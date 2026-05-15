@@ -1864,7 +1864,7 @@ export default function App() {
     input.click();
   };
   const resetData = () => {
-    if(!confirm("Reset all data to defaults?"))return;
+    if(!window.confirm("Reset all data to defaults?"))return;
     setBrands(SEED_BRANDS);setUsers(SEED_USERS);setEntries(buildMockData(SEED_BRANDS));setIssues(buildMockIssues(SEED_BRANDS));
     ["cb_brands","cb_users","cb_entries","cb_issues"].forEach(k=>localStorage.removeItem(k));
   };
