@@ -1199,7 +1199,7 @@ function DashboardView({ brands, entries, issues }) {
 }
 
 // ─── Tactical Ops View ────────────────────────────────────────────────────────
-function TacticalOpsView({ brands, entries, issues, onAddIssue, onUpdateIssue, onDeleteIssue }) {
+function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
   const [selectedBrandId, setSelectedBrandId] = useState(visibleBrands[0]?.id || "");
@@ -1209,6 +1209,8 @@ function TacticalOpsView({ brands, entries, issues, onAddIssue, onUpdateIssue, o
   const [tickets, setTickets] = useState({});
   const [ticketText, setTicketText] = useState("");
   const [ticketPriority, setTicketPriority] = useState("Medium");
+  const [detailTicket, setDetailTicket] = useState(null);
+  const [editTicket, setEditTicket] = useState(null);
 
   // Derive maintenance tickets from issues prop (same source of truth as Issues & Maintenance page)
   useEffect(() => {
@@ -1380,16 +1382,25 @@ function TacticalOpsView({ brands, entries, issues, onAddIssue, onUpdateIssue, o
         {brandTickets.length===0&&<div className="text-slate-500 text-sm text-center py-4">No tickets raised</div>}
         <div className="space-y-2">
           {brandTickets.map(tk=>(
-            <div key={tk.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${tk.done?"bg-slate-900/20 border-slate-700/30 opacity-50":"bg-slate-900/60 border-slate-700/60"}`}>
+            <div key={tk.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-all ${tk.done?"bg-slate-900/20 border-slate-700/30 opacity-50":"bg-slate-900/60 border-slate-700/60"}`}>
               <button onClick={()=>toggleTicket(tk.id)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border transition-colors ${tk.done?"bg-emerald-600 border-emerald-500":"border-slate-600 hover:border-emerald-500"}`}>{tk.done&&<Check size={12} className="text-white"/>}</button>
               <span className={`flex-1 text-sm ${tk.done?"line-through text-slate-500":"text-slate-300"}`}>{tk.text}</span>
-              <Badge label={tk.priority} color={tk.priority==="High"?"red":tk.priority==="Medium"?"amber":"slate"}/>
-              <button onClick={()=>deleteTicket(tk.id)} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={13}/></button>
+              {tk._issueRef?.assignedTo && <span className="text-xs text-indigo-400 hidden sm:block">→ {tk._issueRef.assignedTo}</span>}
+              <Badge label={tk.priority} color={tk.priority==="Critical"?"red":tk.priority==="High"?"amber":tk.priority==="Medium"?"indigo":"slate"}/>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button onClick={()=>setDetailTicket(tk._issueRef)} className="px-2 py-1 rounded-lg bg-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-600 transition-colors">View</button>
+                <button onClick={()=>setEditTicket(tk._issueRef)} className="p-1.5 rounded-lg bg-slate-700 text-slate-400 hover:text-white hover:bg-slate-600 transition-colors"><Edit size={12}/></button>
+                <button onClick={()=>deleteTicket(tk.id)} className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-950/30 rounded-lg transition-colors"><Trash2 size={12}/></button>
+              </div>
             </div>
           ))}
         </div>
       </AnalysisBlock>
     </div>
+
+      {/* Modals */}
+      {detailTicket && <IssueDetailModal issue={detailTicket} brands={brands} users={users} currentUser={user} onUpdate={updated => { onUpdateIssue(updated); setDetailTicket(updated); }} onClose={() => setDetailTicket(null)} />}
+      {editTicket && <IssueFormModal issue={editTicket} brands={brands} users={users} currentUser={user} visibleBrands={visibleBrands} onSave={updated => { onUpdateIssue(updated); setEditTicket(null); }} onClose={() => setEditTicket(null)} />}
   );
 }
 
@@ -2150,7 +2161,7 @@ export default function App() {
           </header>
           <div className="flex-1 p-5 lg:p-6 overflow-auto">
             {activeView==="dashboard"&&<DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView==="tactical"&&<TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {activeView==="tactical"&&<TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView==="eod"&&<EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
             {activeView==="issues"&&<IssuesView brands={brands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView==="admin"&&currentUser.role==="owner"&&(
