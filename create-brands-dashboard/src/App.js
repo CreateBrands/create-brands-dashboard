@@ -45,6 +45,7 @@ const SEED_USERS = [
 // Issue categories and priorities
 const ISSUE_CATEGORIES = ["Equipment", "Plumbing", "Electrical", "Safety", "Hygiene", "IT/Tech", "Structural", "Pest Control", "HVAC", "Other"];
 const ISSUE_PRIORITIES = ["Critical", "High", "Medium", "Low"];
+const ISSUE_TYPES = ["Issue", "Maintenance"];
 const ISSUE_STATUSES = ["Open", "In Progress", "Awaiting Parts", "Resolved", "Closed"];
 
 const STATUS_CONFIG = {
@@ -620,10 +621,11 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
 }
 
 // ─── Issue Form Modal ─────────────────────────────────────────────────────────
-function IssueFormModal({ issue, brands, currentUser, visibleBrands, onSave, onClose }) {
+function IssueFormModal({ issue, brands, currentUser, visibleBrands, defaultType, onSave, onClose }) {
   const isEdit = !!issue;
   const [form, setForm] = useState({
     brandId: issue?.brandId || visibleBrands[0]?.id || "",
+    type: issue?.type || defaultType || "Issue",
     title: issue?.title || "",
     description: issue?.description || "",
     category: issue?.category || ISSUE_CATEGORIES[0],
@@ -655,7 +657,7 @@ function IssueFormModal({ issue, brands, currentUser, visibleBrands, onSave, onC
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">{isEdit ? "Edit Issue" : "Report New Issue"}</h3>
+          <h3 className="font-bold text-white">{isEdit ? `Edit ${form.type}` : `Report New ${form.type}`}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
@@ -674,8 +676,19 @@ function IssueFormModal({ issue, brands, currentUser, visibleBrands, onSave, onC
             </div>
           )}
           <div>
-            <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Issue Title *</label>
-            <input value={form.title} onChange={e => set("title", e.target.value)} placeholder="Brief description of the issue" className={inputCls} />
+            <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Type</label>
+            <div className="flex gap-2">
+              {ISSUE_TYPES.map(t => (
+                <button key={t} onClick={() => set("type", t)}
+                  className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                  {t === "Issue" ? "🔴 Issue" : "🔧 Maintenance"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Title *</label>
+            <input value={form.title} onChange={e => set("title", e.target.value)} placeholder={form.type === "Maintenance" ? "Brief description of the maintenance task" : "Brief description of the issue"} className={inputCls} />
           </div>
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Full Description</label>
@@ -713,7 +726,7 @@ function IssueFormModal({ issue, brands, currentUser, visibleBrands, onSave, onC
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!form.title.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">
-            {isEdit ? "Save Changes" : "Report Issue"}
+            {isEdit ? "Save Changes" : `Report ${form.type}`}
           </button>
         </div>
       </div>
@@ -848,60 +861,22 @@ function IssueDetailModal({ issue, brands, currentUser, onUpdate, onClose }) {
 function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
-
-  // ── Tab ───────────────────────────────────────────────────────────────────
-  const [tab, setTab] = useState("issues");
-
-  // ── Issues filters ────────────────────────────────────────────────────────
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterBrand, setFilterBrand] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All");
+  const [filterType, setFilterType] = useState("All");
   const [showForm, setShowForm] = useState(false);
+  const [newIssueType, setNewIssueType] = useState("Issue");
   const [detailIssue, setDetailIssue] = useState(null);
   const [editIssue, setEditIssue] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
-
-  // ── Maintenance Tickets ───────────────────────────────────────────────────
-  const [allTickets, setAllTickets] = useState([]);
-  const [ticketBrandFilter, setTicketBrandFilter] = useState("All");
-  const [ticketText, setTicketText] = useState("");
-  const [ticketPriority, setTicketPriority] = useState("Medium");
-  const [ticketBrandId, setTicketBrandId] = useState(visibleBrands[0]?.id || "");
-
-  useEffect(() => {
-    fetchMaintenanceTickets().then(setAllTickets).catch(console.error);
-  }, []);
-
-  const visibleTickets = allTickets
-    .filter(tk => visibleBrands.some(b => b.id === tk.brandId))
-    .filter(tk => ticketBrandFilter === "All" || tk.brandId === ticketBrandFilter)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-  const priorityColor = { Critical: "red", High: "amber", Medium: "indigo", Low: "slate" };
-
-  const handleAddTicket = async () => {
-    if (!ticketText.trim() || !ticketBrandId) return;
-    const ticket = { id: `ticket-${Date.now()}`, brandId: ticketBrandId, text: ticketText.trim(), priority: ticketPriority, done: false };
-    const saved = await insertMaintenanceTicket(ticket);
-    setAllTickets(ts => [saved, ...ts]);
-    setTicketText("");
-  };
-
-  const handleToggleTicket = async (tk) => {
-    const updated = await updateMaintenanceTicket({ ...tk, done: !tk.done });
-    setAllTickets(ts => ts.map(t => t.id === updated.id ? updated : t));
-  };
-
-  const handleDeleteTicket = async (id) => {
-    await deleteMaintenanceTicket(id);
-    setAllTickets(ts => ts.filter(t => t.id !== id));
-  };
 
   const visibleIssues = issues.filter(issue => {
     if (!visibleBrands.some(b => b.id === issue.brandId)) return false;
     if (filterStatus !== "All" && issue.status !== filterStatus) return false;
     if (filterBrand !== "All" && issue.brandId !== filterBrand) return false;
     if (filterPriority !== "All" && issue.priority !== filterPriority) return false;
+    if (filterType !== "All" && (issue.type || "Issue") !== filterType) return false;
     return true;
   }).sort((a, b) => {
     const pOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -935,22 +910,33 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
       </div>
 
       {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap gap-1.5">
-          <button onClick={() => setFilterBrand("All")} className={filterBtnCls(filterBrand === "All")}>All Locations</button>
-          {visibleBrands.map(b => <button key={b.id} onClick={() => setFilterBrand(filterBrand === b.id ? "All" : b.id)} className={filterBtnCls(filterBrand === b.id)}>{b.name}</button>)}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setFilterType("All")} className={filterBtnCls(filterType === "All")}>All Types</button>
+            <button onClick={() => setFilterType("Issue")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterType === "Issue" ? "bg-red-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>🔴 Issues</button>
+            <button onClick={() => setFilterType("Maintenance")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterType === "Maintenance" ? "bg-amber-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>🔧 Maintenance</button>
+          </div>
+          <div className="flex flex-wrap gap-1.5 ml-auto">
+            <button onClick={() => { setNewIssueType("Issue"); setShowForm(true); }} className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white rounded-xl px-3 py-2 text-xs font-semibold transition-colors">
+              <Plus size={12}/> Report Issue
+            </button>
+            <button onClick={() => { setNewIssueType("Maintenance"); setShowForm(true); }} className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl px-3 py-2 text-xs font-semibold transition-colors">
+              <Plus size={12}/> Add Maintenance
+            </button>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {ISSUE_PRIORITIES.map(p => {
-            const pc = PRIORITY_CONFIG[p];
-            return <button key={p} onClick={() => setFilterPriority(filterPriority === p ? "All" : p)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${filterPriority === p ? "text-white border-transparent bg-slate-600" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`}>{p}</button>;
-          })}
-        </div>
-        <div className="ml-auto">
-          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
-            <Plus size={14}/> Report Issue
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setFilterBrand("All")} className={filterBtnCls(filterBrand === "All")}>All Locations</button>
+            {visibleBrands.map(b => <button key={b.id} onClick={() => setFilterBrand(filterBrand === b.id ? "All" : b.id)} className={filterBtnCls(filterBrand === b.id)}>{b.name}</button>)}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {ISSUE_PRIORITIES.map(p => (
+              <button key={p} onClick={() => setFilterPriority(filterPriority === p ? "All" : p)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${filterPriority === p ? "text-white border-transparent bg-slate-600" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`}>{p}</button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -980,6 +966,7 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
                   <div className="flex items-start justify-between gap-2 flex-wrap">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
+                        {(issue.type||"Issue") === "Maintenance" ? <Badge label="🔧 Maintenance" color="amber"/> : <Badge label="🔴 Issue" color="red"/>}
                         <Badge label={issue.priority} color={pc.color} />
                         <Badge label={issue.category} color="slate" />
                         <Badge label={issue.status} color={sc.color} />
@@ -1015,68 +1002,8 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
         })}
       </div>
 
-      {/* Maintenance Tickets Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="text-sm font-bold text-white flex items-center gap-2">
-              <CheckSquare size={15} className="text-amber-400"/> Maintenance Tickets
-            </div>
-            {allTickets.filter(t => !t.done && visibleBrands.some(b => b.id === t.brandId)).length > 0 && (
-              <span className="bg-amber-500 text-white text-xs rounded-full px-2 py-0.5 font-semibold">
-                {allTickets.filter(t => !t.done && visibleBrands.some(b => b.id === t.brandId)).length} open
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Add ticket form */}
-        <div className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
-          <div className="flex flex-wrap gap-2">
-            <select value={ticketBrandId} onChange={e => setTicketBrandId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
-              {visibleBrands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-            <input value={ticketText} onChange={e => setTicketText(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAddTicket()} placeholder="Describe the maintenance issue…" className="flex-1 min-w-48 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
-            <select value={ticketPriority} onChange={e => setTicketPriority(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
-              {ISSUE_PRIORITIES.map(p => <option key={p}>{p}</option>)}
-            </select>
-            <button onClick={handleAddTicket} className="bg-amber-600 hover:bg-amber-500 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"><Plus size={14}/>Add Ticket</button>
-          </div>
-        </div>
-
-        {/* Location filter */}
-        <div className="flex flex-wrap gap-1.5">
-          <button onClick={() => setTicketBrandFilter("All")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${ticketBrandFilter === "All" ? "bg-amber-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>All Locations</button>
-          {visibleBrands.map(b => <button key={b.id} onClick={() => setTicketBrandFilter(ticketBrandFilter === b.id ? "All" : b.id)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${ticketBrandFilter === b.id ? "bg-amber-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{b.name}</button>)}
-        </div>
-
-        {visibleTickets.length === 0 && <div className="text-center text-slate-500 text-sm py-8">No maintenance tickets yet</div>}
-        <div className="space-y-2">
-          {visibleTickets.map(tk => {
-            const brand = brands.find(b => b.id === tk.brandId);
-            const pColor = priorityColor[tk.priority] || "slate";
-            return (
-              <div key={tk.id} className={`bg-slate-900/60 border rounded-2xl p-4 flex items-center gap-3 transition-all ${tk.done ? "border-slate-700/30 opacity-60" : "border-slate-700/60"}`}>
-                <button onClick={() => handleToggleTicket(tk)} className={`w-5 h-5 rounded-md border-2 flex-shrink-0 flex items-center justify-center transition-colors ${tk.done ? "bg-emerald-600 border-emerald-600" : "border-slate-600 hover:border-emerald-500"}`}>
-                  {tk.done && <Check size={11} className="text-white"/>}
-                </button>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-sm font-medium ${tk.done ? "line-through text-slate-500" : "text-white"}`}>{tk.text}</div>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <Badge label={tk.priority} color={pColor}/>
-                    {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background: brand.color}}/>{brand.name}</span>}
-                    <span className="text-xs text-slate-600">{new Date(tk.createdAt).toLocaleDateString("en-GB", {day:"numeric", month:"short"})}</span>
-                  </div>
-                </div>
-                <button onClick={() => handleDeleteTicket(tk.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-500 hover:text-red-400 hover:bg-red-950/30 transition-colors flex-shrink-0"><Trash2 size={13}/></button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       {/* Modals */}
-      {showForm && <IssueFormModal brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} onSave={onAddIssue} onClose={() => setShowForm(false)} />}
+      {showForm && <IssueFormModal brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} defaultType={newIssueType} onSave={onAddIssue} onClose={() => setShowForm(false)} />}
       {editIssue && <IssueFormModal issue={editIssue} brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
       {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
       {deleteId && (
