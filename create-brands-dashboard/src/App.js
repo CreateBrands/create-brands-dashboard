@@ -1396,11 +1396,11 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
           ))}
         </div>
       </AnalysisBlock>
-    </div>
 
       {/* Modals */}
       {detailTicket && <IssueDetailModal issue={detailTicket} brands={brands} users={users} currentUser={user} onUpdate={updated => { onUpdateIssue(updated); setDetailTicket(updated); }} onClose={() => setDetailTicket(null)} />}
       {editTicket && <IssueFormModal issue={editTicket} brands={brands} users={users} currentUser={user} visibleBrands={visibleBrands} onSave={updated => { onUpdateIssue(updated); setEditTicket(null); }} onClose={() => setEditTicket(null)} />}
+    </div>
   );
 }
 
