@@ -848,6 +848,11 @@ function IssueDetailModal({ issue, brands, currentUser, onUpdate, onClose }) {
 function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+
+  // ── Tab ───────────────────────────────────────────────────────────────────
+  const [tab, setTab] = useState("issues");
+
+  // ── Issues filters ────────────────────────────────────────────────────────
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterBrand, setFilterBrand] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All");
@@ -855,6 +860,42 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
   const [detailIssue, setDetailIssue] = useState(null);
   const [editIssue, setEditIssue] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
+
+  // ── Maintenance Tickets ───────────────────────────────────────────────────
+  const [allTickets, setAllTickets] = useState([]);
+  const [ticketBrandFilter, setTicketBrandFilter] = useState("All");
+  const [ticketText, setTicketText] = useState("");
+  const [ticketPriority, setTicketPriority] = useState("Medium");
+  const [ticketBrandId, setTicketBrandId] = useState(visibleBrands[0]?.id || "");
+
+  useEffect(() => {
+    fetchMaintenanceTickets().then(setAllTickets).catch(console.error);
+  }, []);
+
+  const visibleTickets = allTickets
+    .filter(tk => visibleBrands.some(b => b.id === tk.brandId))
+    .filter(tk => ticketBrandFilter === "All" || tk.brandId === ticketBrandFilter)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const priorityColor = { Critical: "red", High: "amber", Medium: "indigo", Low: "slate" };
+
+  const handleAddTicket = async () => {
+    if (!ticketText.trim() || !ticketBrandId) return;
+    const ticket = { id: `ticket-${Date.now()}`, brandId: ticketBrandId, text: ticketText.trim(), priority: ticketPriority, done: false };
+    const saved = await insertMaintenanceTicket(ticket);
+    setAllTickets(ts => [saved, ...ts]);
+    setTicketText("");
+  };
+
+  const handleToggleTicket = async (tk) => {
+    const updated = await updateMaintenanceTicket({ ...tk, done: !tk.done });
+    setAllTickets(ts => ts.map(t => t.id === updated.id ? updated : t));
+  };
+
+  const handleDeleteTicket = async (id) => {
+    await deleteMaintenanceTicket(id);
+    setAllTickets(ts => ts.filter(t => t.id !== id));
+  };
 
   const visibleIssues = issues.filter(issue => {
     if (!visibleBrands.some(b => b.id === issue.brandId)) return false;
