@@ -621,7 +621,7 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
 }
 
 // ─── Issue Form Modal ─────────────────────────────────────────────────────────
-function IssueFormModal({ issue, brands, currentUser, visibleBrands, defaultType, onSave, onClose }) {
+function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defaultType, onSave, onClose }) {
   const isEdit = !!issue;
   const [form, setForm] = useState({
     brandId: issue?.brandId || visibleBrands[0]?.id || "",
@@ -718,7 +718,12 @@ function IssueFormModal({ issue, brands, currentUser, visibleBrands, defaultType
               </div>
               <div>
                 <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Assigned To</label>
-                <input value={form.assignedTo} onChange={e => set("assignedTo", e.target.value)} placeholder="Name of person responsible" className={inputCls} />
+                <select value={form.assignedTo} onChange={e => set("assignedTo", e.target.value)} className={selCls}>
+                  <option value="">— Unassigned —</option>
+                  {(users || []).map(u => (
+                    <option key={u.id} value={u.name}>{u.name} ({u.role})</option>
+                  ))}
+                </select>
               </div>
             </>
           )}
@@ -735,7 +740,7 @@ function IssueFormModal({ issue, brands, currentUser, visibleBrands, defaultType
 }
 
 // ─── Issue Detail Modal ───────────────────────────────────────────────────────
-function IssueDetailModal({ issue, brands, currentUser, onUpdate, onClose }) {
+function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose }) {
   const [status, setStatus] = useState(issue.status);
   const [assignedTo, setAssignedTo] = useState(issue.assignedTo || "");
   const [comment, setComment] = useState("");
@@ -816,11 +821,16 @@ function IssueDetailModal({ issue, brands, currentUser, onUpdate, onClose }) {
           <div>
             <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-widest">Assigned To</div>
             <div className="flex gap-2">
-              <input value={assignedTo} onChange={e => setAssignedTo(e.target.value)} placeholder="Assign to a person…"
-                className="flex-1 bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none" />
-              <button onClick={handleAssignSave} className="px-4 py-2 rounded-xl bg-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-600 transition-colors">Save</button>
+              <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)}
+                className="flex-1 bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+                <option value="">— Unassigned —</option>
+                {(users || []).map(u => (
+                  <option key={u.id} value={u.name}>{u.name} ({u.role})</option>
+                ))}
+              </select>
+              <button onClick={handleAssignSave} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition-colors">Assign</button>
             </div>
-            {localIssue.assignedTo && <div className="text-xs text-slate-500 mt-1">Currently: <span className="text-slate-400">{localIssue.assignedTo}</span></div>}
+            {localIssue.assignedTo && <div className="text-xs text-slate-500 mt-1">Assigned to: <span className="text-indigo-400 font-semibold">{localIssue.assignedTo}</span></div>}
           </div>
 
           {/* Comments */}
@@ -858,7 +868,7 @@ function IssueDetailModal({ issue, brands, currentUser, onUpdate, onClose }) {
 }
 
 // ─── Issues Tracker View ──────────────────────────────────────────────────────
-function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
+function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
   const [filterStatus, setFilterStatus] = useState("All");
@@ -987,9 +997,7 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">View</button>
-                      {(user.role === "owner" || issue.reportedBy === user.name) && (
-                        <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
-                      )}
+                      <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
                       {user.role === "owner" && (
                         <button onClick={() => setDeleteId(issue.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={13}/></button>
                       )}
@@ -1004,8 +1012,8 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
 
       {/* Modals */}
       {showForm && <IssueFormModal brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} defaultType={newIssueType} onSave={onAddIssue} onClose={() => setShowForm(false)} />}
-      {editIssue && <IssueFormModal issue={editIssue} brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
-      {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
+      {editIssue && <IssueFormModal issue={editIssue} brands={brands} users={users} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
+      {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} users={users} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
       {deleteId && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
@@ -1191,7 +1199,7 @@ function DashboardView({ brands, entries, issues }) {
 }
 
 // ─── Tactical Ops View ────────────────────────────────────────────────────────
-function TacticalOpsView({ brands, entries }) {
+function TacticalOpsView({ brands, entries, issues, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
   const [selectedBrandId, setSelectedBrandId] = useState(visibleBrands[0]?.id || "");
@@ -1202,13 +1210,14 @@ function TacticalOpsView({ brands, entries }) {
   const [ticketText, setTicketText] = useState("");
   const [ticketPriority, setTicketPriority] = useState("Medium");
 
-  // Load tickets from Supabase whenever the selected brand changes
+  // Derive maintenance tickets from issues prop (same source of truth as Issues & Maintenance page)
   useEffect(() => {
-    if (!selectedBrandId) return;
-    fetchMaintenanceTickets(selectedBrandId).then(data => {
-      setTickets(t => ({ ...t, [selectedBrandId]: data }));
-    }).catch(console.error);
-  }, [selectedBrandId]);
+    if (!selectedBrandId || !issues) return;
+    const brandMaintenance = issues
+      .filter(i => i.brandId === selectedBrandId && (i.type || "Issue") === "Maintenance")
+      .map(i => ({ id: i.id, brandId: i.brandId, text: i.title, priority: i.priority, done: ["Resolved","Closed"].includes(i.status), createdAt: i.createdAt, _issueRef: i }));
+    setTickets(t => ({ ...t, [selectedBrandId]: brandMaintenance }));
+  }, [selectedBrandId, issues]);
 
   const selectedBrand = visibleBrands.find(b => b.id === selectedBrandId);
   const period = resolvePeriod(preset, customFrom, customTo);
@@ -1232,23 +1241,41 @@ function TacticalOpsView({ brands, entries }) {
 
   const primeCostDays = curFiltered.map(e => ({ date: e.date.slice(5), primeCost: ((e.laborCost+e.cogsCost)/(e.netSales||1))*100 }));
   const brandTickets = tickets[selectedBrandId] || [];
+  const brand = selectedBrand;
 
   const addTicket = async (text, priority) => {
-    const ticket = { id: `ticket-${Date.now()}`, brandId: selectedBrandId, text, priority, done: false };
-    const saved = await insertMaintenanceTicket(ticket);
-    setTickets(t => ({ ...t, [selectedBrandId]: [saved, ...(t[selectedBrandId] || [])] }));
+    const now = new Date().toISOString();
+    const issue = {
+      id: `maint-${Date.now()}`,
+      brandId: selectedBrandId,
+      brandName: brand?.name || "",
+      type: "Maintenance",
+      title: text,
+      description: "",
+      category: "Other",
+      priority,
+      status: "Open",
+      reportedBy: user.name,
+      assignedTo: "",
+      comments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await onAddIssue(issue);
+    // tickets state will auto-update via the useEffect watching issues prop
   };
 
   const toggleTicket = async (id) => {
     const ticket = brandTickets.find(tk => tk.id === id);
     if (!ticket) return;
-    const updated = await updateMaintenanceTicket({ ...ticket, done: !ticket.done });
-    setTickets(t => ({ ...t, [selectedBrandId]: (t[selectedBrandId] || []).map(tk => tk.id === id ? updated : tk) }));
+    const newStatus = ticket.done ? "Open" : "Resolved";
+    await onUpdateIssue({ ...ticket._issueRef, status: newStatus, updatedAt: new Date().toISOString() });
+    // tickets state will auto-update via the useEffect watching issues prop
   };
 
   const deleteTicket = async (id) => {
-    await deleteMaintenanceTicket(id);
-    setTickets(t => ({ ...t, [selectedBrandId]: (t[selectedBrandId] || []).filter(tk => tk.id !== id) }));
+    await onDeleteIssue(id);
+    // tickets state will auto-update via the useEffect watching issues prop
   };
 
   return (
@@ -2123,9 +2150,9 @@ export default function App() {
           </header>
           <div className="flex-1 p-5 lg:p-6 overflow-auto">
             {activeView==="dashboard"&&<DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView==="tactical"&&<TacticalOpsView brands={visibleBrands} entries={entries}/>}
+            {activeView==="tactical"&&<TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView==="eod"&&<EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
-            {activeView==="issues"&&<IssuesView brands={brands} issues={issues} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {activeView==="issues"&&<IssuesView brands={brands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView==="admin"&&currentUser.role==="owner"&&(
               <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>
             )}
