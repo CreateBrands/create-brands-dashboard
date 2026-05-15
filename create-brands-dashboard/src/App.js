@@ -915,72 +915,6 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
 
   return (
     <div className="space-y-6">
-      {/* Tab switcher */}
-      <div className="flex gap-2">
-        <button onClick={() => setTab("issues")} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-2 ${tab === "issues" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
-          <Wrench size={14}/> Issues
-        </button>
-        <button onClick={() => setTab("tickets")} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-2 ${tab === "tickets" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
-          <CheckSquare size={14}/> Maintenance Tickets
-          {allTickets.filter(t => !t.done && visibleBrands.some(b => b.id === t.brandId)).length > 0 && (
-            <span className="bg-amber-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
-              {allTickets.filter(t => !t.done && visibleBrands.some(b => b.id === t.brandId)).length}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {tab === "tickets" && (
-        <div className="space-y-4">
-          {/* Add ticket form */}
-          <div className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
-            <div className="text-xs text-slate-400 font-semibold mb-3 uppercase tracking-widest">Add Maintenance Ticket</div>
-            <div className="flex flex-wrap gap-2">
-              <select value={ticketBrandId} onChange={e => setTicketBrandId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
-                {visibleBrands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-              <input value={ticketText} onChange={e => setTicketText(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAddTicket()} placeholder="Describe the issue…" className="flex-1 min-w-48 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
-              <select value={ticketPriority} onChange={e => setTicketPriority(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
-                {ISSUE_PRIORITIES.map(p => <option key={p}>{p}</option>)}
-              </select>
-              <button onClick={handleAddTicket} className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"><Plus size={14}/>Add</button>
-            </div>
-          </div>
-
-          {/* Location filter */}
-          <div className="flex flex-wrap gap-1.5">
-            <button onClick={() => setTicketBrandFilter("All")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${ticketBrandFilter === "All" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>All Locations</button>
-            {visibleBrands.map(b => <button key={b.id} onClick={() => setTicketBrandFilter(ticketBrandFilter === b.id ? "All" : b.id)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${ticketBrandFilter === b.id ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{b.name}</button>)}
-          </div>
-
-          {/* Tickets list */}
-          {visibleTickets.length === 0 && <div className="text-center text-slate-500 text-sm py-12">No maintenance tickets yet</div>}
-          <div className="space-y-2">
-            {visibleTickets.map(tk => {
-              const brand = brands.find(b => b.id === tk.brandId);
-              const pColor = priorityColor[tk.priority] || "slate";
-              return (
-                <div key={tk.id} className={`bg-slate-900/60 border rounded-2xl p-4 flex items-center gap-3 transition-all ${tk.done ? "border-slate-700/30 opacity-60" : "border-slate-700/60"}`}>
-                  <button onClick={() => handleToggleTicket(tk)} className={`w-5 h-5 rounded-md border-2 flex-shrink-0 flex items-center justify-center transition-colors ${tk.done ? "bg-emerald-600 border-emerald-600" : "border-slate-600 hover:border-emerald-500"}`}>
-                    {tk.done && <Check size={11} className="text-white"/>}
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-medium ${tk.done ? "line-through text-slate-500" : "text-white"}`}>{tk.text}</div>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <Badge label={tk.priority} color={pColor}/>
-                      {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background: brand.color}}/>{brand.name}</span>}
-                      <span className="text-xs text-slate-600">{new Date(tk.createdAt).toLocaleDateString("en-GB", {day:"numeric", month:"short"})}</span>
-                    </div>
-                  </div>
-                  <button onClick={() => handleDeleteTicket(tk.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-500 hover:text-red-400 hover:bg-red-950/30 transition-colors flex-shrink-0"><Trash2 size={13}/></button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {tab === "issues" && <>
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {ISSUE_STATUSES.map(s => {
@@ -1081,9 +1015,67 @@ function IssuesView({ brands, issues, currentUser, onAddIssue, onUpdateIssue, on
         })}
       </div>
 
-      </>}
+      {/* Maintenance Tickets Section */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-bold text-white flex items-center gap-2">
+              <CheckSquare size={15} className="text-amber-400"/> Maintenance Tickets
+            </div>
+            {allTickets.filter(t => !t.done && visibleBrands.some(b => b.id === t.brandId)).length > 0 && (
+              <span className="bg-amber-500 text-white text-xs rounded-full px-2 py-0.5 font-semibold">
+                {allTickets.filter(t => !t.done && visibleBrands.some(b => b.id === t.brandId)).length} open
+              </span>
+            )}
+          </div>
+        </div>
 
-      {/* Modals — always rendered regardless of tab */}
+        {/* Add ticket form */}
+        <div className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
+          <div className="flex flex-wrap gap-2">
+            <select value={ticketBrandId} onChange={e => setTicketBrandId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+              {visibleBrands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <input value={ticketText} onChange={e => setTicketText(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAddTicket()} placeholder="Describe the maintenance issue…" className="flex-1 min-w-48 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+            <select value={ticketPriority} onChange={e => setTicketPriority(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+              {ISSUE_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+            </select>
+            <button onClick={handleAddTicket} className="bg-amber-600 hover:bg-amber-500 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"><Plus size={14}/>Add Ticket</button>
+          </div>
+        </div>
+
+        {/* Location filter */}
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={() => setTicketBrandFilter("All")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${ticketBrandFilter === "All" ? "bg-amber-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>All Locations</button>
+          {visibleBrands.map(b => <button key={b.id} onClick={() => setTicketBrandFilter(ticketBrandFilter === b.id ? "All" : b.id)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${ticketBrandFilter === b.id ? "bg-amber-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{b.name}</button>)}
+        </div>
+
+        {visibleTickets.length === 0 && <div className="text-center text-slate-500 text-sm py-8">No maintenance tickets yet</div>}
+        <div className="space-y-2">
+          {visibleTickets.map(tk => {
+            const brand = brands.find(b => b.id === tk.brandId);
+            const pColor = priorityColor[tk.priority] || "slate";
+            return (
+              <div key={tk.id} className={`bg-slate-900/60 border rounded-2xl p-4 flex items-center gap-3 transition-all ${tk.done ? "border-slate-700/30 opacity-60" : "border-slate-700/60"}`}>
+                <button onClick={() => handleToggleTicket(tk)} className={`w-5 h-5 rounded-md border-2 flex-shrink-0 flex items-center justify-center transition-colors ${tk.done ? "bg-emerald-600 border-emerald-600" : "border-slate-600 hover:border-emerald-500"}`}>
+                  {tk.done && <Check size={11} className="text-white"/>}
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-sm font-medium ${tk.done ? "line-through text-slate-500" : "text-white"}`}>{tk.text}</div>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <Badge label={tk.priority} color={pColor}/>
+                    {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background: brand.color}}/>{brand.name}</span>}
+                    <span className="text-xs text-slate-600">{new Date(tk.createdAt).toLocaleDateString("en-GB", {day:"numeric", month:"short"})}</span>
+                  </div>
+                </div>
+                <button onClick={() => handleDeleteTicket(tk.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-500 hover:text-red-400 hover:bg-red-950/30 transition-colors flex-shrink-0"><Trash2 size={13}/></button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Modals */}
       {showForm && <IssueFormModal brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} onSave={onAddIssue} onClose={() => setShowForm(false)} />}
       {editIssue && <IssueFormModal issue={editIssue} brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
       {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
