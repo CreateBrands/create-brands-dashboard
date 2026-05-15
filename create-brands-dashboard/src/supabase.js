@@ -294,3 +294,63 @@ function dbIssueToApp(i) {
     updatedAt: i.updated_at,
   };
 }
+
+// ─── MAINTENANCE TICKETS ─────────────────────────────────────────────────────
+
+export async function fetchMaintenanceTickets(brandId) {
+  const query = supabase
+    .from("maintenance_tickets")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (brandId) query.eq("brand_id", brandId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data.map(dbTicketToApp);
+}
+
+export async function insertMaintenanceTicket(ticket) {
+  const { data, error } = await supabase
+    .from("maintenance_tickets")
+    .insert(appTicketToDb(ticket))
+    .select()
+    .single();
+  if (error) throw error;
+  return dbTicketToApp(data);
+}
+
+export async function updateMaintenanceTicket(ticket) {
+  const { data, error } = await supabase
+    .from("maintenance_tickets")
+    .update({ done: ticket.done, text: ticket.text, priority: ticket.priority, updated_at: new Date().toISOString() })
+    .eq("id", ticket.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return dbTicketToApp(data);
+}
+
+export async function deleteMaintenanceTicket(id) {
+  const { error } = await supabase.from("maintenance_tickets").delete().eq("id", id);
+  if (error) throw error;
+}
+
+function appTicketToDb(t) {
+  return {
+    id: t.id,
+    brand_id: t.brandId,
+    text: t.text,
+    priority: t.priority,
+    done: t.done ?? false,
+  };
+}
+
+function dbTicketToApp(t) {
+  return {
+    id: t.id,
+    brandId: t.brand_id,
+    text: t.text,
+    priority: t.priority,
+    done: t.done,
+    createdAt: t.created_at,
+  };
+}

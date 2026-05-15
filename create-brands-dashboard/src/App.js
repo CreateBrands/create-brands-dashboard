@@ -5,6 +5,7 @@ import {
   fetchUsers,  insertUser,  upsertUser,  removeUser,
   fetchEntries, upsertEntry, upsertEntries,
   fetchIssues, insertIssue, upsertIssue, removeIssue,
+  fetchMaintenanceTickets, insertMaintenanceTicket, updateMaintenanceTicket, deleteMaintenanceTicket,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -1173,6 +1174,14 @@ function TacticalOpsView({ brands, entries }) {
   const [ticketText, setTicketText] = useState("");
   const [ticketPriority, setTicketPriority] = useState("Medium");
 
+  // Load tickets from Supabase whenever the selected brand changes
+  useEffect(() => {
+    if (!selectedBrandId) return;
+    fetchMaintenanceTickets(selectedBrandId).then(data => {
+      setTickets(t => ({ ...t, [selectedBrandId]: data }));
+    }).catch(console.error);
+  }, [selectedBrandId]);
+
   const selectedBrand = visibleBrands.find(b => b.id === selectedBrandId);
   const period = resolvePeriod(preset, customFrom, customTo);
   const prevPeriod = resolvePrevPeriod(preset, customFrom, customTo);
@@ -1195,9 +1204,24 @@ function TacticalOpsView({ brands, entries }) {
 
   const primeCostDays = curFiltered.map(e => ({ date: e.date.slice(5), primeCost: ((e.laborCost+e.cogsCost)/(e.netSales||1))*100 }));
   const brandTickets = tickets[selectedBrandId] || [];
-  const addTicket = (text, priority) => setTickets(t => ({ ...t, [selectedBrandId]: [...(t[selectedBrandId]||[]), { id: Date.now(), text, priority, done: false }] }));
-  const toggleTicket = id => setTickets(t => ({ ...t, [selectedBrandId]: (t[selectedBrandId]||[]).map(tk => tk.id === id ? {...tk, done: !tk.done} : tk) }));
-  const deleteTicket = id => setTickets(t => ({ ...t, [selectedBrandId]: (t[selectedBrandId]||[]).filter(tk => tk.id !== id) }));
+
+  const addTicket = async (text, priority) => {
+    const ticket = { id: `ticket-${Date.now()}`, brandId: selectedBrandId, text, priority, done: false };
+    const saved = await insertMaintenanceTicket(ticket);
+    setTickets(t => ({ ...t, [selectedBrandId]: [saved, ...(t[selectedBrandId] || [])] }));
+  };
+
+  const toggleTicket = async (id) => {
+    const ticket = brandTickets.find(tk => tk.id === id);
+    if (!ticket) return;
+    const updated = await updateMaintenanceTicket({ ...ticket, done: !ticket.done });
+    setTickets(t => ({ ...t, [selectedBrandId]: (t[selectedBrandId] || []).map(tk => tk.id === id ? updated : tk) }));
+  };
+
+  const deleteTicket = async (id) => {
+    await deleteMaintenanceTicket(id);
+    setTickets(t => ({ ...t, [selectedBrandId]: (t[selectedBrandId] || []).filter(tk => tk.id !== id) }));
+  };
 
   return (
     <div className="space-y-6">
