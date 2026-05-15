@@ -493,7 +493,18 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
     reader.readAsArrayBuffer(f);
   };
 
-  const handleImport = () => { onImport(preview); setStep("done"); };
+  const handleImport = async () => {
+    setLoading(true);
+    try {
+      await onImport(preview);
+      setStep("done");
+    } catch (err) {
+      setErrors([`Save failed: ${err.message}`]);
+      setStep("preview");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -607,8 +618,8 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
               <button onClick={() => { setStep("upload"); setPreview([]); setErrors([]); }}
                 className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Re-upload</button>
               {preview.length > 0 && (
-                <button onClick={handleImport} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 transition-colors">
-                  Import {preview.length} Rows
+                <button onClick={handleImport} disabled={loading} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 transition-colors">
+                  {loading ? "Saving to database…" : `Import ${preview.length} Rows`}
                 </button>
               )}
             </>
@@ -1890,7 +1901,7 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
           </div>
         </div>
       )}
-      {showImport&&<ExcelUploadModal brands={brands} entries={entries} onImport={rows=>{onBulkImport(rows);}} onClose={()=>setShowImport(false)}/>}
+      {showImport&&<ExcelUploadModal brands={brands} entries={entries} onImport={async rows=>{ await onBulkImport(rows); }} onClose={()=>setShowImport(false)}/>}
     </div>
   );
 }
