@@ -109,7 +109,10 @@ export async function upsertEntry(entry) {
 export async function upsertEntries(entries) {
   const { data, error } = await supabase
     .from("eod_entries")
-    .upsert(entries.map(appEntryToDb))
+    .upsert(entries.map(appEntryToDb), {
+      onConflict: "id",          // match on id first
+      ignoreDuplicates: false,   // always overwrite
+    })
     .select();
   if (error) throw error;
   return data.map(dbEntryToApp);

@@ -395,7 +395,7 @@ function parseRowToEntry(row, brands) {
   return {
     ok: true,
     entry: {
-      id: "import-" + brandId + "-" + date,
+      id: brandId + "-" + date,
       brandId,
       brandName: brands.find(b => b.id === brandId)?.name || String(get("brandname") || ""),
       date,
