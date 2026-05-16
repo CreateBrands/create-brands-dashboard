@@ -2285,6 +2285,142 @@ function AuditTrailView({ brands, auditTrail, onClear }) {
 }
 
 // ─── Ops Settings View ────────────────────────────────────────────────────────
+// ─── Ops Settings modals (proper top-level components — no hooks-in-callbacks) ──
+
+function TempUnitFormModal({ item, brands, onSave, onClose }) {
+  const [form, setFormState] = useState({
+    name: item?.name || "", type: item?.type || "fridge",
+    brandId: item?.brandId || brands[0]?.id || "",
+    min: item?.min ?? "", max: item?.max ?? "",
+    assignRole: item?.assignRole || "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const handleSave = () => {
+    if (!form.name.trim()) return;
+    onSave({
+      id: item?.id || `tu-${Date.now()}`, ...form,
+      min: form.min !== "" ? parseFloat(form.min) : null,
+      max: form.max !== "" ? parseFloat(form.max) : null,
+    });
+  };
+  return (
+    <Modal title={item ? `Edit — ${item.name}` : "Add Temp Unit"} onClose={onClose}
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      <div className="space-y-4">
+        <div><label className={labelCls}>Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Type</label><select value={form.type} onChange={e => set("type", e.target.value)} className={inputCls}><option value="fridge">Fridge 🧊</option><option value="freezer">Freezer ❄️</option><option value="hot">Hot Hold 🔥</option></select></div>
+          <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Min temp (°C)</label><input type="number" step="0.5" value={form.min} onChange={e => set("min", e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div>
+          <div><label className={labelCls}>Max temp (°C)</label><input type="number" step="0.5" value={form.max} onChange={e => set("max", e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Responsible Role</label><input value={form.assignRole} onChange={e => set("assignRole", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
+      </div>
+    </Modal>
+  );
+}
+
+function CleaningTaskFormModal({ item, onSave, onClose }) {
+  const [form, setFormState] = useState({
+    name: item?.name || "", area: item?.area || "Kitchen",
+    freq: item?.freq || "Daily - Opening",
+    assignRole: item?.assignRole || "", notes: item?.notes || "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const handleSave = () => {
+    if (!form.name.trim()) return;
+    onSave({ id: item?.id || `ct-${Date.now()}`, ...form });
+  };
+  return (
+    <Modal title={item ? `Edit — ${item.name}` : "Add Cleaning Task"} onClose={onClose}
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      <div className="space-y-4">
+        <div><label className={labelCls}>Task Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Area</label><input value={form.area} onChange={e => set("area", e.target.value)} placeholder="Kitchen, FOH…" className={inputCls}/></div>
+          <div><label className={labelCls}>Frequency</label><input value={form.freq} onChange={e => set("freq", e.target.value)} placeholder="Daily - Opening…" className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Assigned Role</label><input value={form.assignRole} onChange={e => set("assignRole", e.target.value)} placeholder="e.g. Kitchen Porter" className={inputCls}/></div>
+        <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Instructions…"/></div>
+      </div>
+    </Modal>
+  );
+}
+
+function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
+  const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
+  const [form, setFormState] = useState({
+    firstName: item?.firstName || "", lastName: item?.lastName || "",
+    role: item?.role || "", brandId: item?.brandId || brands[0]?.id || "",
+    pin: item?.pin || "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const handleSave = () => {
+    if (!form.firstName.trim()) return;
+    onSave({ id: item?.id || `ot-${Date.now()}`, ...form, color: item?.color || COLORS[Math.floor(Math.random() * COLORS.length)] });
+  };
+  return (
+    <Modal title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"} onClose={onClose}
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e => set("firstName", e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Last Name</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} className={inputCls}/></div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Role</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
+          <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+        </div>
+        <div><label className={labelCls}>PIN (optional)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="4–6 digits" className={inputCls}/></div>
+      </div>
+    </Modal>
+  );
+}
+
+function ChecklistSettingsFormModal({ item, onSave, onClose }) {
+  const [name, setName] = useState(item?.name || "");
+  const [shift, setShift] = useState(item?.shift || "Opening");
+  const [defaultRole, setDefaultRole] = useState(item?.defaultRole || "");
+  const [items, setItems] = useState(item?.items || []);
+  const addItem = () => setItems(its => [...its, { id: `ci-${Date.now()}`, text: "", guide: "" }]);
+  const handleSave = () => {
+    if (!name.trim()) return;
+    onSave({ id: item?.id || `cl-${Date.now()}`, name: name.trim(), shift, defaultRole, items: items.filter(i => i.text.trim()) });
+  };
+  return (
+    <Modal title={item ? `Edit — ${item.name}` : "New Checklist"} onClose={onClose} maxW="max-w-2xl"
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Name *</label><input value={name} onChange={e => setName(e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} className={inputCls}><option>Opening</option><option>Mid-shift</option><option>Closing</option><option>Any</option></select></div>
+        </div>
+        <div><label className={labelCls}>Default Role</label><input value={defaultRole} onChange={e => setDefaultRole(e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className={labelCls}>Items</label>
+            <button onClick={addItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button>
+          </div>
+          <div className="space-y-2">
+            {items.map(it => (
+              <div key={it.id} className="flex items-start gap-2 bg-slate-800/60 rounded-xl p-3">
+                <div className="flex-1 space-y-1.5">
+                  <input value={it.text} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, text: e.target.value } : x))} placeholder="Checklist item…" className={inputCls}/>
+                  <input value={it.guide} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, guide: e.target.value } : x))} placeholder="Guidance note…" className={`${inputCls} text-xs py-1.5`}/>
+                </div>
+                <button onClick={() => setItems(its => its.filter(x => x.id !== it.id))} className="text-slate-600 hover:text-red-400 mt-2"><X size={14}/></button>
+              </div>
+            ))}
+            {items.length === 0 && <div className="text-xs text-slate-500 text-center py-4">No items yet — click Add item above</div>}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam, onAddChecklist, onUpdateChecklist, onDeleteChecklist, onAddTempUnit, onUpdateTempUnit, onDeleteTempUnit, onAddCleanTask, onUpdateCleanTask, onDeleteCleanTask, onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam }) {
   const [tab, setTab] = useState("checklists");
   const [clModal, setClModal] = useState(null);
@@ -2294,33 +2430,126 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
   const [delTarget, setDelTarget] = useState(null);
   const tabs = [{ key: "checklists", label: "Checklists" }, { key: "tempunits", label: "Temp Units" }, { key: "cleaning", label: "Cleaning Tasks" }, { key: "team", label: "Ops Team" }];
 
-  // Checklist form modal
-  function ChecklistFormModal({ item, onSave, onClose }) {
-    const [name, setName] = useState(item?.name || ""); const [shift, setShift] = useState(item?.shift || "Opening"); const [defaultRole, setDefaultRole] = useState(item?.defaultRole || ""); const [items, setItems] = useState(item?.items || []);
-    const addItem = () => setItems(its => [...its, { id: `ci-${Date.now()}`, text: "", guide: "" }]);
-    return <Modal title={item ? `Edit — ${item.name}` : "New Checklist"} onClose={onClose} maxW="max-w-2xl" footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!name.trim()) return; onSave({ id: item?.id || `cl-${Date.now()}`, name: name.trim(), shift, defaultRole, items: items.filter(i => i.text.trim()) }); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}><div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Name *</label><input value={name} onChange={e => setName(e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} className={inputCls}><option>Opening</option><option>Mid-shift</option><option>Closing</option><option>Any</option></select></div></div><div><label className={labelCls}>Default Role</label><input value={defaultRole} onChange={e => setDefaultRole(e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div><div><div className="flex items-center justify-between mb-2"><label className={labelCls}>Items</label><button onClick={addItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button></div><div className="space-y-2">{items.map(it => <div key={it.id} className="flex items-start gap-2 bg-slate-800/60 rounded-xl p-3"><div className="flex-1 space-y-1.5"><input value={it.text} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, text: e.target.value } : x))} placeholder="Checklist item…" className={inputCls}/><input value={it.guide} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, guide: e.target.value } : x))} placeholder="Guidance note…" className={`${inputCls} text-xs py-1.5`}/></div><button onClick={() => setItems(its => its.filter(x => x.id !== it.id))} className="text-slate-600 hover:text-red-400 mt-2"><X size={14}/></button></div>)}{items.length === 0 && <div className="text-xs text-slate-500 text-center py-4">No items yet</div>}</div></div></div></Modal>;
-  }
-
   return (
     <div className="space-y-6">
-      <div className="flex gap-2 bg-slate-900/60 border border-slate-700/60 rounded-2xl p-1.5 w-fit flex-wrap">{tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>{t.label}</button>)}</div>
+      <div className="flex gap-2 bg-slate-900/60 border border-slate-700/60 rounded-2xl p-1.5 w-fit flex-wrap">
+        {tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>{t.label}</button>)}
+      </div>
 
-      {tab === "checklists" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setClModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> New Checklist</button></div>{checklists.map(cl => <div key={cl.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4"><div className="flex items-start justify-between gap-2"><div><div className="text-sm font-bold text-white">{cl.name}</div><div className="flex gap-2 mt-1.5"><Badge label={cl.shift} color="slate"/>{cl.defaultRole && <Badge label={`🎭 ${cl.defaultRole}`} color="violet"/>}<Badge label={`${cl.items.length} items`} color="slate"/></div></div><div className="flex gap-1.5"><button onClick={() => setClModal(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div><div className="mt-3 space-y-1">{cl.items.map(it => <div key={it.id} className="flex items-center gap-2 text-xs text-slate-400"><Check size={10} className="text-slate-600"/>{it.text}</div>)}</div></div>)}</div>}
+      {tab === "checklists" && (
+        <div className="space-y-4">
+          <div className="flex justify-end"><button onClick={() => setClModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> New Checklist</button></div>
+          {checklists.map(cl => (
+            <div key={cl.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-sm font-bold text-white">{cl.name}</div>
+                  <div className="flex gap-2 mt-1.5"><Badge label={cl.shift} color="slate"/>{cl.defaultRole && <Badge label={`🎭 ${cl.defaultRole}`} color="violet"/>}<Badge label={`${cl.items.length} items`} color="slate"/></div>
+                </div>
+                <div className="flex gap-1.5">
+                  <button onClick={() => setClModal(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1">{cl.items.map(it => <div key={it.id} className="flex items-center gap-2 text-xs text-slate-400"><Check size={10} className="text-slate-600"/>{it.text}</div>)}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
-      {tab === "tempunits" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setTuModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Unit</button></div>{tempUnits.map(u => { const brand = brands.find(b => b.id === u.brandId); return <div key={u.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4"><span className="text-xl">{TEMP_ICON[u.type] || "🌡️"}</span><div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{u.name}</div><div className="text-xs text-slate-400">{brand?.name} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div><div className="flex gap-1.5"><button onClick={() => setTuModal(u)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete "${u.name}"?`, fn: () => onDeleteTempUnit(u.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div>; })}</div>}
+      {tab === "tempunits" && (
+        <div className="space-y-4">
+          <div className="flex justify-end"><button onClick={() => setTuModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Unit</button></div>
+          {tempUnits.map(u => {
+            const brand = brands.find(b => b.id === u.brandId);
+            return (
+              <div key={u.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
+                <span className="text-xl">{TEMP_ICON[u.type] || "🌡️"}</span>
+                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{u.name}</div><div className="text-xs text-slate-400">{brand?.name} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div>
+                <div className="flex gap-1.5">
+                  <button onClick={() => setTuModal(u)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete "${u.name}"?`, fn: () => onDeleteTempUnit(u.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {tab === "cleaning" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setCtModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Task</button></div>{[...new Set(cleaningTasks.map(t => t.area))].sort().map(area => <div key={area} className="space-y-2"><div className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{area}</div>{cleaningTasks.filter(t => t.area === area).map(t => <div key={t.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-xl px-4 py-3"><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-white">{t.name}</div><div className="text-xs text-slate-400">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div></div><div className="flex gap-1.5"><button onClick={() => setCtModal(t)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div>)}</div>)}</div>}
+      {tab === "cleaning" && (
+        <div className="space-y-4">
+          <div className="flex justify-end"><button onClick={() => setCtModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Task</button></div>
+          {[...new Set(cleaningTasks.map(t => t.area))].sort().map(area => (
+            <div key={area} className="space-y-2">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{area}</div>
+              {cleaningTasks.filter(t => t.area === area).map(t => (
+                <div key={t.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-xl px-4 py-3">
+                  <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-white">{t.name}</div><div className="text-xs text-slate-400">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div></div>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => setCtModal(t)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                    <button onClick={() => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
 
-      {tab === "team" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>{opsTeam.map(m => { const brand = brands.find(b => b.id === m.brandId); return <div key={m.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4"><div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color||"#6366f1")+"30", color: m.color||"#6366f1" }}>{m.firstName[0]}{m.lastName?.[0]||""}</div><div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{m.firstName} {m.lastName}</div><div className="text-xs text-slate-400">{m.role} · {brand?.name||"—"}</div></div><div className="flex gap-1.5"><button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div>; })}</div>}
+      {tab === "team" && (
+        <div className="space-y-4">
+          <div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>
+          {opsTeam.map(m => {
+            const brand = brands.find(b => b.id === m.brandId);
+            return (
+              <div key={m.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
+                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{m.firstName} {m.lastName}</div><div className="text-xs text-slate-400">{m.role} · {brand?.name || "—"}</div></div>
+                <div className="flex gap-1.5">
+                  <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {clModal && <ChecklistFormModal item={clModal === "new" ? null : clModal} onSave={item => { clModal === "new" ? onAddChecklist(item) : onUpdateChecklist(item); setClModal(null); }} onClose={() => setClModal(null)}/>}
-      {tuModal && (() => { const item = tuModal === "new" ? null : tuModal; const [form, setFormState] = useState({ name: item?.name||"", type: item?.type||"fridge", brandId: item?.brandId||brands[0]?.id||"", min: item?.min??'', max: item?.max??'', assignRole: item?.assignRole||"" }); const set = (k,v) => setFormState(f=>({...f,[k]:v})); return <Modal title={item ? `Edit — ${item.name}` : "Add Temp Unit"} onClose={() => setTuModal(null)} footer={<><button onClick={() => setTuModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.name.trim()) return; const saved = { id: item?.id||`tu-${Date.now()}`, ...form, min: form.min!==''?parseFloat(form.min):null, max: form.max!==''?parseFloat(form.max):null }; tuModal==="new"?onAddTempUnit(saved):onUpdateTempUnit(saved); setTuModal(null); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item?"Save":"Add"}</button></>}><div className="space-y-4"><div><label className={labelCls}>Name *</label><input value={form.name} onChange={e=>set("name",e.target.value)} className={inputCls}/></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Type</label><select value={form.type} onChange={e=>set("type",e.target.value)} className={inputCls}><option value="fridge">Fridge 🧊</option><option value="freezer">Freezer ❄️</option><option value="hot">Hot Hold 🔥</option></select></div><div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e=>set("brandId",e.target.value)} className={inputCls}>{brands.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Min temp (°C)</label><input type="number" step="0.5" value={form.min} onChange={e=>set("min",e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div><div><label className={labelCls}>Max temp (°C)</label><input type="number" step="0.5" value={form.max} onChange={e=>set("max",e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div></div><div><label className={labelCls}>Responsible Role</label><input value={form.assignRole} onChange={e=>set("assignRole",e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div></div></Modal>; })()}
-      {ctModal && (() => { const item = ctModal === "new" ? null : ctModal; const [form, setFormState] = useState({ name: item?.name||"", area: item?.area||"Kitchen", freq: item?.freq||"Daily - Opening", assignRole: item?.assignRole||"", notes: item?.notes||"" }); const set = (k,v) => setFormState(f=>({...f,[k]:v})); return <Modal title={item ? `Edit — ${item.name}` : "Add Cleaning Task"} onClose={() => setCtModal(null)} footer={<><button onClick={() => setCtModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.name.trim()) return; const saved = { id: item?.id||`ct-${Date.now()}`, ...form }; ctModal==="new"?onAddCleanTask(saved):onUpdateCleanTask(saved); setCtModal(null); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item?"Save":"Add"}</button></>}><div className="space-y-4"><div><label className={labelCls}>Task Name *</label><input value={form.name} onChange={e=>set("name",e.target.value)} className={inputCls}/></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Area</label><input value={form.area} onChange={e=>set("area",e.target.value)} placeholder="Kitchen, FOH…" className={inputCls}/></div><div><label className={labelCls}>Frequency</label><input value={form.freq} onChange={e=>set("freq",e.target.value)} placeholder="Daily - Opening…" className={inputCls}/></div></div><div><label className={labelCls}>Assigned Role</label><input value={form.assignRole} onChange={e=>set("assignRole",e.target.value)} placeholder="e.g. Kitchen Porter" className={inputCls}/></div><div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Instructions…"/></div></div></Modal>; })()}
-      {tmModal && (() => { const item = tmModal === "new" ? null : tmModal; const colors = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"]; const [form, setFormState] = useState({ firstName: item?.firstName||"", lastName: item?.lastName||"", role: item?.role||"", brandId: item?.brandId||brands[0]?.id||"", pin: item?.pin||"" }); const set = (k,v) => setFormState(f=>({...f,[k]:v})); return <Modal title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"} onClose={() => setTmModal(null)} footer={<><button onClick={() => setTmModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.firstName.trim()) return; const saved = { id: item?.id||`ot-${Date.now()}`, ...form, color: item?.color||colors[Math.floor(Math.random()*colors.length)] }; tmModal==="new"?onAddOpsTeam(saved):onUpdateOpsTeam(saved); setTmModal(null); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item?"Save":"Add"}</button></>}><div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e=>set("firstName",e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Last Name</label><input value={form.lastName} onChange={e=>set("lastName",e.target.value)} className={inputCls}/></div></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Role</label><input value={form.role} onChange={e=>set("role",e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div><div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e=>set("brandId",e.target.value)} className={inputCls}>{brands.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div></div><div><label className={labelCls}>PIN (optional)</label><input value={form.pin} onChange={e=>set("pin",e.target.value)} maxLength={6} placeholder="4-6 digits" className={inputCls}/></div></div></Modal>; })()}
+      {clModal && (
+        <ChecklistSettingsFormModal
+          item={clModal === "new" ? null : clModal}
+          onSave={item => { clModal === "new" ? onAddChecklist(item) : onUpdateChecklist(item); setClModal(null); }}
+          onClose={() => setClModal(null)}
+        />
+      )}
+      {tuModal && (
+        <TempUnitFormModal
+          item={tuModal === "new" ? null : tuModal}
+          brands={brands}
+          onSave={item => { tuModal === "new" ? onAddTempUnit(item) : onUpdateTempUnit(item); setTuModal(null); }}
+          onClose={() => setTuModal(null)}
+        />
+      )}
+      {ctModal && (
+        <CleaningTaskFormModal
+          item={ctModal === "new" ? null : ctModal}
+          onSave={item => { ctModal === "new" ? onAddCleanTask(item) : onUpdateCleanTask(item); setCtModal(null); }}
+          onClose={() => setCtModal(null)}
+        />
+      )}
+      {tmModal && (
+        <OpsTeamMemberFormModal
+          item={tmModal === "new" ? null : tmModal}
+          brands={brands}
+          onSave={item => { tmModal === "new" ? onAddOpsTeam(item) : onUpdateOpsTeam(item); setTmModal(null); }}
+          onClose={() => setTmModal(null)}
+        />
+      )}
       {delTarget && <OpsConfirmModal message={delTarget.msg} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
     </div>
   );
 }
+
 
 // ─── Main App (merged: live financial + new ops) ───────────────────────────────
 export default function App() {
