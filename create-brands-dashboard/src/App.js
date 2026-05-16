@@ -6,6 +6,15 @@ import {
   fetchEntries, upsertEntry, upsertEntries,
   fetchIssues, insertIssue, upsertIssue, removeIssue,
   fetchMaintenanceTickets, insertMaintenanceTicket, updateMaintenanceTicket, deleteMaintenanceTicket,
+  fetchChecklists, upsertChecklist, removeChecklist,
+  fetchTempUnits, upsertTempUnit, removeTempUnit,
+  fetchCleaningTasks, upsertCleaningTask, removeCleaningTask,
+  fetchAssignments, upsertAssignment, removeAssignment,
+  fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember,
+  fetchTempLogs, insertTempLog,
+  fetchDeliveries, insertDelivery,
+  fetchChecklistStates, upsertChecklistState,
+  fetchAuditTrail, insertAuditEntry, clearAuditTrail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -18,7 +27,8 @@ import {
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
-  ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar
+  ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
+  Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks
 } from "lucide-react";
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
@@ -63,73 +73,6 @@ const PRIORITY_CONFIG = {
   "Low": { color: "slate" },
 };
 
-// ─── Mock Data Generator ──────────────────────────────────────────────────────
-function buildMockData(brands) {
-  const entries = [];
-  const today = new Date();
-  const managers = { "cb-kitchen": "Sarah Chen", "noir-bar": "Lena Park", "the-deli": "Oliver Reeves" };
-  brands.forEach(brand => {
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(today); d.setDate(d.getDate() - i);
-      const dow = d.getDay(); const isWeekend = dow === 0 || dow === 6;
-      const mult = isWeekend ? 1.25 : 0.9; const noise = () => 1 + (Math.random() - 0.5) * 0.36;
-      const netSales = Math.round(brand.kpiTargets.dailyRevenue * mult * noise());
-      const laborCost = Math.round(netSales * 0.28 * noise());
-      const cogsCost = Math.round(netSales * 0.30 * noise());
-      const totalHours = Math.round(netSales / (48 + Math.random() * 10));
-      const totalOrders = Math.round(netSales / (18 + Math.random() * 8));
-      const atv = totalOrders > 0 ? netSales / totalOrders : 0;
-      const cashVariance = Math.random() < 0.85 ? 0 : Math.round((Math.random() - 0.5) * 80);
-      const cardRevenue = Math.round(netSales * 0.82);
-      const cashExpected = netSales - cardRevenue;
-      const physicalCash = cashExpected + cashVariance;
-      const dateStr = d.toISOString().split("T")[0];
-      const fiveStar = Math.round(3 + Math.random() * 10);
-      const midStar = Math.round(1 + Math.random() * 4);
-      const oneStar = Math.random() < 0.3 ? Math.round(Math.random() * 2) : 0;
-      entries.push({
-        id: `${brand.id}-${dateStr}`,
-        brandId: brand.id, brandName: brand.name, date: dateStr,
-        manager: managers[brand.id] || "Manager", submittedBy: managers[brand.id] || "Manager",
-        netSales, cardRevenue, cashExpected, physicalCash, cashVariance,
-        varianceJustification: cashVariance !== 0 ? "Till count discrepancy noted." : "",
-        openingFloat: 200, closingFloat: 200 + cashVariance,
-        laborCost, cogsCost, totalHours, totalOrders, atv,
-        fiveStarReviews: fiveStar, midStarReviews: midStar, oneStarReviews: oneStar,
-        notes: "", maintenanceTickets: [], timestamp: d.toISOString()
-      });
-    }
-  });
-  return entries;
-}
-
-function buildMockIssues(brands) {
-  const issues = [];
-  const statuses = ISSUE_STATUSES;
-  const priorities = ISSUE_PRIORITIES;
-  const categories = ISSUE_CATEGORIES;
-  const titles = ["Dishwasher not draining", "HVAC unit making noise", "Broken walk-in fridge seal", "POS system crashing", "Grease trap needs cleaning", "Ceiling light flickering", "Prep table surface damaged", "Drainage slow in kitchen", "Pest sighting near store room", "Wi-Fi router down"];
-  brands.forEach((brand, bi) => {
-    for (let i = 0; i < 4; i++) {
-      const d = new Date(); d.setDate(d.getDate() - Math.round(Math.random() * 14));
-      issues.push({
-        id: `issue-${brand.id}-${i}`,
-        brandId: brand.id, brandName: brand.name,
-        title: titles[(bi * 4 + i) % titles.length],
-        description: "Reported during shift. Requires immediate attention or scheduled maintenance.",
-        category: categories[Math.floor(Math.random() * categories.length)],
-        priority: priorities[Math.floor(Math.random() * priorities.length)],
-        status: statuses[Math.floor(Math.random() * 3)],
-        reportedBy: ["Sarah Chen", "Lena Park", "Oliver Reeves"][bi % 3],
-        createdAt: d.toISOString(),
-        updatedAt: d.toISOString(),
-        comments: [],
-        assignedTo: "",
-      });
-    }
-  });
-  return issues;
-}
 
 // ─── Period Utilities ─────────────────────────────────────────────────────────
 function getMonday(d) { const dt = new Date(d); const day = dt.getDay(); dt.setDate(dt.getDate() + (day === 0 ? -6 : 1 - day)); return dt; }
@@ -1923,11 +1866,467 @@ function UserChip({ user, onLogout, compact }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
+
+// ─── Ops imports patch (added to existing imports at top) ─────────────────────
+// NOTE: Also add these to the import line at the top of the file:
+// fetchChecklists, upsertChecklist, removeChecklist,
+// fetchTempUnits, upsertTempUnit, removeTempUnit,
+// fetchCleaningTasks, upsertCleaningTask, removeCleaningTask,
+// fetchAssignments, upsertAssignment, removeAssignment,
+// fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember,
+// fetchTempLogs, insertTempLog,
+// fetchDeliveries, insertDelivery,
+// fetchChecklistStates, upsertChecklistState,
+// fetchAuditTrail, insertAuditEntry, clearAuditTrail,
+
+// ─── Ops constants ────────────────────────────────────────────────────────────
+const TEMP_ICON = { fridge: "🧊", freezer: "❄️", hot: "🔥" };
+
+function getTodayStr() { return new Date().toISOString().split("T")[0]; }
+function nowTimeStr() { const n = new Date(); return n.getHours().toString().padStart(2,"0") + ":" + n.getMinutes().toString().padStart(2,"0"); }
+function isActiveToday(a) {
+  const f = a.freq, d = new Date().getDay();
+  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  if (f === "daily") return true;
+  if (f === "weekdays") return d >= 1 && d <= 5;
+  if (f === "weekends") return d === 0 || d === 6;
+  if (f === "weekly") return a.weekday === days[d];
+  if (f === "once") return a.date === getTodayStr();
+  if (f === "custom") return (a.customDays || []).includes(days[d]);
+  return true;
+}
+function isWindowOpen(a) {
+  if (!a.winStart) return true;
+  const [h,m] = a.winStart.split(":").map(Number);
+  const now = new Date(); return now.getHours()*60+now.getMinutes() >= h*60+m;
+}
+function isOverdue(a) {
+  if (!a.winEnd) return false;
+  const [h,m] = a.winEnd.split(":").map(Number);
+  const now = new Date(); return now.getHours()*60+now.getMinutes() > h*60+m;
+}
+function tempLimitText(u) {
+  if (u.min != null && u.max != null) return `${u.min}°C–${u.max}°C`;
+  if (u.min != null) return `Min ${u.min}°C`;
+  if (u.max != null) return `Max ${u.max}°C`;
+  return "No limit";
+}
+function checkTemp(u, v) {
+  const n = parseFloat(v);
+  if (u.min != null && n < u.min) return false;
+  if (u.max != null && n > u.max) return false;
+  return true;
+}
+
+// ─── Ops shared helpers ───────────────────────────────────────────────────────
+const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors";
+const labelCls = "text-xs text-slate-400 font-semibold mb-1.5 block";
+
+function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${maxW} flex flex-col`} style={{ maxHeight: "85vh" }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700 flex-shrink-0">
+          <h3 className="font-bold text-white">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">{children}</div>
+        {footer && <div className="flex gap-3 px-5 py-4 border-t border-slate-700 flex-shrink-0">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+function OpsConfirmModal({ message, onConfirm, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
+          <div className="text-sm text-slate-300">{message}</div>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Ops Network Dashboard ────────────────────────────────────────────────────
+function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checklists = [], tempUnits = [], cleaningTasks = [] }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const todayA = assignments.filter(a => vb.some(b => b.id === a.brandId) && isActiveToday(a));
+  const overdue = todayA.filter(isOverdue);
+  const completed = auditTrail.filter(t => t.date === getTodayStr() && t.action.includes("sign-off") && vb.some(b => b.id === t.brandId)).length;
+  const ragFor = brand => {
+    const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
+    const od = la.filter(isOverdue);
+    const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
+    if (od.length) return "red";
+    if (done === la.length && la.length > 0) return "green";
+    return "amber";
+  };
+  return (
+    <div className="space-y-6">
+      {overdue.length > 0 && <div className="bg-red-950/30 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={18} className="text-red-400 flex-shrink-0 mt-0.5"/><div><div className="text-sm font-bold text-red-400">{overdue.length} overdue assignment{overdue.length > 1 ? "s" : ""} require action</div></div></div>}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Locations" value={vb.length} sub="Active" icon={MapPin} accent="indigo"/>
+        <StatCard label="Assignments Today" value={todayA.length} sub="All sites" icon={ClipboardList} accent="indigo"/>
+        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "Action needed" : "All on time"} icon={Clock} accent={overdue.length ? "red" : "emerald"} alert={overdue.length > 0}/>
+        <StatCard label="Completed Today" value={completed} sub="Sign-offs" icon={CheckCircle} accent="emerald"/>
+      </div>
+      <AnalysisBlock title="All Locations — Live Status">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="border-b border-slate-700">{["Location","Scheduled","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead>
+            <tbody>
+              {vb.map(brand => {
+                const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
+                const od = la.filter(isOverdue);
+                const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
+                const rate = la.length ? Math.round((done / la.length) * 100) : 0;
+                const rag = ragFor(brand);
+                const ragColors = { red: "red", green: "green", amber: "amber" };
+                return (
+                  <tr key={brand.id} className="border-b border-slate-800 hover:bg-slate-800/30">
+                    <td className="px-3 py-3"><div className="flex items-center gap-2"><div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: brand.color + "25", color: brand.color }}>{brand.name.slice(0,2)}</div><span className="font-semibold text-slate-200">{brand.name}</span></div></td>
+                    <td className="px-3 py-3 text-slate-300 font-semibold">{la.length}</td>
+                    <td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ On time" color="green"/>}</td>
+                    <td className="px-3 py-3 text-slate-300">{done}</td>
+                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la.length ? rate+"%" : "—"}</span></td>
+                    <td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={ragColors[rag]}/></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </AnalysisBlock>
+    </div>
+  );
+}
+
+// ─── Today's Tasks ────────────────────────────────────────────────────────────
+function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
+  const [expandedId, setExpandedId] = useState(null);
+  const bAssigns = assignments.filter(a => a.brandId === selBrand && isActiveToday(a));
+  const overdue = bAssigns.filter(isOverdue);
+  const getTaskName = (type, taskId) => {
+    if (type === "checklist") return checklists.find(c => c.id === taskId)?.name || taskId;
+    if (type === "temp") return tempUnits.find(t => t.id === taskId)?.name || taskId;
+    if (type === "cleaning") return cleaningTasks.find(t => t.id === taskId)?.name || taskId;
+    return "Delivery check";
+  };
+  const typeIcons = { checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" };
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap gap-2">{vb.map(b => <button key={b.id} onClick={() => setSelBrand(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${selBrand === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={selBrand === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+      {overdue.length > 0 && <div className="bg-red-950/30 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
+      {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments for this location today</div></div>}
+      <div className="space-y-3">
+        {bAssigns.map(a => {
+          const od = isOverdue(a); const taskName = getTaskName(a.type, a.taskId);
+          const cl = a.type === "checklist" ? checklists.find(c => c.id === a.taskId) : null;
+          const doneToday = auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName));
+          const stateKey = `${a.brandId}||${a.taskId}||${getTodayStr()}`;
+          const clState = checklistStates[stateKey] || {};
+          const totalItems = cl?.items?.length || 0;
+          const doneItems = totalItems ? Object.values(clState).filter(Boolean).length : 0;
+          const pct = totalItems ? Math.round((doneItems / totalItems) * 100) : 0;
+          const isExp = expandedId === a.id;
+          return (
+            <div key={a.id} className={`rounded-2xl border overflow-hidden ${od ? "border-red-500/30 bg-red-950/10" : doneToday ? "border-emerald-500/30 bg-emerald-950/10" : "border-slate-700/60 bg-slate-900/60"}`}>
+              <div className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-base flex-shrink-0">{typeIcons[a.type] || "📋"}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="text-sm font-bold text-white">{taskName}</div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {od && <Badge label="OVERDUE" color="red"/>}
+                        {doneToday && <Badge label="✓ Complete" color="emerald"/>}
+                        {cl && <button onClick={() => setExpandedId(isExp ? null : a.id)} className="text-xs text-indigo-400 hover:text-indigo-300">{isExp ? "Collapse" : "Open"}</button>}
+                        {!doneToday && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Sign off</button>}
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">Window: {a.winStart}–{a.winEnd}{a.role ? ` · 🎭 ${a.role}` : ""}</div>
+                    {cl && totalItems > 0 && <div className="mt-2"><div className="flex justify-between text-xs text-slate-400 mb-1"><span>{doneItems}/{totalItems} items</span><span>{pct}%</span></div><div className="h-1.5 bg-slate-800 rounded-full"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/></div></div>}
+                  </div>
+                </div>
+              </div>
+              {cl && isExp && (
+                <div className="border-t border-slate-700/60 p-4 space-y-2">
+                  {cl.items.map(item => {
+                    const checked = !!clState[item.id];
+                    return (
+                      <div key={item.id} className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${checked ? "bg-emerald-950/20 border-emerald-500/20" : "bg-slate-800/40 border-slate-700/40"}`}>
+                        <button onClick={() => onChecklistItemToggle(stateKey, item.id, !checked)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border mt-0.5 transition-colors ${checked ? "bg-emerald-600 border-emerald-500" : "border-slate-600 hover:border-emerald-500"}`}>{checked && <Check size={11} className="text-white"/>}</button>
+                        <div className="flex-1 min-w-0"><div className={`text-sm ${checked ? "line-through text-slate-500" : "text-slate-200"}`}>{item.text}</div>{item.guide && <div className="text-xs text-slate-500 mt-0.5">{item.guide}</div>}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Temperature Log ──────────────────────────────────────────────────────────
+function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ unitId: "", value: "", notes: "", time: nowTimeStr() });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const brandUnits = tempUnits.filter(u => u.brandId === selBrand);
+  const todayLogs = tempLogs.filter(l => l.brandId === selBrand && l.date === getTodayStr());
+  const getLatest = unitId => todayLogs.filter(l => l.unitId === unitId).sort((a,b) => b.time.localeCompare(a.time))[0];
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">{vb.map(b => <button key={b.id} onClick={() => setSelBrand(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${selBrand === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={selBrand === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+        <button onClick={() => { setForm({ unitId: brandUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {brandUnits.map(unit => {
+          const latest = getLatest(unit.id);
+          const ok = latest ? checkTemp(unit, latest.value) : null;
+          return (
+            <div key={unit.id} className={`rounded-2xl border p-4 ${latest && !ok ? "bg-red-950/20 border-red-500/30" : latest && ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2"><span className="text-lg">{TEMP_ICON[unit.type] || "🌡️"}</span><div><div className="text-sm font-bold text-white">{unit.name}</div><div className="text-xs text-slate-500">{tempLimitText(unit)}</div></div></div>
+                {latest && (ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ BREACH" color="red"/>)}
+              </div>
+              {latest ? <div className="text-2xl font-bold mb-1" style={{ color: ok ? "#10b981" : "#ef4444" }}>{latest.value}°C</div> : <div className="text-xl font-bold text-slate-600 mb-1">No reading</div>}
+              <div className="text-xs text-slate-500">{latest ? `Logged ${latest.time} by ${latest.loggedBy}` : "Not logged today"}</div>
+            </div>
+          );
+        })}
+        {brandUnits.length === 0 && <div className="col-span-3 flex flex-col items-center justify-center py-12 text-slate-500"><Thermometer size={28} className="mb-2 text-slate-700"/><div className="text-sm">No temperature units for this location</div><div className="text-xs mt-1">Add units in Ops Settings</div></div>}
+      </div>
+      {todayLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead><tbody>{[...todayLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-800"><td className="px-3 py-2 text-slate-300">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-400 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-400">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
+      {showForm && (
+        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = brandUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: selBrand, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
+          <div className="space-y-4">
+            <div><label className={labelCls}>Unit</label><select value={form.unitId} onChange={e => set("unitId", e.target.value)} className={inputCls}>{brandUnits.map(u => <option key={u.id} value={u.id}>{u.name} ({u.type})</option>)}</select></div>
+            <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Temperature (°C)</label><input type="number" step="0.1" value={form.value} onChange={e => set("value", e.target.value)} placeholder="e.g. 4.5" className={inputCls}/></div><div><label className={labelCls}>Time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div></div>
+            {form.unitId && form.value !== "" && (() => { const unit = brandUnits.find(u => u.id === form.unitId); const ok = unit ? checkTemp(unit, form.value) : true; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-950/30 border-emerald-500/30" : "bg-red-950/30 border-red-500/30"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-400" : "text-red-400"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{unit && <div className="text-xs text-slate-400 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
+            <div><label className={labelCls}>Notes</label><input value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Any observations…" className={inputCls}/></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Deliveries View ──────────────────────────────────────────────────────────
+function DeliveriesView({ brands, deliveries, onAdd }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const brandDeliveries = deliveries.filter(d => d.brandId === selBrand).sort((a,b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">{vb.map(b => <button key={b.id} onClick={() => setSelBrand(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${selBrand === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={selBrand === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+        <button onClick={() => { setForm({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Delivery</button>
+      </div>
+      {brandDeliveries.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Truck size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No deliveries logged</div></div>}
+      <div className="space-y-3">{brandDeliveries.map(d => <div key={d.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4"><div className="text-sm font-bold text-white">{d.supplier}</div><div className="text-xs text-slate-400 mt-0.5">{d.items}</div><div className="flex gap-2 mt-2 flex-wrap"><Badge label={d.date} color="slate"/><Badge label={d.time} color="slate"/>{d.temp && <Badge label={`${d.temp}°C`} color={d.tempOk === "yes" ? "green" : "red"}/>}<Badge label={d.condition === "good" ? "✓ Good" : `⚠ ${d.condition}`} color={d.condition === "good" ? "green" : "amber"}/><Badge label={`By ${d.loggedBy}`} color="slate"/></div>{d.notes && <div className="text-xs text-slate-500 mt-1.5 italic">{d.notes}</div>}</div>)}</div>
+      {showForm && (
+        <Modal title="Log Delivery" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.supplier) return; onAdd({ id: `del-${Date.now()}`, brandId: selBrand, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
+          <div className="space-y-4">
+            <div><label className={labelCls}>Supplier *</label><input value={form.supplier} onChange={e => set("supplier", e.target.value)} className={inputCls} placeholder="e.g. Fresh Direct"/></div>
+            <div><label className={labelCls}>Items delivered</label><textarea value={form.items} onChange={e => set("items", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="List items…"/></div>
+            <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Delivery time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Temp check (°C)</label><input type="number" step="0.1" value={form.temp} onChange={e => set("temp", e.target.value)} className={inputCls} placeholder="Optional"/></div></div>
+            <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Temp acceptable?</label><select value={form.tempOk} onChange={e => set("tempOk", e.target.value)} className={inputCls}><option value="yes">Yes</option><option value="no">No — rejected</option></select></div><div><label className={labelCls}>Condition</label><select value={form.condition} onChange={e => set("condition", e.target.value)} className={inputCls}><option value="good">Good</option><option value="damaged">Damaged</option><option value="short">Short delivery</option><option value="rejected">Rejected</option></select></div></div>
+            <div><label className={labelCls}>Driver name</label><input value={form.driver} onChange={e => set("driver", e.target.value)} className={inputCls} placeholder="Optional"/></div>
+            <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Any issues…"/></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Assignments View ─────────────────────────────────────────────────────────
+function AssignmentFormModal({ brands, checklists, tempUnits, cleaningTasks, item, onSave, onClose }) {
+  const [form, setForm] = useState({ brandId: item?.brandId || brands[0]?.id || "", type: item?.type || "checklist", taskId: item?.taskId || "", role: item?.role || "", personId: item?.personId || "", freq: item?.freq || "daily", weekday: item?.weekday || "Monday", date: item?.date || "", customDays: item?.customDays || [], winStart: item?.winStart || "08:00", winEnd: item?.winEnd || "10:00", priority: item?.priority || "normal", notes: item?.notes || "" });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const taskOptions = () => {
+    if (form.type === "checklist") return checklists.map(c => ({ id: c.id, label: `${c.name} (${c.shift})` }));
+    if (form.type === "temp") return tempUnits.filter(t => !t.brandId || t.brandId === form.brandId).map(t => ({ id: t.id, label: t.name }));
+    if (form.type === "cleaning") return cleaningTasks.map(t => ({ id: t.id, label: `${t.name} — ${t.area}` }));
+    return [{ id: "delivery", label: "Delivery check" }];
+  };
+  const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  return (
+    <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl" footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.taskId || !form.role) return; onSave({ id: item?.id || `as-${Date.now()}`, ...form }); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+      <div className="space-y-4">
+        <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Task Type</label><select value={form.type} onChange={e => { set("type", e.target.value); set("taskId", ""); }} className={inputCls}><option value="checklist">Checklist</option><option value="cleaning">Cleaning</option><option value="temp">Temperature</option><option value="delivery">Delivery</option></select></div><div><label className={labelCls}>Task</label><select value={form.taskId} onChange={e => set("taskId", e.target.value)} className={inputCls}><option value="">— Select —</option>{taskOptions().map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
+        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Role *</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>
+        <div><label className={labelCls}>Frequency</label><select value={form.freq} onChange={e => set("freq", e.target.value)} className={inputCls}><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="weekly">Weekly</option><option value="once">One-off</option><option value="custom">Custom days</option></select></div>
+        {form.freq === "weekly" && <div><label className={labelCls}>Day of week</label><select value={form.weekday} onChange={e => set("weekday", e.target.value)} className={inputCls}>{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d => <option key={d}>{d}</option>)}</select></div>}
+        {form.freq === "once" && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
+        {form.freq === "custom" && <div><label className={labelCls}>Custom days</label><div className="flex gap-2 flex-wrap">{days.map(d => <button key={d} onClick={() => set("customDays", form.customDays.includes(d) ? form.customDays.filter(x => x !== d) : [...form.customDays, d])} className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${form.customDays.includes(d) ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400"}`}>{d}</button>)}</div></div>}
+        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Window Start</label><input type="time" value={form.winStart} onChange={e => set("winStart", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Window End</label><input type="time" value={form.winEnd} onChange={e => set("winEnd", e.target.value)} className={inputCls}/></div></div>
+        <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Any instructions…"/></div>
+      </div>
+    </Modal>
+  );
+}
+
+function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningTasks, opsTeam, auditTrail, onAdd, onEdit, onDelete }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [filter, setFilter] = useState("all");
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [deleteId, setDeleteId] = useState(null);
+  const getTaskName = (type, taskId) => {
+    if (type === "checklist") return checklists.find(c => c.id === taskId)?.name || taskId;
+    if (type === "temp") return tempUnits.find(t => t.id === taskId)?.name || taskId;
+    if (type === "cleaning") return cleaningTasks.find(t => t.id === taskId)?.name || taskId;
+    return "Delivery check";
+  };
+  const visible = assignments.filter(a => {
+    if (!vb.some(b => b.id === a.brandId)) return false;
+    if (filter === "overdue") return isActiveToday(a) && isOverdue(a);
+    if (filter !== "all") return a.type === filter;
+    return true;
+  });
+  const overdueCnt = assignments.filter(a => vb.some(b => b.id === a.brandId) && isActiveToday(a) && isOverdue(a)).length;
+  const tabs = [{ key: "all", label: "All" }, { key: "checklist", label: "Checklists" }, { key: "cleaning", label: "Cleaning" }, { key: "temp", label: "Temperature" }, { key: "delivery", label: "Deliveries" }, { key: "overdue", label: `⚠ Overdue${overdueCnt ? ` (${overdueCnt})` : ""}` }];
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">{tabs.map(t => <button key={t.key} onClick={() => setFilter(t.key)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filter === t.key ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{t.label}</button>)}</div>
+        {user.role === "owner" && <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>}
+      </div>
+      {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm">No assignments found</div></div>}
+      <div className="space-y-3">{visible.map(a => {
+        const brand = brands.find(b => b.id === a.brandId);
+        const od = isActiveToday(a) && isOverdue(a);
+        const done = auditTrail.some(t => t.date === getTodayStr() && t.brandId === a.brandId && t.detail?.includes(getTaskName(a.type, a.taskId)));
+        return (
+          <div key={a.id} className={`rounded-2xl border p-4 ${od ? "bg-red-950/20 border-red-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 ${od ? "bg-red-500/20" : "bg-slate-800"}`}>{{ checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" }[a.type] || "📋"}</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2 flex-wrap">
+                  <div><div className="text-sm font-bold text-white">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">Window: {a.winStart}–{a.winEnd}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
+                  {user.role === "owner" && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div>}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}</div>
+      {showForm && <AssignmentFormModal brands={vb} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
+      {deleteId && <OpsConfirmModal message="Delete this assignment?" onConfirm={() => onDelete(deleteId)} onClose={() => setDeleteId(null)}/>}
+    </div>
+  );
+}
+
+// ─── Compliance View ──────────────────────────────────────────────────────────
+function ComplianceView({ brands, assignments, auditTrail }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  return (
+    <div className="space-y-5">
+      <AnalysisBlock title="Compliance Overview — Today">
+        <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Location","Assignments","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead><tbody>{vb.map(brand => {
+          const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
+          const od = la.filter(isOverdue);
+          const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
+          const rate = la.length ? Math.round((done / la.length) * 100) : 0;
+          const rag = od.length ? "red" : rate >= 80 ? "green" : "amber";
+          return <tr key={brand.id} className="border-b border-slate-800"><td className="px-3 py-3 font-semibold text-slate-200">{brand.name}</td><td className="px-3 py-3 text-slate-300">{la.length}</td><td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ 0" color="green"/>}</td><td className="px-3 py-3 text-slate-300">{done}</td><td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la.length ? rate+"%" : "—"}</span></td><td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={rag}/></td></tr>;
+        })}</tbody></table></div>
+      </AnalysisBlock>
+    </div>
+  );
+}
+
+// ─── Audit Trail View ─────────────────────────────────────────────────────────
+function AuditTrailView({ brands, auditTrail, onClear }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [filterBrand, setFilterBrand] = useState("all");
+  const visible = auditTrail.filter(t => filterBrand === "all" || t.brandId === filterBrand).sort((a,b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
+  const actionColor = action => action.includes("sign-off") || action.includes("completed") ? "text-emerald-400" : action.includes("breach") ? "text-red-400" : action.includes("logged") ? "text-amber-400" : "text-indigo-400";
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2"><button onClick={() => setFilterBrand("all")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterBrand === "all" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>All Locations</button>{vb.map(b => <button key={b.id} onClick={() => setFilterBrand(b.id)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterBrand === b.id ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{b.name}</button>)}</div>
+        {user.role === "owner" && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
+      </div>
+      {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ScrollText size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No audit entries yet</div></div>}
+      <AnalysisBlock title={`Audit Trail — ${visible.length} entries`}>
+        <div className="space-y-3">{visible.slice(0,100).map(t => { const brand = brands.find(b => b.id === t.brandId); return <div key={t.id} className="flex items-start gap-3 py-2.5 border-b border-slate-700/40 last:border-0"><div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 bg-indigo-400"/><div className="flex-1 min-w-0"><div className={`text-sm font-semibold ${actionColor(t.action)}`}>{t.action}{brand ? ` — ${brand.name}` : ""}</div><div className="text-xs text-slate-400 mt-0.5">{t.detail}</div><div className="text-xs text-slate-600 mt-0.5 font-mono">{t.date} {t.time} · By: {t.by}</div></div></div>; })}</div>
+      </AnalysisBlock>
+    </div>
+  );
+}
+
+// ─── Ops Settings View ────────────────────────────────────────────────────────
+function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam, onAddChecklist, onUpdateChecklist, onDeleteChecklist, onAddTempUnit, onUpdateTempUnit, onDeleteTempUnit, onAddCleanTask, onUpdateCleanTask, onDeleteCleanTask, onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam }) {
+  const [tab, setTab] = useState("checklists");
+  const [clModal, setClModal] = useState(null);
+  const [tuModal, setTuModal] = useState(null);
+  const [ctModal, setCtModal] = useState(null);
+  const [tmModal, setTmModal] = useState(null);
+  const [delTarget, setDelTarget] = useState(null);
+  const tabs = [{ key: "checklists", label: "Checklists" }, { key: "tempunits", label: "Temp Units" }, { key: "cleaning", label: "Cleaning Tasks" }, { key: "team", label: "Ops Team" }];
+
+  // Checklist form modal
+  function ChecklistFormModal({ item, onSave, onClose }) {
+    const [name, setName] = useState(item?.name || ""); const [shift, setShift] = useState(item?.shift || "Opening"); const [defaultRole, setDefaultRole] = useState(item?.defaultRole || ""); const [items, setItems] = useState(item?.items || []);
+    const addItem = () => setItems(its => [...its, { id: `ci-${Date.now()}`, text: "", guide: "" }]);
+    return <Modal title={item ? `Edit — ${item.name}` : "New Checklist"} onClose={onClose} maxW="max-w-2xl" footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!name.trim()) return; onSave({ id: item?.id || `cl-${Date.now()}`, name: name.trim(), shift, defaultRole, items: items.filter(i => i.text.trim()) }); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}><div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Name *</label><input value={name} onChange={e => setName(e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} className={inputCls}><option>Opening</option><option>Mid-shift</option><option>Closing</option><option>Any</option></select></div></div><div><label className={labelCls}>Default Role</label><input value={defaultRole} onChange={e => setDefaultRole(e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div><div><div className="flex items-center justify-between mb-2"><label className={labelCls}>Items</label><button onClick={addItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button></div><div className="space-y-2">{items.map(it => <div key={it.id} className="flex items-start gap-2 bg-slate-800/60 rounded-xl p-3"><div className="flex-1 space-y-1.5"><input value={it.text} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, text: e.target.value } : x))} placeholder="Checklist item…" className={inputCls}/><input value={it.guide} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, guide: e.target.value } : x))} placeholder="Guidance note…" className={`${inputCls} text-xs py-1.5`}/></div><button onClick={() => setItems(its => its.filter(x => x.id !== it.id))} className="text-slate-600 hover:text-red-400 mt-2"><X size={14}/></button></div>)}{items.length === 0 && <div className="text-xs text-slate-500 text-center py-4">No items yet</div>}</div></div></div></Modal>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex gap-2 bg-slate-900/60 border border-slate-700/60 rounded-2xl p-1.5 w-fit flex-wrap">{tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>{t.label}</button>)}</div>
+
+      {tab === "checklists" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setClModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> New Checklist</button></div>{checklists.map(cl => <div key={cl.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4"><div className="flex items-start justify-between gap-2"><div><div className="text-sm font-bold text-white">{cl.name}</div><div className="flex gap-2 mt-1.5"><Badge label={cl.shift} color="slate"/>{cl.defaultRole && <Badge label={`🎭 ${cl.defaultRole}`} color="violet"/>}<Badge label={`${cl.items.length} items`} color="slate"/></div></div><div className="flex gap-1.5"><button onClick={() => setClModal(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div><div className="mt-3 space-y-1">{cl.items.map(it => <div key={it.id} className="flex items-center gap-2 text-xs text-slate-400"><Check size={10} className="text-slate-600"/>{it.text}</div>)}</div></div>)}</div>}
+
+      {tab === "tempunits" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setTuModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Unit</button></div>{tempUnits.map(u => { const brand = brands.find(b => b.id === u.brandId); return <div key={u.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4"><span className="text-xl">{TEMP_ICON[u.type] || "🌡️"}</span><div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{u.name}</div><div className="text-xs text-slate-400">{brand?.name} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div><div className="flex gap-1.5"><button onClick={() => setTuModal(u)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete "${u.name}"?`, fn: () => onDeleteTempUnit(u.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div>; })}</div>}
+
+      {tab === "cleaning" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setCtModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Task</button></div>{[...new Set(cleaningTasks.map(t => t.area))].sort().map(area => <div key={area} className="space-y-2"><div className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{area}</div>{cleaningTasks.filter(t => t.area === area).map(t => <div key={t.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-xl px-4 py-3"><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-white">{t.name}</div><div className="text-xs text-slate-400">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div></div><div className="flex gap-1.5"><button onClick={() => setCtModal(t)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div>)}</div>)}</div>}
+
+      {tab === "team" && <div className="space-y-4"><div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>{opsTeam.map(m => { const brand = brands.find(b => b.id === m.brandId); return <div key={m.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4"><div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color||"#6366f1")+"30", color: m.color||"#6366f1" }}>{m.firstName[0]}{m.lastName?.[0]||""}</div><div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{m.firstName} {m.lastName}</div><div className="text-xs text-slate-400">{m.role} · {brand?.name||"—"}</div></div><div className="flex gap-1.5"><button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div></div>; })}</div>}
+
+      {clModal && <ChecklistFormModal item={clModal === "new" ? null : clModal} onSave={item => { clModal === "new" ? onAddChecklist(item) : onUpdateChecklist(item); setClModal(null); }} onClose={() => setClModal(null)}/>}
+      {tuModal && (() => { const item = tuModal === "new" ? null : tuModal; const [form, setFormState] = useState({ name: item?.name||"", type: item?.type||"fridge", brandId: item?.brandId||brands[0]?.id||"", min: item?.min??'', max: item?.max??'', assignRole: item?.assignRole||"" }); const set = (k,v) => setFormState(f=>({...f,[k]:v})); return <Modal title={item ? `Edit — ${item.name}` : "Add Temp Unit"} onClose={() => setTuModal(null)} footer={<><button onClick={() => setTuModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.name.trim()) return; const saved = { id: item?.id||`tu-${Date.now()}`, ...form, min: form.min!==''?parseFloat(form.min):null, max: form.max!==''?parseFloat(form.max):null }; tuModal==="new"?onAddTempUnit(saved):onUpdateTempUnit(saved); setTuModal(null); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item?"Save":"Add"}</button></>}><div className="space-y-4"><div><label className={labelCls}>Name *</label><input value={form.name} onChange={e=>set("name",e.target.value)} className={inputCls}/></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Type</label><select value={form.type} onChange={e=>set("type",e.target.value)} className={inputCls}><option value="fridge">Fridge 🧊</option><option value="freezer">Freezer ❄️</option><option value="hot">Hot Hold 🔥</option></select></div><div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e=>set("brandId",e.target.value)} className={inputCls}>{brands.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Min temp (°C)</label><input type="number" step="0.5" value={form.min} onChange={e=>set("min",e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div><div><label className={labelCls}>Max temp (°C)</label><input type="number" step="0.5" value={form.max} onChange={e=>set("max",e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div></div><div><label className={labelCls}>Responsible Role</label><input value={form.assignRole} onChange={e=>set("assignRole",e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div></div></Modal>; })()}
+      {ctModal && (() => { const item = ctModal === "new" ? null : ctModal; const [form, setFormState] = useState({ name: item?.name||"", area: item?.area||"Kitchen", freq: item?.freq||"Daily - Opening", assignRole: item?.assignRole||"", notes: item?.notes||"" }); const set = (k,v) => setFormState(f=>({...f,[k]:v})); return <Modal title={item ? `Edit — ${item.name}` : "Add Cleaning Task"} onClose={() => setCtModal(null)} footer={<><button onClick={() => setCtModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.name.trim()) return; const saved = { id: item?.id||`ct-${Date.now()}`, ...form }; ctModal==="new"?onAddCleanTask(saved):onUpdateCleanTask(saved); setCtModal(null); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item?"Save":"Add"}</button></>}><div className="space-y-4"><div><label className={labelCls}>Task Name *</label><input value={form.name} onChange={e=>set("name",e.target.value)} className={inputCls}/></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Area</label><input value={form.area} onChange={e=>set("area",e.target.value)} placeholder="Kitchen, FOH…" className={inputCls}/></div><div><label className={labelCls}>Frequency</label><input value={form.freq} onChange={e=>set("freq",e.target.value)} placeholder="Daily - Opening…" className={inputCls}/></div></div><div><label className={labelCls}>Assigned Role</label><input value={form.assignRole} onChange={e=>set("assignRole",e.target.value)} placeholder="e.g. Kitchen Porter" className={inputCls}/></div><div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Instructions…"/></div></div></Modal>; })()}
+      {tmModal && (() => { const item = tmModal === "new" ? null : tmModal; const colors = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"]; const [form, setFormState] = useState({ firstName: item?.firstName||"", lastName: item?.lastName||"", role: item?.role||"", brandId: item?.brandId||brands[0]?.id||"", pin: item?.pin||"" }); const set = (k,v) => setFormState(f=>({...f,[k]:v})); return <Modal title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"} onClose={() => setTmModal(null)} footer={<><button onClick={() => setTmModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.firstName.trim()) return; const saved = { id: item?.id||`ot-${Date.now()}`, ...form, color: item?.color||colors[Math.floor(Math.random()*colors.length)] }; tmModal==="new"?onAddOpsTeam(saved):onUpdateOpsTeam(saved); setTmModal(null); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item?"Save":"Add"}</button></>}><div className="space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e=>set("firstName",e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Last Name</label><input value={form.lastName} onChange={e=>set("lastName",e.target.value)} className={inputCls}/></div></div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Role</label><input value={form.role} onChange={e=>set("role",e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div><div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e=>set("brandId",e.target.value)} className={inputCls}>{brands.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div></div><div><label className={labelCls}>PIN (optional)</label><input value={form.pin} onChange={e=>set("pin",e.target.value)} maxLength={6} placeholder="4-6 digits" className={inputCls}/></div></div></Modal>; })()}
+      {delTarget && <OpsConfirmModal message={delTarget.msg} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
+    </div>
+  );
+}
+
+// ─── Main App (merged: live financial + new ops) ───────────────────────────────
 export default function App() {
-  // ── Session: persist logged-in user to localStorage (lightweight, not sensitive) ──
   const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
 
-  // ── All persistent data now lives in Supabase ─────────────────────────────
+  // ── Financial state (Supabase) ────────────────────────────────────────────
   const [brands,  setBrands]  = useState([]);
   const [users,   setUsers]   = useState([]);
   const [entries, setEntries] = useState([]);
@@ -1935,17 +2334,34 @@ export default function App() {
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState(null);
 
-  // Load everything on mount
+  // ── Ops state (Supabase) ──────────────────────────────────────────────────
+  const [checklists,      setChecklists]      = useState([]);
+  const [tempUnits,       setTempUnits]       = useState([]);
+  const [cleaningTasks,   setCleaningTasks]   = useState([]);
+  const [assignments,     setAssignments]     = useState([]);
+  const [opsTeam,         setOpsTeam]         = useState([]);
+  const [tempLogs,        setTempLogs]        = useState([]);
+  const [deliveries,      setDeliveries]      = useState([]);
+  const [checklistStates, setChecklistStates] = useState({});
+  const [auditTrail,      setAuditTrail]      = useState([]);
+
+  const [activeView, setActiveView] = useState("dashboard");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [toast, setToast] = useState(null); // { msg, type: "success"|"error" }
+
+  // ── Load everything on mount ──────────────────────────────────────────────
   useEffect(() => {
     async function loadAll() {
       try {
-        const [b, u, e, i] = await Promise.all([
-          fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues()
+        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at] = await Promise.all([
+          fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
+          fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
+          fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail()
         ]);
-        setBrands(b);
-        setUsers(u);
-        setEntries(e);
-        setIssues(i);
+        setBrands(b); setUsers(u); setEntries(e); setIssues(i);
+        setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
+        setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl); setChecklistStates(cs); setAuditTrail(at);
         setDbReady(true);
       } catch (err) {
         console.error("Supabase load error:", err);
@@ -1954,111 +2370,130 @@ export default function App() {
     }
     loadAll();
   }, []);
-  const [activeView, setActiveView] = useState("dashboard");
-  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Persist session (login state only — all data is in Supabase)
-  useEffect(()=>{ try{if(currentUser)localStorage.setItem("cb_session",JSON.stringify(currentUser));else localStorage.removeItem("cb_session");}catch{} },[currentUser]);
+  useEffect(() => { try { if(currentUser) localStorage.setItem("cb_session",JSON.stringify(currentUser)); else localStorage.removeItem("cb_session"); } catch {} }, [currentUser]);
 
-  const handleLogin = useCallback(user => { setCurrentUser(user); setActiveView("dashboard"); }, []);
+  const handleLogin  = useCallback(user => { setCurrentUser(user); setActiveView("dashboard"); }, []);
   const handleLogout = useCallback(() => { setCurrentUser(null); setActiveView("dashboard"); }, []);
 
+  // ── Audit helper ──────────────────────────────────────────────────────────
+  const showToast = useCallback((msg, type = "success") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  const addAudit = useCallback(async (action, detail, by, brandId) => {
+    const entry = { brandId: brandId || null, action, detail: detail || "", by: by || "System", date: getTodayStr(), time: nowTimeStr(), timestamp: new Date().toISOString() };
+    await insertAuditEntry(entry);
+    setAuditTrail(t => [{ id: `local-${Date.now()}`, ...entry }, ...t].slice(0, 500));
+  }, []);
+
   // ── Brands ────────────────────────────────────────────────────────────────
-  const addBrand = useCallback(async b => {
-    const saved = await insertBrand(b);
-    setBrands(bs => [...bs, saved]);
-  }, []);
-
-  const updateBrand = useCallback(async b => {
-    const saved = await upsertBrand(b);
-    setBrands(bs => bs.map(x => x.id === saved.id ? saved : x));
-  }, []);
-
-  const deleteBrand = useCallback(async id => {
-    await removeBrand(id);
-    setBrands(bs => bs.filter(b => b.id !== id));
-    setEntries(es => es.filter(e => e.brandId !== id));
-    setUsers(us => us.map(u => ({ ...u, brandIds: u.brandIds.filter(bid => bid !== id) })));
-    setIssues(is => is.filter(i => i.brandId !== id));
-  }, []);
-
-  const updateKPITargets = useCallback(async (brandId, targets) => {
-    const brand = brands.find(b => b.id === brandId);
-    if (!brand) return;
-    const updated = { ...brand, kpiTargets: { ...brand.kpiTargets, ...targets } };
-    const saved = await upsertBrand(updated);
-    setBrands(bs => bs.map(b => b.id === brandId ? saved : b));
-  }, [brands]);
+  const addBrand = useCallback(async b => { const saved = await insertBrand(b); setBrands(bs => [...bs, saved]); }, []);
+  const updateBrand = useCallback(async b => { const saved = await upsertBrand(b); setBrands(bs => bs.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteBrand = useCallback(async id => { await removeBrand(id); setBrands(bs => bs.filter(b => b.id !== id)); setEntries(es => es.filter(e => e.brandId !== id)); setUsers(us => us.map(u => ({ ...u, brandIds: u.brandIds.filter(bid => bid !== id) }))); setIssues(is => is.filter(i => i.brandId !== id)); setAssignments(as => as.filter(a => a.brandId !== id)); }, []);
+  const updateKPITargets = useCallback(async (brandId, targets) => { const brand = brands.find(b => b.id === brandId); if (!brand) return; const updated = { ...brand, kpiTargets: { ...brand.kpiTargets, ...targets } }; const saved = await upsertBrand(updated); setBrands(bs => bs.map(b => b.id === brandId ? saved : b)); }, [brands]);
 
   // ── Users ─────────────────────────────────────────────────────────────────
-  const addUser = useCallback(async u => {
-    const saved = await insertUser(u);
-    setUsers(us => [...us, saved]);
-  }, []);
-
-  const updateUser = useCallback(async u => {
-    const saved = await upsertUser(u);
-    setUsers(us => us.map(x => x.id === saved.id ? saved : x));
-  }, []);
-
-  const deleteUser = useCallback(async id => {
-    await removeUser(id);
-    setUsers(us => us.filter(u => u.id !== id));
-  }, []);
+  const addUser    = useCallback(async u => { const saved = await insertUser(u); setUsers(us => [...us, saved]); }, []);
+  const updateUser = useCallback(async u => { const saved = await upsertUser(u); setUsers(us => us.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteUser = useCallback(async id => { await removeUser(id); setUsers(us => us.filter(u => u.id !== id)); }, []);
 
   // ── EOD Entries ───────────────────────────────────────────────────────────
-  const addEntry = useCallback(async entry => {
-    const saved = await upsertEntry(entry);
-    setEntries(es => {
-      const filtered = es.filter(e => e.id !== saved.id);
-      return [...filtered, saved].sort((a, b) => a.date.localeCompare(b.date));
-    });
-  }, []);
-
-  const bulkImport = useCallback(async rows => {
-    const saved = await upsertEntries(rows);
-    setEntries(es => {
-      const map = new Map(es.map(e => [e.id, e]));
-      saved.forEach(r => map.set(r.id, r));
-      return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
-    });
-  }, []);
+  const addEntry = useCallback(async entry => { const saved = await upsertEntry(entry); setEntries(es => { const f = es.filter(e => e.id !== saved.id); return [...f, saved].sort((a,b) => a.date.localeCompare(b.date)); }); }, []);
+  const bulkImport = useCallback(async rows => { const saved = await upsertEntries(rows); setEntries(es => { const map = new Map(es.map(e => [e.id, e])); saved.forEach(r => map.set(r.id, r)); return [...map.values()].sort((a,b) => a.date.localeCompare(b.date)); }); }, []);
 
   // ── Issues ────────────────────────────────────────────────────────────────
-  const addIssue = useCallback(async issue => {
-    const saved = await insertIssue(issue);
-    setIssues(is => [...is, saved]);
-  }, []);
+  const addIssue    = useCallback(async issue => { const saved = await insertIssue(issue); setIssues(is => [...is, saved]); }, []);
+  const updateIssue = useCallback(async issue => { const saved = await upsertIssue(issue); setIssues(is => is.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteIssue = useCallback(async id => { await removeIssue(id); setIssues(is => is.filter(i => i.id !== id)); }, []);
 
-  const updateIssue = useCallback(async issue => {
-    const saved = await upsertIssue(issue);
-    setIssues(is => is.map(x => x.id === saved.id ? saved : x));
-  }, []);
+  // ── Checklists ────────────────────────────────────────────────────────────
+  const addChecklist    = useCallback(async cl => { const saved = await upsertChecklist(cl); setChecklists(cs => [...cs, saved]); }, []);
+  const updateChecklist = useCallback(async cl => { const saved = await upsertChecklist(cl); setChecklists(cs => cs.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteChecklist = useCallback(async id => { await removeChecklist(id); setChecklists(cs => cs.filter(c => c.id !== id)); }, []);
 
-  const deleteIssue = useCallback(async id => {
-    await removeIssue(id);
-    setIssues(is => is.filter(i => i.id !== id));
-  }, []);
+  // ── Temp Units ────────────────────────────────────────────────────────────
+  const addTempUnit    = useCallback(async u => { const saved = await upsertTempUnit(u); setTempUnits(ts => [...ts, saved]); }, []);
+  const updateTempUnit = useCallback(async u => { const saved = await upsertTempUnit(u); setTempUnits(ts => ts.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteTempUnit = useCallback(async id => { await removeTempUnit(id); setTempUnits(ts => ts.filter(u => u.id !== id)); }, []);
 
+  // ── Cleaning Tasks ────────────────────────────────────────────────────────
+  const addCleanTask    = useCallback(async t => { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => [...ts, saved]); }, []);
+  const updateCleanTask = useCallback(async t => { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => ts.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteCleanTask = useCallback(async id => { await removeCleaningTask(id); setCleaningTasks(ts => ts.filter(t => t.id !== id)); }, []);
+
+  // ── Assignments ───────────────────────────────────────────────────────────
+  const addAssignment    = useCallback(async a => { const saved = await upsertAssignment(a); setAssignments(as => [...as, saved]); }, []);
+  const updateAssignment = useCallback(async a => { const saved = await upsertAssignment(a); setAssignments(as => as.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteAssignment = useCallback(async id => { await removeAssignment(id); setAssignments(as => as.filter(a => a.id !== id)); }, []);
+
+  // ── Ops Team ──────────────────────────────────────────────────────────────
+  const addOpsTeam    = useCallback(async m => { const saved = await upsertOpsTeamMember(m); setOpsTeam(ms => [...ms, saved]); }, []);
+  const updateOpsTeam = useCallback(async m => { const saved = await upsertOpsTeamMember(m); setOpsTeam(ms => ms.map(x => x.id === saved.id ? saved : x)); }, []);
+  const deleteOpsTeam = useCallback(async id => { await removeOpsTeamMember(id); setOpsTeam(ms => ms.filter(m => m.id !== id)); }, []);
+
+  // ── Temp Logs ─────────────────────────────────────────────────────────────
+  const handleTempLog = useCallback(async log => {
+    try {
+      const saved = await insertTempLog(log);
+      setTempLogs(ls => [...ls, saved]);
+      const unit = tempUnits.find(u => u.id === log.unitId);
+      await addAudit(saved.isBreach ? "breach" : "logged", `${unit?.name || log.unitId}: ${log.value}°C${saved.isBreach ? " — BREACH" : ""}`, log.loggedBy, log.brandId);
+      if (saved.isBreach) showToast(`⚠ Temperature breach logged for ${unit?.name || log.unitId}`, "error");
+      else showToast("Temperature reading saved");
+    } catch (err) { showToast("Failed to save temperature reading: " + err.message, "error"); }
+  }, [tempUnits, addAudit, showToast]);
+
+  // ── Deliveries ────────────────────────────────────────────────────────────
+  const handleDeliveryAdd = useCallback(async d => {
+    try {
+      const saved = await insertDelivery(d);
+      setDeliveries(ds => [...ds, saved]);
+      await addAudit("logged", `Delivery from ${d.supplier} — ${d.condition}`, d.loggedBy, d.brandId);
+      showToast("Delivery logged successfully");
+    } catch (err) { showToast("Failed to log delivery: " + err.message, "error"); }
+  }, [addAudit, showToast]);
+
+  // ── Checklist sign-off ────────────────────────────────────────────────────
+  const handleSignOff = useCallback(async (assignment, taskName) => {
+    try {
+      const now = new Date().toISOString();
+      const stateKey = `${assignment.brandId}||${assignment.taskId}||${getTodayStr()}`;
+      await upsertChecklistState(assignment.brandId, assignment.taskId, getTodayStr(), checklistStates[stateKey] || {}, currentUser?.name || "Manager", now);
+      await addAudit("sign-off", `${taskName} completed`, currentUser?.name || "Manager", assignment.brandId);
+      showToast(`✓ ${taskName} signed off`);
+    } catch (err) { showToast("Sign-off failed: " + err.message, "error"); }
+  }, [checklistStates, currentUser, addAudit, showToast]);
+
+  // ── Checklist item toggle ─────────────────────────────────────────────────
+  const handleChecklistItemToggle = useCallback(async (stateKey, itemId, val) => {
+    const newState = { ...(checklistStates[stateKey] || {}), [itemId]: val };
+    setChecklistStates(s => ({ ...s, [stateKey]: newState }));
+    const [brandId, checklistId, date] = stateKey.split("||");
+    await upsertChecklistState(brandId, checklistId, date || getTodayStr(), newState, "", null);
+  }, [checklistStates]);
+
+  const handleClearAudit = useCallback(async () => {
+    try {
+      await clearAuditTrail();
+      setAuditTrail([]);
+      showToast("Audit trail cleared");
+    } catch (err) { showToast("Failed to clear audit trail: " + err.message, "error"); }
+  }, [showToast]);
+
+  // ── Data utilities ────────────────────────────────────────────────────────
   const exportData = () => {
     const data = JSON.stringify({ brands, users, entries, issues }, null, 2);
     const blob = new Blob([data], { type: "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "createbrands-export.json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 100);
+    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "createbrands-export.json"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 100);
   };
   const importData = () => {
-    const input=document.createElement("input");input.type="file";input.accept=".json";
-    input.onchange=e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(d.brands)setBrands(d.brands);if(d.users)setUsers(d.users);if(d.entries)setEntries(d.entries);if(d.issues)setIssues(d.issues);}catch{alert("Invalid JSON file.");}};reader.readAsText(file);};
-    input.click();
+    const input = document.createElement("input"); input.type = "file"; input.accept = ".json";
+    input.onchange = e => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { try { const d = JSON.parse(ev.target.result); if (d.brands) setBrands(d.brands); if (d.users) setUsers(d.users); if (d.entries) setEntries(d.entries); if (d.issues) setIssues(d.issues); } catch { alert("Invalid JSON file."); } }; reader.readAsText(file); }; input.click();
   };
   const resetData = async () => {
-    if(!window.confirm("Reset all data to defaults?"))return;
+    // Called after user confirms via ConfirmModal — no window.confirm needed
     await supabase.from("eod_entries").delete().neq("id","__none__");
     await supabase.from("issues").delete().neq("id","__none__");
     await supabase.from("users").delete().neq("id","__none__");
@@ -2071,72 +2506,83 @@ export default function App() {
 
   if (dbError) return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#f87171",fontFamily:"sans-serif",gap:12}}>
-      <span style={{fontSize:32}}>⚠️</span>
-      <strong>Could not connect to database</strong>
+      <span style={{fontSize:32}}>⚠️</span><strong>Could not connect to database</strong>
       <code style={{fontSize:12,color:"#94a3b8"}}>{dbError}</code>
-      <p style={{fontSize:12,color:"#64748b",maxWidth:400,textAlign:"center"}}>Check your <code>REACT_APP_SUPABASE_URL</code> and <code>REACT_APP_SUPABASE_ANON_KEY</code> environment variables in Vercel.</p>
+      <p style={{fontSize:12,color:"#64748b",maxWidth:400,textAlign:"center"}}>Check your <code>REACT_APP_SUPABASE_URL</code> and <code>REACT_APP_SUPABASE_ANON_KEY</code> environment variables.</p>
     </div>
   );
 
   if (!dbReady) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:12}}>
-      <span style={{fontSize:24,animation:"spin 1s linear infinite"}}>⏳</span>
-      <span>Loading data…</span>
+      <span style={{fontSize:24}}>⏳</span><span>Loading data…</span>
     </div>
   );
 
-  if (!currentUser) return (
-    <AuthContext.Provider value={{user:null}}>
-      <LoginScreen users={users} onLogin={handleLogin}/>
-    </AuthContext.Provider>
-  );
+  if (!currentUser) return <AuthContext.Provider value={{user:null}}><LoginScreen users={users} onLogin={handleLogin}/></AuthContext.Provider>;
 
-  const visibleBrands = brands.filter(b=>currentUser.role==="owner"||currentUser.brandIds.includes(b.id));
-  const openIssueCount = issues.filter(i=>visibleBrands.some(b=>b.id===i.brandId)&&["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
+  const visibleBrands = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
+  const openIssueCount = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
+  const overdueOpsCount = assignments.filter(a => visibleBrands.some(b => b.id === a.brandId) && isActiveToday(a) && isOverdue(a)).length;
 
-  const NAV = [
-    { key:"dashboard", label:"Dashboard", icon:LayoutDashboard },
-    { key:"tactical", label:"Tactical Ops", icon:BarChart2 },
-    { key:"eod", label:"EOD Report", icon:ClipboardList },
-    { key:"issues", label:"Issues & Maintenance", icon:Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
-    ...(currentUser.role==="owner"?[{key:"admin",label:"Admin Panel",icon:Settings,badge:"OWNER"}]:[]),
+  const NAV_GROUPS = [
+    { group: "Financial", items: [
+      { key: "dashboard", label: "Dashboard",           icon: LayoutDashboard },
+      { key: "tactical",  label: "Tactical Ops",        icon: BarChart2 },
+      { key: "eod",       label: "EOD Report",           icon: ClipboardList },
+      { key: "issues",    label: "Issues & Maintenance", icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+    ]},
+    { group: "Operations", items: [
+      { key: "ops-network",    label: "Ops Network",       icon: LayoutDashboard, badge: overdueOpsCount > 0 ? overdueOpsCount.toString() : null },
+      { key: "ops-tasks",      label: "Today's Tasks",     icon: ClipboardList },
+      { key: "ops-temps",      label: "Temperature Log",   icon: Thermometer },
+      { key: "ops-deliveries", label: "Deliveries",        icon: Truck },
+      { key: "ops-assigns",    label: "Assignments",       icon: Clipboard },
+      { key: "ops-compliance", label: "Compliance",        icon: ShieldCheck },
+      { key: "ops-audit",      label: "Audit Trail",       icon: ScrollText },
+      { key: "ops-settings",   label: "Ops Settings",      icon: Settings },
+    ]},
+    ...(currentUser.role === "owner" ? [{ group: "System", items: [{ key: "admin", label: "Admin Panel", icon: Settings, badge: "OWNER" }] }] : []),
   ];
 
-  const titles = { dashboard:"Executive Dashboard", tactical:"Tactical Ops", eod:"EOD Report", issues:"Issues & Maintenance", admin:"Admin Panel" };
-  const todayDisplay = new Date().toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+  const titles = { dashboard: "Executive Dashboard", tactical: "Tactical Ops", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Network", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Settings", admin: "Admin Panel" };
+  const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
-  const Sidebar = ({mobile=false}) => (
-    <div className={`flex flex-col h-full ${mobile?"w-72":""}`}>
+  const Sidebar = ({ mobile = false }) => (
+    <div className={`flex flex-col h-full ${mobile ? "w-72" : ""}`}>
       <div className="flex items-center gap-2.5 px-5 py-5 border-b border-slate-800">
         <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center"><BarChart2 size={16} className="text-white"/></div>
         <div><div className="text-sm font-bold text-white">Create Brands</div><div className="text-xs text-slate-500">Hospitality Group</div></div>
-        {mobile&&<button onClick={()=>setDrawerOpen(false)} className="ml-auto text-slate-400 hover:text-white"><X size={18}/></button>}
+        {mobile && <button onClick={() => setDrawerOpen(false)} className="ml-auto text-slate-400 hover:text-white"><X size={18}/></button>}
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV.map(n=>{
-          const NIcon=n.icon;const active=activeView===n.key;
-          return(
-            <button key={n.key} onClick={()=>{setActiveView(n.key);setDrawerOpen(false);}}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${active?"bg-indigo-600 text-white":"text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
-              <NIcon size={16}/>
-              <span className="flex-1 text-left">{n.label}</span>
-              {n.badge&&(
-                <span className={`text-xs px-1.5 py-0.5 rounded-lg font-semibold ${n.badge==="OWNER"?"bg-violet-500/20 text-violet-400 border border-violet-500/30":"bg-red-500 text-white"}`}>{n.badge}</span>
-              )}
-            </button>
-          );
-        })}
+      <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-4">
+        {NAV_GROUPS.map(({ group, items }) => (
+          <div key={group}>
+            <div className="text-xs font-bold text-slate-600 uppercase tracking-widest px-2 mb-1">{group}</div>
+            <div className="space-y-0.5">
+              {items.map(n => {
+                const NIcon = n.icon; const active = activeView === n.key;
+                return (
+                  <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
+                    <NIcon size={14}/><span className="flex-1 text-left">{n.label}</span>
+                    {n.badge && <span className={`text-xs px-1.5 py-0.5 rounded-lg font-semibold ${n.badge === "OWNER" ? "bg-violet-500/20 text-violet-400 border border-violet-500/30" : "bg-red-500 text-white"}`}>{n.badge}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
       <div className="px-4 py-4 border-t border-slate-800 space-y-3">
         <UserChip user={currentUser} onLogout={handleLogout}/>
         <div className="flex flex-wrap gap-1.5">
-          <button onClick={exportData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 transition-colors"><Download size={11}/>Export</button>
-          {currentUser.role==="owner"&&<>
-            <button onClick={importData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 transition-colors"><Upload size={11}/>Import</button>
-            <button onClick={resetData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-red-400 transition-colors"><RotateCcw size={11}/>Reset</button>
+          <button onClick={exportData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700"><Download size={11}/>Export</button>
+          {currentUser.role === "owner" && <>
+            <button onClick={importData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700"><Upload size={11}/>Import</button>
+            <button onClick={() => setResetConfirmOpen(true)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-red-400"><RotateCcw size={11}/>Reset</button>
           </>}
         </div>
-        <div className="text-xs text-slate-600">{entries.length} entries · {brands.length} locations · {issues.length} issues</div>
+        <div className="text-xs text-slate-600">{entries.length} entries · {brands.length} locations · {issues.length} issues · {assignments.length} assignments</div>
       </div>
     </div>
   );
@@ -2145,42 +2591,56 @@ export default function App() {
     <AuthContext.Provider value={{user:currentUser}}>
       <div className="min-h-screen bg-slate-950 text-white flex">
         <aside className="hidden lg:flex w-60 flex-col bg-slate-900/80 border-r border-slate-800 flex-shrink-0"><Sidebar/></aside>
-        {drawerOpen&&(
-          <div className="fixed inset-0 z-50 lg:hidden">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={()=>setDrawerOpen(false)}/>
-            <div className="absolute left-0 top-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col"><Sidebar mobile/></div>
-          </div>
-        )}
+        {drawerOpen && <div className="fixed inset-0 z-50 lg:hidden"><div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDrawerOpen(false)}/><div className="absolute left-0 top-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col"><Sidebar mobile/></div></div>}
         <main className="flex-1 flex flex-col min-w-0">
           <header className="flex items-center gap-4 px-5 py-4 border-b border-slate-800 bg-slate-900/50 sticky top-0 z-10 backdrop-blur-sm">
-            <button onClick={()=>setDrawerOpen(true)} className="lg:hidden text-slate-400 hover:text-white"><Menu size={20}/></button>
+            <button onClick={() => setDrawerOpen(true)} className="lg:hidden text-slate-400 hover:text-white"><Menu size={20}/></button>
             <div className="flex-1 min-w-0">
               <h1 className="text-base font-bold text-white">{titles[activeView]}</h1>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">{todayDisplay}</span>
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>Live</span>
-              </div>
+              <div className="flex items-center gap-2"><span className="text-xs text-slate-500">{todayDisplay}</span><span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>Live</span></div>
             </div>
-            <div className="hidden md:flex items-center gap-2 flex-wrap">
-              {visibleBrands.slice(0,3).map(b=>(
-                <span key={b.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300">
-                  <span className="w-1.5 h-1.5 rounded-full" style={{background:b.color}}/>{b.name}
-                </span>
-              ))}
-            </div>
+            <div className="hidden md:flex items-center gap-2 flex-wrap">{visibleBrands.slice(0,3).map(b => <span key={b.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{background:b.color}}/>{b.name}</span>)}</div>
             <div className="lg:hidden"><UserChip user={currentUser} onLogout={handleLogout} compact/></div>
           </header>
           <div className="flex-1 p-5 lg:p-6 overflow-auto">
-            {activeView==="dashboard"&&<DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView==="tactical"&&<TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {activeView==="eod"&&<EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
-            {activeView==="issues"&&<IssuesView brands={brands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {activeView==="admin"&&currentUser.role==="owner"&&(
-              <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>
-            )}
+            {activeView === "dashboard"       && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
+            {activeView === "tactical"        && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {activeView === "eod"             && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
+            {activeView === "issues"          && <IssuesView brands={brands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {activeView === "ops-network"     && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+            {activeView === "ops-tasks"       && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
+            {activeView === "ops-temps"       && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
+            {activeView === "ops-deliveries"  && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {activeView === "ops-assigns"     && <AssignmentsView brands={brands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
+            {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
+            {activeView === "ops-settings"    && <OpsSettingsView brands={brands} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist} onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit} onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask} onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}/>}
+            {activeView === "admin" && currentUser.role === "owner" && <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>}
           </div>
         </main>
       </div>
+    {/* Toast notification */}
+      {toast && (
+        <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border text-sm font-semibold transition-all ${toast.type === "error" ? "bg-red-950 border-red-500/50 text-red-300" : "bg-emerald-950 border-emerald-500/50 text-emerald-300"}`}>
+          {toast.type === "error" ? <AlertTriangle size={15}/> : <CheckCircle size={15}/>}
+          {toast.msg}
+          <button onClick={() => setToast(null)} className="ml-2 opacity-60 hover:opacity-100"><X size={13}/></button>
+        </div>
+      )}
+      {resetConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
+              <div className="text-sm text-slate-300">This will wipe all data and restore seed defaults. This cannot be undone.</div>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setResetConfirmOpen(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+              <button onClick={async () => { setResetConfirmOpen(false); await resetData(); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reset All Data</button>
+            </div>
+          </div>
+        </div>
+      )}
     </AuthContext.Provider>
   );
 }
