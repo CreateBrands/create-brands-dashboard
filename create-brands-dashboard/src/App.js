@@ -1197,7 +1197,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
   availability, onAddAvailability, onUpdateAvailability,
-  schedules,
+  schedules, punchRecords, onAmendPunch,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -1320,6 +1320,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
               tickets={hdTickets || []} onAddTicket={onAddHdTicket} onUpdateTicket={onUpdateHdTicket} onDeleteTicket={() => {}}
               availability={availability || []} onAddAvailability={onAddAvailability} onUpdateAvailability={onUpdateAvailability}
               schedules={schedules || []} shiftPresets={[]} onAddSchedule={() => {}} onDeleteSchedule={() => {}} onPublishWeek={() => {}}
+              punchRecords={punchRecords || []} onUpdatePunchRecord={onAmendPunch}
               isEmployee={true}
             />
           )}
@@ -5130,6 +5131,7 @@ function CommunicationView({
   tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
   availability, onAddAvailability, onUpdateAvailability,
   schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
+  punchRecords, onUpdatePunchRecord,
   isEmployee,
 }) {
   const [tab, setTab] = useState("helpdesk");
@@ -5158,8 +5160,11 @@ function CommunicationView({
     { key: "helpdesk",     label: "Help Desk",    icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
     { key: "chat",         label: "Chat",          icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
     { key: "availability", label: "Availability",  icon: Calendar,      badge: pendingAvail > 0 ? pendingAvail : null },
-    ...(!isEmployee ? [{ key: "schedule", label: "Schedule", icon: CalendarDays, badge: null }] : [
-      { key: "emp-schedule", label: "My Schedule", icon: CalendarDays, badge: null }
+    ...(!isEmployee ? [
+      { key: "schedule", label: "Schedule", icon: CalendarDays, badge: null },
+    ] : [
+      { key: "emp-schedule", label: "My Schedule", icon: CalendarDays, badge: null },
+      { key: "my-hours",     label: "My Hours",    icon: Clock,         badge: (() => { const needsReason = (punchRecords||[]).filter(r => (r.employeeId===myOpsId||r.employeeId===myId) && r.overtimeHours>0 && !r.overtimeReason).length; return needsReason>0?needsReason.toString():null; })() },
     ]),
   ];
 
@@ -5206,6 +5211,9 @@ function CommunicationView({
         )}
         {tab === "emp-schedule" && isEmployee && (
           <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]}/>
+        )}
+        {tab === "my-hours" && isEmployee && (
+          <EmployeeHoursView currentUser={currentUser} brands={brands} schedules={schedules||[]} punchRecords={punchRecords||[]} onUpdate={onUpdatePunchRecord}/>
         )}
       </div>
     </div>
@@ -5929,6 +5937,7 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
   const [shake,       setShake]     = useState(false);
   const [lastAction,  setLastAction]= useState(null); // { type:"in"|"out", name, time }
   const [clock,       setClock]     = useState(new Date());
+  const [submitting,  setSubmitting]= useState(false); // prevents double-tap
 
   // Live clock
   useEffect(() => {
@@ -5970,12 +5979,14 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
   const handleClear = () => { setPin(""); setMatched(null); setError(""); };
 
   const handleConfirm = async () => {
+    if (submitting) return; // prevent double-tap
     if (!matched) {
       setError("PIN not recognised");
       setShake(true);
       setTimeout(() => { setShake(false); setPin(""); }, 600);
       return;
     }
+    setSubmitting(true);
 
     const toLocalDate = () => {
       const d = new Date();
@@ -5996,6 +6007,7 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
       const hoursWorked  = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
       const grossPay     = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
       await onPunchOut(openRecord.id, now, hoursWorked, grossPay);
+      setSubmitting(false);
       setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked });
     } else {
       // Punch IN
@@ -6015,6 +6027,7 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
         status: "open",
         amendedBy: "",
       });
+      setSubmitting(false);
       setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
     }
   };
@@ -6135,13 +6148,14 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
           <button onClick={handleConfirm}
             disabled={!matched}
             className={`w-full py-5 rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
+              submitting ? "bg-slate-700 text-slate-500 cursor-not-allowed" :
               matched
                 ? isClockedIn
                   ? "bg-amber-500 hover:bg-amber-400 text-white"
                   : "bg-emerald-600 hover:bg-emerald-500 text-white"
                 : "bg-slate-800 text-slate-600 cursor-not-allowed"
             }`}>
-            {matched
+            {submitting ? "Processing…" : matched
               ? isClockedIn ? "⏹ Clock Out" : "▶ Clock In"
               : "Enter PIN"}
           </button>
@@ -6161,7 +6175,12 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
 // TIME & ATTENDANCE — Manager view
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmend }) {
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TIME & ATTENDANCE — Manager view with approval + overtime comparison
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate }) {
   const { user } = useAuth();
   const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
 
@@ -6169,8 +6188,6 @@ function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmen
     const dt = d || new Date();
     return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
   };
-
-  // Default: current week Mon–Sun
   const getWeekBounds = (offset = 0) => {
     const today = new Date(); today.setHours(0,0,0,0);
     const day = today.getDay() === 0 ? 6 : today.getDay() - 1;
@@ -6178,12 +6195,31 @@ function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmen
     const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
     return { from: toLocalDate(mon), to: toLocalDate(sun) };
   };
+  const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
+  const fmtDur  = (hrs) => {
+    if (hrs == null || hrs <= 0) return "—";
+    const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
+    return `${h}h ${String(m).padStart(2,"0")}m`;
+  };
+  const calcOvertimeHours = (r) => {
+    if (!r.punchIn || !r.punchOut || !r.scheduledEnd) return 0;
+    const actualEnd    = new Date(r.punchOut);
+    const schedDate    = r.date + "T" + r.scheduledEnd + ":00";
+    const scheduledEnd = new Date(schedDate);
+    const diff = (actualEnd - scheduledEnd) / 3600000;
+    return diff > 0 ? Math.round(diff * 100) / 100 : 0;
+  };
+  const calcUnscheduled = (r) => {
+    if (!r.scheduledStart && !r.scheduledEnd) return true; // no schedule at all
+    return false;
+  };
 
   const [weekOffset,     setWeekOffset]     = useState(0);
   const [filterBrand,    setFilterBrand]    = useState(vb[0]?.id || "all");
   const [filterEmployee, setFilterEmployee] = useState("all");
+  const [tab,            setTab]            = useState("records");
   const [amendModal,     setAmendModal]     = useState(null);
-  const [tab,            setTab]            = useState("records"); // records | summary
+  const [overtimeModal,  setOvertimeModal]  = useState(null); // for approving OT reason
 
   const { from, to } = getWeekBounds(weekOffset);
 
@@ -6200,42 +6236,59 @@ function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmen
       .map(r => [r.employeeId, { id: r.employeeId, name: r.employeeName }])
   ).values()];
 
-  // Weekly summary per employee
+  // Enrich each record with schedule data
+  const enriched = visible.map(r => {
+    const daySchedules = schedules.filter(s =>
+      s.brandId === r.brandId && s.employeeId === r.employeeId && s.date === r.date && s.published
+    );
+    const sched = daySchedules[0] || null;
+    const scheduledStart = r.scheduledStart || sched?.startTime || null;
+    const scheduledEnd   = r.scheduledEnd   || sched?.endTime   || null;
+    const overtimeHrs    = r.overtimeHours  ?? calcOvertimeHours({ ...r, scheduledStart, scheduledEnd });
+    const isUnscheduled  = !sched && !r.scheduledStart;
+    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, isUnscheduled };
+  });
+
+  // Summary per employee
   const summary = {};
-  visible.forEach(r => {
+  enriched.forEach(r => {
     if (!summary[r.employeeId]) {
       const m = opsTeam.find(x => x.id === r.employeeId);
-      summary[r.employeeId] = {
-        name: r.employeeName,
-        role: m?.role || "",
+      summary[r.employeeId] = { name: r.employeeName, role: m?.role || "",
         hourlyRate: m?.hourlyRate || r.hourlyRate || 0,
-        totalHours: 0, totalPay: 0, days: 0, openShifts: 0,
-      };
+        totalHours: 0, regularHours: 0, overtimeHours: 0, approvedOT: 0,
+        totalPay: 0, days: 0, pendingApproval: 0, pendingOT: 0 };
     }
-    if (r.hoursWorked) {
-      summary[r.employeeId].totalHours += r.hoursWorked;
-      summary[r.employeeId].days += 1;
-    }
-    if (r.status === "open") summary[r.employeeId].openShifts += 1;
+    const s = summary[r.employeeId];
+    if (r.hoursWorked) { s.totalHours += r.hoursWorked; s.days += 1; }
+    if (!r.approved && r.status === "closed") s.pendingApproval += 1;
+    if (r.overtimeHrs > 0 && !r.overtimeApproved) s.pendingOT += 1;
+    const approvedOT = (r.overtimeApproved && r.overtimeHrs > 0) ? r.overtimeHrs : 0;
+    s.approvedOT += approvedOT;
   });
   Object.values(summary).forEach(s => {
-    const OVERTIME_THRESHOLD = 40; // hrs/week
-    s.regularHours  = Math.min(s.totalHours, OVERTIME_THRESHOLD);
-    s.overtimeHours = Math.max(0, s.totalHours - OVERTIME_THRESHOLD);
-    s.totalPay      = Math.round(((s.regularHours + s.overtimeHours * 1.5) * s.hourlyRate) * 100) / 100;
-    s.isOvertime    = s.overtimeHours > 0;
+    s.regularHours  = s.totalHours;
+    s.overtimeHours = s.approvedOT; // only count manager-approved OT
+    s.totalPay      = Math.round((s.totalHours * s.hourlyRate) * 100) / 100;
   });
 
-  const totalWeekPay   = Object.values(summary).reduce((a, s) => a + (s.totalPay || 0), 0);
-  const totalWeekHours = Object.values(summary).reduce((a, s) => a + (s.totalHours || 0), 0);
-  const openShifts     = visible.filter(r => r.status === "open").length;
+  const totalPay        = Object.values(summary).reduce((a, s) => a + s.totalPay, 0);
+  const totalHours      = Object.values(summary).reduce((a, s) => a + s.totalHours, 0);
+  const pendingApproval = enriched.filter(r => !r.approved && r.status === "closed").length;
+  const pendingOT       = enriched.filter(r => r.overtimeHrs > 0 && !r.overtimeApproved && r.overtimeReason).length;
 
-  const fmtDuration = (hrs) => {
-    if (hrs == null) return "—";
-    const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
-    return `${h}h ${String(m).padStart(2,"0")}m`;
-  };
-  const fmtDateTime = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
+  const handleApprove = (r) => onUpdate({ ...r,
+    approved: true, approvedBy: currentUser.name,
+    scheduledStart: r.scheduledStart, scheduledEnd: r.scheduledEnd,
+    overtimeHours: r.overtimeHrs, updatedAt: new Date().toISOString() });
+
+  const handleApproveOT = (r) => onUpdate({ ...r,
+    overtimeApproved: true, overtimeApprovedBy: currentUser.name,
+    overtimeHours: r.overtimeHrs, updatedAt: new Date().toISOString() });
+
+  const handleRejectOT = (r) => onUpdate({ ...r,
+    overtimeApproved: false, overtimeHours: 0,
+    updatedAt: new Date().toISOString() });
 
   return (
     <div className="space-y-5">
@@ -6243,21 +6296,20 @@ function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmen
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-base font-bold text-white">Time & Attendance</h2>
-          <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
-            <span>{totalWeekHours.toFixed(1)} hrs this week</span>
-            <span>·</span>
-            <span className="text-emerald-400">£{totalWeekPay.toFixed(2)} total pay</span>
-            {openShifts > 0 && <span className="text-amber-400">· {openShifts} still clocked in</span>}
+          <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5 flex-wrap">
+            <span>{totalHours.toFixed(1)} hrs</span>
+            <span className="text-emerald-400">£{totalPay.toFixed(2)} pay</span>
+            {pendingApproval > 0 && <span className="text-amber-400 font-semibold">⚠ {pendingApproval} pending approval</span>}
+            {pendingOT > 0 && <span className="text-red-400 font-semibold">⏱ {pendingOT} overtime pending</span>}
           </div>
         </div>
-        {/* Tab toggle */}
         <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
           <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Records</button>
           <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Summary</button>
         </div>
       </div>
 
-      {/* Filters + week nav */}
+      {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
         {vb.length > 1 && <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>}
         <SelectDropdown value={filterEmployee} onChange={setFilterEmployee} className="w-44">
@@ -6273,23 +6325,31 @@ function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmen
           {new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
           {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}
         </div>
-        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset >= 0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
       </div>
 
-      {/* ── Records tab ── */}
+      {/* ── Records ── */}
       {tab === "records" && (
-        <div className="space-y-2">
-          {visible.length === 0 && (
+        <div className="space-y-3">
+          {enriched.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16 text-slate-500">
               <Clock size={32} className="mb-3 text-slate-700"/>
-              <div className="text-sm font-semibold">No punch records this week</div>
+              <div className="text-sm font-semibold">No records this week</div>
             </div>
           )}
-          {visible.map(r => {
-            const brand = brands.find(b => b.id === r.brandId);
+          {enriched.map(r => {
+            const brand  = brands.find(b => b.id === r.brandId);
             const member = opsTeam.find(m => m.id === r.employeeId);
+            const hasOT  = r.overtimeHrs > 0;
+            const needsApproval = r.status === "closed" && !r.approved;
+            const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved;
             return (
-              <div key={r.id} className={`rounded-2xl border p-4 ${r.status==="open" ? "bg-amber-950/20 border-amber-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+              <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
+                needsApproval || needsOTApproval ? "bg-amber-950/20 border-amber-500/30" :
+                r.status === "open" ? "bg-slate-900/40 border-slate-700/40" :
+                "bg-slate-900/60 border-slate-700/60"
+              }`}>
+                {/* Top row */}
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
@@ -6297,114 +6357,162 @@ function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmen
                       {r.employeeName.split(" ").map(w=>w[0]).join("").slice(0,2)}
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-white">{r.employeeName}</div>
-                      <div className="text-xs text-slate-400">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="text-sm font-bold text-white">{r.employeeName}</div>
+                        {r.approved && <Badge label="✓ Approved" color="emerald"/>}
+                        {needsApproval && <Badge label="Needs approval" color="amber"/>}
+                        {r.status === "open" && <Badge label="Still clocked in" color="amber"/>}
+                        {r.isUnscheduled && <Badge label="Unscheduled" color="red"/>}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5">
                         {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
-                        {brand && <span className="ml-2 flex-inline items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{background:brand.color}}/>{brand.name}</span>}
+                        {brand && <span className="ml-2"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle" style={{background:brand.color}}/>{brand.name}</span>}
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-4 text-right">
-                    <div>
-                      <div className="text-xs text-slate-500">IN</div>
-                      <div className="text-sm font-bold text-white">{fmtDateTime(r.punchIn)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500">OUT</div>
-                      <div className={`text-sm font-bold ${r.punchOut ? "text-white" : "text-amber-400"}`}>
-                        {r.punchOut ? fmtDateTime(r.punchOut) : "Still in"}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500">Hours</div>
-                      <div className="text-sm font-bold text-white">{fmtDuration(r.hoursWorked)}</div>
-                    </div>
-                    {r.hourlyRate > 0 && (
-                      <div>
-                        <div className="text-xs text-slate-500">Pay</div>
-                        <div className="text-sm font-bold text-emerald-400">
-                          {r.grossPay != null ? `£${r.grossPay.toFixed(2)}` : "—"}
-                        </div>
-                      </div>
+
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {needsApproval && (
+                      <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve</button>
                     )}
-                    <button onClick={()=>setAmendModal(r)}
-                      className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend">
-                      <Edit size={13}/>
-                    </button>
+                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
                   </div>
                 </div>
+
+                {/* Schedule vs Actual comparison */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Scheduled */}
+                  <div className="bg-slate-800/60 rounded-xl p-3">
+                    <div className="text-xs font-semibold text-slate-400 mb-1.5">📅 Scheduled</div>
+                    {r.scheduledStart ? (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">Start</span>
+                          <span className="text-slate-300 font-mono">{r.scheduledStart}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">End</span>
+                          <span className="text-slate-300 font-mono">{r.scheduledEnd || "—"}</span>
+                        </div>
+                        {r.sched && (
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">Shift</span>
+                            <span className="text-slate-300">{r.sched.shift}</span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-red-400 font-semibold">No schedule found</div>
+                    )}
+                  </div>
+
+                  {/* Actual */}
+                  <div className="bg-slate-800/60 rounded-xl p-3">
+                    <div className="text-xs font-semibold text-slate-400 mb-1.5">⏱ Actual</div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-500">In</span>
+                        <span className="text-white font-mono font-bold">{fmtTime(r.punchIn)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-500">Out</span>
+                        <span className={`font-mono font-bold ${r.punchOut ? "text-white" : "text-amber-400"}`}>{r.punchOut ? fmtTime(r.punchOut) : "Still in"}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-500">Hours</span>
+                        <span className="text-white font-bold">{fmtDur(r.hoursWorked)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Overtime section */}
+                {hasOT && (
+                  <div className={`rounded-xl p-3 border ${r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" : "bg-red-950/20 border-red-500/20"}`}>
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold text-red-400 mb-1">
+                          ⏱ {r.overtimeHrs.toFixed(2)}h overtime
+                          {r.overtimeApproved && <span className="text-emerald-400 ml-2">✓ Approved by {r.overtimeApprovedBy}</span>}
+                        </div>
+                        {r.overtimeReason ? (
+                          <div className="text-xs text-slate-300 italic">"{r.overtimeReason}"</div>
+                        ) : (
+                          <div className="text-xs text-slate-500">Awaiting employee reason</div>
+                        )}
+                      </div>
+                      {/* Approve/reject OT */}
+                      {needsOTApproval && (
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button onClick={()=>handleApproveOT(r)} className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve OT</button>
+                          <button onClick={()=>handleRejectOT(r)} className="px-2.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors">✗ Reject</button>
+                        </div>
+                      )}
+                    </div>
+                    {/* Gross pay with/without OT */}
+                    {r.hourlyRate > 0 && r.punchOut && (
+                      <div className="mt-2 pt-2 border-t border-white/10 flex gap-4 text-xs">
+                        <span className="text-slate-400">Scheduled pay: <span className="text-white font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*r.hourlyRate) : 0).toFixed(2)}</span></span>
+                        {r.overtimeApproved && <span className="text-emerald-400">+OT: <span className="font-bold">£{(r.overtimeHrs * r.hourlyRate).toFixed(2)}</span></span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Unscheduled shift */}
+                {r.isUnscheduled && r.status === "closed" && (
+                  <div className="bg-red-950/20 border border-red-500/20 rounded-xl p-3">
+                    <div className="text-xs font-bold text-red-400 mb-0.5">⚠ Unscheduled shift — {fmtDur(r.hoursWorked)}</div>
+                    <div className="text-xs text-slate-500">No matching published schedule found for this date</div>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* ── Summary tab ── */}
+      {/* ── Summary ── */}
       {tab === "summary" && (
         <div className="space-y-3">
-          {Object.entries(summary).length === 0 && (
-            <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>
-          )}
+          {Object.entries(summary).length === 0 && <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>}
           {Object.entries(summary).map(([empId, s]) => (
-            <div key={empId} className={`rounded-2xl border p-5 ${s.isOvertime ? "bg-amber-950/10 border-amber-500/20" : "bg-slate-900/60 border-slate-700/60"}`}>
+            <div key={empId} className="rounded-2xl border border-slate-700/60 bg-slate-900/60 p-5">
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                   <div className="flex items-center gap-2">
                     <div className="text-sm font-bold text-white">{s.name}</div>
-                    {s.isOvertime && <Badge label="Overtime" color="amber"/>}
-                    {s.openShifts > 0 && <Badge label="Still clocked in" color="amber"/>}
+                    {s.pendingApproval > 0 && <Badge label={`${s.pendingApproval} pending`} color="amber"/>}
+                    {s.pendingOT > 0 && <Badge label={`${s.pendingOT} OT pending`} color="red"/>}
                   </div>
-                  <div className="text-xs text-slate-400 mt-0.5">{s.role} · {s.days} day{s.days!==1?"s":""} worked</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{s.role} · {s.days} days worked</div>
                 </div>
-                <div className="flex gap-5 text-right">
-                  <div>
-                    <div className="text-xs text-slate-500">Regular</div>
-                    <div className="text-sm font-bold text-white">{fmtDuration(s.regularHours)}</div>
-                  </div>
-                  {s.overtimeHours > 0 && (
-                    <div>
-                      <div className="text-xs text-slate-500">Overtime (×1.5)</div>
-                      <div className="text-sm font-bold text-amber-400">{fmtDuration(s.overtimeHours)}</div>
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-xs text-slate-500">Total hrs</div>
-                    <div className="text-sm font-bold text-white">{fmtDuration(s.totalHours)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-500">Rate</div>
-                    <div className="text-sm font-bold text-slate-300">£{(s.hourlyRate||0).toFixed(2)}/hr</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-500">Gross Pay</div>
-                    <div className="text-sm font-bold text-emerald-400">£{(s.totalPay||0).toFixed(2)}</div>
-                  </div>
+                <div className="flex gap-4 text-right flex-wrap">
+                  <div><div className="text-xs text-slate-500">Regular</div><div className="text-sm font-bold text-white">{fmtDur(s.regularHours)}</div></div>
+                  {s.overtimeHours > 0 && <div><div className="text-xs text-slate-500">Approved OT</div><div className="text-sm font-bold text-amber-400">{fmtDur(s.overtimeHours)}</div></div>}
+                  <div><div className="text-xs text-slate-500">Total</div><div className="text-sm font-bold text-white">{fmtDur(s.totalHours)}</div></div>
+                  <div><div className="text-xs text-slate-500">Rate</div><div className="text-sm font-bold text-slate-300">£{(s.hourlyRate||0).toFixed(2)}/hr</div></div>
+                  <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-sm font-bold text-emerald-400">£{(s.totalPay||0).toFixed(2)}</div></div>
                 </div>
               </div>
             </div>
           ))}
           {Object.entries(summary).length > 0 && (
-            <div className="flex items-center justify-between rounded-2xl bg-indigo-950/30 border border-indigo-500/30 px-5 py-4">
+            <div className="rounded-2xl bg-indigo-950/30 border border-indigo-500/30 px-5 py-4 flex items-center justify-between">
               <div className="text-sm font-bold text-white">Week Total</div>
               <div className="flex gap-6 text-right">
-                <div>
-                  <div className="text-xs text-slate-500">Hours</div>
-                  <div className="text-sm font-bold text-white">{fmtDuration(totalWeekHours)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500">Gross Pay</div>
-                  <div className="text-lg font-black text-emerald-400">£{totalWeekPay.toFixed(2)}</div>
-                </div>
+                <div><div className="text-xs text-slate-500">Hours</div><div className="text-sm font-bold text-white">{fmtDur(totalHours)}</div></div>
+                <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-lg font-black text-emerald-400">£{totalPay.toFixed(2)}</div></div>
               </div>
             </div>
           )}
         </div>
       )}
 
-      {/* Amend modal */}
       {amendModal && (
         <AmendPunchModal record={amendModal}
-          onSave={updated => { onAmend(updated); setAmendModal(null); }}
+          onSave={updated => { onUpdate(updated); setAmendModal(null); }}
           onClose={() => setAmendModal(null)}
         />
       )}
@@ -6417,19 +6525,16 @@ function AmendPunchModal({ record, onSave, onClose }) {
   const toTimeStr = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "";
   const [punchInTime,  setPunchInTime]  = useState(toTimeStr(record.punchIn));
   const [punchOutTime, setPunchOutTime] = useState(toTimeStr(record.punchOut));
-  const [notes,        setNotes]        = useState(record.notes || "");
+  const [notes, setNotes] = useState(record.notes || "");
 
   const handleSave = () => {
-    const dateBase = record.date + "T";
+    const dateBase    = record.date + "T";
     const newPunchIn  = new Date(dateBase + punchInTime  + ":00").toISOString();
     const newPunchOut = punchOutTime ? new Date(dateBase + punchOutTime + ":00").toISOString() : null;
-    const hoursWorked = newPunchOut
-      ? Math.round(((new Date(newPunchOut) - new Date(newPunchIn)) / 3600000) * 100) / 100
-      : null;
-    const grossPay = hoursWorked && record.hourlyRate
-      ? Math.round(hoursWorked * record.hourlyRate * 100) / 100
-      : null;
-    onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes, status: punchOutTime ? "amended" : "open", updatedAt: new Date().toISOString() });
+    const hoursWorked = newPunchOut ? Math.round(((new Date(newPunchOut)-new Date(newPunchIn))/3600000)*100)/100 : null;
+    const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
+    onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes,
+             status: punchOutTime ? "amended" : "open", approved: false, updatedAt: new Date().toISOString() });
   };
 
   return (
@@ -6443,84 +6548,443 @@ function AmendPunchModal({ record, onSave, onClose }) {
           {new Date(record.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <AvailTimeField label="Clock In" value={punchInTime} onChange={setPunchInTime}/>
+          <AvailTimeField label="Clock In"  value={punchInTime}  onChange={setPunchInTime}/>
           <AvailTimeField label="Clock Out" value={punchOutTime} onChange={setPunchOutTime}/>
         </div>
         <div><label className={labelCls}>Notes</label>
-          <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Reason for amendment…" className={`${inputCls} resize-none`}/>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2}
+            placeholder="Reason for amendment…" className={`${inputCls} resize-none`}/>
         </div>
       </div>
     </Modal>
   );
 }
 
-// ─── Main App (merged: live financial + new ops) ───────────────────────────────
-// ── KioskShell — standalone data loader for the kiosk route ──────────────────
-// Completely independent of App() — no auth, no manager state
-function KioskShell() {
-  const [opsTeam,      setOpsTeam]      = useState([]);
-  const [brands,       setBrands]       = useState([]);
-  const [punchRecords, setPunchRecords] = useState([]);
-  const [ready,        setReady]        = useState(false);
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE HOURS VIEW — see own punch records, submit overtime reason
+// ═══════════════════════════════════════════════════════════════════════════════
+function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpdate }) {
+  const myId      = currentUser.opsTeamMemberId || currentUser.id;
+  const myBrandId = currentUser.brandIds[0];
 
-  useEffect(() => {
-    Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords()])
-      .then(([team, br, punches]) => {
-        setOpsTeam(team); setBrands(br); setPunchRecords(punches);
-        setReady(true);
-      })
-      .catch(err => { console.error("Kiosk load error:", err); setReady(true); });
-  }, []);
-
-  // Realtime for punch records so clock-in state stays live
-  useEffect(() => {
-    const ch = supabase
-      .channel("kiosk:punch_records")
-      .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
-        const { eventType, new: r, old: oldRow } = payload;
-        if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
-        const p = {
-          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
-          date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
-          hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
-          hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
-          grossPay: r.gross_pay ? parseFloat(r.gross_pay) : null,
-          notes: r.notes, status: r.status, amendedBy: r.amended_by,
-          createdAt: r.created_at, updatedAt: r.updated_at,
-        };
-        if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
-        if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
-      })
-      .subscribe();
-    return () => supabase.removeChannel(ch);
-  }, []);
-
-  const handlePunchIn = async (record) => {
-    const saved = await insertPunchIn(record);
-    setPunchRecords(ps => [saved, ...ps]);
+  const toLocalDate = (d) => {
+    const dt = d || new Date();
+    return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
   };
-  const handlePunchOut = async (id, punchOut, hoursWorked, grossPay) => {
-    const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
-    setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+  const getWeekBounds = (offset = 0) => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const day = today.getDay() === 0 ? 6 : today.getDay() - 1;
+    const mon = new Date(today); mon.setDate(today.getDate() - day + offset * 7);
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    return { from: toLocalDate(mon), to: toLocalDate(sun) };
+  };
+  const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
+  const fmtDur  = (hrs) => {
+    if (!hrs || hrs <= 0) return "—";
+    const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
+    return `${h}h ${String(m).padStart(2,"0")}m`;
   };
 
-  if (!ready) return (
-    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:16}}>
-      <div style={{width:56,height:56,borderRadius:14,background:"#4f46e5",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:20}}>CB</div>
-      <span style={{fontSize:15}}>Loading kiosk…</span>
-    </div>
-  );
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [reasonInputs, setReasonInputs] = useState({}); // { recordId: text }
+
+  const { from, to } = getWeekBounds(weekOffset);
+
+  const myRecords = punchRecords.filter(r =>
+    (r.employeeId === myId || r.employeeId === currentUser.id) &&
+    r.brandId === myBrandId && r.date >= from && r.date <= to
+  ).sort((a,b) => new Date(b.punchIn) - new Date(a.punchIn));
+
+  const enriched = myRecords.map(r => {
+    const sched = schedules.find(s =>
+      s.brandId === r.brandId && s.employeeId === myId && s.date === r.date && s.published
+    );
+    const scheduledStart = r.scheduledStart || sched?.startTime || null;
+    const scheduledEnd   = r.scheduledEnd   || sched?.endTime   || null;
+    const actualEnd      = r.punchOut ? new Date(r.punchOut) : null;
+    const schedEndObj    = scheduledEnd ? new Date(r.date+"T"+scheduledEnd+":00") : null;
+    const overtimeHrs    = r.overtimeHours ?? (actualEnd && schedEndObj ? Math.max(0,Math.round(((actualEnd-schedEndObj)/3600000)*100)/100) : 0);
+    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs };
+  });
+
+  const totalHours = enriched.reduce((a,r) => a + (r.hoursWorked||0), 0);
+  const approvedOT = enriched.filter(r => r.overtimeApproved).reduce((a,r) => a + (r.overtimeHrs||0), 0);
+  const brand = brands.find(b => b.id === myBrandId);
+
+  const handleSubmitReason = (r) => {
+    const reason = (reasonInputs[r.id] || "").trim();
+    if (!reason) return;
+    onUpdate({ ...r, overtimeReason: reason, updatedAt: new Date().toISOString() });
+    setReasonInputs(prev => ({ ...prev, [r.id]: "" }));
+  };
 
   return (
-    <KioskApp
-      opsTeam={opsTeam} brands={brands}
-      punchRecords={punchRecords}
-      onPunchIn={handlePunchIn}
-      onPunchOut={handlePunchOut}
-    />
+    <div className="space-y-5 max-w-2xl">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white">My Hours</h2>
+          {brand && <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          <span className="text-slate-400">{fmtDur(totalHours)} this week</span>
+          {approvedOT > 0 && <span className="text-amber-400 font-semibold">+ {fmtDur(approvedOT)} approved OT</span>}
+        </div>
+      </div>
+
+      {/* Week nav */}
+      <div className="flex items-center justify-between">
+        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+        <div className="text-sm font-semibold text-white">
+          {new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}
+        </div>
+        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+      </div>
+
+      {enriched.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-12 text-slate-500">
+          <Clock size={28} className="mb-2 text-slate-700"/>
+          <div className="text-sm font-semibold">No punch records this week</div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {enriched.map(r => {
+          const hasOT = r.overtimeHrs > 0;
+          const needsReason = hasOT && !r.overtimeReason;
+          const awaitingApproval = hasOT && r.overtimeReason && !r.overtimeApproved;
+          return (
+            <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
+              needsReason ? "bg-red-950/20 border-red-500/30" :
+              awaitingApproval ? "bg-amber-950/20 border-amber-500/30" :
+              r.status === "open" ? "bg-slate-900/40 border-slate-700/40" :
+              "bg-slate-900/60 border-slate-700/60"
+            }`}>
+              {/* Date + status */}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-sm font-bold text-white">
+                  {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
+                </div>
+                <div className="flex items-center gap-2">
+                  {r.approved && <Badge label="✓ Approved" color="emerald"/>}
+                  {!r.approved && r.status === "closed" && <Badge label="Pending approval" color="amber"/>}
+                  {r.status === "open" && <Badge label="Clocked in" color="amber"/>}
+                </div>
+              </div>
+
+              {/* Times */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-800/60 rounded-xl p-3">
+                  <div className="text-xs text-slate-400 font-semibold mb-1">📅 Scheduled</div>
+                  {r.scheduledStart ? (
+                    <div className="text-sm font-bold text-slate-200">{r.scheduledStart} – {r.scheduledEnd||"?"}</div>
+                  ) : (
+                    <div className="text-xs text-slate-500 italic">No schedule found</div>
+                  )}
+                </div>
+                <div className="bg-slate-800/60 rounded-xl p-3">
+                  <div className="text-xs text-slate-400 font-semibold mb-1">⏱ Actual</div>
+                  <div className="text-sm font-bold text-white">{fmtTime(r.punchIn)} – {r.punchOut ? fmtTime(r.punchOut) : <span className="text-amber-400">Still in</span>}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{fmtDur(r.hoursWorked)}</div>
+                </div>
+              </div>
+
+              {/* Overtime section */}
+              {hasOT && (
+                <div className={`rounded-xl p-3 border ${
+                  r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" :
+                  needsReason ? "bg-red-950/30 border-red-500/30" :
+                  "bg-amber-950/20 border-amber-500/20"
+                }`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`text-xs font-bold ${r.overtimeApproved?"text-emerald-400":needsReason?"text-red-400":"text-amber-400"}`}>
+                      ⏱ {r.overtimeHrs.toFixed(2)}h overtime / unscheduled time
+                    </div>
+                    {r.overtimeApproved && <Badge label={`✓ Approved by ${r.overtimeApprovedBy}`} color="emerald"/>}
+                    {awaitingApproval && <Badge label="Awaiting manager approval" color="amber"/>}
+                  </div>
+
+                  {r.overtimeApproved ? (
+                    <div className="text-xs text-emerald-300">This overtime has been approved and will count towards your pay.</div>
+                  ) : r.overtimeReason ? (
+                    <div className="text-xs text-slate-300 italic">Your reason: "{r.overtimeReason}"</div>
+                  ) : (
+                    /* Employee must submit reason before manager can approve */
+                    <div className="space-y-2">
+                      <div className="text-xs text-red-300 font-semibold">You need to provide a reason for this overtime before it can be approved.</div>
+                      <textarea
+                        value={reasonInputs[r.id] || ""}
+                        onChange={e => setReasonInputs(prev => ({...prev, [r.id]: e.target.value}))}
+                        rows={2}
+                        placeholder="e.g. Helped cover during busy service, manager asked me to stay…"
+                        className={`${inputCls} resize-none text-xs`}
+                      />
+                      <button
+                        onClick={() => handleSubmitReason(r)}
+                        disabled={!(reasonInputs[r.id]||"").trim()}
+                        className="w-full py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-colors">
+                        Submit Reason
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
+  const [pin,         setPin]       = useState("");
+  const [matched,     setMatched]   = useState(null); // ops_team member
+  const [error,       setError]     = useState("");
+  const [shake,       setShake]     = useState(false);
+  const [lastAction,  setLastAction]= useState(null); // { type:"in"|"out", name, time }
+  const [clock,       setClock]     = useState(new Date());
+  const [submitting,  setSubmitting]= useState(false); // prevents double-tap
+
+  // Live clock
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Auto-clear last action message after 5 seconds
+  useEffect(() => {
+    if (!lastAction) return;
+    const t = setTimeout(() => { setLastAction(null); setPin(""); setMatched(null); }, 5000);
+    return () => clearTimeout(t);
+  }, [lastAction]);
+
+  const handleDigit = (d) => {
+    if (matched) return; // already confirmed — waiting for auto-clear
+    if (pin.length >= 6) return;
+    setError("");
+    const next = pin + d;
+    setPin(next);
+
+    // Auto-match when 4+ digits entered
+    if (next.length >= 4) {
+      const found = opsTeam.find(m => m.pin && m.pin === next);
+      if (found) {
+        setMatched(found);
+        setError("");
+      }
+    }
+  };
+
+  const handleBackspace = () => {
+    if (matched) return;
+    setPin(p => p.slice(0, -1));
+    setError("");
+    setMatched(null);
+  };
+
+  const handleClear = () => { setPin(""); setMatched(null); setError(""); };
+
+  const handleConfirm = async () => {
+    if (submitting) return; // prevent double-tap
+    if (!matched) {
+      setError("PIN not recognised");
+      setShake(true);
+      setTimeout(() => { setShake(false); setPin(""); }, 600);
+      return;
+    }
+    setSubmitting(true);
+
+    const toLocalDate = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    };
+
+    // Check if already punched in today
+    const todayStr = toLocalDate();
+    const openRecord = punchRecords.find(r =>
+      r.employeeId === matched.id && r.date === todayStr && r.status === "open"
+    );
+
+    const now = new Date().toISOString();
+
+    if (openRecord) {
+      // Punch OUT
+      const punchInTime  = new Date(openRecord.punchIn);
+      const hoursWorked  = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
+      const grossPay     = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
+      await onPunchOut(openRecord.id, now, hoursWorked, grossPay);
+      setSubmitting(false);
+      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked });
+    } else {
+      // Punch IN
+      const brand = brands.find(b => b.id === matched.brandId);
+      await onPunchIn({
+        id: `pr-${Date.now()}`,
+        brandId: matched.brandId,
+        employeeId: matched.id,
+        employeeName: `${matched.firstName} ${matched.lastName}`.trim(),
+        date: todayStr,
+        punchIn: now,
+        punchOut: null,
+        hoursWorked: null,
+        hourlyRate: matched.hourlyRate || 0,
+        grossPay: null,
+        notes: "",
+        status: "open",
+        amendedBy: "",
+      });
+      setSubmitting(false);
+      setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
+    }
+  };
+
+  const fmtTime = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const fmtDate = (d) => d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+  // Success screen
+  if (lastAction) {
+    const isIn = lastAction.type === "in";
+    return (
+      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isIn ? "bg-emerald-950" : "bg-indigo-950"}`}>
+        <div className="text-center space-y-6">
+          <div className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto text-6xl ${isIn ? "bg-emerald-500/20" : "bg-indigo-500/20"}`}>
+            {isIn ? "✓" : "✓"}
+          </div>
+          <div>
+            <div className={`text-5xl font-black mb-2 ${isIn ? "text-emerald-300" : "text-indigo-300"}`}>
+              {isIn ? "Clocked In" : "Clocked Out"}
+            </div>
+            <div className="text-3xl font-bold text-white">{lastAction.name}</div>
+            <div className="text-xl text-slate-400 mt-2">{fmtTime(lastAction.time)}</div>
+            {!isIn && lastAction.hours && (
+              <div className="text-lg text-slate-300 mt-2">{lastAction.hours.toFixed(2)} hours worked</div>
+            )}
+          </div>
+          <div className="text-slate-500 text-sm">Returning to kiosk in a moment…</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if matched employee is currently clocked in
+  const toLocalDate = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  };
+  const todayStr = toLocalDate();
+  const openRecord = matched ? punchRecords.find(r =>
+    r.employeeId === matched.id && r.date === todayStr && r.status === "open"
+  ) : null;
+  const isClockedIn = !!openRecord;
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none">
+      {/* Header */}
+      <div className="mb-8 text-center">
+        <div className="flex items-center justify-center gap-3 mb-2">
+          <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
+            <span className="text-white font-black text-lg">CB</span>
+          </div>
+          <span className="text-white font-bold text-xl">Create Brands</span>
+        </div>
+        <div className="text-3xl font-black text-white tabular-nums">{fmtTime(clock)}</div>
+        <div className="text-slate-400 text-sm mt-0.5">{fmtDate(clock)}</div>
+      </div>
+
+      {/* PIN display */}
+      <div className="w-full max-w-sm space-y-6">
+        <div className="text-center">
+          <div className="text-slate-400 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
+
+          {/* PIN dots */}
+          <div className={`flex justify-center gap-4 mb-3 ${shake ? "animate-bounce" : ""}`}>
+            {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
+              <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all ${
+                i < pin.length
+                  ? matched ? "bg-emerald-500 border-emerald-400" : "bg-indigo-500 border-indigo-400"
+                  : "bg-transparent border-slate-600"
+              }`}/>
+            ))}
+          </div>
+
+          {/* Matched name */}
+          {matched && (
+            <div className={`rounded-2xl px-6 py-4 mx-4 border ${isClockedIn ? "bg-amber-950/40 border-amber-500/40" : "bg-emerald-950/40 border-emerald-500/40"}`}>
+              <div className="text-xl font-bold text-white">{matched.firstName} {matched.lastName}</div>
+              <div className="text-sm mt-0.5 font-semibold">
+                {isClockedIn
+                  ? <span className="text-amber-400">⏱ Currently clocked in — tap to Clock Out</span>
+                  : <span className="text-emerald-400">Ready to Clock In</span>
+                }
+              </div>
+              {isClockedIn && openRecord && (
+                <div className="text-xs text-slate-400 mt-1">
+                  In at {new Date(openRecord.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="text-red-400 text-sm font-semibold mt-2">{error}</div>
+          )}
+        </div>
+
+        {/* Numpad */}
+        <div className="grid grid-cols-3 gap-3">
+          {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
+            if (key === "") return <div key={idx}/>;
+            return (
+              <button key={key}
+                onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
+                className={`h-20 rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
+                  key === "⌫"
+                    ? "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                    : "bg-slate-800 text-white hover:bg-slate-700"
+                }`}>
+                {key}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Confirm / Clear */}
+        <div className="space-y-3">
+          <button onClick={handleConfirm}
+            disabled={!matched}
+            className={`w-full py-5 rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
+              submitting ? "bg-slate-700 text-slate-500 cursor-not-allowed" :
+              matched
+                ? isClockedIn
+                  ? "bg-amber-500 hover:bg-amber-400 text-white"
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                : "bg-slate-800 text-slate-600 cursor-not-allowed"
+            }`}>
+            {submitting ? "Processing…" : matched
+              ? isClockedIn ? "⏹ Clock Out" : "▶ Clock In"
+              : "Enter PIN"}
+          </button>
+          {pin.length > 0 && (
+            <button onClick={handleClear}
+              className="w-full py-3 rounded-2xl bg-slate-900 text-slate-500 text-sm font-semibold hover:bg-slate-800 transition-colors touch-manipulation">
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TIME & ATTENDANCE — Manager view
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Kiosk detection BEFORE anything else ────────────────────────────────────
 // Must be outside App() so it fires before any hooks or state
@@ -7087,6 +7551,8 @@ export default function App() {
         onAddAvailability={addAvailability}
         onUpdateAvailability={updateAvailability}
         schedules={schedules}
+        punchRecords={punchRecords}
+        onAmendPunch={handleAmendPunch}
         messages={messages}
         onSendMessage={sendMessage}
         onMarkRead={handleMarkRead}
@@ -7308,7 +7774,7 @@ export default function App() {
             {activeView === "ops-tasks"       && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {activeView === "ops-temps"       && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {activeView === "ops-deliveries"  && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-            {activeView === "time-attend" && <TimeAttendanceView brands={visibleBrands} opsTeam={opsTeam} punchRecords={punchRecords} currentUser={currentUser} onAmend={handleAmendPunch}/>}
+            {activeView === "time-attend" && <TimeAttendanceView brands={visibleBrands} opsTeam={opsTeam} schedules={schedules} punchRecords={punchRecords} currentUser={currentUser} onUpdate={handleAmendPunch}/>}
             {activeView === "ops-assigns"     && <AssignmentsView brands={brands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
@@ -7330,6 +7796,7 @@ export default function App() {
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
               availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
               schedules={schedules} shiftPresets={shiftPresets} onAddSchedule={addSchedule} onDeleteSchedule={deleteSchedule} onPublishWeek={handlePublishWeek}
+              punchRecords={punchRecords} onUpdatePunchRecord={handleAmendPunch}
               isEmployee={false}
             />}
             {activeView === "admin" && currentUser.role === "owner" && <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>}
