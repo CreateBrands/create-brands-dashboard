@@ -2978,7 +2978,7 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
             onAdd={onAddShiftPreset} onUpdate={onUpdateShiftPreset} onDelete={onDeleteShiftPreset}
             currentUser={currentUser}
           />
-          <div className="border-t border-slate-700/60 pt-4">
+          <div className="border-t border-slate-700/60 pt-4 space-y-4">
           <div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>
           {opsTeam.map(m => {
             const brand = brands.find(b => b.id === m.brandId);
@@ -2996,6 +2996,7 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
               </div>
             );
           })}
+          </div>
         </div>
       )}
 
@@ -3020,9 +3021,6 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
           onSave={item => { ctModal === "new" ? onAddCleanTask(item) : onUpdateCleanTask(item); setCtModal(null); }}
           onClose={() => setCtModal(null)}
         />
-      )}
-          </div>
-      </div>
       )}
       {tmModal && (
         <OpsTeamMemberFormModal
