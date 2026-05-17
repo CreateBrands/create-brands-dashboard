@@ -7072,9 +7072,7 @@ export default function App() {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
-      const csMap = {};
-      cs.forEach(s => { csMap[`${s.brandId}||${s.checklistId}||${s.date}`] = s.state; });
-      setChecklistStates(csMap);
+      setChecklistStates(cs || {});
       setAuditTrail(at); setHdTickets(hd); setMessages(msgs); setAvailability(avail);
       setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
       setDbReady(true);
