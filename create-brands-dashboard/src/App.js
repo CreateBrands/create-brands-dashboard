@@ -18,6 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -2808,18 +2809,19 @@ function CleaningTaskFormModal({ item, onSave, onClose }) {
 function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
   const [form, setFormState] = useState({
-    firstName:  item?.firstName  || "",
-    lastName:   item?.lastName   || "",
-    nickname:   item?.nickname   || "",
-    role:       item?.role       || "",
-    department: item?.department || "",
-    brandId:    item?.brandId    || brands[0]?.id || "",
-    pin:        item?.pin        || "",
+    firstName:  item?.firstName   || "",
+    lastName:   item?.lastName    || "",
+    nickname:   item?.nickname    || "",
+    role:       item?.role        || "",
+    department: item?.department  || "",
+    brandId:    item?.brandId     || brands[0]?.id || "",
+    pin:        item?.pin         || "",
+    hourlyRate: item?.hourlyRate  || 0,
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
   const handleSave = () => {
     if (!form.firstName.trim()) return;
-    onSave({ id: item?.id || `ot-${Date.now()}`, ...form, color: item?.color || COLORS[Math.floor(Math.random() * COLORS.length)] });
+    onSave({ id: item?.id || `ot-${Date.now()}`, ...form, hourlyRate: parseFloat(form.hourlyRate) || 0, color: item?.color || COLORS[Math.floor(Math.random() * COLORS.length)] });
   };
   return (
     <Modal title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"} onClose={onClose}
@@ -2837,7 +2839,10 @@ function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
           <div><label className={labelCls}>Role / Job title</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
           <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
         </div>
-        <div><label className={labelCls}>PIN (4–6 digits, used for sign in)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="e.g. 1234" className={inputCls}/></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>PIN (4–6 digits)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="e.g. 1234" className={inputCls}/></div>
+          <div><label className={labelCls}>Hourly Rate (£)</label><input type="number" step="0.01" min="0" value={form.hourlyRate} onChange={e => set("hourlyRate", e.target.value)} placeholder="e.g. 11.44" className={inputCls}/></div>
+        </div>
       </div>
     </Modal>
   );
@@ -5913,8 +5918,619 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
+  const [pin,         setPin]       = useState("");
+  const [matched,     setMatched]   = useState(null); // ops_team member
+  const [error,       setError]     = useState("");
+  const [shake,       setShake]     = useState(false);
+  const [lastAction,  setLastAction]= useState(null); // { type:"in"|"out", name, time }
+  const [clock,       setClock]     = useState(new Date());
+
+  // Live clock
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Auto-clear last action message after 5 seconds
+  useEffect(() => {
+    if (!lastAction) return;
+    const t = setTimeout(() => { setLastAction(null); setPin(""); setMatched(null); }, 5000);
+    return () => clearTimeout(t);
+  }, [lastAction]);
+
+  const handleDigit = (d) => {
+    if (matched) return; // already confirmed — waiting for auto-clear
+    if (pin.length >= 6) return;
+    setError("");
+    const next = pin + d;
+    setPin(next);
+
+    // Auto-match when 4+ digits entered
+    if (next.length >= 4) {
+      const found = opsTeam.find(m => m.pin && m.pin === next);
+      if (found) {
+        setMatched(found);
+        setError("");
+      }
+    }
+  };
+
+  const handleBackspace = () => {
+    if (matched) return;
+    setPin(p => p.slice(0, -1));
+    setError("");
+    setMatched(null);
+  };
+
+  const handleClear = () => { setPin(""); setMatched(null); setError(""); };
+
+  const handleConfirm = async () => {
+    if (!matched) {
+      setError("PIN not recognised");
+      setShake(true);
+      setTimeout(() => { setShake(false); setPin(""); }, 600);
+      return;
+    }
+
+    const toLocalDate = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    };
+
+    // Check if already punched in today
+    const todayStr = toLocalDate();
+    const openRecord = punchRecords.find(r =>
+      r.employeeId === matched.id && r.date === todayStr && r.status === "open"
+    );
+
+    const now = new Date().toISOString();
+
+    if (openRecord) {
+      // Punch OUT
+      const punchInTime  = new Date(openRecord.punchIn);
+      const hoursWorked  = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
+      const grossPay     = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
+      await onPunchOut(openRecord.id, now, hoursWorked, grossPay);
+      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked });
+    } else {
+      // Punch IN
+      const brand = brands.find(b => b.id === matched.brandId);
+      await onPunchIn({
+        id: `pr-${Date.now()}`,
+        brandId: matched.brandId,
+        employeeId: matched.id,
+        employeeName: `${matched.firstName} ${matched.lastName}`.trim(),
+        date: todayStr,
+        punchIn: now,
+        punchOut: null,
+        hoursWorked: null,
+        hourlyRate: matched.hourlyRate || 0,
+        grossPay: null,
+        notes: "",
+        status: "open",
+        amendedBy: "",
+      });
+      setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
+    }
+  };
+
+  const fmtTime = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const fmtDate = (d) => d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+  // Success screen
+  if (lastAction) {
+    const isIn = lastAction.type === "in";
+    return (
+      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isIn ? "bg-emerald-950" : "bg-indigo-950"}`}>
+        <div className="text-center space-y-6">
+          <div className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto text-6xl ${isIn ? "bg-emerald-500/20" : "bg-indigo-500/20"}`}>
+            {isIn ? "✓" : "✓"}
+          </div>
+          <div>
+            <div className={`text-5xl font-black mb-2 ${isIn ? "text-emerald-300" : "text-indigo-300"}`}>
+              {isIn ? "Clocked In" : "Clocked Out"}
+            </div>
+            <div className="text-3xl font-bold text-white">{lastAction.name}</div>
+            <div className="text-xl text-slate-400 mt-2">{fmtTime(lastAction.time)}</div>
+            {!isIn && lastAction.hours && (
+              <div className="text-lg text-slate-300 mt-2">{lastAction.hours.toFixed(2)} hours worked</div>
+            )}
+          </div>
+          <div className="text-slate-500 text-sm">Returning to kiosk in a moment…</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if matched employee is currently clocked in
+  const toLocalDate = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  };
+  const todayStr = toLocalDate();
+  const openRecord = matched ? punchRecords.find(r =>
+    r.employeeId === matched.id && r.date === todayStr && r.status === "open"
+  ) : null;
+  const isClockedIn = !!openRecord;
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none">
+      {/* Header */}
+      <div className="mb-8 text-center">
+        <div className="flex items-center justify-center gap-3 mb-2">
+          <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
+            <span className="text-white font-black text-lg">CB</span>
+          </div>
+          <span className="text-white font-bold text-xl">Create Brands</span>
+        </div>
+        <div className="text-3xl font-black text-white tabular-nums">{fmtTime(clock)}</div>
+        <div className="text-slate-400 text-sm mt-0.5">{fmtDate(clock)}</div>
+      </div>
+
+      {/* PIN display */}
+      <div className="w-full max-w-sm space-y-6">
+        <div className="text-center">
+          <div className="text-slate-400 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
+
+          {/* PIN dots */}
+          <div className={`flex justify-center gap-4 mb-3 ${shake ? "animate-bounce" : ""}`}>
+            {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
+              <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all ${
+                i < pin.length
+                  ? matched ? "bg-emerald-500 border-emerald-400" : "bg-indigo-500 border-indigo-400"
+                  : "bg-transparent border-slate-600"
+              }`}/>
+            ))}
+          </div>
+
+          {/* Matched name */}
+          {matched && (
+            <div className={`rounded-2xl px-6 py-4 mx-4 border ${isClockedIn ? "bg-amber-950/40 border-amber-500/40" : "bg-emerald-950/40 border-emerald-500/40"}`}>
+              <div className="text-xl font-bold text-white">{matched.firstName} {matched.lastName}</div>
+              <div className="text-sm mt-0.5 font-semibold">
+                {isClockedIn
+                  ? <span className="text-amber-400">⏱ Currently clocked in — tap to Clock Out</span>
+                  : <span className="text-emerald-400">Ready to Clock In</span>
+                }
+              </div>
+              {isClockedIn && openRecord && (
+                <div className="text-xs text-slate-400 mt-1">
+                  In at {new Date(openRecord.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="text-red-400 text-sm font-semibold mt-2">{error}</div>
+          )}
+        </div>
+
+        {/* Numpad */}
+        <div className="grid grid-cols-3 gap-3">
+          {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
+            if (key === "") return <div key={idx}/>;
+            return (
+              <button key={key}
+                onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
+                className={`h-20 rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
+                  key === "⌫"
+                    ? "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                    : "bg-slate-800 text-white hover:bg-slate-700"
+                }`}>
+                {key}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Confirm / Clear */}
+        <div className="space-y-3">
+          <button onClick={handleConfirm}
+            disabled={!matched}
+            className={`w-full py-5 rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
+              matched
+                ? isClockedIn
+                  ? "bg-amber-500 hover:bg-amber-400 text-white"
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                : "bg-slate-800 text-slate-600 cursor-not-allowed"
+            }`}>
+            {matched
+              ? isClockedIn ? "⏹ Clock Out" : "▶ Clock In"
+              : "Enter PIN"}
+          </button>
+          {pin.length > 0 && (
+            <button onClick={handleClear}
+              className="w-full py-3 rounded-2xl bg-slate-900 text-slate-500 text-sm font-semibold hover:bg-slate-800 transition-colors touch-manipulation">
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TIME & ATTENDANCE — Manager view
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function TimeAttendanceView({ brands, opsTeam, punchRecords, currentUser, onAmend }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+
+  const toLocalDate = (d) => {
+    const dt = d || new Date();
+    return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+  };
+
+  // Default: current week Mon–Sun
+  const getWeekBounds = (offset = 0) => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const day = today.getDay() === 0 ? 6 : today.getDay() - 1;
+    const mon = new Date(today); mon.setDate(today.getDate() - day + offset * 7);
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    return { from: toLocalDate(mon), to: toLocalDate(sun) };
+  };
+
+  const [weekOffset,     setWeekOffset]     = useState(0);
+  const [filterBrand,    setFilterBrand]    = useState(vb[0]?.id || "all");
+  const [filterEmployee, setFilterEmployee] = useState("all");
+  const [amendModal,     setAmendModal]     = useState(null);
+  const [tab,            setTab]            = useState("records"); // records | summary
+
+  const { from, to } = getWeekBounds(weekOffset);
+
+  const visible = punchRecords.filter(r => {
+    if (filterBrand    !== "all" && r.brandId    !== filterBrand)    return false;
+    if (filterEmployee !== "all" && r.employeeId !== filterEmployee) return false;
+    if (r.date < from || r.date > to) return false;
+    if (!vb.some(b => b.id === r.brandId)) return false;
+    return true;
+  }).sort((a, b) => new Date(b.punchIn) - new Date(a.punchIn));
+
+  const employees = [...new Map(
+    punchRecords.filter(r => vb.some(b => b.id === r.brandId))
+      .map(r => [r.employeeId, { id: r.employeeId, name: r.employeeName }])
+  ).values()];
+
+  // Weekly summary per employee
+  const summary = {};
+  visible.forEach(r => {
+    if (!summary[r.employeeId]) {
+      const m = opsTeam.find(x => x.id === r.employeeId);
+      summary[r.employeeId] = {
+        name: r.employeeName,
+        role: m?.role || "",
+        hourlyRate: m?.hourlyRate || r.hourlyRate || 0,
+        totalHours: 0, totalPay: 0, days: 0, openShifts: 0,
+      };
+    }
+    if (r.hoursWorked) {
+      summary[r.employeeId].totalHours += r.hoursWorked;
+      summary[r.employeeId].days += 1;
+    }
+    if (r.status === "open") summary[r.employeeId].openShifts += 1;
+  });
+  Object.values(summary).forEach(s => {
+    const OVERTIME_THRESHOLD = 40; // hrs/week
+    s.regularHours  = Math.min(s.totalHours, OVERTIME_THRESHOLD);
+    s.overtimeHours = Math.max(0, s.totalHours - OVERTIME_THRESHOLD);
+    s.totalPay      = Math.round(((s.regularHours + s.overtimeHours * 1.5) * s.hourlyRate) * 100) / 100;
+    s.isOvertime    = s.overtimeHours > 0;
+  });
+
+  const totalWeekPay   = Object.values(summary).reduce((a, s) => a + (s.totalPay || 0), 0);
+  const totalWeekHours = Object.values(summary).reduce((a, s) => a + (s.totalHours || 0), 0);
+  const openShifts     = visible.filter(r => r.status === "open").length;
+
+  const fmtDuration = (hrs) => {
+    if (hrs == null) return "—";
+    const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
+    return `${h}h ${String(m).padStart(2,"0")}m`;
+  };
+  const fmtDateTime = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white">Time & Attendance</h2>
+          <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
+            <span>{totalWeekHours.toFixed(1)} hrs this week</span>
+            <span>·</span>
+            <span className="text-emerald-400">£{totalWeekPay.toFixed(2)} total pay</span>
+            {openShifts > 0 && <span className="text-amber-400">· {openShifts} still clocked in</span>}
+          </div>
+        </div>
+        {/* Tab toggle */}
+        <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
+          <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Records</button>
+          <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Summary</button>
+        </div>
+      </div>
+
+      {/* Filters + week nav */}
+      <div className="flex flex-wrap gap-2 items-center">
+        {vb.length > 1 && <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>}
+        <SelectDropdown value={filterEmployee} onChange={setFilterEmployee} className="w-44">
+          <option value="all">All Employees</option>
+          {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+        </SelectDropdown>
+      </div>
+
+      {/* Week nav */}
+      <div className="flex items-center justify-between">
+        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+        <div className="text-sm font-semibold text-white">
+          {new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}
+        </div>
+        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset >= 0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+      </div>
+
+      {/* ── Records tab ── */}
+      {tab === "records" && (
+        <div className="space-y-2">
+          {visible.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+              <Clock size={32} className="mb-3 text-slate-700"/>
+              <div className="text-sm font-semibold">No punch records this week</div>
+            </div>
+          )}
+          {visible.map(r => {
+            const brand = brands.find(b => b.id === r.brandId);
+            const member = opsTeam.find(m => m.id === r.employeeId);
+            return (
+              <div key={r.id} className={`rounded-2xl border p-4 ${r.status==="open" ? "bg-amber-950/20 border-amber-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
+                      style={{background:(member?.color||"#6366f1")+"30",color:member?.color||"#6366f1"}}>
+                      {r.employeeName.split(" ").map(w=>w[0]).join("").slice(0,2)}
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-white">{r.employeeName}</div>
+                      <div className="text-xs text-slate-400">
+                        {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
+                        {brand && <span className="ml-2 flex-inline items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{background:brand.color}}/>{brand.name}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-right">
+                    <div>
+                      <div className="text-xs text-slate-500">IN</div>
+                      <div className="text-sm font-bold text-white">{fmtDateTime(r.punchIn)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">OUT</div>
+                      <div className={`text-sm font-bold ${r.punchOut ? "text-white" : "text-amber-400"}`}>
+                        {r.punchOut ? fmtDateTime(r.punchOut) : "Still in"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Hours</div>
+                      <div className="text-sm font-bold text-white">{fmtDuration(r.hoursWorked)}</div>
+                    </div>
+                    {r.hourlyRate > 0 && (
+                      <div>
+                        <div className="text-xs text-slate-500">Pay</div>
+                        <div className="text-sm font-bold text-emerald-400">
+                          {r.grossPay != null ? `£${r.grossPay.toFixed(2)}` : "—"}
+                        </div>
+                      </div>
+                    )}
+                    <button onClick={()=>setAmendModal(r)}
+                      className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend">
+                      <Edit size={13}/>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Summary tab ── */}
+      {tab === "summary" && (
+        <div className="space-y-3">
+          {Object.entries(summary).length === 0 && (
+            <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>
+          )}
+          {Object.entries(summary).map(([empId, s]) => (
+            <div key={empId} className={`rounded-2xl border p-5 ${s.isOvertime ? "bg-amber-950/10 border-amber-500/20" : "bg-slate-900/60 border-slate-700/60"}`}>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-bold text-white">{s.name}</div>
+                    {s.isOvertime && <Badge label="Overtime" color="amber"/>}
+                    {s.openShifts > 0 && <Badge label="Still clocked in" color="amber"/>}
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">{s.role} · {s.days} day{s.days!==1?"s":""} worked</div>
+                </div>
+                <div className="flex gap-5 text-right">
+                  <div>
+                    <div className="text-xs text-slate-500">Regular</div>
+                    <div className="text-sm font-bold text-white">{fmtDuration(s.regularHours)}</div>
+                  </div>
+                  {s.overtimeHours > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500">Overtime (×1.5)</div>
+                      <div className="text-sm font-bold text-amber-400">{fmtDuration(s.overtimeHours)}</div>
+                    </div>
+                  )}
+                  <div>
+                    <div className="text-xs text-slate-500">Total hrs</div>
+                    <div className="text-sm font-bold text-white">{fmtDuration(s.totalHours)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Rate</div>
+                    <div className="text-sm font-bold text-slate-300">£{(s.hourlyRate||0).toFixed(2)}/hr</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Gross Pay</div>
+                    <div className="text-sm font-bold text-emerald-400">£{(s.totalPay||0).toFixed(2)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+          {Object.entries(summary).length > 0 && (
+            <div className="flex items-center justify-between rounded-2xl bg-indigo-950/30 border border-indigo-500/30 px-5 py-4">
+              <div className="text-sm font-bold text-white">Week Total</div>
+              <div className="flex gap-6 text-right">
+                <div>
+                  <div className="text-xs text-slate-500">Hours</div>
+                  <div className="text-sm font-bold text-white">{fmtDuration(totalWeekHours)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Gross Pay</div>
+                  <div className="text-lg font-black text-emerald-400">£{totalWeekPay.toFixed(2)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Amend modal */}
+      {amendModal && (
+        <AmendPunchModal record={amendModal}
+          onSave={updated => { onAmend(updated); setAmendModal(null); }}
+          onClose={() => setAmendModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Amend Punch Modal ─────────────────────────────────────────────────────────
+function AmendPunchModal({ record, onSave, onClose }) {
+  const toTimeStr = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "";
+  const [punchInTime,  setPunchInTime]  = useState(toTimeStr(record.punchIn));
+  const [punchOutTime, setPunchOutTime] = useState(toTimeStr(record.punchOut));
+  const [notes,        setNotes]        = useState(record.notes || "");
+
+  const handleSave = () => {
+    const dateBase = record.date + "T";
+    const newPunchIn  = new Date(dateBase + punchInTime  + ":00").toISOString();
+    const newPunchOut = punchOutTime ? new Date(dateBase + punchOutTime + ":00").toISOString() : null;
+    const hoursWorked = newPunchOut
+      ? Math.round(((new Date(newPunchOut) - new Date(newPunchIn)) / 3600000) * 100) / 100
+      : null;
+    const grossPay = hoursWorked && record.hourlyRate
+      ? Math.round(hoursWorked * record.hourlyRate * 100) / 100
+      : null;
+    onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes, status: punchOutTime ? "amended" : "open", updatedAt: new Date().toISOString() });
+  };
+
+  return (
+    <Modal title={`Amend — ${record.employeeName}`} onClose={onClose}
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button>
+      </>}>
+      <div className="space-y-4">
+        <div className="bg-slate-800/50 rounded-xl px-4 py-3 text-xs text-slate-400">
+          {new Date(record.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <AvailTimeField label="Clock In" value={punchInTime} onChange={setPunchInTime}/>
+          <AvailTimeField label="Clock Out" value={punchOutTime} onChange={setPunchOutTime}/>
+        </div>
+        <div><label className={labelCls}>Notes</label>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Reason for amendment…" className={`${inputCls} resize-none`}/>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Main App (merged: live financial + new ops) ───────────────────────────────
+// ── KioskShell — standalone data loader for the kiosk route ──────────────────
+// Completely independent of App() — no auth, no manager state
+function KioskShell() {
+  const [opsTeam,      setOpsTeam]      = useState([]);
+  const [brands,       setBrands]       = useState([]);
+  const [punchRecords, setPunchRecords] = useState([]);
+  const [ready,        setReady]        = useState(false);
+
+  useEffect(() => {
+    Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords()])
+      .then(([team, br, punches]) => {
+        setOpsTeam(team); setBrands(br); setPunchRecords(punches);
+        setReady(true);
+      })
+      .catch(err => { console.error("Kiosk load error:", err); setReady(true); });
+  }, []);
+
+  // Realtime for punch records so clock-in state stays live
+  useEffect(() => {
+    const ch = supabase
+      .channel("kiosk:punch_records")
+      .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
+        const p = {
+          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
+          hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
+          hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
+          grossPay: r.gross_pay ? parseFloat(r.gross_pay) : null,
+          notes: r.notes, status: r.status, amendedBy: r.amended_by,
+          createdAt: r.created_at, updatedAt: r.updated_at,
+        };
+        if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
+        if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
+      })
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, []);
+
+  const handlePunchIn = async (record) => {
+    const saved = await insertPunchIn(record);
+    setPunchRecords(ps => [saved, ...ps]);
+  };
+  const handlePunchOut = async (id, punchOut, hoursWorked, grossPay) => {
+    const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
+    setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+  };
+
+  if (!ready) return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:16}}>
+      <div style={{width:56,height:56,borderRadius:14,background:"#4f46e5",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:20}}>CB</div>
+      <span style={{fontSize:15}}>Loading kiosk…</span>
+    </div>
+  );
+
+  return (
+    <KioskApp
+      opsTeam={opsTeam} brands={brands}
+      punchRecords={punchRecords}
+      onPunchIn={handlePunchIn}
+      onPunchOut={handlePunchOut}
+    />
+  );
+}
+
+
+// ── Kiosk detection BEFORE anything else ────────────────────────────────────
+// Must be outside App() so it fires before any hooks or state
+const IS_KIOSK = window.location.pathname === "/kiosk" ||
+                 window.location.hash === "#kiosk" ||
+                 window.location.search.includes("kiosk");
+
 export default function App() {
+  // If kiosk mode, render the standalone kiosk shell
+  if (IS_KIOSK) return <KioskShell />;
   const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
 
   // ── Financial state (Supabase) ────────────────────────────────────────────
@@ -5940,6 +6556,7 @@ export default function App() {
   const [availability,    setAvailability]    = useState([]);
   const [schedules,       setSchedules]       = useState([]);
   const [shiftPresets,    setShiftPresets]    = useState([]);
+  const [punchRecords,    setPunchRecords]    = useState([]);
 
   const [activeView, setActiveView] = useState("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -5951,16 +6568,16 @@ export default function App() {
   useEffect(() => {
     async function loadAll() {
       try {
-        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs, avail, scheds, spreset] = await Promise.all([
+        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs, avail, scheds, spreset, punches] = await Promise.all([
           fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
           fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
           fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail(),
-          fetchHelpdeskTickets(), fetchInboxMessages(), fetchAvailability(), fetchSchedules(), fetchShiftPresets(),
+          fetchHelpdeskTickets(), fetchInboxMessages(), fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
         ]);
         setBrands(b); setUsers(u); setEntries(e); setIssues(i);
         setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
         setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl); setChecklistStates(cs); setAuditTrail(at);
-        setHdTickets(hd); setMessages(msgs); setAvailability(avail); setSchedules(scheds); setShiftPresets(spreset);
+        setHdTickets(hd); setMessages(msgs); setAvailability(avail); setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
         setDbReady(true);
       } catch (err) {
         console.error("Supabase load error:", err);
@@ -6098,12 +6715,32 @@ export default function App() {
       })
       .subscribe();
 
+    const punchChannel = supabase
+      .channel("realtime:punch_records")
+      .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
+        const p = {
+          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
+          hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
+          hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
+          grossPay: r.gross_pay ? parseFloat(r.gross_pay) : null,
+          notes: r.notes, status: r.status, amendedBy: r.amended_by,
+          createdAt: r.created_at, updatedAt: r.updated_at,
+        };
+        if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
+        if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
+      })
+      .subscribe();
+
     return () => {
       clearInterval(interval);
       supabase.removeChannel(ticketChannel);
       supabase.removeChannel(msgChannel);
       supabase.removeChannel(availChannel);
       supabase.removeChannel(schedChannel);
+      supabase.removeChannel(punchChannel);
     };
   }, [dbReady]);
 
@@ -6260,6 +6897,22 @@ export default function App() {
       setAuditTrail([]);
       showToast("Audit trail cleared");
     } catch (err) { showToast("Failed to clear audit trail: " + err.message, "error"); }
+  }, [showToast]);
+
+  // ── Punch Records ────────────────────────────────────────────────────────────
+  const handlePunchIn = useCallback(async record => {
+    try { const saved = await insertPunchIn(record); setPunchRecords(ps => [saved, ...ps]); }
+    catch (err) { console.error("PunchIn failed:", err); }
+  }, []);
+
+  const handlePunchOut = useCallback(async (id, punchOut, hoursWorked, grossPay) => {
+    try { const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay); setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p)); }
+    catch (err) { console.error("PunchOut failed:", err); }
+  }, []);
+
+  const handleAmendPunch = useCallback(async record => {
+    try { const saved = await upsertPunchRecord(record); setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p)); showToast("Record amended"); }
+    catch (err) { showToast("Failed to amend: " + err.message, "error"); }
   }, [showToast]);
 
   // ── Shift Presets ────────────────────────────────────────────────────────────
@@ -6487,6 +7140,7 @@ export default function App() {
     {
       group: "Settings",
       items: [
+        { key: "time-attend",  label: "Time & Attendance", icon: Clock },
         { key: "ops-assigns",  label: "Assignments",   icon: Clipboard },
         { key: "ops-settings", label: "Ops Setup",     icon: Settings },
         { key: "ops-audit",    label: "Audit Trail",   icon: ScrollText },
@@ -6495,7 +7149,7 @@ export default function App() {
     },
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication" };
+  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication", "time-attend": "Time & Attendance" };
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
@@ -6653,6 +7307,7 @@ export default function App() {
             {activeView === "ops-tasks"       && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {activeView === "ops-temps"       && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {activeView === "ops-deliveries"  && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {activeView === "time-attend" && <TimeAttendanceView brands={visibleBrands} opsTeam={opsTeam} punchRecords={punchRecords} currentUser={currentUser} onAmend={handleAmendPunch}/>}
             {activeView === "ops-assigns"     && <AssignmentsView brands={brands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
