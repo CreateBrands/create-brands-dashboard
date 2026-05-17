@@ -5780,10 +5780,14 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
   const myShifts = daySchedules.filter(s =>
     s.employeeId === myId || s.employeeId === currentUser.id
   );
-  // Department shifts (everyone else in my dept)
-  const deptShifts = myDept
-    ? daySchedules.filter(s => s.employeeId !== myId && s.department === myDept)
-    : [];
+
+  // Colleague shifts — everyone else at same location, same day
+  // Grouped: same dept first, then others
+  const colleagueShifts = daySchedules.filter(s =>
+    s.employeeId !== myId && s.employeeId !== currentUser.id
+  );
+  const sameDeptShifts  = myDept ? colleagueShifts.filter(s => s.department === myDept) : [];
+  const otherDeptShifts = myDept ? colleagueShifts.filter(s => s.department !== myDept) : colleagueShifts;
 
   const brand = brands.find(b => b.id === myBrandId);
 
@@ -5870,10 +5874,18 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
       </div>
 
       {/* Department shifts for selected day */}
-      {myDept && deptShifts.length > 0 && (
+      {sameDeptShifts.length > 0 && (
         <div>
           <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">{myDept} Team {viewLabel}</div>
-          <div className="space-y-2">{deptShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={false}/>)}</div>
+          <div className="space-y-2">{sameDeptShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={false}/>)}</div>
+        </div>
+      )}
+
+      {/* Other colleagues */}
+      {otherDeptShifts.length > 0 && (
+        <div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Also Working {viewLabel}</div>
+          <div className="space-y-2">{otherDeptShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={false}/>)}</div>
         </div>
       )}
 
