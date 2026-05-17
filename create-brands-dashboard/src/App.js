@@ -5747,11 +5747,15 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 
   // Only published schedules for this brand on this date
   const daySchedules = schedules.filter(s =>
-    s.brandId === myBrandId && s.date === viewDate && s.published && s.status !== "cancelled"
+    s.brandId === myBrandId && s.date === viewDate &&
+    (s.published === true || s.published === "true") &&
+    s.status !== "cancelled"
   );
 
-  // My own shifts
-  const myShifts = daySchedules.filter(s => s.employeeId === myId);
+  // My own shifts — match by opsTeamMemberId OR currentUser.id
+  const myShifts = daySchedules.filter(s =>
+    s.employeeId === myId || s.employeeId === currentUser.id
+  );
   // Department shifts (everyone else in my dept)
   const deptShifts = myDept
     ? daySchedules.filter(s => s.employeeId !== myId && s.department === myDept)
@@ -6205,12 +6209,13 @@ export default function App() {
   const handlePublishWeek = useCallback(async (brandId, weekStart, published) => {
     try {
       await publishWeekSchedules(brandId, weekStart, published);
+      // Use string comparison to avoid timezone issues with Date objects
+      const weEnd = new Date(weekStart+"T00:00:00");
+      weEnd.setDate(weEnd.getDate()+6);
+      const weekEndStr = weEnd.toISOString().split("T")[0];
       setSchedules(ss => ss.map(s => {
         if (s.brandId !== brandId) return s;
-        const d = new Date(s.date+"T00:00:00");
-        const ws = new Date(weekStart+"T00:00:00");
-        const we = new Date(weekStart+"T00:00:00"); we.setDate(we.getDate()+6);
-        return (d >= ws && d <= we) ? { ...s, published } : s;
+        return (s.date >= weekStart && s.date <= weekEndStr) ? { ...s, published } : s;
       }));
       showToast(published ? "Schedule published — employees can now see it ✓" : "Schedule unpublished", published ? "success" : "success");
     } catch (err) { showToast("Failed to publish: " + err.message, "error"); }
