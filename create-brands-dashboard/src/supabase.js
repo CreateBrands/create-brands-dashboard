@@ -604,3 +604,64 @@ export async function publishWeekSchedules(brandId, weekStart, published) {
     .lte("date", weekEnd.toISOString().split("T")[0]);
   if (error) throw error;
 }
+
+// ── PUNCH RECORDS ─────────────────────────────────────────────────────────────
+
+export async function fetchPunchRecords({ brandId, from, to } = {}) {
+  let q = supabase.from("punch_records").select("*").order("punch_in", { ascending: false });
+  if (brandId) q = q.eq("brand_id", brandId);
+  if (from)    q = q.gte("date", from);
+  if (to)      q = q.lte("date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data.map(dbPunchToApp);
+}
+
+export async function insertPunchIn(record) {
+  const { data, error } = await supabase
+    .from("punch_records").insert(appPunchToDb(record)).select().single();
+  if (error) throw error;
+  return dbPunchToApp(data);
+}
+
+export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
+  const { data, error } = await supabase
+    .from("punch_records")
+    .update({ punch_out: punchOut, hours_worked: hoursWorked, gross_pay: grossPay,
+               status: "closed", updated_at: new Date().toISOString() })
+    .eq("id", id).select().single();
+  if (error) throw error;
+  return dbPunchToApp(data);
+}
+
+export async function upsertPunchRecord(record) {
+  const { data, error } = await supabase
+    .from("punch_records").upsert(appPunchToDb(record), { onConflict: "id" })
+    .select().single();
+  if (error) throw error;
+  return dbPunchToApp(data);
+}
+
+function appPunchToDb(p) {
+  return {
+    id: p.id, brand_id: p.brandId,
+    employee_id: p.employeeId, employee_name: p.employeeName,
+    date: p.date, punch_in: p.punchIn, punch_out: p.punchOut || null,
+    hours_worked: p.hoursWorked || null, hourly_rate: p.hourlyRate || 0,
+    gross_pay: p.grossPay || null, notes: p.notes || "",
+    status: p.status || "open", amended_by: p.amendedBy || "",
+    updated_at: new Date().toISOString(),
+  };
+}
+function dbPunchToApp(p) {
+  return {
+    id: p.id, brandId: p.brand_id,
+    employeeId: p.employee_id, employeeName: p.employee_name,
+    date: p.date, punchIn: p.punch_in, punchOut: p.punch_out,
+    hoursWorked: p.hours_worked ? parseFloat(p.hours_worked) : null,
+    hourlyRate: p.hourly_rate ? parseFloat(p.hourly_rate) : 0,
+    grossPay: p.gross_pay ? parseFloat(p.gross_pay) : null,
+    notes: p.notes, status: p.status, amendedBy: p.amended_by,
+    createdAt: p.created_at, updatedAt: p.updated_at,
+  };
+}
