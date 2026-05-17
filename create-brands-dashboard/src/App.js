@@ -6741,253 +6741,76 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
 // KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
-  const [pin,         setPin]       = useState("");
-  const [matched,     setMatched]   = useState(null); // ops_team member
-  const [error,       setError]     = useState("");
-  const [shake,       setShake]     = useState(false);
-  const [lastAction,  setLastAction]= useState(null); // { type:"in"|"out", name, time }
-  const [clock,       setClock]     = useState(new Date());
-  const [submitting,  setSubmitting]= useState(false); // prevents double-tap
-
-  // Live clock
-  useEffect(() => {
-    const t = setInterval(() => setClock(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Auto-clear last action message after 5 seconds
-  useEffect(() => {
-    if (!lastAction) return;
-    const t = setTimeout(() => { setLastAction(null); setPin(""); setMatched(null); }, 5000);
-    return () => clearTimeout(t);
-  }, [lastAction]);
-
-  const handleDigit = (d) => {
-    if (matched) return; // already confirmed — waiting for auto-clear
-    if (pin.length >= 6) return;
-    setError("");
-    const next = pin + d;
-    setPin(next);
-
-    // Auto-match when 4+ digits entered
-    if (next.length >= 4) {
-      const found = opsTeam.find(m => m.pin && m.pin === next);
-      if (found) {
-        setMatched(found);
-        setError("");
-      }
-    }
-  };
-
-  const handleBackspace = () => {
-    if (matched) return;
-    setPin(p => p.slice(0, -1));
-    setError("");
-    setMatched(null);
-  };
-
-  const handleClear = () => { setPin(""); setMatched(null); setError(""); };
-
-  const handleConfirm = async () => {
-    if (submitting) return; // prevent double-tap
-    if (!matched) {
-      setError("PIN not recognised");
-      setShake(true);
-      setTimeout(() => { setShake(false); setPin(""); }, 600);
-      return;
-    }
-    setSubmitting(true);
-
-    const toLocalDate = () => {
-      const d = new Date();
-      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    };
-
-    // Check if already punched in today
-    const todayStr = toLocalDate();
-    const openRecord = punchRecords.find(r =>
-      r.employeeId === matched.id && r.date === todayStr && r.status === "open"
-    );
-
-    const now = new Date().toISOString();
-
-    if (openRecord) {
-      // Punch OUT
-      const punchInTime  = new Date(openRecord.punchIn);
-      const hoursWorked  = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
-      const grossPay     = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
-      await onPunchOut(openRecord.id, now, hoursWorked, grossPay);
-      setSubmitting(false);
-      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked });
-    } else {
-      // Punch IN
-      const brand = brands.find(b => b.id === matched.brandId);
-      await onPunchIn({
-        id: `pr-${Date.now()}`,
-        brandId: matched.brandId,
-        employeeId: matched.id,
-        employeeName: `${matched.firstName} ${matched.lastName}`.trim(),
-        date: todayStr,
-        punchIn: now,
-        punchOut: null,
-        hoursWorked: null,
-        hourlyRate: matched.hourlyRate || 0,
-        grossPay: null,
-        notes: "",
-        status: "open",
-        amendedBy: "",
-      });
-      setSubmitting(false);
-      setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
-    }
-  };
-
-  const fmtTime = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  const fmtDate = (d) => d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-
-  // Success screen
-  if (lastAction) {
-    const isIn = lastAction.type === "in";
-    return (
-      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isIn ? "bg-emerald-950" : "bg-indigo-950"}`}>
-        <div className="text-center space-y-6">
-          <div className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto text-6xl ${isIn ? "bg-emerald-500/20" : "bg-indigo-500/20"}`}>
-            {isIn ? "✓" : "✓"}
-          </div>
-          <div>
-            <div className={`text-5xl font-black mb-2 ${isIn ? "text-emerald-300" : "text-indigo-300"}`}>
-              {isIn ? "Clocked In" : "Clocked Out"}
-            </div>
-            <div className="text-3xl font-bold text-white">{lastAction.name}</div>
-            <div className="text-xl text-slate-400 mt-2">{fmtTime(lastAction.time)}</div>
-            {!isIn && lastAction.hours && (
-              <div className="text-lg text-slate-300 mt-2">{lastAction.hours.toFixed(2)} hours worked</div>
-            )}
-          </div>
-          <div className="text-slate-500 text-sm">Returning to kiosk in a moment…</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Check if matched employee is currently clocked in
-  const toLocalDate = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  };
-  const todayStr = toLocalDate();
-  const openRecord = matched ? punchRecords.find(r =>
-    r.employeeId === matched.id && r.date === todayStr && r.status === "open"
-  ) : null;
-  const isClockedIn = !!openRecord;
-
-  return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none">
-      {/* Header */}
-      <div className="mb-8 text-center">
-        <div className="flex items-center justify-center gap-3 mb-2">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
-            <span className="text-white font-black text-lg">CB</span>
-          </div>
-          <span className="text-white font-bold text-xl">Create Brands</span>
-        </div>
-        <div className="text-3xl font-black text-white tabular-nums">{fmtTime(clock)}</div>
-        <div className="text-slate-400 text-sm mt-0.5">{fmtDate(clock)}</div>
-      </div>
-
-      {/* PIN display */}
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center">
-          <div className="text-slate-400 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
-
-          {/* PIN dots */}
-          <div className={`flex justify-center gap-4 mb-3 ${shake ? "animate-bounce" : ""}`}>
-            {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
-              <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all ${
-                i < pin.length
-                  ? matched ? "bg-emerald-500 border-emerald-400" : "bg-indigo-500 border-indigo-400"
-                  : "bg-transparent border-slate-600"
-              }`}/>
-            ))}
-          </div>
-
-          {/* Matched name */}
-          {matched && (
-            <div className={`rounded-2xl px-6 py-4 mx-4 border ${isClockedIn ? "bg-amber-950/40 border-amber-500/40" : "bg-emerald-950/40 border-emerald-500/40"}`}>
-              <div className="text-xl font-bold text-white">{matched.firstName} {matched.lastName}</div>
-              <div className="text-sm mt-0.5 font-semibold">
-                {isClockedIn
-                  ? <span className="text-amber-400">⏱ Currently clocked in — tap to Clock Out</span>
-                  : <span className="text-emerald-400">Ready to Clock In</span>
-                }
-              </div>
-              {isClockedIn && openRecord && (
-                <div className="text-xs text-slate-400 mt-1">
-                  In at {new Date(openRecord.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Error */}
-          {error && (
-            <div className="text-red-400 text-sm font-semibold mt-2">{error}</div>
-          )}
-        </div>
-
-        {/* Numpad */}
-        <div className="grid grid-cols-3 gap-3">
-          {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
-            if (key === "") return <div key={idx}/>;
-            return (
-              <button key={key}
-                onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
-                className={`h-20 rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
-                  key === "⌫"
-                    ? "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                    : "bg-slate-800 text-white hover:bg-slate-700"
-                }`}>
-                {key}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Confirm / Clear */}
-        <div className="space-y-3">
-          <button onClick={handleConfirm}
-            disabled={!matched}
-            className={`w-full py-5 rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
-              submitting ? "bg-slate-700 text-slate-500 cursor-not-allowed" :
-              matched
-                ? isClockedIn
-                  ? "bg-amber-500 hover:bg-amber-400 text-white"
-                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
-                : "bg-slate-800 text-slate-600 cursor-not-allowed"
-            }`}>
-            {submitting ? "Processing…" : matched
-              ? isClockedIn ? "⏹ Clock Out" : "▶ Clock In"
-              : "Enter PIN"}
-          </button>
-          {pin.length > 0 && (
-            <button onClick={handleClear}
-              className="w-full py-3 rounded-2xl bg-slate-900 text-slate-500 text-sm font-semibold hover:bg-slate-800 transition-colors touch-manipulation">
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // TIME & ATTENDANCE — Manager view
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Kiosk detection BEFORE anything else ────────────────────────────────────
 // Must be outside App() so it fires before any hooks or state
+function KioskShell() {
+  const [opsTeam,      setOpsTeam]      = useState([]);
+  const [brands,       setBrands]       = useState([]);
+  const [punchRecords, setPunchRecords] = useState([]);
+  const [ready,        setReady]        = useState(false);
+
+  useEffect(() => {
+    Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords()])
+      .then(([team, br, punches]) => {
+        setOpsTeam(team); setBrands(br); setPunchRecords(punches);
+        setReady(true);
+      })
+      .catch(() => setReady(true));
+  }, []);
+
+  useEffect(() => {
+    const ch = supabase
+      .channel("kiosk:punch_records")
+      .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
+        const p = {
+          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
+          hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
+          hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
+          grossPay: r.gross_pay ? parseFloat(r.gross_pay) : null,
+          notes: r.notes, status: r.status, amendedBy: r.amended_by,
+          createdAt: r.created_at, updatedAt: r.updated_at,
+        };
+        if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
+        if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
+      })
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, []);
+
+  const handlePunchIn = async (record) => {
+    const alreadyOpen = punchRecords.some(p =>
+      p.employeeId === record.employeeId && p.date === record.date && p.status === "open"
+    );
+    if (alreadyOpen) return;
+    const saved = await insertPunchIn(record);
+    setPunchRecords(ps => [saved, ...ps]);
+  };
+  const handlePunchOut = async (id, punchOut, hoursWorked, grossPay) => {
+    const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
+    setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+  };
+
+  if (!ready) return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:16}}>
+      <div style={{width:56,height:56,borderRadius:14,background:"#4f46e5",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:20}}>CB</div>
+      <span style={{fontSize:15}}>Loading kiosk…</span>
+    </div>
+  );
+
+  return (
+    <KioskApp opsTeam={opsTeam} brands={brands} punchRecords={punchRecords}
+      onPunchIn={handlePunchIn} onPunchOut={handlePunchOut}/>
+  );
+}
+
+
 const IS_KIOSK = window.location.pathname === "/kiosk" ||
                  window.location.hash === "#kiosk" ||
                  window.location.search.includes("kiosk");
