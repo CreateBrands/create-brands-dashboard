@@ -545,6 +545,8 @@ function appScheduleToDb(s) {
     start_time: s.startTime || "08:00", end_time: s.endTime || "16:00",
     role: s.role || "", department: s.department || "",
     notes: s.notes || "", status: s.status || "scheduled",
+    published: s.published ?? false,
+    week_start: s.weekStart || null,
     created_by: s.createdBy || "", updated_at: new Date().toISOString(),
   };
 }
@@ -557,6 +559,48 @@ function dbScheduleToApp(s) {
     endTime: s.end_time?.slice(0,5) || "16:00",
     role: s.role, department: s.department,
     notes: s.notes, status: s.status,
+    published: s.published ?? false,
+    weekStart: s.week_start || null,
     createdBy: s.created_by, createdAt: s.created_at, updatedAt: s.updated_at,
   };
+}
+
+// ── SHIFT PRESETS ─────────────────────────────────────────────────────────────
+
+export async function fetchShiftPresets() {
+  const { data, error } = await supabase
+    .from("shift_presets").select("*").order("sort_order");
+  if (error) throw error;
+  return data.map(r => ({ id: r.id, brandId: r.brand_id, name: r.name,
+    startTime: r.start_time?.slice(0,5)||"08:00", endTime: r.end_time?.slice(0,5)||"16:00",
+    color: r.color, sortOrder: r.sort_order }));
+}
+
+export async function upsertShiftPreset(p) {
+  const { data, error } = await supabase.from("shift_presets")
+    .upsert({ id: p.id, brand_id: p.brandId, name: p.name,
+      start_time: p.startTime, end_time: p.endTime,
+      color: p.color || "#6366f1", sort_order: p.sortOrder || 0 },
+      { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return { id: data.id, brandId: data.brand_id, name: data.name,
+    startTime: data.start_time?.slice(0,5), endTime: data.end_time?.slice(0,5),
+    color: data.color, sortOrder: data.sort_order };
+}
+
+export async function removeShiftPreset(id) {
+  const { error } = await supabase.from("shift_presets").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── Publish/unpublish a week of schedules ─────────────────────────────────────
+export async function publishWeekSchedules(brandId, weekStart, published) {
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const { error } = await supabase.from("schedules")
+    .update({ published, updated_at: new Date().toISOString() })
+    .eq("brand_id", brandId)
+    .gte("date", weekStart)
+    .lte("date", weekEnd.toISOString().split("T")[0]);
+  if (error) throw error;
 }
