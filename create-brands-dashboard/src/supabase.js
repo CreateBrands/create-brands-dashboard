@@ -21,7 +21,7 @@ export async function insertBrand(brand) {
   return dbBrandToApp(data);
 }
 export async function upsertBrand(brand) {
-  const { data, error } = await supabase.from("brands").upsert(appBrandToDb(brand)).select().single();
+  const { data, error } = await supabase.from("brands").upsert(appBrandToDb(brand), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbBrandToApp(data);
 }
@@ -42,7 +42,7 @@ export async function insertUser(user) {
   return dbUserToApp(data);
 }
 export async function upsertUser(user) {
-  const { data, error } = await supabase.from("users").upsert(appUserToDb(user)).select().single();
+  const { data, error } = await supabase.from("users").upsert(appUserToDb(user), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbUserToApp(data);
 }
@@ -58,7 +58,7 @@ export async function fetchEntries() {
   return data.map(dbEntryToApp);
 }
 export async function upsertEntry(entry) {
-  const { data, error } = await supabase.from("eod_entries").upsert(appEntryToDb(entry)).select().single();
+  const { data, error } = await supabase.from("eod_entries").upsert(appEntryToDb(entry), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbEntryToApp(data);
 }
@@ -83,7 +83,7 @@ export async function insertIssue(issue) {
   return dbIssueToApp(data);
 }
 export async function upsertIssue(issue) {
-  const { data, error } = await supabase.from("issues").upsert(appIssueToDb(issue)).select().single();
+  const { data, error } = await supabase.from("issues").upsert(appIssueToDb(issue), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbIssueToApp(data);
 }
@@ -131,19 +131,26 @@ export async function fetchChecklists() {
   }));
 }
 export async function upsertChecklist(cl) {
-  const { error } = await supabase.from("checklists").upsert({
+  const { data, error } = await supabase.from("checklists").upsert({
     id: cl.id, name: cl.name, shift: cl.shift, default_role: cl.defaultRole || "",
     color: cl.color || "indigo", sort_order: cl.sortOrder || 0, updated_at: new Date().toISOString(),
-  });
+  }, { onConflict: "id" }).select().single();
   if (error) throw error;
-  await supabase.from("checklist_items").delete().eq("checklist_id", cl.id);
+  // Replace items — delete existing then insert fresh
+  const { error: delErr } = await supabase.from("checklist_items").delete().eq("checklist_id", cl.id);
+  if (delErr) throw delErr;
   if (cl.items?.length) {
-    const { error: e2 } = await supabase.from("checklist_items").insert(
+    const { error: insErr } = await supabase.from("checklist_items").insert(
       cl.items.map((item, idx) => ({ id: item.id, checklist_id: cl.id, text: item.text, guide: item.guide || "", sort_order: idx }))
     );
-    if (e2) throw e2;
+    if (insErr) throw insErr;
   }
-  return cl;
+  return {
+    id: data.id, name: data.name, shift: data.shift,
+    defaultRole: data.default_role, color: data.color,
+    sortOrder: data.sort_order,
+    items: cl.items || [],
+  };
 }
 export async function removeChecklist(id) {
   const { error } = await supabase.from("checklists").delete().eq("id", id);
@@ -157,7 +164,7 @@ export async function fetchTempUnits() {
   return data.map(dbTempUnitToApp);
 }
 export async function upsertTempUnit(unit) {
-  const { data, error } = await supabase.from("temp_units").upsert(appTempUnitToDb(unit)).select().single();
+  const { data, error } = await supabase.from("temp_units").upsert(appTempUnitToDb(unit), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbTempUnitToApp(data);
 }
@@ -173,7 +180,7 @@ export async function fetchCleaningTasks() {
   return data.map(dbCleanTaskToApp);
 }
 export async function upsertCleaningTask(task) {
-  const { data, error } = await supabase.from("cleaning_tasks").upsert(appCleanTaskToDb(task)).select().single();
+  const { data, error } = await supabase.from("cleaning_tasks").upsert(appCleanTaskToDb(task), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbCleanTaskToApp(data);
 }
@@ -189,7 +196,7 @@ export async function fetchAssignments() {
   return data.map(dbAssignmentToApp);
 }
 export async function upsertAssignment(a) {
-  const { data, error } = await supabase.from("assignments").upsert(appAssignmentToDb(a)).select().single();
+  const { data, error } = await supabase.from("assignments").upsert(appAssignmentToDb(a), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbAssignmentToApp(data);
 }
@@ -205,7 +212,7 @@ export async function fetchOpsTeam() {
   return data.map(dbOpsTeamToApp);
 }
 export async function upsertOpsTeamMember(m) {
-  const { data, error } = await supabase.from("ops_team").upsert(appOpsTeamToDb(m)).select().single();
+  const { data, error } = await supabase.from("ops_team").upsert(appOpsTeamToDb(m), { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbOpsTeamToApp(data);
 }
@@ -347,7 +354,7 @@ export async function insertHelpdeskTicket(ticket) {
 export async function upsertHelpdeskTicket(ticket) {
   const { data, error } = await supabase
     .from("helpdesk_tickets")
-    .upsert(helpdeskTicketToDb(ticket))
+    .upsert(helpdeskTicketToDb(ticket), { onConflict: "id" })
     .select().single();
   if (error) throw error;
   return dbTicketToHelpdesk(data);

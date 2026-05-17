@@ -4299,7 +4299,24 @@ export default function App() {
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
-    const [collapsed, setCollapsed] = useState({ Overview: false, "Daily Ops": true, Team: true, Settings: true });
+    // Find which group the current activeView belongs to
+    const activeGroup = NAV_GROUPS.find(g => g.items.some(n => n.key === activeView))?.group;
+
+    const [collapsed, setCollapsed] = useState(() => {
+      // Start all collapsed except the group containing the active view
+      return NAV_GROUPS.reduce((acc, g) => {
+        acc[g.group] = g.group !== activeGroup;
+        return acc;
+      }, {});
+    });
+
+    // Auto-expand the active group whenever activeView changes
+    useEffect(() => {
+      if (activeGroup) {
+        setCollapsed(c => ({ ...c, [activeGroup]: false }));
+      }
+    }, [activeGroup]);
+
     const toggleGroup = (g) => setCollapsed(c => ({ ...c, [g]: !c[g] }));
     const groupIcons = { Overview: LayoutDashboard, "Daily Ops": Activity, Team: Users, Settings: Settings };
 
