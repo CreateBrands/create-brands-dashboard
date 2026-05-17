@@ -6008,7 +6008,10 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
       const grossPay     = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
       await onPunchOut(openRecord.id, now, hoursWorked, grossPay);
       setSubmitting(false);
-      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked });
+      // Calculate if there was OT for the summary screen
+      const emp = matched;
+      // Find schedule for today (simplified — just show hours)
+      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs: 0, isUnscheduled: false });
     } else {
       // Punch IN
       const brand = brands.find(b => b.id === matched.brandId);
@@ -6038,23 +6041,42 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
   // Success screen
   if (lastAction) {
     const isIn = lastAction.type === "in";
+    const hasOT = lastAction.overtimeHrs > 0;
+    const isUnscheduled = lastAction.isUnscheduled;
     return (
-      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isIn ? "bg-emerald-950" : "bg-indigo-950"}`}>
-        <div className="text-center space-y-6">
-          <div className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto text-6xl ${isIn ? "bg-emerald-500/20" : "bg-indigo-500/20"}`}>
-            {isIn ? "✓" : "✓"}
+      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isIn ? "bg-emerald-950" : hasOT || isUnscheduled ? "bg-red-950" : "bg-slate-950"}`}>
+        <div className="text-center space-y-6 max-w-sm w-full">
+          <div className={`text-5xl font-black mb-2 ${isIn ? "text-emerald-300" : "text-white"}`}>
+            {isIn ? "Clocked In ✓" : "Clocked Out ✓"}
           </div>
-          <div>
-            <div className={`text-5xl font-black mb-2 ${isIn ? "text-emerald-300" : "text-indigo-300"}`}>
-              {isIn ? "Clocked In" : "Clocked Out"}
+          <div className="text-3xl font-bold text-white">{lastAction.name}</div>
+          <div className="text-xl text-slate-400">{fmtTime(lastAction.time)}</div>
+
+          {!isIn && (
+            <div className="bg-black/30 rounded-2xl p-5 space-y-3 text-left">
+              {lastAction.hours && (
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 text-sm">Hours worked</span>
+                  <span className="text-white text-lg font-bold">
+                    {Math.floor(lastAction.hours)}h {String(Math.round((lastAction.hours % 1)*60)).padStart(2,"0")}m
+                  </span>
+                </div>
+              )}
+              {(hasOT || isUnscheduled) && (
+                <div className="pt-3 border-t border-white/10">
+                  <div className="text-red-300 font-bold text-sm mb-1">
+                    ⚠ {isUnscheduled ? "Unscheduled shift" : `${lastAction.overtimeHrs.toFixed(2)}h extra time`}
+                  </div>
+                  <div className="text-slate-300 text-xs">
+                    {isUnscheduled
+                      ? "This shift wasn't scheduled. Open the app → My Hours to submit a reason for your manager to approve."
+                      : "You worked beyond your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="text-3xl font-bold text-white">{lastAction.name}</div>
-            <div className="text-xl text-slate-400 mt-2">{fmtTime(lastAction.time)}</div>
-            {!isIn && lastAction.hours && (
-              <div className="text-lg text-slate-300 mt-2">{lastAction.hours.toFixed(2)} hours worked</div>
-            )}
-          </div>
-          <div className="text-slate-500 text-sm">Returning to kiosk in a moment…</div>
+          )}
+          <div className="text-slate-600 text-sm">Returning to kiosk in a moment…</div>
         </div>
       </div>
     );
@@ -6180,7 +6202,7 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
 // TIME & ATTENDANCE — Manager view with approval + overtime comparison
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate }) {
+function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
 
@@ -6202,11 +6224,16 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
     return `${h}h ${String(m).padStart(2,"0")}m`;
   };
   const calcOvertimeHours = (r) => {
-    if (!r.punchIn || !r.punchOut || !r.scheduledEnd) return 0;
-    const actualEnd    = new Date(r.punchOut);
-    const schedDate    = r.date + "T" + r.scheduledEnd + ":00";
-    const scheduledEnd = new Date(schedDate);
-    const diff = (actualEnd - scheduledEnd) / 3600000;
+    if (!r.punchIn || !r.punchOut || !r.scheduledStart || !r.scheduledEnd) return 0;
+    // Compare HOURS WORKED vs SCHEDULED HOURS — not wall-clock times
+    const actualHours = (new Date(r.punchOut) - new Date(r.punchIn)) / 3600000;
+    const schedStart  = new Date(r.date + "T" + r.scheduledStart + ":00");
+    const schedEnd    = new Date(r.date + "T" + r.scheduledEnd   + ":00");
+    // Handle overnight shifts (end < start)
+    const schedHours  = schedEnd <= schedStart
+      ? (schedEnd - schedStart + 86400000) / 3600000
+      : (schedEnd - schedStart) / 3600000;
+    const diff = actualHours - schedHours;
     return diff > 0 ? Math.round(diff * 100) / 100 : 0;
   };
   const calcUnscheduled = (r) => {
@@ -6219,7 +6246,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
   const [filterEmployee, setFilterEmployee] = useState("all");
   const [tab,            setTab]            = useState("records");
   const [amendModal,     setAmendModal]     = useState(null);
-  const [overtimeModal,  setOvertimeModal]  = useState(null); // for approving OT reason
+  const [rejectOTModal,  setRejectOTModal]  = useState(null);
+  const [addManualModal, setAddManualModal] = useState(false);
 
   const { from, to } = getWeekBounds(weekOffset);
 
@@ -6244,7 +6272,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
     const sched = daySchedules[0] || null;
     const scheduledStart = r.scheduledStart || sched?.startTime || null;
     const scheduledEnd   = r.scheduledEnd   || sched?.endTime   || null;
-    const overtimeHrs    = r.overtimeHours  ?? calcOvertimeHours({ ...r, scheduledStart, scheduledEnd });
+    // Always recalculate fresh — DB value may be stale if schedule changed
+    const overtimeHrs    = calcOvertimeHours({ ...r, scheduledStart, scheduledEnd });
     const isUnscheduled  = !sched && !r.scheduledStart;
     return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, isUnscheduled };
   });
@@ -6286,8 +6315,10 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
     overtimeApproved: true, overtimeApprovedBy: currentUser.name,
     overtimeHours: r.overtimeHrs, updatedAt: new Date().toISOString() });
 
-  const handleRejectOT = (r) => onUpdate({ ...r,
+  const handleRejectOT = (r, reason) => onUpdate({ ...r,
     overtimeApproved: false, overtimeHours: 0,
+    overtimeReason: r.overtimeReason, // keep employee reason
+    overtimeRejectedReason: reason || "",
     updatedAt: new Date().toISOString() });
 
   return (
@@ -6303,9 +6334,12 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
             {pendingOT > 0 && <span className="text-red-400 font-semibold">⏱ {pendingOT} overtime pending</span>}
           </div>
         </div>
-        <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
-          <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Records</button>
-          <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Summary</button>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setAddManualModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"><Plus size={13}/> Manual Entry</button>
+          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
+            <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Records</button>
+            <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Summary</button>
+          </div>
         </div>
       </div>
 
@@ -6373,6 +6407,9 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
                   {/* Action buttons */}
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {r.status === "open" && (
+                      <button onClick={()=>setAmendModal(r)} className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors">⏹ Clock Out</button>
+                    )}
                     {needsApproval && (
                       <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve</button>
                     )}
@@ -6437,16 +6474,19 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                           {r.overtimeApproved && <span className="text-emerald-400 ml-2">✓ Approved by {r.overtimeApprovedBy}</span>}
                         </div>
                         {r.overtimeReason ? (
-                          <div className="text-xs text-slate-300 italic">"{r.overtimeReason}"</div>
+                          <div className="text-xs text-slate-300 italic">Employee: "{r.overtimeReason}"</div>
                         ) : (
                           <div className="text-xs text-slate-500">Awaiting employee reason</div>
+                        )}
+                        {r.overtimeApproved === false && r.overtimeRejectedReason && (
+                          <div className="text-xs text-red-400 mt-1">Rejected: "{r.overtimeRejectedReason}"</div>
                         )}
                       </div>
                       {/* Approve/reject OT */}
                       {needsOTApproval && (
                         <div className="flex gap-2 flex-shrink-0">
                           <button onClick={()=>handleApproveOT(r)} className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve OT</button>
-                          <button onClick={()=>handleRejectOT(r)} className="px-2.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors">✗ Reject</button>
+                          <button onClick={()=>setRejectOTModal(r)} className="px-2.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors">✗ Reject</button>
                         </div>
                       )}
                     </div>
@@ -6513,7 +6553,20 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
       {amendModal && (
         <AmendPunchModal record={amendModal}
           onSave={updated => { onUpdate(updated); setAmendModal(null); }}
+          onDelete={id => { onDelete(id); setAmendModal(null); }}
           onClose={() => setAmendModal(null)}
+        />
+      )}
+      {rejectOTModal && (
+        <RejectOTModal record={rejectOTModal}
+          onReject={handleRejectOT}
+          onClose={() => setRejectOTModal(null)}
+        />
+      )}
+      {addManualModal && (
+        <AddManualHoursModal brands={vb} opsTeam={opsTeam} currentUser={currentUser}
+          onSave={r => { onAdd(r); setAddManualModal(false); }}
+          onClose={() => setAddManualModal(false)}
         />
       )}
     </div>
@@ -6521,11 +6574,14 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 }
 
 // ── Amend Punch Modal ─────────────────────────────────────────────────────────
-function AmendPunchModal({ record, onSave, onClose }) {
+
+// ── Amend Punch Modal — full manager controls ─────────────────────────────────
+function AmendPunchModal({ record, onSave, onDelete, onClose }) {
   const toTimeStr = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "";
   const [punchInTime,  setPunchInTime]  = useState(toTimeStr(record.punchIn));
   const [punchOutTime, setPunchOutTime] = useState(toTimeStr(record.punchOut));
-  const [notes, setNotes] = useState(record.notes || "");
+  const [notes,        setNotes]        = useState(record.notes || "");
+  const [confirmDel,   setConfirmDel]   = useState(false);
 
   const handleSave = () => {
     const dateBase    = record.date + "T";
@@ -6537,20 +6593,43 @@ function AmendPunchModal({ record, onSave, onClose }) {
              status: punchOutTime ? "amended" : "open", approved: false, updatedAt: new Date().toISOString() });
   };
 
+  const handleForceClockOut = () => {
+    const now = new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+    setPunchOutTime(now);
+  };
+
   return (
     <Modal title={`Amend — ${record.employeeName}`} onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-        <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button>
+        {confirmDel ? (
+          <>
+            <div className="flex-1 text-xs text-red-400 font-semibold self-center">Delete this record?</div>
+            <button onClick={() => setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">No</button>
+            <button onClick={() => { onDelete(record.id); onClose(); }} className="px-3 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
+          </>
+        ) : (
+          <>
+            <button onClick={() => setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-950/40 border border-red-500/30 text-red-400 hover:bg-red-950/60 transition-colors" title="Delete record"><Trash2 size={15}/></button>
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button>
+          </>
+        )}
       </>}>
       <div className="space-y-4">
         <div className="bg-slate-800/50 rounded-xl px-4 py-3 text-xs text-slate-400">
-          {new Date(record.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+          {record.employeeName} · {new Date(record.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <AvailTimeField label="Clock In"  value={punchInTime}  onChange={setPunchInTime}/>
           <AvailTimeField label="Clock Out" value={punchOutTime} onChange={setPunchOutTime}/>
         </div>
+        {/* Force clock out now */}
+        {record.status === "open" && (
+          <button onClick={handleForceClockOut}
+            className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+            ⏹ Force Clock Out Now
+          </button>
+        )}
         <div><label className={labelCls}>Notes</label>
           <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2}
             placeholder="Reason for amendment…" className={`${inputCls} resize-none`}/>
@@ -6560,8 +6639,95 @@ function AmendPunchModal({ record, onSave, onClose }) {
   );
 }
 
+// ── OT Reject Modal — manager gives reason for rejection ──────────────────────
+function RejectOTModal({ record, onReject, onClose }) {
+  const [reason, setReason] = useState("");
+  return (
+    <Modal title="Reject Overtime" onClose={onClose}
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={() => { onReject(record, reason); onClose(); }}
+          className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reject</button>
+      </>}>
+      <div className="space-y-3">
+        <div className="bg-slate-800/50 rounded-xl p-3 text-xs text-slate-400">
+          <div className="font-semibold text-slate-300">{record.employeeName}</div>
+          <div>{record.overtimeHrs?.toFixed(2)}h overtime — Employee reason: "{record.overtimeReason}"</div>
+        </div>
+        <div><label className={labelCls}>Reason for rejection</label>
+          <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={3}
+            placeholder="Explain why this overtime is not approved…" className={`${inputCls} resize-none`} autoFocus/>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Add Manual Hours Modal ────────────────────────────────────────────────────
+function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) {
+  const vb = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
+  const [brandId,   setBrandId]   = useState(vb[0]?.id || "");
+  const [empId,     setEmpId]     = useState("");
+  const [date,      setDate]      = useState("");
+  const [punchIn,   setPunchIn]   = useState("08:00");
+  const [punchOut,  setPunchOut]  = useState("16:00");
+  const [notes,     setNotes]     = useState("Manual entry by manager");
+
+  const members = opsTeam.filter(m => m.brandId === brandId);
+  const member  = opsTeam.find(m => m.id === empId);
+  const hoursWorked = punchIn && punchOut ? Math.round(((new Date("2000-01-01T"+punchOut)-new Date("2000-01-01T"+punchIn))/3600000)*100)/100 : null;
+
+  const handleSave = () => {
+    if (!empId || !date) return;
+    const dateBase = date + "T";
+    const grossPay = hoursWorked && member?.hourlyRate ? Math.round(hoursWorked*member.hourlyRate*100)/100 : null;
+    onSave({
+      id: `pr-${Date.now()}`, brandId,
+      employeeId: empId, employeeName: `${member.firstName} ${member.lastName}`.trim(),
+      date, punchIn: new Date(dateBase+punchIn+":00").toISOString(),
+      punchOut: new Date(dateBase+punchOut+":00").toISOString(),
+      hoursWorked, hourlyRate: member?.hourlyRate || 0, grossPay,
+      notes, status: "amended", approved: true, approvedBy: currentUser.name,
+      amendedBy: currentUser.name,
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title="Add Manual Hours" onClose={onClose}
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSave} disabled={!empId||!date} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add Entry</button>
+      </>}>
+      <div className="space-y-4">
+        {vb.length > 1 && <div><label className={labelCls}>Location</label><LocationDropdown brands={vb} value={brandId} onChange={v=>{setBrandId(v);setEmpId("");}} className="w-full"/></div>}
+        <div><label className={labelCls}>Employee *</label>
+          <SelectDropdown value={empId} onChange={setEmpId} className="w-full">
+            <option value="">— Select —</option>
+            {members.map(m=><option key={m.id} value={m.id}>{m.firstName} {m.lastName} · {m.role}</option>)}
+          </SelectDropdown>
+        </div>
+        <AvailDateField label="Date *" value={date} onChange={setDate} placeholder="Select date"/>
+        <div className="grid grid-cols-2 gap-3">
+          <AvailTimeField label="Clock In"  value={punchIn}  onChange={setPunchIn}/>
+          <AvailTimeField label="Clock Out" value={punchOut} onChange={setPunchOut}/>
+        </div>
+        {hoursWorked !== null && (
+          <div className="text-xs text-slate-400 px-1">
+            Hours: <span className="text-white font-bold">{hoursWorked.toFixed(2)}h</span>
+            {member?.hourlyRate > 0 && <span className="ml-3">Pay: <span className="text-emerald-400 font-bold">£{(hoursWorked*member.hourlyRate).toFixed(2)}</span></span>}
+          </div>
+        )}
+        <div><label className={labelCls}>Notes</label>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`}/>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// EMPLOYEE HOURS VIEW — see own punch records, submit overtime reason
+// EMPLOYEE HOURS VIEW — own records + overtime reason submission
 // ═══════════════════════════════════════════════════════════════════════════════
 function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpdate }) {
   const myId      = currentUser.opsTeamMemberId || currentUser.id;
@@ -6578,15 +6744,14 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
     return { from: toLocalDate(mon), to: toLocalDate(sun) };
   };
-  const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
-  const fmtDur  = (hrs) => {
+  const fmtDur = (hrs) => {
     if (!hrs || hrs <= 0) return "—";
     const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
     return `${h}h ${String(m).padStart(2,"0")}m`;
   };
 
-  const [weekOffset, setWeekOffset] = useState(0);
-  const [reasonInputs, setReasonInputs] = useState({}); // { recordId: text }
+  const [weekOffset,    setWeekOffset]   = useState(0);
+  const [reasonInputs,  setReasonInputs] = useState({});
 
   const { from, to } = getWeekBounds(weekOffset);
 
@@ -6601,10 +6766,17 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     );
     const scheduledStart = r.scheduledStart || sched?.startTime || null;
     const scheduledEnd   = r.scheduledEnd   || sched?.endTime   || null;
-    const actualEnd      = r.punchOut ? new Date(r.punchOut) : null;
-    const schedEndObj    = scheduledEnd ? new Date(r.date+"T"+scheduledEnd+":00") : null;
-    const overtimeHrs    = r.overtimeHours ?? (actualEnd && schedEndObj ? Math.max(0,Math.round(((actualEnd-schedEndObj)/3600000)*100)/100) : 0);
-    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs };
+    // Overtime = actual hours worked minus scheduled hours
+    let overtimeHrs = 0;
+    if (r.punchIn && r.punchOut && scheduledStart && scheduledEnd) {
+      const actualHours = (new Date(r.punchOut) - new Date(r.punchIn)) / 3600000;
+      const ss = new Date(r.date+"T"+scheduledStart+":00");
+      const se = new Date(r.date+"T"+scheduledEnd  +":00");
+      const schedHours = se <= ss ? (se-ss+86400000)/3600000 : (se-ss)/3600000;
+      overtimeHrs = Math.max(0, Math.round((actualHours - schedHours)*100)/100);
+    }
+    const isUnscheduled = !sched && !r.scheduledStart;
+    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, isUnscheduled };
   });
 
   const totalHours = enriched.reduce((a,r) => a + (r.hoursWorked||0), 0);
@@ -6644,20 +6816,21 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
       {enriched.length === 0 && (
         <div className="flex flex-col items-center justify-center py-12 text-slate-500">
           <Clock size={28} className="mb-2 text-slate-700"/>
-          <div className="text-sm font-semibold">No punch records this week</div>
+          <div className="text-sm font-semibold">No records this week</div>
         </div>
       )}
 
       <div className="space-y-3">
         {enriched.map(r => {
-          const hasOT = r.overtimeHrs > 0;
-          const needsReason = hasOT && !r.overtimeReason;
-          const awaitingApproval = hasOT && r.overtimeReason && !r.overtimeApproved;
+          const hasOT       = r.overtimeHrs > 0;
+          const needsReason = (hasOT || r.isUnscheduled) && !r.overtimeReason;
+          const awaitingApproval = (hasOT || r.isUnscheduled) && r.overtimeReason && !r.overtimeApproved;
+          const rejected    = r.overtimeApproved === false && r.overtimeReason && r.overtimeRejectedReason;
           return (
             <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
-              needsReason ? "bg-red-950/20 border-red-500/30" :
+              needsReason   ? "bg-red-950/20 border-red-500/30" :
+              rejected      ? "bg-slate-900/60 border-slate-700/60" :
               awaitingApproval ? "bg-amber-950/20 border-amber-500/30" :
-              r.status === "open" ? "bg-slate-900/40 border-slate-700/40" :
               "bg-slate-900/60 border-slate-700/60"
             }`}>
               {/* Date + status */}
@@ -6665,58 +6838,71 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                 <div className="text-sm font-bold text-white">
                   {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
                 </div>
-                <div className="flex items-center gap-2">
-                  {r.approved && <Badge label="✓ Approved" color="emerald"/>}
-                  {!r.approved && r.status === "closed" && <Badge label="Pending approval" color="amber"/>}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {r.approved && !hasOT && <Badge label="✓ Approved" color="emerald"/>}
+                  {!r.approved && r.status === "closed" && !hasOT && <Badge label="Pending approval" color="amber"/>}
                   {r.status === "open" && <Badge label="Clocked in" color="amber"/>}
                 </div>
               </div>
 
-              {/* Times */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-800/60 rounded-xl p-3">
-                  <div className="text-xs text-slate-400 font-semibold mb-1">📅 Scheduled</div>
-                  {r.scheduledStart ? (
-                    <div className="text-sm font-bold text-slate-200">{r.scheduledStart} – {r.scheduledEnd||"?"}</div>
-                  ) : (
-                    <div className="text-xs text-slate-500 italic">No schedule found</div>
-                  )}
-                </div>
-                <div className="bg-slate-800/60 rounded-xl p-3">
-                  <div className="text-xs text-slate-400 font-semibold mb-1">⏱ Actual</div>
-                  <div className="text-sm font-bold text-white">{fmtTime(r.punchIn)} – {r.punchOut ? fmtTime(r.punchOut) : <span className="text-amber-400">Still in</span>}</div>
-                  <div className="text-xs text-slate-400 mt-0.5">{fmtDur(r.hoursWorked)}</div>
+              {/* Hours summary — NO scheduled times shown to employee */}
+              <div className="bg-slate-800/60 rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-slate-400">Hours worked</div>
+                  <div className="text-lg font-black text-white">{fmtDur(r.hoursWorked)}</div>
                 </div>
               </div>
 
-              {/* Overtime section */}
-              {hasOT && (
-                <div className={`rounded-xl p-3 border ${
+              {/* Overtime / unscheduled — ONLY shown if it exists */}
+              {(hasOT || r.isUnscheduled) && (
+                <div className={`rounded-xl p-3 border space-y-2 ${
                   r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" :
+                  rejected ? "bg-slate-800/40 border-slate-700/40" :
                   needsReason ? "bg-red-950/30 border-red-500/30" :
                   "bg-amber-950/20 border-amber-500/20"
                 }`}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className={`text-xs font-bold ${r.overtimeApproved?"text-emerald-400":needsReason?"text-red-400":"text-amber-400"}`}>
-                      ⏱ {r.overtimeHrs.toFixed(2)}h overtime / unscheduled time
-                    </div>
-                    {r.overtimeApproved && <Badge label={`✓ Approved by ${r.overtimeApprovedBy}`} color="emerald"/>}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-xs font-bold ${
+                      r.overtimeApproved ? "text-emerald-400" :
+                      rejected ? "text-slate-400" :
+                      "text-red-400"
+                    }`}>
+                      ⏱ {r.isUnscheduled ? "Unscheduled shift" : `${r.overtimeHrs.toFixed(2)}h extra time`}
+                    </span>
+                    {r.overtimeApproved && <Badge label={`✓ Approved`} color="emerald"/>}
                     {awaitingApproval && <Badge label="Awaiting manager approval" color="amber"/>}
+                    {rejected && <Badge label="Not approved" color="slate"/>}
                   </div>
 
-                  {r.overtimeApproved ? (
-                    <div className="text-xs text-emerald-300">This overtime has been approved and will count towards your pay.</div>
-                  ) : r.overtimeReason ? (
+                  {r.overtimeApproved && (
+                    <div className="text-xs text-emerald-300">This extra time has been approved and will count towards your pay.</div>
+                  )}
+
+                  {rejected && (
+                    <div className="text-xs text-slate-400">
+                      <div className="font-semibold text-slate-300 mb-0.5">Not approved</div>
+                      {r.overtimeRejectedReason && <div className="italic">Manager note: "{r.overtimeRejectedReason}"</div>}
+                    </div>
+                  )}
+
+                  {r.overtimeReason && !r.overtimeApproved && !rejected && (
                     <div className="text-xs text-slate-300 italic">Your reason: "{r.overtimeReason}"</div>
-                  ) : (
-                    /* Employee must submit reason before manager can approve */
+                  )}
+
+                  {needsReason && (
                     <div className="space-y-2">
-                      <div className="text-xs text-red-300 font-semibold">You need to provide a reason for this overtime before it can be approved.</div>
+                      <div className="text-xs text-red-300 font-semibold">
+                        {r.isUnscheduled
+                          ? "This shift wasn't in your schedule. Please provide a reason so your manager can approve it."
+                          : "You stayed beyond your scheduled hours. Please explain why so your manager can approve the extra time."}
+                      </div>
                       <textarea
                         value={reasonInputs[r.id] || ""}
                         onChange={e => setReasonInputs(prev => ({...prev, [r.id]: e.target.value}))}
                         rows={2}
-                        placeholder="e.g. Helped cover during busy service, manager asked me to stay…"
+                        placeholder={r.isUnscheduled
+                          ? "e.g. Cover for absent colleague, manager asked me to come in…"
+                          : "e.g. Helped cover during busy service, manager asked me to stay…"}
                         className={`${inputCls} resize-none text-xs`}
                       />
                       <button
@@ -6737,16 +6923,9 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
-// ═══════════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TIME & ATTENDANCE — Manager view
-// ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Kiosk detection BEFORE anything else ────────────────────────────────────
-// Must be outside App() so it fires before any hooks or state
+// ── KioskShell ────────────────────────────────────────────────────────────────
 function KioskShell() {
   const [opsTeam,      setOpsTeam]      = useState([]);
   const [brands,       setBrands]       = useState([]);
@@ -6755,39 +6934,29 @@ function KioskShell() {
 
   useEffect(() => {
     Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords()])
-      .then(([team, br, punches]) => {
-        setOpsTeam(team); setBrands(br); setPunchRecords(punches);
-        setReady(true);
-      })
+      .then(([team, br, punches]) => { setOpsTeam(team); setBrands(br); setPunchRecords(punches); setReady(true); })
       .catch(() => setReady(true));
   }, []);
 
   useEffect(() => {
-    const ch = supabase
-      .channel("kiosk:punch_records")
+    const ch = supabase.channel("kiosk:punch_records")
       .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
         const { eventType, new: r, old: oldRow } = payload;
         if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
-        const p = {
-          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+        const p = { id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
           date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
           hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
           hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
-          grossPay: r.gross_pay ? parseFloat(r.gross_pay) : null,
-          notes: r.notes, status: r.status, amendedBy: r.amended_by,
-          createdAt: r.created_at, updatedAt: r.updated_at,
-        };
+          notes: r.notes, status: r.status, approved: r.approved,
+          createdAt: r.created_at, updatedAt: r.updated_at };
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
-      })
-      .subscribe();
+      }).subscribe();
     return () => supabase.removeChannel(ch);
   }, []);
 
-  const handlePunchIn = async (record) => {
-    const alreadyOpen = punchRecords.some(p =>
-      p.employeeId === record.employeeId && p.date === record.date && p.status === "open"
-    );
+  const handlePunchIn  = async (record) => {
+    const alreadyOpen = punchRecords.some(p => p.employeeId === record.employeeId && p.date === record.date && p.status === "open");
     if (alreadyOpen) return;
     const saved = await insertPunchIn(record);
     setPunchRecords(ps => [saved, ...ps]);
@@ -6803,518 +6972,287 @@ function KioskShell() {
       <span style={{fontSize:15}}>Loading kiosk…</span>
     </div>
   );
-
-  return (
-    <KioskApp opsTeam={opsTeam} brands={brands} punchRecords={punchRecords}
-      onPunchIn={handlePunchIn} onPunchOut={handlePunchOut}/>
-  );
+  return <KioskApp opsTeam={opsTeam} brands={brands} punchRecords={punchRecords} onPunchIn={handlePunchIn} onPunchOut={handlePunchOut}/>;
 }
-
 
 const IS_KIOSK = window.location.pathname === "/kiosk" ||
                  window.location.hash === "#kiosk" ||
                  window.location.search.includes("kiosk");
 
+// ── Sidebar Component ─────────────────────────────────────────────────────────
+function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed }) {
+  return (
+    <div className={`flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
+      {/* Logo */}
+      <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/40">
+        <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
+          <BarChart2 size={16} className="text-white"/>
+        </div>
+        {!collapsed && <div><div className="text-sm font-black text-white">Create Brands</div><div className="text-xs text-slate-500">Hospitality Group</div></div>}
+        <button onClick={() => setCollapsed(c => !c)} className="ml-auto text-slate-600 hover:text-slate-300 p-1 rounded-lg">
+          {collapsed ? <ChevronRight size={14}/> : <ChevronLeft size={14}/>}
+        </button>
+      </div>
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto py-2 space-y-0.5 px-2">
+        {navGroups.map(g => (
+          <div key={g.group}>
+            {!collapsed && <div className="text-xs font-bold text-slate-600 uppercase tracking-widest px-2 pt-3 pb-1">{g.group}</div>}
+            {g.items.map(n => {
+              const NIcon = n.icon;
+              const active = activeView === n.key;
+              return (
+                <button key={n.key} onClick={() => setActiveView(n.key)}
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
+                  <NIcon size={15} className="flex-shrink-0"/>
+                  {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
+                  {!collapsed && n.badge && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{n.badge}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+      {/* User */}
+      <div className="border-t border-slate-800/40 p-3">
+        <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
+          <div className="w-7 h-7 rounded-lg bg-indigo-600/30 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">{currentUser.avatar || currentUser.name?.[0] || "?"}</div>
+          {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-indigo-400 font-semibold uppercase">{currentUser.role}</div></div>}
+          {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { const s = localStorage.getItem("cb_session"); return s ? JSON.parse(s) : null; } catch { return null; }
+  });
+  const [loginMode, setLoginMode] = useState("employee");
 
-  // ── Financial state (Supabase) ────────────────────────────────────────────
-  const [brands,  setBrands]  = useState([]);
-  const [users,   setUsers]   = useState([]);
-  const [entries, setEntries] = useState([]);
-  const [issues,  setIssues]  = useState([]);
-  const [dbReady, setDbReady] = useState(false);
-  const [dbError, setDbError] = useState(null);
+  const [brands,         setBrands]         = useState([]);
+  const [users,          setUsers]          = useState([]);
+  const [entries,        setEntries]        = useState([]);
+  const [issues,         setIssues]         = useState([]);
+  const [dbReady,        setDbReady]        = useState(false);
+  const [dbError,        setDbError]        = useState(null);
+  const [checklists,      setChecklists]     = useState([]);
+  const [tempUnits,       setTempUnits]      = useState([]);
+  const [cleaningTasks,   setCleaningTasks]  = useState([]);
+  const [assignments,     setAssignments]    = useState([]);
+  const [opsTeam,         setOpsTeam]        = useState([]);
+  const [tempLogs,        setTempLogs]       = useState([]);
+  const [deliveries,      setDeliveries]     = useState([]);
+  const [checklistStates, setChecklistStates]= useState({});
+  const [auditTrail,      setAuditTrail]     = useState([]);
+  const [hdTickets,       setHdTickets]      = useState([]);
+  const [messages,        setMessages]       = useState([]);
+  const [availability,    setAvailability]   = useState([]);
+  const [schedules,       setSchedules]      = useState([]);
+  const [shiftPresets,    setShiftPresets]   = useState([]);
+  const [punchRecords,    setPunchRecords]   = useState([]);
+  const [toast,           setToast]          = useState(null);
+  const [activeView,      setActiveView]     = useState("dashboard");
+  const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
 
-  // ── Ops state (Supabase) ──────────────────────────────────────────────────
-  const [checklists,      setChecklists]      = useState([]);
-  const [tempUnits,       setTempUnits]       = useState([]);
-  const [cleaningTasks,   setCleaningTasks]   = useState([]);
-  const [assignments,     setAssignments]     = useState([]);
-  const [opsTeam,         setOpsTeam]         = useState([]);
-  const [tempLogs,        setTempLogs]        = useState([]);
-  const [deliveries,      setDeliveries]      = useState([]);
-  const [checklistStates, setChecklistStates] = useState({});
-  const [auditTrail,      setAuditTrail]      = useState([]);
-  const [hdTickets,       setHdTickets]       = useState([]);
-  const [messages,        setMessages]        = useState([]);
-  const [availability,    setAvailability]    = useState([]);
-  const [schedules,       setSchedules]       = useState([]);
-  const [shiftPresets,    setShiftPresets]    = useState([]);
-  const [punchRecords,    setPunchRecords]    = useState([]);
-
-  const [activeView, setActiveView] = useState("dashboard");
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [loginMode, setLoginMode] = useState("employee"); // "employee" | "manager"
-  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const [toast, setToast] = useState(null); // { msg, type: "success"|"error" }
-
-  // ── Load everything on mount ──────────────────────────────────────────────
-  useEffect(() => {
-    async function loadAll() {
-      try {
-        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs, avail, scheds, spreset, punches] = await Promise.all([
-          fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
-          fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
-          fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail(),
-          fetchHelpdeskTickets(), fetchInboxMessages(), fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
-        ]);
-        setBrands(b); setUsers(u); setEntries(e); setIssues(i);
-        setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
-        setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl); setChecklistStates(cs); setAuditTrail(at);
-        setHdTickets(hd); setMessages(msgs); setAvailability(avail); setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
-        setDbReady(true);
-      } catch (err) {
-        console.error("Supabase load error:", err);
-        setDbError(err.message);
-      }
-    }
-    loadAll();
+  const showToast = useCallback((msg, type = "success") => {
+    setToast({ msg, type }); setTimeout(() => setToast(null), 3500);
   }, []);
 
-  // ── Supabase Realtime + polling fallback ─────────────────────────────────────
-  // Realtime: instant updates when rows change in DB.
-  // Polling: 30s fallback — catches updates if Realtime isn't enabled on the table.
+  useEffect(() => {
+    Promise.all([
+      fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
+      fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
+      fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(),
+      fetchAuditTrail(), fetchHelpdeskTickets(), fetchInboxMessages(),
+      fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches]) => {
+      setBrands(b); setUsers(u); setEntries(e); setIssues(i);
+      setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
+      setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
+      const csMap = {};
+      cs.forEach(s => { csMap[`${s.brandId}||${s.checklistId}||${s.date}`] = s.state; });
+      setChecklistStates(csMap);
+      setAuditTrail(at); setHdTickets(hd); setMessages(msgs); setAvailability(avail);
+      setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
+      setDbReady(true);
+    }).catch(err => { setDbError(err.message); });
+  }, []);
+
   useEffect(() => {
     if (!dbReady) return;
-
-    // 30-second polling fallback for availability (in case Realtime not enabled yet)
-    const pollAvailability = async () => {
-      try {
-        const fresh = await fetchAvailability();
-        setAvailability(fresh);
-      } catch (err) {
-        console.warn("Availability poll failed:", err.message);
-      }
-    };
-    const pollTickets = async () => {
-      try {
-        const fresh = await fetchHelpdeskTickets();
-        setHdTickets(fresh);
-      } catch (err) {
-        console.warn("Ticket poll failed:", err.message);
-      }
-    };
-    const interval = setInterval(() => {
-      pollAvailability();
-      pollTickets();
-    }, 30000);
-
-    // Subscribe to helpdesk_tickets changes
-    const ticketChannel = supabase
-      .channel("realtime:helpdesk_tickets")
-      .on("postgres_changes", {
-        event: "*",
-        schema: "public",
-        table: "helpdesk_tickets",
-      }, (payload) => {
-        const { eventType, new: newRow, old: oldRow } = payload;
-        if (eventType === "INSERT") {
-          const ticket = {
-            id: newRow.id, brandId: newRow.brand_id, title: newRow.title,
-            description: newRow.description, category: newRow.category,
-            priority: newRow.priority, status: newRow.status,
-            createdById: newRow.created_by_id, createdByName: newRow.created_by_name,
-            assignedTo: newRow.assigned_to || [], comments: newRow.comments || [],
-            createdAt: newRow.created_at, updatedAt: newRow.updated_at,
-          };
-          setHdTickets(ts => {
-            if (ts.some(t => t.id === ticket.id)) return ts;
-            return [ticket, ...ts];
-          });
-        } else if (eventType === "UPDATE") {
-          const ticket = {
-            id: newRow.id, brandId: newRow.brand_id, title: newRow.title,
-            description: newRow.description, category: newRow.category,
-            priority: newRow.priority, status: newRow.status,
-            createdById: newRow.created_by_id, createdByName: newRow.created_by_name,
-            assignedTo: newRow.assigned_to || [], comments: newRow.comments || [],
-            createdAt: newRow.created_at, updatedAt: newRow.updated_at,
-          };
-          setHdTickets(ts => ts.map(t => t.id === ticket.id ? ticket : t));
-        } else if (eventType === "DELETE") {
-          setHdTickets(ts => ts.filter(t => t.id !== oldRow.id));
-        }
-      })
-      .subscribe();
-
-    // Subscribe to inbox_messages changes
-    const msgChannel = supabase
-      .channel("realtime:inbox_messages")
-      .on("postgres_changes", {
-        event: "INSERT",
-        schema: "public",
-        table: "inbox_messages",
-      }, (payload) => {
-        const r = payload.new;
-        const msg = {
-          id: r.id, brandId: r.brand_id,
-          fromId: r.from_id, fromName: r.from_name, fromRole: r.from_role,
-          toScope: r.to_scope, toBrandId: r.to_brand_id,
-          toPersonId: r.to_person_id, toPersonName: r.to_person_name,
-          subject: r.subject, body: r.body, readBy: r.read_by || [],
-          createdAt: r.created_at,
-        };
-        setMessages(ms => {
-          if (ms.some(m => m.id === msg.id)) return ms;
-          return [msg, ...ms];
-        });
-      })
-      .subscribe();
-
-    // Subscribe to availability changes
-    const availChannel = supabase
-      .channel("realtime:availability")
-      .on("postgres_changes", { event: "*", schema: "public", table: "availability" }, (payload) => {
-        const { eventType, new: r, old: oldRow } = payload;
-        if (eventType === "DELETE") { setAvailability(as => as.filter(a => a.id !== oldRow.id)); return; }
-        const a = {
-          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
-          type: r.type, date: r.date, dayOfWeek: r.day_of_week, startDate: r.start_date, endDate: r.end_date,
-          startTime: r.start_time?.slice(0,5)||"09:00", endTime: r.end_time?.slice(0,5)||"17:00",
-          available: r.available, notes: r.notes, status: r.status, managerNotes: r.manager_notes||"",
-          amendedStartTime: r.amended_start_time?.slice(0,5)||null, amendedEndTime: r.amended_end_time?.slice(0,5)||null,
-          amendedDate: r.amended_date||null, amendedDayOfWeek: r.amended_day_of_week||null,
-          createdAt: r.created_at, updatedAt: r.updated_at,
-        };
-        if (eventType === "INSERT") setAvailability(as => as.some(x => x.id === a.id) ? as : [a, ...as]);
-        if (eventType === "UPDATE") setAvailability(as => as.map(x => x.id === a.id ? a : x));
-      })
-      .subscribe();
-
-    const schedChannel = supabase
-      .channel("realtime:schedules")
-      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, (payload) => {
-        const { eventType, new: r, old: oldRow } = payload;
-        if (eventType === "DELETE") { setSchedules(ss => ss.filter(s => s.id !== oldRow.id)); return; }
-        const s = {
-          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
-          date: r.date, shift: r.shift, startTime: r.start_time?.slice(0,5)||"08:00",
-          endTime: r.end_time?.slice(0,5)||"16:00", role: r.role, department: r.department,
-          notes: r.notes, status: r.status,
-          published: r.published ?? false, weekStart: r.week_start || null,
-          createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
-        };
-        if (eventType === "INSERT") setSchedules(ss => ss.some(x => x.id === s.id) ? ss : [s, ...ss]);
-        if (eventType === "UPDATE") setSchedules(ss => ss.map(x => x.id === s.id ? s : x));
-      })
-      .subscribe();
-
-    const punchChannel = supabase
-      .channel("realtime:punch_records")
+    const punchChannel = supabase.channel("realtime:punch_records")
       .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
         const { eventType, new: r, old: oldRow } = payload;
         if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
-        const p = {
-          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+        const p = { id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
           date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
           hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
           hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
           grossPay: r.gross_pay ? parseFloat(r.gross_pay) : null,
-          notes: r.notes, status: r.status, amendedBy: r.amended_by,
-          createdAt: r.created_at, updatedAt: r.updated_at,
-        };
+          notes: r.notes, status: r.status,
+          approved: r.approved ?? false, approvedBy: r.approved_by || "",
+          scheduledStart: r.scheduled_start?.slice(0,5) || null,
+          scheduledEnd: r.scheduled_end?.slice(0,5) || null,
+          overtimeHours: r.overtime_hours ? parseFloat(r.overtime_hours) : null,
+          overtimeReason: r.overtime_reason || "",
+          overtimeApproved: r.overtime_approved ?? false,
+          overtimeApprovedBy: r.overtime_approved_by || "",
+          overtimeRejectedReason: r.overtime_rejected_reason || "",
+          createdAt: r.created_at, updatedAt: r.updated_at };
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
-      })
-      .subscribe();
-
+      }).subscribe();
+    const schedChannel = supabase.channel("realtime:schedules")
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setSchedules(ss => ss.filter(s => s.id !== oldRow.id)); return; }
+        const s = { id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          date: r.date, shift: r.shift, startTime: r.start_time?.slice(0,5)||"08:00",
+          endTime: r.end_time?.slice(0,5)||"16:00", role: r.role, department: r.department,
+          notes: r.notes, status: r.status, published: r.published ?? false, weekStart: r.week_start||null,
+          createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at };
+        if (eventType === "INSERT") setSchedules(ss => ss.some(x => x.id === s.id) ? ss : [s, ...ss]);
+        if (eventType === "UPDATE") setSchedules(ss => ss.map(x => x.id === s.id ? s : x));
+      }).subscribe();
+    const availChannel = supabase.channel("realtime:availability")
+      .on("postgres_changes", { event: "*", schema: "public", table: "availability" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setAvailability(av => av.filter(a => a.id !== oldRow.id)); return; }
+        const a = { id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          type: r.type, date: r.date, dayOfWeek: r.day_of_week, startDate: r.start_date,
+          endDate: r.end_date, startTime: r.start_time?.slice(0,5), endTime: r.end_time?.slice(0,5),
+          available: r.available, status: r.status, comments: r.comments || [],
+          amendedDayOfWeek: r.amended_day_of_week, amendedStartTime: r.amended_start_time?.slice(0,5),
+          amendedEndTime: r.amended_end_time?.slice(0,5), createdAt: r.created_at, updatedAt: r.updated_at };
+        if (eventType === "INSERT") setAvailability(av => av.some(x => x.id === a.id) ? av : [a, ...av]);
+        if (eventType === "UPDATE") setAvailability(av => av.map(x => x.id === a.id ? a : x));
+      }).subscribe();
+    const ticketChannel = supabase.channel("realtime:helpdesk_tickets")
+      .on("postgres_changes", { event: "*", schema: "public", table: "helpdesk_tickets" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setHdTickets(ts => ts.filter(t => t.id !== oldRow.id)); return; }
+        const t = { id: r.id, brandId: r.brand_id, title: r.title, description: r.description,
+          status: r.status, priority: r.priority, category: r.category,
+          createdById: r.created_by_id, createdByName: r.created_by_name,
+          assignedTo: r.assigned_to, comments: r.comments || [],
+          createdAt: r.created_at, updatedAt: r.updated_at };
+        if (eventType === "INSERT") setHdTickets(ts => ts.some(x => x.id === t.id) ? ts : [t, ...ts]);
+        if (eventType === "UPDATE") setHdTickets(ts => ts.map(x => x.id === t.id ? t : x));
+      }).subscribe();
+    const msgChannel = supabase.channel("realtime:inbox_messages")
+      .on("postgres_changes", { event: "*", schema: "public", table: "inbox_messages" }, (payload) => {
+        const { eventType, new: r } = payload;
+        if (eventType === "INSERT") {
+          const m = { id: r.id, brandId: r.brand_id, fromId: r.from_id, fromName: r.from_name,
+            toScope: r.to_scope, toBrandId: r.to_brand_id, toPersonId: r.to_person_id,
+            body: r.body, readBy: r.read_by || [], createdAt: r.created_at };
+          setMessages(ms => ms.some(x => x.id === m.id) ? ms : [m, ...ms]);
+        }
+      }).subscribe();
+    const interval = setInterval(() => {
+      fetchHelpdeskTickets().then(setHdTickets).catch(()=>{});
+      fetchAvailability().then(setAvailability).catch(()=>{});
+    }, 30000);
     return () => {
       clearInterval(interval);
-      supabase.removeChannel(ticketChannel);
+      supabase.removeChannel(punchChannel); supabase.removeChannel(schedChannel);
+      supabase.removeChannel(availChannel); supabase.removeChannel(ticketChannel);
       supabase.removeChannel(msgChannel);
-      supabase.removeChannel(availChannel);
-      supabase.removeChannel(schedChannel);
-      supabase.removeChannel(punchChannel);
     };
   }, [dbReady]);
 
-  useEffect(() => { try { if(currentUser) localStorage.setItem("cb_session",JSON.stringify(currentUser)); else localStorage.removeItem("cb_session"); } catch {} }, [currentUser]);
+  const handleLogin  = useCallback(user => { setCurrentUser(user); localStorage.setItem("cb_session", JSON.stringify(user)); }, []);
+  const handleLogout = useCallback(() => { setCurrentUser(null); localStorage.removeItem("cb_session"); setLoginMode("employee"); }, []);
 
-  const handleLogin  = useCallback(user => {
-    setCurrentUser(user);
-    setActiveView(user.role === "employee" ? "ops-tasks" : "dashboard");
-  }, []);
-  const handleLogout = useCallback(() => {
-    setCurrentUser(null);
-    setActiveView("dashboard");
-    setLoginMode("employee"); // always return to employee screen after logout
+  const addAudit = useCallback(async (action, detail, who, brandId) => {
+    try { const e={id:`at-${Date.now()}`,action,detail,performedBy:who,brandId,timestamp:new Date().toISOString()}; await insertAuditEntry(e); setAuditTrail(at=>[e,...at]); } catch {}
   }, []);
 
-  // ── Audit helper ──────────────────────────────────────────────────────────
-  const showToast = useCallback((msg, type = "success") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
-  }, []);
-
-  const addAudit = useCallback(async (action, detail, by, brandId) => {
-    const entry = { brandId: brandId || null, action, detail: detail || "", by: by || "System", date: getTodayStr(), time: nowTimeStr(), timestamp: new Date().toISOString() };
-    await insertAuditEntry(entry);
-    setAuditTrail(t => [{ id: `local-${Date.now()}`, ...entry }, ...t].slice(0, 500));
-  }, []);
-
-  // ── Brands ────────────────────────────────────────────────────────────────
-  const addBrand = useCallback(async b => { try { const saved = await insertBrand(b); setBrands(bs => [...bs, saved]); showToast(`${b.name} added`); } catch (err) { showToast("Failed to add location: " + err.message, "error"); } }, [showToast]);
-  const updateBrand = useCallback(async b => { try { const saved = await upsertBrand(b); setBrands(bs => bs.map(x => x.id === saved.id ? saved : x)); showToast(`${b.name} updated`); } catch (err) { showToast("Failed to update location: " + err.message, "error"); } }, [showToast]);
-  const deleteBrand = useCallback(async id => { try { await removeBrand(id); setBrands(bs => bs.filter(b => b.id !== id)); setEntries(es => es.filter(e => e.brandId !== id)); setUsers(us => us.map(u => ({ ...u, brandIds: u.brandIds.filter(bid => bid !== id) }))); setIssues(is => is.filter(i => i.brandId !== id)); setAssignments(as => as.filter(a => a.brandId !== id)); showToast("Location deleted"); } catch (err) { showToast("Failed to delete location: " + err.message, "error"); } }, [showToast]);
-  const updateKPITargets = useCallback(async (brandId, targets) => { try { const brand = brands.find(b => b.id === brandId); if (!brand) return; const updated = { ...brand, kpiTargets: { ...brand.kpiTargets, ...targets } }; const saved = await upsertBrand(updated); setBrands(bs => bs.map(b => b.id === brandId ? saved : b)); showToast("KPI targets saved"); } catch (err) { showToast("Failed to save KPI targets: " + err.message, "error"); } }, [brands, showToast]);
-
-  // ── Users ─────────────────────────────────────────────────────────────────
-  const addUser    = useCallback(async u => { try { const saved = await insertUser(u); setUsers(us => [...us, saved]); showToast(`${u.name} added`); } catch (err) { showToast("Failed to add user: " + err.message, "error"); } }, [showToast]);
-  const updateUser = useCallback(async u => { try { const saved = await upsertUser(u); setUsers(us => us.map(x => x.id === saved.id ? saved : x)); showToast(`${u.name} updated`); } catch (err) { showToast("Failed to update user: " + err.message, "error"); } }, [showToast]);
-  const deleteUser = useCallback(async id => { try { await removeUser(id); setUsers(us => us.filter(u => u.id !== id)); showToast("User removed"); } catch (err) { showToast("Failed to remove user: " + err.message, "error"); } }, [showToast]);
-
-  // ── EOD Entries ───────────────────────────────────────────────────────────
-  const addEntry = useCallback(async entry => {
-    try {
-      const saved = await upsertEntry(entry);
-      setEntries(es => { const f = es.filter(e => e.id !== saved.id); return [...f, saved].sort((a,b) => a.date.localeCompare(b.date)); });
-      showToast("EOD report saved");
-    } catch (err) {
-      showToast("Failed to save EOD report: " + err.message, "error");
-    }
-  }, [showToast]);
-  const bulkImport = useCallback(async rows => { try { const saved = await upsertEntries(rows); setEntries(es => { const map = new Map(es.map(e => [e.id, e])); saved.forEach(r => map.set(r.id, r)); return [...map.values()].sort((a,b) => a.date.localeCompare(b.date)); }); showToast(`${rows.length} entries imported`); } catch (err) { showToast("Import failed: " + err.message, "error"); } }, [showToast]);
-
-  // ── Issues ────────────────────────────────────────────────────────────────
-  const addIssue    = useCallback(async issue => { try { const saved = await insertIssue(issue); setIssues(is => [...is, saved]); showToast("Issue reported"); } catch (err) { showToast("Failed to report issue: " + err.message, "error"); } }, [showToast]);
-  const updateIssue = useCallback(async issue => { try { const saved = await upsertIssue(issue); setIssues(is => is.map(x => x.id === saved.id ? saved : x)); } catch (err) { showToast("Failed to update issue: " + err.message, "error"); } }, [showToast]);
-  const deleteIssue = useCallback(async id => { try { await removeIssue(id); setIssues(is => is.filter(i => i.id !== id)); showToast("Issue deleted"); } catch (err) { showToast("Failed to delete issue: " + err.message, "error"); } }, [showToast]);
-
-  // ── Checklists ────────────────────────────────────────────────────────────
-  const addChecklist    = useCallback(async cl => { try { const saved = await upsertChecklist(cl); setChecklists(cs => [...cs, saved]); showToast(`"${cl.name}" checklist created`); } catch (err) { showToast("Failed to save checklist: " + err.message, "error"); } }, [showToast]);
-  const updateChecklist = useCallback(async cl => { try { const saved = await upsertChecklist(cl); setChecklists(cs => cs.map(x => x.id === saved.id ? saved : x)); showToast(`"${cl.name}" updated`); } catch (err) { showToast("Failed to update checklist: " + err.message, "error"); } }, [showToast]);
-  const deleteChecklist = useCallback(async id => { try { await removeChecklist(id); setChecklists(cs => cs.filter(c => c.id !== id)); showToast("Checklist deleted"); } catch (err) { showToast("Failed to delete checklist: " + err.message, "error"); } }, [showToast]);
-
-  // ── Temp Units ────────────────────────────────────────────────────────────
-  const addTempUnit    = useCallback(async u => { try { const saved = await upsertTempUnit(u); setTempUnits(ts => [...ts, saved]); showToast(`"${u.name}" added`); } catch (err) { showToast("Failed to add temp unit: " + err.message, "error"); } }, [showToast]);
-  const updateTempUnit = useCallback(async u => { try { const saved = await upsertTempUnit(u); setTempUnits(ts => ts.map(x => x.id === saved.id ? saved : x)); showToast(`"${u.name}" updated`); } catch (err) { showToast("Failed to update temp unit: " + err.message, "error"); } }, [showToast]);
-  const deleteTempUnit = useCallback(async id => { try { await removeTempUnit(id); setTempUnits(ts => ts.filter(u => u.id !== id)); showToast("Temp unit deleted"); } catch (err) { showToast("Failed to delete temp unit: " + err.message, "error"); } }, [showToast]);
-
-  // ── Cleaning Tasks ────────────────────────────────────────────────────────
-  const addCleanTask    = useCallback(async t => { try { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => [...ts, saved]); showToast(`"${t.name}" added`); } catch (err) { showToast("Failed to add cleaning task: " + err.message, "error"); } }, [showToast]);
-  const updateCleanTask = useCallback(async t => { try { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => ts.map(x => x.id === saved.id ? saved : x)); showToast(`"${t.name}" updated`); } catch (err) { showToast("Failed to update cleaning task: " + err.message, "error"); } }, [showToast]);
-  const deleteCleanTask = useCallback(async id => { try { await removeCleaningTask(id); setCleaningTasks(ts => ts.filter(t => t.id !== id)); showToast("Cleaning task deleted"); } catch (err) { showToast("Failed to delete cleaning task: " + err.message, "error"); } }, [showToast]);
-
-  // ── Assignments ───────────────────────────────────────────────────────────
-  const addAssignment    = useCallback(async a => { try { const saved = await upsertAssignment(a); setAssignments(as => [...as, saved]); showToast("Assignment created"); } catch (err) { showToast("Failed to create assignment: " + err.message, "error"); } }, [showToast]);
-  const updateAssignment = useCallback(async a => { try { const saved = await upsertAssignment(a); setAssignments(as => as.map(x => x.id === saved.id ? saved : x)); showToast("Assignment updated"); } catch (err) { showToast("Failed to update assignment: " + err.message, "error"); } }, [showToast]);
-  const deleteAssignment = useCallback(async id => { try { await removeAssignment(id); setAssignments(as => as.filter(a => a.id !== id)); showToast("Assignment deleted"); } catch (err) { showToast("Failed to delete assignment: " + err.message, "error"); } }, [showToast]);
-
-  // ── Ops Team ──────────────────────────────────────────────────────────────
-  const addOpsTeam = useCallback(async m => {
-    try {
-      const saved = await upsertOpsTeamMember(m);
-      setOpsTeam(ms => [...ms, saved]);
-      showToast(`${saved.firstName} ${saved.lastName} added to team`);
-    } catch (err) {
-      console.error("addOpsTeam failed:", err);
-      showToast("Failed to add team member: " + err.message, "error");
-    }
-  }, [showToast]);
-
-  const updateOpsTeam = useCallback(async m => {
-    try {
-      const saved = await upsertOpsTeamMember(m);
-      setOpsTeam(ms => ms.map(x => x.id === saved.id ? saved : x));
-      showToast(`${saved.firstName} ${saved.lastName} updated`);
-    } catch (err) {
-      console.error("updateOpsTeam failed:", err);
-      showToast("Failed to update team member: " + err.message, "error");
-    }
-  }, [showToast]);
-
-  const deleteOpsTeam = useCallback(async id => {
-    try {
-      await removeOpsTeamMember(id);
-      setOpsTeam(ms => ms.filter(m => m.id !== id));
-      showToast("Team member removed");
-    } catch (err) {
-      console.error("deleteOpsTeam failed:", err);
-      showToast("Failed to remove team member: " + err.message, "error");
-    }
-  }, [showToast]);
-
-  // ── Temp Logs ─────────────────────────────────────────────────────────────
-  const handleTempLog = useCallback(async log => {
-    try {
-      const saved = await insertTempLog(log);
-      setTempLogs(ls => [...ls, saved]);
-      const unit = tempUnits.find(u => u.id === log.unitId);
-      await addAudit(saved.isBreach ? "breach" : "logged", `${unit?.name || log.unitId}: ${log.value}°C${saved.isBreach ? " — BREACH" : ""}`, log.loggedBy, log.brandId);
-      if (saved.isBreach) showToast(`⚠ Temperature breach logged for ${unit?.name || log.unitId}`, "error");
-      else showToast("Temperature reading saved");
-    } catch (err) { showToast("Failed to save temperature reading: " + err.message, "error"); }
-  }, [tempUnits, addAudit, showToast]);
-
-  // ── Deliveries ────────────────────────────────────────────────────────────
-  const handleDeliveryAdd = useCallback(async d => {
-    try {
-      const saved = await insertDelivery(d);
-      setDeliveries(ds => [...ds, saved]);
-      await addAudit("logged", `Delivery from ${d.supplier} — ${d.condition}`, d.loggedBy, d.brandId);
-      showToast("Delivery logged successfully");
-    } catch (err) { showToast("Failed to log delivery: " + err.message, "error"); }
-  }, [addAudit, showToast]);
-
-  // ── Checklist sign-off ────────────────────────────────────────────────────
-  const handleSignOff = useCallback(async (assignment, taskName) => {
-    try {
-      const now = new Date().toISOString();
-      const stateKey = `${assignment.brandId}||${assignment.taskId}||${getTodayStr()}`;
-      await upsertChecklistState(assignment.brandId, assignment.taskId, getTodayStr(), checklistStates[stateKey] || {}, currentUser?.name || "Manager", now);
-      await addAudit("sign-off", `${taskName} completed`, currentUser?.name || "Manager", assignment.brandId);
-      showToast(`✓ ${taskName} signed off`);
-    } catch (err) { showToast("Sign-off failed: " + err.message, "error"); }
-  }, [checklistStates, currentUser, addAudit, showToast]);
-
-  // ── Checklist item toggle ─────────────────────────────────────────────────
-  const handleChecklistItemToggle = useCallback(async (stateKey, itemId, val) => {
-    const newState = { ...(checklistStates[stateKey] || {}), [itemId]: val };
-    setChecklistStates(s => ({ ...s, [stateKey]: newState }));
-    const [brandId, checklistId, date] = stateKey.split("||");
-    await upsertChecklistState(brandId, checklistId, date || getTodayStr(), newState, "", null);
+  const addEntry     = useCallback(async e=>{const s=await upsertEntry(e);setEntries(es=>{const idx=es.findIndex(x=>x.id===s.id);return idx>=0?es.map((x,i)=>i===idx?s:x):[s,...es];});}, []);
+  const addIssue     = useCallback(async i=>{const s=await insertIssue(i);setIssues(is=>[s,...is]);}, []);
+  const updateIssue  = useCallback(async i=>{const s=await upsertIssue(i);setIssues(is=>is.map(x=>x.id===s.id?s:x));}, []);
+  const deleteIssue  = useCallback(async id=>{await removeIssue(id);setIssues(is=>is.filter(x=>x.id!==id));}, []);
+  const addBrand     = useCallback(async b=>{const s=await insertBrand(b);setBrands(bs=>[...bs,s]);showToast("Brand added");}, [showToast]);
+  const updateBrand  = useCallback(async b=>{const s=await upsertBrand(b);setBrands(bs=>bs.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteBrand  = useCallback(async id=>{await removeBrand(id);setBrands(bs=>bs.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const addUser      = useCallback(async u=>{const s=await insertUser(u);setUsers(us=>[...us,s]);showToast("User added");}, [showToast]);
+  const updateUser   = useCallback(async u=>{const s=await upsertUser(u);setUsers(us=>us.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteUser   = useCallback(async id=>{await removeUser(id);setUsers(us=>us.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const updateKPITargets = useCallback(async(brandId,targets)=>{const s=await upsertBrand({...brands.find(b=>b.id===brandId),kpiTargets:targets});setBrands(bs=>bs.map(x=>x.id===s.id?s:x));showToast("KPI saved");}, [brands,showToast]);
+  const handleBulkImport = useCallback(async rows=>{const saved=await upsertEntries(rows);setEntries(es=>{const m=new Map(es.map(x=>[x.id,x]));saved.forEach(s=>m.set(s.id,s));return[...m.values()];});showToast(`${saved.length} entries imported`);}, [showToast]);
+  const addChecklist    = useCallback(async c=>{const s=await upsertChecklist(c);setChecklists(cs=>cs.some(x=>x.id===s.id)?cs.map(x=>x.id===s.id?s:x):[...cs,s]);showToast("Saved");}, [showToast]);
+  const updateChecklist = useCallback(async c=>{const s=await upsertChecklist(c);setChecklists(cs=>cs.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteChecklist = useCallback(async id=>{await removeChecklist(id);setChecklists(cs=>cs.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const addTempUnit     = useCallback(async u=>{const s=await upsertTempUnit(u);setTempUnits(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved");}, [showToast]);
+  const updateTempUnit  = useCallback(async u=>{const s=await upsertTempUnit(u);setTempUnits(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteTempUnit  = useCallback(async id=>{await removeTempUnit(id);setTempUnits(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const addCleanTask    = useCallback(async t=>{const s=await upsertCleaningTask(t);setCleaningTasks(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved");}, [showToast]);
+  const updateCleanTask = useCallback(async t=>{const s=await upsertCleaningTask(t);setCleaningTasks(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteCleanTask = useCallback(async id=>{await removeCleaningTask(id);setCleaningTasks(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const addAssignment    = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.some(x=>x.id===s.id)?as.map(x=>x.id===s.id?s:x):[...as,s]);showToast("Saved");}, [showToast]);
+  const updateAssignment = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved");}, [showToast]);
+  const updateOpsTeam = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const deleteOpsTeam = useCallback(async id=>{await removeOpsTeamMember(id);setOpsTeam(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const handleTempLog     = useCallback(async l=>{const s=await insertTempLog(l);setTempLogs(ls=>[s,...ls]);}, []);
+  const handleDeliveryAdd = useCallback(async d=>{const s=await insertDelivery(d);setDeliveries(ds=>[s,...ds]);}, []);
+  const handleChecklistItemToggle = useCallback(async (stateKey,itemId,val)=>{
+    const newState={...(checklistStates[stateKey]||{}),[itemId]:val};
+    setChecklistStates(s=>({...s,[stateKey]:newState}));
+    const [brandId,checklistId,date]=stateKey.split("||");
+    await upsertChecklistState(brandId,checklistId,date,newState,"",null);
   }, [checklistStates]);
-
-  const handleClearAudit = useCallback(async () => {
+  const handleSignOff = useCallback(async(assignment)=>{
     try {
-      await clearAuditTrail();
-      setAuditTrail([]);
-      showToast("Audit trail cleared");
-    } catch (err) { showToast("Failed to clear audit trail: " + err.message, "error"); }
-  }, [showToast]);
-
-  // ── Punch Records ────────────────────────────────────────────────────────────
-  const handlePunchIn = useCallback(async record => {
-    try { const saved = await insertPunchIn(record); setPunchRecords(ps => [saved, ...ps]); }
-    catch (err) { console.error("PunchIn failed:", err); }
-  }, []);
-
-  const handlePunchOut = useCallback(async (id, punchOut, hoursWorked, grossPay) => {
-    try { const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay); setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p)); }
-    catch (err) { console.error("PunchOut failed:", err); }
-  }, []);
-
-  const handleAmendPunch = useCallback(async record => {
-    try { const saved = await upsertPunchRecord(record); setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p)); showToast("Record amended"); }
-    catch (err) { showToast("Failed to amend: " + err.message, "error"); }
-  }, [showToast]);
-
-  // ── Shift Presets ────────────────────────────────────────────────────────────
-  const addShiftPreset = useCallback(async p => {
-    try { const saved = await upsertShiftPreset(p); setShiftPresets(ps => [...ps, saved]); showToast(`"${p.name}" preset added`); }
-    catch (err) { showToast("Failed to add preset: " + err.message, "error"); }
-  }, [showToast]);
-  const updateShiftPreset = useCallback(async p => {
-    try { const saved = await upsertShiftPreset(p); setShiftPresets(ps => ps.map(x => x.id===saved.id?saved:x)); showToast("Preset updated"); }
-    catch (err) { showToast("Failed to update preset: " + err.message, "error"); }
-  }, [showToast]);
-  const deleteShiftPreset = useCallback(async id => {
-    try { await removeShiftPreset(id); setShiftPresets(ps => ps.filter(p => p.id!==id)); showToast("Preset deleted"); }
-    catch (err) { showToast("Failed to delete preset: " + err.message, "error"); }
-  }, [showToast]);
-  const handlePublishWeek = useCallback(async (brandId, weekStart, published) => {
+      const now=new Date().toISOString();
+      const d=now.split("T")[0];
+      const stateKey=`${assignment.brandId}||${assignment.taskId}||${d}`;
+      await upsertChecklistState(assignment.brandId,assignment.taskId,d,checklistStates[stateKey]||{},currentUser?.name||"Manager",now);
+      await addAudit("sign-off",`${assignment.checklistName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId);
+      showToast("✓ Signed off");
+    } catch(err){showToast(err.message,"error");}
+  }, [checklistStates,currentUser,addAudit,showToast]);
+  const handleClearAudit = useCallback(async()=>{try{await clearAuditTrail();setAuditTrail([]);showToast("Cleared");}catch(err){showToast(err.message,"error");}}, [showToast]);
+  const addAvailability    = useCallback(async a=>{const s=await insertAvailability(a);setAvailability(av=>av.some(x=>x.id===s.id)?av.map(x=>x.id===s.id?s:x):[s,...av]);}, []);
+  const updateAvailability = useCallback(async a=>{const s=await upsertAvailability(a);setAvailability(av=>av.map(x=>x.id===s.id?s:x));}, []);
+  const deleteAvailability = useCallback(async id=>{await removeAvailability(id);setAvailability(av=>av.filter(x=>x.id!==id));}, []);
+  const addSchedule    = useCallback(async s=>{const saved=await upsertSchedule(s);setSchedules(ss=>ss.some(x=>x.id===saved.id)?ss.map(x=>x.id===saved.id?saved:x):[saved,...ss]);}, []);
+  const deleteSchedule = useCallback(async id=>{await removeSchedule(id);setSchedules(ss=>ss.filter(x=>x.id!==id));}, []);
+  const handlePublishWeek = useCallback(async(brandId,weekStart,published)=>{
     try {
-      await publishWeekSchedules(brandId, weekStart, published);
-      // Use string comparison to avoid timezone issues with Date objects
-      const weEnd = new Date(weekStart+"T00:00:00");
-      weEnd.setDate(weEnd.getDate()+6);
-      const weekEndStr = weEnd.toISOString().split("T")[0];
-      setSchedules(ss => ss.map(s => {
-        if (s.brandId !== brandId) return s;
-        return (s.date >= weekStart && s.date <= weekEndStr) ? { ...s, published } : s;
-      }));
-      showToast(published ? "Schedule published — employees can now see it ✓" : "Schedule unpublished", published ? "success" : "success");
-    } catch (err) { showToast("Failed to publish: " + err.message, "error"); }
+      await publishWeekSchedules(brandId,weekStart,published);
+      const we=new Date(weekStart+"T00:00:00"); we.setDate(we.getDate()+6);
+      const weStr=[we.getFullYear(),String(we.getMonth()+1).padStart(2,"0"),String(we.getDate()).padStart(2,"0")].join("-");
+      setSchedules(ss=>ss.map(s=>s.brandId!==brandId?s:(s.date>=weekStart&&s.date<=weStr)?{...s,published}:s));
+      showToast(published?"Schedule published ✓":"Schedule unpublished");
+    } catch(err){showToast("Failed: "+err.message,"error");}
   }, [showToast]);
+  const addShiftPreset    = useCallback(async p=>{try{const s=await upsertShiftPreset(p);setShiftPresets(ps=>[...ps,s]);showToast(`"${p.name}" added`);}catch(err){showToast(err.message,"error");}}, [showToast]);
+  const updateShiftPreset = useCallback(async p=>{try{const s=await upsertShiftPreset(p);setShiftPresets(ps=>ps.map(x=>x.id===s.id?s:x));showToast("Updated");}catch(err){showToast(err.message,"error");}}, [showToast]);
+  const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
+  const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
+  const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
+  const handleAmendPunch = useCallback(async record=>{try{const saved=await upsertPunchRecord(record);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
+  const removeSchedulePunchRecord = useCallback(async(id)=>{try{const{error}=await supabase.from("punch_records").delete().eq("id",id);if(error)throw error;setPunchRecords(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
+  const addHdTicket    = useCallback(async t=>{const s=await insertHelpdeskTicket(t);setHdTickets(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[s,...ts]);}, []);
+  const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
+  const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
+  const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);}, []);
+  const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...(m.readBy||[]),userId]}:m));}, []);
 
-  // ── Schedules ────────────────────────────────────────────────────────────────
-  const addSchedule = useCallback(async s => {
-    try { const saved = await upsertSchedule(s); setSchedules(ss => { const f = ss.filter(x => x.id !== saved.id); return [...f, saved]; }); showToast("Shift saved"); }
-    catch (err) { showToast("Failed to save shift: " + err.message, "error"); }
-  }, [showToast]);
-
-  const deleteSchedule = useCallback(async id => {
-    try { await removeSchedule(id); setSchedules(ss => ss.filter(s => s.id !== id)); showToast("Shift deleted"); }
-    catch (err) { showToast("Failed to delete shift: " + err.message, "error"); }
-  }, [showToast]);
-
-  // ── Availability ─────────────────────────────────────────────────────────────
-  const addAvailability = useCallback(async a => {
-    try { const saved = await insertAvailability(a); setAvailability(as => [saved, ...as]); showToast("Availability submitted"); }
-    catch (err) { showToast("Failed to submit: " + err.message, "error"); }
-  }, [showToast]);
-
-  const updateAvailability = useCallback(async a => {
-    try { const saved = await upsertAvailability(a); setAvailability(as => as.map(x => x.id === saved.id ? saved : x)); showToast("Availability updated"); }
-    catch (err) { showToast("Failed to update: " + err.message, "error"); }
-  }, [showToast]);
-
-  const deleteAvailability = useCallback(async id => {
-    try { await removeAvailability(id); setAvailability(as => as.filter(a => a.id !== id)); showToast("Availability deleted"); }
-    catch (err) { showToast("Failed to delete: " + err.message, "error"); }
-  }, [showToast]);
-
-  // ── Helpdesk ─────────────────────────────────────────────────────────────────
-  const addHdTicket = useCallback(async t => {
-    try { const saved = await insertHelpdeskTicket(t); setHdTickets(ts => [saved, ...ts]); showToast("Ticket submitted"); }
-    catch (err) { showToast("Failed to submit ticket: " + err.message, "error"); }
-  }, [showToast]);
-
-  const updateHdTicket = useCallback(async t => {
-    try { const saved = await upsertHelpdeskTicket(t); setHdTickets(ts => ts.map(x => x.id === saved.id ? saved : x)); }
-    catch (err) { showToast("Failed to update ticket: " + err.message, "error"); }
-  }, [showToast]);
-
-  const deleteHdTicket = useCallback(async id => {
-    try { await removeHelpdeskTicket(id); setHdTickets(ts => ts.filter(t => t.id !== id)); showToast("Ticket deleted"); }
-    catch (err) { showToast("Failed to delete ticket: " + err.message, "error"); }
-  }, [showToast]);
-
-  // ── Inbox ─────────────────────────────────────────────────────────────────────
-  const sendMessage = useCallback(async msg => {
-    try { const saved = await insertInboxMessage(msg); setMessages(ms => [saved, ...ms]); showToast("Message sent"); }
-    catch (err) { showToast("Failed to send: " + err.message, "error"); }
-  }, [showToast]);
-
-  const handleMarkRead = useCallback(async (id, readerId) => {
-    await markMessageRead(id, readerId);
-    setMessages(ms => ms.map(m => m.id === id && !m.readBy?.includes(readerId) ? { ...m, readBy: [...(m.readBy || []), readerId] } : m));
-  }, []);
-
-  // ── Data utilities ────────────────────────────────────────────────────────
-  const exportData = () => {
-    const data = JSON.stringify({ brands, users, entries, issues }, null, 2);
-    const blob = new Blob([data], { type: "application/octet-stream" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "createbrands-export.json"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 100);
-  };
-  const importData = () => {
-    const input = document.createElement("input"); input.type = "file"; input.accept = ".json";
-    input.onchange = e => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { try { const d = JSON.parse(ev.target.result); if (d.brands) setBrands(d.brands); if (d.users) setUsers(d.users); if (d.entries) setEntries(d.entries); if (d.issues) setIssues(d.issues); } catch { alert("Invalid JSON file."); } }; reader.readAsText(file); }; input.click();
-  };
-  const resetData = async () => {
-    // Called after user confirms via ConfirmModal — no window.confirm needed
-    await supabase.from("eod_entries").delete().neq("id","__none__");
-    await supabase.from("issues").delete().neq("id","__none__");
-    await supabase.from("users").delete().neq("id","__none__");
-    await supabase.from("brands").delete().neq("id","__none__");
-    const savedBrands = await Promise.all(SEED_BRANDS.map(insertBrand));
-    const savedUsers  = await Promise.all(SEED_USERS.map(insertUser));
-    setBrands(savedBrands); setUsers(savedUsers); setEntries([]); setIssues([]);
-    localStorage.removeItem("cb_session"); setCurrentUser(null);
-  };
-
-  // Kiosk mode — all hooks have run above, safe to early-return here
+  // Kiosk guard — all hooks ran above
   if (IS_KIOSK) return <KioskShell />;
 
   if (dbError) return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#f87171",fontFamily:"sans-serif",gap:12}}>
       <span style={{fontSize:32}}>⚠️</span><strong>Could not connect to database</strong>
       <code style={{fontSize:12,color:"#94a3b8"}}>{dbError}</code>
-      <p style={{fontSize:12,color:"#64748b",maxWidth:400,textAlign:"center"}}>Check your <code>REACT_APP_SUPABASE_URL</code> and <code>REACT_APP_SUPABASE_ANON_KEY</code> environment variables.</p>
     </div>
   );
-
   if (!dbReady) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:12}}>
       <span style={{fontSize:24}}>⏳</span><span>Loading data…</span>
@@ -7322,286 +7260,125 @@ export default function App() {
   );
 
   if (!currentUser) {
-    if (loginMode === "manager") {
-      return (
-        <AuthContext.Provider value={{ user: null }}>
-          <LoginScreen
-            users={users}
-            onLogin={handleLogin}
-            onSwitchToEmployee={() => setLoginMode("employee")}
-          />
-        </AuthContext.Provider>
-      );
-    }
+    if (loginMode === "manager") return (
+      <AuthContext.Provider value={{ user: null }}>
+        <LoginScreen users={users} onLogin={handleLogin} onSwitchToEmployee={() => setLoginMode("employee")}/>
+      </AuthContext.Provider>
+    );
     return (
       <AuthContext.Provider value={{ user: null }}>
-        <EmployeeLoginScreen
-          opsTeam={opsTeam}
-          brands={brands}
-          onLogin={handleLogin}
-          onSwitchToManager={() => setLoginMode("manager")}
+        <EmployeeLoginScreen opsTeam={opsTeam} brands={brands} onLogin={handleLogin} onSwitchToManager={() => setLoginMode("manager")}/>
+      </AuthContext.Provider>
+    );
+  }
+
+  if (currentUser.role === "employee") {
+    const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+    return (
+      <AuthContext.Provider value={{ user: currentUser }}>
+        <EmployeeShell
+          currentUser={currentUser} brands={myBrands} opsTeam={opsTeam}
+          assignments={assignments} checklists={checklists} tempUnits={tempUnits}
+          cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
+          tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
+          onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}
+          onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
+          onAddIssue={addIssue} onUpdateIssue={updateIssue}
+          hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
+          messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
+          availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
+          schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch}
+          onLogout={handleLogout}
         />
       </AuthContext.Provider>
     );
   }
 
-  // ── Employee shell — restricted view ───────────────────────────────────────
-  if (currentUser.role === "employee") {
-    return (
-      <EmployeeShell
-        currentUser={currentUser}
-        brands={brands}
-        opsTeam={opsTeam}
-        assignments={assignments}
-        checklists={checklists}
-        tempUnits={tempUnits}
-        cleaningTasks={cleaningTasks}
-        auditTrail={auditTrail}
-        checklistStates={checklistStates}
-        tempLogs={tempLogs}
-        deliveries={deliveries}
-        issues={issues}
-        onSignOff={handleSignOff}
-        onChecklistItemToggle={handleChecklistItemToggle}
-        onTempLog={handleTempLog}
-        onDeliveryAdd={handleDeliveryAdd}
-        onAddIssue={addIssue}
-        onUpdateIssue={updateIssue}
-        hdTickets={hdTickets}
-        onAddHdTicket={addHdTicket}
-        onUpdateHdTicket={updateHdTicket}
-        availability={availability}
-        onAddAvailability={addAvailability}
-        onUpdateAvailability={updateAvailability}
-        schedules={schedules}
-        punchRecords={punchRecords}
-        onAmendPunch={handleAmendPunch}
-        messages={messages}
-        onSendMessage={sendMessage}
-        onMarkRead={handleMarkRead}
-        onLogout={handleLogout}
-      />
-    );
-  }
-
+  // Manager / Owner
   const visibleBrands = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
-  const openIssueCount = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
-  const overdueOpsCount = assignments.filter(a => visibleBrands.some(b => b.id === a.brandId) && isActiveToday(a) && isOverdue(a)).length;
-
-  // ── Badge helpers (memoised) ─────────────────────────────────────────────
-  const hdOpenCount = hdTickets.filter(t => visibleBrands.some(b => b.id === t.brandId) && ["Open","In Progress"].includes(t.status)).length;
-  const inboxUnread = (() => {
-    const myId = currentUser.id;
-    return messages.filter(m => {
-      if (m.fromId === myId) return false;
-      if (m.toScope === "all_locations") return true;
-      if (m.toScope === "location" && visibleBrands.some(b => b.id === m.toBrandId)) return true;
-      if (m.toScope === "individual" && m.toPersonId === myId) return true;
-      return false;
-    }).filter(m => !m.readBy?.includes(myId)).length;
-  })();
+  const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
+  const inboxUnread = messages.filter(m => {
+    if (m.fromId===currentUser.id) return false;
+    if (m.toScope==="all_locations") return true;
+    if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+    if (m.toScope==="individual" && m.toPersonId===currentUser.id) return true;
+    return false;
+  }).filter(m => !m.readBy?.includes(currentUser.id)).length;
+  const pendingAvail = availability.filter(a => visibleBrands.some(b=>b.id===a.brandId) && a.status==="pending").length;
+  const commsBadge = inboxUnread + pendingAvail;
 
   const NAV_GROUPS = [
-    {
-      group: "Overview",
-      items: [
-        { key: "dashboard", label: "Dashboard",     icon: LayoutDashboard },
-        { key: "tactical",  label: "Performance",   icon: BarChart2 },
-      ],
-    },
-    {
-      group: "Daily Ops",
-      items: [
-        { key: "ops-tasks",      label: "Today's Tasks",   icon: ListChecks,  badge: overdueOpsCount > 0 ? overdueOpsCount.toString() : null },
-        { key: "eod",            label: "EOD Report",       icon: ClipboardList },
-        { key: "ops-temps",      label: "Temperatures",     icon: Thermometer },
-        { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
-        { key: "ops-network",    label: "Ops Overview",     icon: ShieldCheck },
-        { key: "ops-compliance", label: "Compliance",       icon: CheckSquare },
-      ],
-    },
-    {
-      group: "Team",
-      items: [
-        { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => { const pendAvail = availability.filter(a => visibleBrands.some(b => b.id === a.brandId) && a.status === "pending").length; const total = inboxUnread + (pendAvail > 0 ? pendAvail : 0); return total > 0 ? total.toString() : null; })() },
-        { key: "issues",       label: "Issues",        icon: Wrench,        badge: openIssueCount > 0 ? openIssueCount.toString() : null },
-      ],
-    },
-    {
-      group: "Settings",
-      items: [
-        { key: "time-attend",  label: "Time & Attendance", icon: Clock },
-        { key: "ops-assigns",  label: "Assignments",   icon: Clipboard },
-        { key: "ops-settings", label: "Ops Setup",     icon: Settings },
-        { key: "ops-audit",    label: "Audit Trail",   icon: ScrollText },
-        ...(currentUser.role === "owner" ? [{ key: "admin", label: "Admin", icon: Users, badge: "OWNER" }] : []),
-      ],
-    },
+    { group: "OVERVIEW", items: [
+      { key: "dashboard",  label: "Dashboard",   icon: BarChart2 },
+      { key: "tactical",   label: "Performance", icon: TrendingUp },
+    ]},
+    { group: "DAILY OPS", items: [
+      { key: "ops-tasks",      label: "Today's Tasks",  icon: CheckSquare },
+      { key: "eod",            label: "EOD Report",      icon: ScrollText },
+      { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
+      { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
+      { key: "ops-network",    label: "Ops Overview",    icon: Building2 },
+      { key: "ops-compliance", label: "Compliance",      icon: Shield },
+    ]},
+    { group: "TEAM", items: [
+      { key: "comms",   label: "Communication", icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
+      { key: "issues",  label: "Issues",         icon: AlertTriangle,  badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+    ]},
+    { group: "SETTINGS", items: [
+      { key: "time-attend",  label: "Time & Attendance", icon: Clock },
+      { key: "ops-assigns",  label: "Assignments",        icon: Clipboard },
+      { key: "ops-settings", label: "Ops Setup",          icon: Settings },
+      { key: "ops-audit",    label: "Audit Trail",        icon: ScrollText },
+      ...(currentUser.role === "owner" ? [{ key: "admin", label: "Admin", icon: Users }] : []),
+    ]},
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication", "time-attend": "Time & Attendance" };
-  const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  const titles = { dashboard:"Executive Dashboard", tactical:"Performance", eod:"EOD Report",
+    issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
+    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
+    "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
+    admin:"Admin", comms:"Communication", "time-attend":"Time & Attendance" };
 
-  const Sidebar = ({ mobile = false }) => {
-    // Find which group the current activeView belongs to
-    const activeGroup = NAV_GROUPS.find(g => g.items.some(n => n.key === activeView))?.group;
-
-    const [collapsed, setCollapsed] = useState(() => {
-      // Start all collapsed except the group containing the active view
-      return NAV_GROUPS.reduce((acc, g) => {
-        acc[g.group] = g.group !== activeGroup;
-        return acc;
-      }, {});
-    });
-
-    // Auto-expand the active group whenever activeView changes
-    useEffect(() => {
-      if (activeGroup) {
-        setCollapsed(c => ({ ...c, [activeGroup]: false }));
-      }
-    }, [activeGroup]);
-
-    const toggleGroup = (g) => setCollapsed(c => ({ ...c, [g]: !c[g] }));
-    const groupIcons = { Overview: LayoutDashboard, "Daily Ops": Activity, Team: Users, Settings: Settings };
-
-    return (
-      <div className="flex flex-col h-full">
-        {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/80">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-lg flex-shrink-0">
-            <BarChart2 size={15} className="text-white"/>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-bold text-white leading-tight">Create Brands</div>
-            <div className="text-xs text-slate-500 leading-tight">Hospitality Group</div>
-          </div>
-          {mobile && (
-            <button onClick={() => setDrawerOpen(false)} className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-all flex-shrink-0">
-              <X size={16}/>
-            </button>
-          )}
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-          {NAV_GROUPS.map(({ group, items }) => {
-            const GIcon = groupIcons[group] || LayoutDashboard;
-            const isCollapsed = collapsed[group];
-            return (
-              <div key={group}>
-                {/* Group header — clickable to collapse */}
-                <button
-                  onClick={() => toggleGroup(group)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-slate-500 hover:text-slate-300 transition-all group mb-0.5"
-                >
-                  <GIcon size={12} className="flex-shrink-0"/>
-                  <span className="flex-1 text-left text-xs font-bold uppercase tracking-widest">{group}</span>
-                  <ChevronDownIcon size={12} className={`transition-transform duration-200 ${isCollapsed ? "-rotate-90" : ""}`}/>
-                </button>
-
-                {/* Nav items */}
-                {!isCollapsed && (
-                  <div className="space-y-0.5 mb-2">
-                    {items.map(n => {
-                      const NIcon = n.icon;
-                      const active = activeView === n.key;
-                      return (
-                        <button key={n.key}
-                          onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
-                            active
-                              ? "bg-indigo-600 text-white shadow-sm shadow-indigo-900/50"
-                              : "text-slate-400 hover:bg-slate-800/80 hover:text-slate-200"
-                          }`}
-                        >
-                          <NIcon size={14} className="flex-shrink-0"/>
-                          <span className="flex-1 text-left">{n.label}</span>
-                          {n.badge && (
-                            <span className={`text-xs px-1.5 py-0.5 rounded-md font-bold leading-none ${
-                              n.badge === "OWNER"
-                                ? "bg-violet-500/20 text-violet-400 border border-violet-500/30"
-                                : "bg-red-500 text-white"
-                            }`}>{n.badge}</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </nav>
-
-        {/* Footer */}
-        <div className="px-3 py-3 border-t border-slate-800/80 space-y-3">
-          <UserChip user={currentUser} onLogout={handleLogout}/>
-          {/* Data tools — owner only */}
-          {currentUser.role === "owner" && (
-            <div className="flex gap-1.5">
-              <button onClick={exportData} title="Export data" className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-800/80 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-slate-200 transition-all">
-                <Download size={11}/> Export
-              </button>
-              <button onClick={importData} title="Import data" className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-800/80 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-slate-200 transition-all">
-                <Upload size={11}/> Import
-              </button>
-              <button onClick={() => setResetConfirmOpen(true)} title="Reset data" className="p-1.5 rounded-lg bg-slate-800/80 text-slate-500 text-xs font-semibold hover:bg-red-950/40 hover:text-red-400 transition-all">
-                <RotateCcw size={11}/>
-              </button>
-            </div>
-          )}
-          {currentUser.role !== "owner" && (
-            <button onClick={exportData} className="w-full flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-800/80 text-slate-400 text-xs font-semibold hover:bg-slate-700 transition-all">
-              <Download size={11}/> Export
-            </button>
-          )}
-          <div className="text-xs text-slate-600 text-center tabular-nums">{brands.length} locations · {issues.length} issues</div>
-        </div>
-      </div>
-    );
-  };
+  const currentUser_ctx = currentUser;
 
   return (
-    <AuthContext.Provider value={{user:currentUser}}>
-      <div className="min-h-screen bg-slate-950 text-white flex">
-        <aside className="hidden lg:flex w-60 flex-col bg-slate-900/80 border-r border-slate-800 flex-shrink-0"><Sidebar/></aside>
-        {drawerOpen && <div className="fixed inset-0 z-50 lg:hidden"><div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDrawerOpen(false)}/><div className="absolute left-0 top-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col"><Sidebar mobile/></div></div>}
-        <main className="flex-1 flex flex-col min-w-0">
-          <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 sticky top-0 z-10 backdrop-blur-sm">
-            <button onClick={() => setDrawerOpen(true)} className="lg:hidden p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all"><Menu size={18}/></button>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-sm font-bold text-white">{titles[activeView] || activeView}</h1>
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/20">
-                  <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"/>Live
-                </span>
+    <AuthContext.Provider value={{ user: currentUser_ctx }}>
+      <div className="flex h-screen bg-slate-950 overflow-hidden">
+        {/* Sidebar */}
+        <Sidebar
+          navGroups={NAV_GROUPS} activeView={activeView} setActiveView={setActiveView}
+          currentUser={currentUser} onLogout={handleLogout}
+          collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
+        />
+        {/* Main */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Topbar */}
+          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
+            <div>
+              <h1 className="text-sm font-bold text-white">{titles[activeView] || activeView}</h1>
+              <div className="text-xs text-slate-500 mt-0.5">
+                {new Date().toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"long",year:"numeric"})}
               </div>
-              <div className="text-xs text-slate-500 mt-0.5">{todayDisplay}</div>
             </div>
-            {/* Notification badges in header for quick access */}
-            {inboxUnread > 0 && (
-              <div className="hidden sm:flex items-center gap-2">
-                <button onClick={() => setActiveView("comms")} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold hover:bg-indigo-500/20 transition-all">
-                  <Inbox size={12}/>{inboxUnread} unread
-                </button>
-              </div>
-            )}
-            <div className="lg:hidden"><UserChip user={currentUser} onLogout={handleLogout} compact/></div>
-          </header>
-          <div className="flex-1 p-5 lg:p-6 overflow-auto">
-            {activeView === "dashboard"       && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView === "tactical"        && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {activeView === "eod"             && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
-            {activeView === "issues"          && <IssuesView brands={brands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {activeView === "ops-network"     && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
-            {activeView === "ops-tasks"       && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
-            {activeView === "ops-temps"       && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
-            {activeView === "ops-deliveries"  && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-            {activeView === "time-attend" && <TimeAttendanceView brands={visibleBrands} opsTeam={opsTeam} schedules={schedules} punchRecords={punchRecords} currentUser={currentUser} onUpdate={handleAmendPunch}/>}
-            {activeView === "ops-assigns"     && <AssignmentsView brands={brands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-            {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
-            {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {activeView === "ops-settings" && <OpsSettingsView
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
+              {inboxUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{inboxUnread} unread</div>}
+            </div>
+          </div>
+          {/* Content */}
+          <main className="flex-1 overflow-y-auto p-6">
+            {activeView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
+            {activeView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {activeView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
+            {activeView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {activeView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
+            {activeView === "ops-temps"      && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
+            {activeView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {activeView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+            {activeView === "ops-compliance" && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
+            {activeView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
+            {activeView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {activeView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} checklists={checklists} tempUnits={tempUnits}
               cleaningTasks={cleaningTasks} opsTeam={opsTeam} shiftPresets={shiftPresets}
               onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist}
@@ -7611,8 +7388,17 @@ export default function App() {
               onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
               currentUser={currentUser}
             />}
-
-
+            {activeView === "time-attend"    && <TimeAttendanceView
+              brands={visibleBrands} opsTeam={opsTeam} schedules={schedules}
+              punchRecords={punchRecords} currentUser={currentUser}
+              onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
+            />}
+            {activeView === "admin"          && currentUser.role === "owner" && <AdminPanelView
+              brands={brands} users={users} entries={entries}
+              onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand}
+              onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser}
+              onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
+            />}
             {activeView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
@@ -7622,32 +7408,15 @@ export default function App() {
               punchRecords={punchRecords} onUpdatePunchRecord={handleAmendPunch}
               isEmployee={false}
             />}
-            {activeView === "admin" && currentUser.role === "owner" && <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>}
+          </main>
+        </div>
+        {/* Toast */}
+        {toast && (
+          <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl flex items-center gap-3 ${toast.type==="error"?"bg-red-600 text-white":"bg-emerald-600 text-white"}`}>
+            {toast.type==="error"?"✗":"✓"} {toast.msg}
           </div>
-        </main>
+        )}
       </div>
-    {/* Toast notification */}
-      {toast && (
-        <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border text-sm font-semibold transition-all ${toast.type === "error" ? "bg-red-950 border-red-500/50 text-red-300" : "bg-emerald-950 border-emerald-500/50 text-emerald-300"}`}>
-          {toast.type === "error" ? <AlertTriangle size={15}/> : <CheckCircle size={15}/>}
-          {toast.msg}
-          <button onClick={() => setToast(null)} className="ml-2 opacity-60 hover:opacity-100"><X size={13}/></button>
-        </div>
-      )}
-      {resetConfirmOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
-              <div className="text-sm text-slate-300">This will wipe all data and restore seed defaults. This cannot be undone.</div>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setResetConfirmOpen(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-              <button onClick={async () => { setResetConfirmOpen(false); await resetData(); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reset All Data</button>
-            </div>
-          </div>
-        </div>
-      )}
     </AuthContext.Provider>
   );
 }

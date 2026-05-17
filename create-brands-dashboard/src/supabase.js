@@ -656,6 +656,7 @@ function appPunchToDb(p) {
     overtime_reason: p.overtimeReason || "",
     overtime_approved: p.overtimeApproved ?? false,
     overtime_approved_by: p.overtimeApprovedBy || "",
+    overtime_rejected_reason: p.overtimeRejectedReason || "",
     updated_at: new Date().toISOString(),
   };
 }
@@ -675,6 +676,7 @@ function dbPunchToApp(p) {
     overtimeReason: p.overtime_reason || "",
     overtimeApproved: p.overtime_approved ?? false,
     overtimeApprovedBy: p.overtime_approved_by || "",
+    overtimeRejectedReason: p.overtime_rejected_reason || "",
     createdAt: p.created_at, updatedAt: p.updated_at,
   };
 }
