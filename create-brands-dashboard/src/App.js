@@ -5342,8 +5342,9 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
   const handleSave = () => {
     if (!employeeId) return;
     const member = opsTeam.find(m => m.id === employeeId);
-    const weekStart = new Date(date+"T00:00:00");
-    weekStart.setDate(weekStart.getDate() - (weekStart.getDay()===0?6:weekStart.getDay()-1));
+    const ws = new Date(date+"T00:00:00");
+    ws.setDate(ws.getDate() - (ws.getDay()===0?6:ws.getDay()-1));
+    const wsStr = [ws.getFullYear(),String(ws.getMonth()+1).padStart(2,"0"),String(ws.getDate()).padStart(2,"0")].join("-");
     onSave({
       id: slot?.id || `sch-${Date.now()}`,
       brandId, date, employeeId,
@@ -5353,7 +5354,7 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
       department: member?.department || filterDept || "",
       notes, status: slot?.status || "scheduled",
       published: slot?.published ?? false,
-      weekStart: weekStart.toISOString().split("T")[0],
+      weekStart: wsStr,
       createdBy: currentUser.name,
     });
   };
@@ -5471,11 +5472,12 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
   const [publishing, setPublishing] = useState(false);
 
   const today = new Date(); today.setHours(0,0,0,0);
+  const toLocalDateStr = (d) => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),dd=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${dd}`; };
   const weekStart = new Date(today);
   weekStart.setDate(today.getDate() - (today.getDay()===0?6:today.getDay()-1) + weekOffset*7);
-  const weekStartStr = weekStart.toISOString().split("T")[0];
+  const weekStartStr = toLocalDateStr(weekStart);
   const weekDays = Array.from({length:7},(_,i)=>{const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);return d;});
-  const weekDayStrs = weekDays.map(d=>d.toISOString().split("T")[0]);
+  const weekDayStrs = weekDays.map(d=>toLocalDateStr(d));
 
   const brandMembers = opsTeam.filter(m=>m.brandId===brandId);
   const allDepts = [...new Set(brandMembers.map(m=>m.department).filter(Boolean))];
@@ -5591,7 +5593,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
             <div className="grid gap-1 mb-2" style={{gridTemplateColumns:"160px repeat(7, 1fr)"}}>
               <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
               {weekDays.map((day,idx)=>{
-                const isToday = day.toDateString()===today.toDateString();
+                const isToday = toLocalDateStr(day)===toLocalDateStr(today);
                 return (
                   <div key={idx} className={`text-center rounded-xl py-2 ${isToday?"bg-indigo-600/20 border border-indigo-500/30":"bg-slate-900/40"}`}>
                     <div className={`text-xs font-semibold ${isToday?"text-indigo-300":"text-slate-400"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
@@ -5624,7 +5626,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                   const isAvail = avails.some(a=>a.available);
                   const isUnavail = avails.some(a=>!a.available);
                   const availWindow = avails.find(a=>a.available);
-                  const isToday = day.toDateString()===today.toDateString();
+                  const isToday = toLocalDateStr(day)===toLocalDateStr(today);
                   return (
                     <div key={dIdx}
                       className={`relative rounded-xl min-h-14 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/40 bg-slate-900/30 hover:bg-slate-800/40"}`}
@@ -5673,7 +5675,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
           {weekDays.map(day=>{
             const dateStr = day.toISOString().split("T")[0];
             const daySlots = weekSchedules.filter(s=>s.date===dateStr).sort((a,b)=>a.startTime.localeCompare(b.startTime));
-            const isToday = day.toDateString()===today.toDateString();
+            const isToday = toLocalDateStr(day)===toLocalDateStr(today);
             return (
               <div key={dateStr} className={`rounded-2xl border overflow-hidden ${isToday?"border-indigo-500/30":"border-slate-800/60"}`}>
                 <div className={`flex items-center justify-between px-4 py-2.5 ${isToday?"bg-indigo-950/30":"bg-slate-900/60"}`}>
@@ -5737,10 +5739,18 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
   const myMember = opsTeam.find(m => m.id === myId);
   const myDept = myMember?.department || "";
 
+  // Use local date (not UTC) so BST/timezone doesn't shift the day
+  const toLocalDateStr = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,"0");
+    const day = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  };
+
   const today = new Date(); today.setHours(0,0,0,0);
   const tomorrow = new Date(today); tomorrow.setDate(today.getDate()+1);
-  const todayStr    = today.toISOString().split("T")[0];
-  const tomorrowStr = tomorrow.toISOString().split("T")[0];
+  const todayStr    = toLocalDateStr(today);
+  const tomorrowStr = toLocalDateStr(tomorrow);
 
   const [viewDate, setViewDate] = useState(todayStr);
   const viewLabel = viewDate === todayStr ? "Today" : "Tomorrow";
