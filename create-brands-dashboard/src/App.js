@@ -1191,7 +1191,7 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
 function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
-  hdTickets, onAddHdTicket, messages, onSendMessage, onMarkRead,
+  hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -1207,8 +1207,18 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
     { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
     { key: "ops-network",    label: "Ops Status",       icon: ShieldCheck },
     { key: "issues",         label: "Report Issue",     icon: Wrench },
-    { key: "helpdesk",       label: "Help Desk",        icon: LifeBuoy, badge: (() => { const myOpen = (hdTickets || []).filter(t => t.createdById === currentUser.opsTeamMemberId && t.status !== "Closed").length; return myOpen > 0 ? myOpen.toString() : null; })() },
-    { key: "inbox",          label: "Inbox",            icon: Inbox,   badge: (() => { const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id; const unread = (messages || []).filter(m => { if (m.fromId === myId || m.fromId === myOpsId) return false; if (m.toScope === "all_locations") return true; if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true; if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true; return false; }).filter(m => !m.readBy?.includes(myId)).length; return unread > 0 ? unread.toString() : null; })() },
+    { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => {
+        const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+        const hdOpen = (hdTickets || []).filter(t => t.createdById === myOpsId && t.status !== "Closed").length;
+        const unread = (messages || []).filter(m => {
+          if (m.fromId === myId || m.fromId === myOpsId) return false;
+          if (m.toScope === "all_locations") return true;
+          if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+          if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
+          return false;
+        }).filter(m => !m.readBy?.includes(myId)).length;
+        const total = hdOpen + unread; return total > 0 ? total.toString() : null;
+      })() },
   ];
 
   const titles = {
@@ -1217,8 +1227,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
     "ops-deliveries": "Deliveries",
     "ops-network":    "Ops Status",
     "issues":         "Report an Issue",
-    "helpdesk":       "Help Desk",
-    "inbox":          "Inbox",
+    "comms":          "Communication",
   };
 
   const NavBar = () => (
@@ -1296,16 +1305,12 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
             />
           )}
-          {activeView === "helpdesk" && (
-            <EmployeeHelpdeskView
-              brands={myBrands} tickets={hdTickets || []} currentUser={currentUser}
-              onAdd={onAddHdTicket}
-            />
-          )}
-          {activeView === "inbox" && (
-            <InboxView
-              currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={[]}
+          {activeView === "comms" && (
+            <CommunicationView
+              currentUser={currentUser} brands={myBrands} opsTeam={opsTeam} users={[]}
               messages={messages || []} onSend={onSendMessage} onMarkRead={onMarkRead}
+              tickets={hdTickets || []} onAddTicket={onAddHdTicket} onUpdateTicket={onUpdateHdTicket} onDeleteTicket={() => {}}
+              isEmployee={true}
             />
           )}
         </main>
@@ -3004,163 +3009,281 @@ const HD_STATUS_COLOR = { Open:"red", "In Progress":"amber", Pending:"indigo", R
 const HD_PRIORITY_COLOR = { Urgent:"red", High:"amber", Normal:"indigo", Low:"slate" };
 
 // ── Ticket Detail Modal (managers/owners) ─────────────────────────────────────
-function HelpdeskTicketModal({ ticket, brands, opsTeam, users, currentUser, onUpdate, onDelete, onClose }) {
-  const [status, setStatus]       = useState(ticket.status);
-  const [assignedTo, setAssignedTo] = useState(ticket.assignedTo || []);
-  const [comment, setComment]     = useState("");
-  const [localTicket, setLocal]   = useState(ticket);
-  const [delConfirm, setDelConfirm] = useState(false);
 
-  const brand    = brands.find(b => b.id === ticket.brandId);
-  const allPeople = [
-    ...users.filter(u => u.role !== "employee").map(u => ({ id: u.id, name: u.name, role: u.role })),
-    ...opsTeam.map(m => ({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), role: m.role })),
-  ];
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPDESK — WhatsApp-style ticket chat
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const toggleAssign = (name) => {
-    const next = assignedTo.includes(name)
-      ? assignedTo.filter(n => n !== name)
-      : [...assignedTo, name];
-    setAssignedTo(next);
-    const updated = { ...localTicket, assignedTo: next, updatedAt: new Date().toISOString() };
-    setLocal(updated);
-    onUpdate(updated);
-  };
+function fmtTicketTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const diffDays = Math.floor((now - d) / 86400000);
+  if (diffDays === 0) return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7)  return d.toLocaleDateString("en-GB", { weekday: "short" });
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
 
-  const handleStatusChange = (s) => {
-    setStatus(s);
-    const updated = { ...localTicket, status: s, updatedAt: new Date().toISOString() };
-    setLocal(updated);
-    onUpdate(updated);
-  };
-
-  const handleAddComment = () => {
-    if (!comment.trim()) return;
-    const newComment = {
-      id: `cmt-${Date.now()}`, author: currentUser.name,
-      authorRole: currentUser.role, text: comment.trim(),
-      createdAt: new Date().toISOString(),
-    };
-    const updated = {
-      ...localTicket,
-      comments: [...(localTicket.comments || []), newComment],
-      updatedAt: new Date().toISOString(),
-    };
-    setLocal(updated);
-    onUpdate(updated);
-    setComment("");
-  };
-
+// Shared chat panel — used by both manager and employee
+function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStatusChange, onAssignToggle, allPeople, brands }) {
+  const [body, setBody]         = useState("");
+  const [showInfo, setShowInfo] = useState(false);
+  const bottomRef               = useRef(null);
+  const brand = brands.find(b => b.id === ticket.brandId);
   const statusColors = { Open:"#dc2626","In Progress":"#d97706",Pending:"#4f46e5",Resolved:"#059669",Closed:"#475569" };
 
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [ticket.comments?.length]);
+
+  const handleSend = () => {
+    const text = body.trim();
+    if (!text) return;
+    onSendComment(ticket, {
+      id: `cmt-${Date.now()}`,
+      author: currentUser.name,
+      authorRole: currentUser.role,
+      text,
+      createdAt: new Date().toISOString(),
+    });
+    setBody("");
+  };
+
+  // Group comments by date
+  const grouped = [];
+  let lastDate = null;
+  (ticket.comments || []).forEach(c => {
+    const d = new Date(c.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    if (d !== lastDate) { grouped.push({ type: "date", label: d }); lastDate = d; }
+    grouped.push({ type: "comment", c });
+  });
+
+  const isClosed = ticket.status === "Closed";
+
   return (
-    <Modal title={localTicket.title} onClose={onClose} maxW="max-w-2xl">
-      <div className="space-y-5">
-        {/* Meta row */}
-        <div className="flex flex-wrap gap-2 items-center">
-          <Badge label={localTicket.category} color="slate"/>
-          <Badge label={localTicket.priority} color={HD_PRIORITY_COLOR[localTicket.priority] || "slate"}/>
-          {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
-          <span className="text-xs text-slate-500">by {localTicket.createdByName}</span>
-          <span className="text-xs text-slate-600">{new Date(localTicket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
-        </div>
-
-        {/* Description */}
-        {localTicket.description && (
-          <div className="bg-slate-800/40 border border-slate-700/40 rounded-xl p-4 text-sm text-slate-300">{localTicket.description}</div>
-        )}
-
-        {/* Status changer */}
-        <div>
-          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Status</div>
-          <div className="flex flex-wrap gap-2">
-            {HELPDESK_STATUSES.map(s => (
-              <button key={s} onClick={() => handleStatusChange(s)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${status === s ? "text-white border-transparent" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
-                style={status === s ? { background: statusColors[s], borderColor: "transparent" } : {}}>
-                {s}
-              </button>
-            ))}
+    <div className="flex flex-col h-full">
+      {/* Thread header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
+            <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
+            <Badge label={ticket.category} color="slate"/>
+            {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
           </div>
         </div>
+        {isManager && (
+          <button onClick={() => setShowInfo(s => !s)}
+            className={`p-2 rounded-xl transition-all ${showInfo ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
+            title="Ticket details">
+            <Info size={15}/>
+          </button>
+        )}
+      </div>
 
-        {/* Multi-assign */}
-        <div>
-          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Assigned To ({assignedTo.length})</div>
-          {assignedTo.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {assignedTo.map(name => (
-                <span key={name} className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-semibold">
-                  {name}
-                  <button onClick={() => toggleAssign(name)} className="opacity-60 hover:opacity-100 hover:text-red-400 transition-colors"><X size={11}/></button>
+      <div className="flex flex-1 min-h-0">
+        {/* Chat messages */}
+        <div className="flex flex-col flex-1 min-w-0">
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+            {/* Original description */}
+            {ticket.description && (
+              <div className="flex justify-center mb-3">
+                <div className="bg-slate-800/60 border border-slate-700/40 rounded-2xl px-4 py-3 max-w-[80%] text-sm text-slate-300 text-center">
+                  <div className="text-xs text-slate-500 mb-1">Raised by {ticket.createdByName}</div>
+                  {ticket.description}
+                </div>
+              </div>
+            )}
+            {ticket.assignedTo?.length > 0 && (
+              <div className="flex justify-center mb-2">
+                <span className="bg-indigo-950/60 border border-indigo-500/20 text-indigo-300 text-xs px-3 py-1 rounded-full">
+                  Assigned to {ticket.assignedTo.join(", ")}
                 </span>
-              ))}
-            </div>
-          )}
-          <div className="bg-slate-800/40 rounded-xl p-3 max-h-40 overflow-y-auto space-y-1">
-            {allPeople.map(p => {
-              const assigned = assignedTo.includes(p.name);
+              </div>
+            )}
+            {grouped.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-32 text-slate-600">
+                <MessageSquare size={24} className="mb-2 text-slate-700"/>
+                <div className="text-xs">No messages yet — send the first one</div>
+              </div>
+            )}
+            {grouped.map((item, idx) => {
+              if (item.type === "date") {
+                return (
+                  <div key={`d-${idx}`} className="flex items-center justify-center my-3">
+                    <span className="bg-slate-800/80 border border-slate-700/60 text-slate-400 text-xs px-3 py-1 rounded-full">{item.label}</span>
+                  </div>
+                );
+              }
+              const c   = item.c;
+              const isMe = c.author === currentUser.name;
+              const isStaff = c.authorRole === "manager" || c.authorRole === "owner";
+              const av = avatarFor(c.author);
               return (
-                <button key={p.id} onClick={() => toggleAssign(p.name)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-400 hover:bg-slate-700/60"}`}>
-                  <span>{p.name} <span className="opacity-50 ml-1">· {p.role}</span></span>
-                  {assigned && <Check size={12} className="text-indigo-400"/>}
-                </button>
+                <div key={c.id} className={`flex items-end gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                  {!isMe && (
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mb-0.5"
+                      style={{ background: av.bg + "30", color: av.bg }}>
+                      {av.initials}
+                    </div>
+                  )}
+                  <div className={`max-w-[70%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                    {!isMe && (
+                      <div className="text-xs font-semibold mb-0.5 px-1 flex items-center gap-1.5" style={{ color: av.bg }}>
+                        {c.author}
+                        {isStaff && <span className="text-xs text-slate-500 font-normal">· {c.authorRole}</span>}
+                      </div>
+                    )}
+                    <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                      isMe
+                        ? "bg-indigo-600 text-white rounded-br-md"
+                        : isStaff
+                          ? "bg-slate-700 text-slate-100 border border-slate-600/60 rounded-bl-md"
+                          : "bg-slate-800 text-slate-100 border border-slate-700/60 rounded-bl-md"
+                    }`}>{c.text}</div>
+                    <div className={`text-xs text-slate-600 mt-0.5 px-1 ${isMe ? "text-right" : "text-left"}`}>
+                      {new Date(c.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </div>
+                  {isMe && <div className="w-7 flex-shrink-0"/>}
+                </div>
               );
             })}
+            <div ref={bottomRef}/>
           </div>
-        </div>
 
-        {/* Comments thread */}
-        <div>
-          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Comments ({localTicket.comments?.length || 0})</div>
-          <div className="space-y-3 mb-3 max-h-64 overflow-y-auto">
-            {(localTicket.comments || []).length === 0 && (
-              <div className="text-xs text-slate-600 py-2 text-center">No comments yet — be the first</div>
-            )}
-            {(localTicket.comments || []).map(c => (
-              <div key={c.id} className={`rounded-xl p-3 ${c.authorRole === "employee" ? "bg-slate-800/60 border border-slate-700/40" : "bg-indigo-950/40 border border-indigo-500/20"}`}>
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-xs font-bold text-slate-300">{c.author}</span>
-                  <Badge label={c.authorRole} color={c.authorRole === "owner" ? "violet" : c.authorRole === "manager" ? "indigo" : "slate"}/>
-                  <span className="text-xs text-slate-600 ml-auto">{new Date(c.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
-                </div>
-                <div className="text-sm text-slate-300">{c.text}</div>
+          {/* Input bar */}
+          {isClosed ? (
+            <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800/80 text-center text-xs text-slate-600">
+              This ticket is closed
+            </div>
+          ) : (
+            <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80 bg-slate-900/40">
+              <div className="flex items-end gap-2">
+                <textarea value={body} onChange={e => setBody(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                  placeholder="Type a message…" rows={1}
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-28 transition-colors"/>
+                <button onClick={handleSend} disabled={!body.trim()}
+                  className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
+                  <Send size={15} className="text-white ml-0.5"/>
+                </button>
               </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <textarea value={comment} onChange={e => setComment(e.target.value)}
-              placeholder="Add a comment…" rows={2}
-              onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey) handleAddComment(); }}
-              className={`${inputCls} resize-none flex-1`}/>
-            <button onClick={handleAddComment} disabled={!comment.trim()}
-              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold transition-colors self-end flex items-center gap-1.5">
-              <Send size={13}/> Post
-            </button>
-          </div>
-          <div className="text-xs text-slate-600 mt-1">Ctrl+Enter to post</div>
+              <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+            </div>
+          )}
         </div>
 
-        {/* Danger zone */}
-        {currentUser.role === "owner" && (
-          <div className="border-t border-slate-700/60 pt-4">
-            {!delConfirm
-              ? <button onClick={() => setDelConfirm(true)} className="text-xs text-red-500 hover:text-red-400 transition-colors">Delete ticket</button>
-              : <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400">Are you sure?</span>
-                  <button onClick={() => { onDelete(ticket.id); onClose(); }} className="text-xs bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors">Delete</button>
-                  <button onClick={() => setDelConfirm(false)} className="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
-                </div>
-            }
+        {/* Manager info side panel */}
+        {isManager && showInfo && (
+          <div className="w-56 flex-shrink-0 border-l border-slate-800/80 bg-slate-900/40 overflow-y-auto p-4 space-y-4">
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Status</div>
+              <div className="space-y-1">
+                {HELPDESK_STATUSES.map(s => (
+                  <button key={s} onClick={() => onStatusChange(ticket, s)}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold transition-all ${ticket.status === s ? "text-white" : "text-slate-400 hover:bg-slate-800"}`}
+                    style={ticket.status === s ? { background: statusColors[s] } : {}}>{s}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Assigned To</div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {allPeople.map(p => {
+                  const assigned = ticket.assignedTo?.includes(p.name);
+                  return (
+                    <button key={p.id} onClick={() => onAssignToggle(ticket, p.name)}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-500 hover:bg-slate-800/60"}`}>
+                      <span className="truncate">{p.name}</span>
+                      {assigned && <Check size={11} className="text-indigo-400 flex-shrink-0"/>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="text-xs text-slate-600 space-y-1 border-t border-slate-800 pt-3">
+              <div>Raised by {ticket.createdByName}</div>
+              <div>{new Date(ticket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
+              <div>{ticket.comments?.length || 0} message{ticket.comments?.length !== 1 ? "s" : ""}</div>
+            </div>
           </div>
         )}
       </div>
-    </Modal>
+    </div>
   );
 }
 
-// ── Manager Helpdesk View ──────────────────────────────────────────────────────
+// New ticket form — used in employee view
+function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
+  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+  const [brandId, setBrandId] = useState(myBrands[0]?.id || "");
+  const [form, setFormState]  = useState({ title: "", description: "", category: "General", priority: "Normal" });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  const handleSubmit = () => {
+    if (!form.title.trim()) return;
+    const brand = myBrands.find(b => b.id === brandId);
+    onSubmit({
+      id: `hd-${Date.now()}`, brandId, brandName: brand?.name || "",
+      ...form, title: form.title.trim(),
+      status: "Open",
+      createdById: currentUser.opsTeamMemberId || currentUser.id,
+      createdByName: currentUser.name,
+      assignedTo: [], comments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
+        <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+          <ChevronLeft size={18}/>
+        </button>
+        <div className="text-sm font-bold text-white">New Ticket</div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        {myBrands.length > 1 && (
+          <div><label className={labelCls}>Location</label>
+            <LocationDropdown brands={myBrands} value={brandId} onChange={setBrandId} className="w-full"/>
+          </div>
+        )}
+        <div><label className={labelCls}>What do you need help with? *</label>
+          <input value={form.title} onChange={e => set("title", e.target.value)}
+            placeholder="Brief summary…" autoFocus className={inputCls}/>
+        </div>
+        <div><label className={labelCls}>Details</label>
+          <textarea value={form.description} onChange={e => set("description", e.target.value)}
+            rows={4} placeholder="Describe the problem in full…" className={`${inputCls} resize-none`}/>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Category</label>
+            <SelectDropdown value={form.category} onChange={v => set("category", v)} className="w-full">
+              {HELPDESK_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </SelectDropdown>
+          </div>
+          <div><label className={labelCls}>Urgency</label>
+            <SelectDropdown value={form.priority} onChange={v => set("priority", v)} className="w-full">
+              {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+            </SelectDropdown>
+          </div>
+        </div>
+      </div>
+      <div className="flex-shrink-0 p-4 border-t border-slate-800/80">
+        <button onClick={handleSubmit} disabled={!form.title.trim()}
+          className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
+          <Send size={14}/> Submit Ticket
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Manager Helpdesk ──────────────────────────────────────────────────────────
 function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onUpdate, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
@@ -3168,260 +3291,255 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
   const [filterBrand,    setFilterBrand]    = useState("all");
   const [filterPriority, setFilterPriority] = useState("all");
   const [search,         setSearch]         = useState("");
-  const [selected,       setSelected]       = useState(null);
+  const [activeTicket,   setActiveTicket]   = useState(null);
+  const [mobileShowChat, setMobileShowChat] = useState(false);
+
+  const allPeople = [
+    ...users.filter(u => u.role !== "employee").map(u => ({ id: u.id, name: u.name, role: u.role })),
+    ...opsTeam.map(m => ({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), role: m.role })),
+  ];
+
+  // Keep active ticket in sync with live state — no refresh needed
+  useEffect(() => {
+    if (activeTicket) {
+      const fresh = tickets.find(t => t.id === activeTicket.id);
+      if (fresh) setActiveTicket(fresh);
+    }
+  }, [tickets]);
 
   const visible = tickets.filter(t => {
     if (!vb.some(b => b.id === t.brandId)) return false;
     if (filterStatus !== "all" && t.status !== filterStatus) return false;
     if (filterBrand  !== "all" && t.brandId !== filterBrand) return false;
     if (filterPriority !== "all" && t.priority !== filterPriority) return false;
-    if (search && !t.title.toLowerCase().includes(search.toLowerCase()) && !t.createdByName.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !t.title.toLowerCase().includes(search.toLowerCase()) &&
+        !t.createdByName.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   }).sort((a, b) => {
-    const prio = { Urgent: 0, High: 1, Normal: 2, Low: 3 };
+    const prio = { Urgent:0, High:1, Normal:2, Low:3 };
     if (a.status === "Closed" && b.status !== "Closed") return 1;
     if (b.status === "Closed" && a.status !== "Closed") return -1;
-    return (prio[a.priority] - prio[b.priority]) || new Date(b.createdAt) - new Date(a.createdAt);
+    return (prio[a.priority] - prio[b.priority]) || new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt);
   });
+
+  const handleSendComment = (ticket, comment) => {
+    const updated = { ...ticket, comments: [...(ticket.comments||[]), comment], updatedAt: new Date().toISOString() };
+    onUpdate(updated); setActiveTicket(updated);
+  };
+  const handleStatusChange = (ticket, status) => {
+    const updated = { ...ticket, status, updatedAt: new Date().toISOString() };
+    onUpdate(updated); setActiveTicket(updated);
+  };
+  const handleAssignToggle = (ticket, name) => {
+    const assignedTo = ticket.assignedTo?.includes(name)
+      ? ticket.assignedTo.filter(n => n !== name)
+      : [...(ticket.assignedTo||[]), name];
+    const updated = { ...ticket, assignedTo, updatedAt: new Date().toISOString() };
+    onUpdate(updated); setActiveTicket(updated);
+  };
 
   const counts = HELPDESK_STATUSES.reduce((acc, s) => {
     acc[s] = tickets.filter(t => vb.some(b => b.id === t.brandId) && t.status === s).length;
     return acc;
   }, {});
 
+  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
+
   return (
-    <div className="space-y-6">
-      {/* Status KPI cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {HELPDESK_STATUSES.map(s => (
-          <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)}
-            className={`rounded-2xl border p-4 text-left transition-all ${filterStatus === s ? "ring-2 ring-white/20" : ""} ${s === "Open" ? "bg-red-950/30 border-red-500/30" : s === "In Progress" ? "bg-amber-950/30 border-amber-500/30" : s === "Pending" ? "bg-indigo-950/30 border-indigo-500/30" : s === "Resolved" ? "bg-emerald-950/30 border-emerald-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
-            <div className="text-2xl font-bold text-white mb-1">{counts[s] || 0}</div>
-            <div className="text-xs font-semibold text-slate-400">{s}</div>
-          </button>
-        ))}
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
-          className="bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none w-48"/>
-        <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
-        <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="w-36">
-          <option value="all">All Priorities</option>
-          {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
-        </SelectDropdown>
-        {(filterStatus !== "all" || filterBrand !== "all" || filterPriority !== "all" || search) && (
-          <button onClick={() => { setFilterStatus("all"); setFilterBrand("all"); setFilterPriority("all"); setSearch(""); }}
-            className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 transition-colors">
-            Clear filters
-          </button>
-        )}
-      </div>
-
-      {/* Ticket list */}
-      {visible.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-          <LifeBuoy size={32} className="mb-3 text-slate-700"/>
-          <div className="text-sm font-semibold">No tickets match your filters</div>
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/80 bg-slate-950">
+      {/* Left panel */}
+      <div className={`flex flex-col border-r border-slate-800/80 bg-slate-900/80 flex-shrink-0 w-full lg:w-80 xl:w-96 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        <div className="px-4 py-3.5 border-b border-slate-800/80 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-bold text-white">Help Desk</div>
+            <div className="flex items-center gap-1">
+              {HELPDESK_STATUSES.map(s => (
+                <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)} title={s}
+                  className={`w-2.5 h-2.5 rounded-full transition-all ${statusDot(s)} ${filterStatus === s ? "ring-2 ring-white/50 scale-125" : "opacity-40 hover:opacity-70"}`}/>
+              ))}
+            </div>
+          </div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
+            className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
+          <div className="flex gap-2">
+            <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="flex-1"/>
+            <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="flex-1">
+              <option value="all">All Priorities</option>
+              {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+            </SelectDropdown>
+          </div>
         </div>
-      )}
-      <div className="space-y-3">
-        {visible.map(ticket => {
-          const brand = brands.find(b => b.id === ticket.brandId);
-          const commentCount = ticket.comments?.length || 0;
-          const unreadComments = ticket.comments?.filter(c => c.authorRole === "employee").length || 0;
-          return (
-            <button key={ticket.id} onClick={() => setSelected(ticket)}
-              className="w-full text-left rounded-2xl border bg-slate-900/60 border-slate-700/60 hover:border-slate-500/60 hover:bg-slate-800/60 transition-all p-4">
-              <div className="flex items-start gap-3">
-                <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${ticket.status === "Open" ? "bg-red-400" : ticket.status === "In Progress" ? "bg-amber-400" : ticket.status === "Resolved" ? "bg-emerald-400" : ticket.status === "Pending" ? "bg-indigo-400" : "bg-slate-600"}`}/>
+        {/* Status count strip */}
+        <div className="flex gap-2 px-4 py-2 border-b border-slate-800/50 overflow-x-auto">
+          {HELPDESK_STATUSES.map(s => (
+            <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 ${filterStatus === s ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${statusDot(s)}`}/>{counts[s]||0} {s}
+            </button>
+          ))}
+        </div>
+        {/* Ticket list */}
+        <div className="flex-1 overflow-y-auto">
+          {visible.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
+              <LifeBuoy size={28} className="mb-2 text-slate-700"/>
+              <div className="text-sm font-semibold text-center">No tickets found</div>
+            </div>
+          )}
+          {visible.map(ticket => {
+            const isActive = activeTicket?.id === ticket.id;
+            const brand = brands.find(b => b.id === ticket.brandId);
+            const lastComment = ticket.comments?.[ticket.comments.length-1];
+            return (
+              <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setMobileShowChat(true); }}
+                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/40 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${statusDot(ticket.status)}`}/>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
-                        <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
-                        <Badge label={ticket.category} color="slate"/>
-                        {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                        <span className="text-xs text-slate-500">by {ticket.createdByName}</span>
-                        <span className="text-xs text-slate-600">{new Date(ticket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
-                        {ticket.assignedTo?.length > 0 && <span className="text-xs text-indigo-400">→ {ticket.assignedTo.join(", ")}</span>}
-                        {commentCount > 0 && <span className="flex items-center gap-1 text-xs text-slate-500"><MessageSquare size={10}/>{commentCount}</span>}
-                        {unreadComments > 0 && <Badge label={`${unreadComments} from staff`} color="amber"/>}
-                      </div>
-                    </div>
+                  <div className="flex items-center justify-between gap-1 mb-0.5">
+                    <div className="text-sm font-semibold text-white truncate">{ticket.title}</div>
+                    <div className="text-xs text-slate-600 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
+                  </div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority]||"slate"}/>
+                    {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+                  </div>
+                  <div className="text-xs text-slate-500 truncate">
+                    {lastComment ? `${lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-slate-600">by {ticket.createdByName}</span>
+                    {ticket.comments?.length > 0 && <span className="flex items-center gap-1 text-xs text-slate-600"><MessageSquare size={10}/>{ticket.comments.length}</span>}
                   </div>
                 </div>
-              </div>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </div>
       </div>
-
-      {selected && (
-        <HelpdeskTicketModal
-          ticket={selected} brands={brands} opsTeam={opsTeam} users={users}
-          currentUser={currentUser}
-          onUpdate={t => { onUpdate(t); setSelected(t); }}
-          onDelete={id => { onDelete(id); setSelected(null); }}
-          onClose={() => setSelected(null)}
-        />
-      )}
+      {/* Right panel */}
+      <div className={`flex-1 flex flex-col min-w-0 ${!mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        {!activeTicket ? (
+          <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
+            <LifeBuoy size={32} className="text-slate-700"/>
+            <div className="text-base font-semibold text-slate-500">Select a ticket</div>
+          </div>
+        ) : (
+          <>
+            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/80 bg-slate-900/40">
+              <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
+              <span className="text-xs text-slate-400">Back to tickets</span>
+            </div>
+            <TicketChatPanel ticket={activeTicket} currentUser={currentUser}
+              onSendComment={handleSendComment} onStatusChange={handleStatusChange}
+              onAssignToggle={handleAssignToggle} allPeople={allPeople} brands={brands} isManager={true}/>
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-// ── Employee Helpdesk View ─────────────────────────────────────────────────────
-function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd }) {
-  const [showForm, setShowForm] = useState(false);
-  const [selected, setSelected] = useState(null);
-  const [form, setFormState] = useState({ title: "", description: "", category: "General", priority: "Normal" });
-  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
-
+// ── Employee Helpdesk ─────────────────────────────────────────────────────────
+function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate }) {
   const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
-  const [brandId, setBrandId] = useState(myBrands[0]?.id || "");
+  const [activeTicket,   setActiveTicket]   = useState(null);
+  const [showNewForm,    setShowNewForm]    = useState(false);
+  const [mobileShowChat, setMobileShowChat] = useState(false);
 
-  // Employees see only their own tickets, and not Closed ones
+  const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myTickets = tickets
-    .filter(t => t.createdById === currentUser.opsTeamMemberId && t.status !== "Closed")
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    .filter(t => t.createdById === myId && t.status !== "Closed")
+    .sort((a, b) => new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
 
-  const handleSubmit = () => {
-    if (!form.title.trim()) return;
-    const brand = myBrands.find(b => b.id === brandId);
-    onAdd({
-      id: `hd-${Date.now()}`,
-      brandId,
-      brandName: brand?.name || "",
-      title: form.title.trim(),
-      description: form.description,
-      category: form.category,
-      priority: form.priority,
-      status: "Open",
-      createdById: currentUser.opsTeamMemberId || currentUser.id,
-      createdByName: currentUser.name,
-      assignedTo: [],
-      comments: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    setFormState({ title: "", description: "", category: "General", priority: "Normal" });
-    setShowForm(false);
+  // KEY FIX: sync activeTicket with live tickets prop → no manual refresh needed
+  useEffect(() => {
+    if (activeTicket) {
+      const fresh = tickets.find(t => t.id === activeTicket.id);
+      if (fresh && JSON.stringify(fresh) !== JSON.stringify(activeTicket)) {
+        setActiveTicket(fresh);
+      }
+    }
+  }, [tickets]);
+
+  const handleSendComment = (ticket, comment) => {
+    const updated = { ...ticket, comments: [...(ticket.comments||[]), comment], updatedAt: new Date().toISOString() };
+    onUpdate(updated); setActiveTicket(updated);
   };
 
-  return (
-    <div className="space-y-5 max-w-xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold text-white">Help Desk</h2>
-          <p className="text-xs text-slate-400 mt-0.5">Raise a ticket and track its progress</p>
-        </div>
-        <button onClick={() => setShowForm(s => !s)}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
-          <Plus size={14}/>{showForm ? "Cancel" : "New Ticket"}
-        </button>
-      </div>
+  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
 
-      {showForm && (
-        <div className="bg-slate-900/80 border border-slate-700/60 rounded-2xl p-5 space-y-4">
-          <h3 className="text-sm font-bold text-white">New Help Desk Ticket</h3>
-          {myBrands.length > 1 && (
-            <div><label className={labelCls}>Location</label>
-              <div className="flex flex-wrap gap-2">{myBrands.map(b => <button key={b.id} onClick={() => setBrandId(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${brandId === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={brandId === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
-            </div>
-          )}
-          <div><label className={labelCls}>What do you need help with? *</label>
-            <input value={form.title} onChange={e => set("title", e.target.value)} placeholder="Brief summary of the issue" className={inputCls}/>
+  return (
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/80 bg-slate-950">
+      {/* Left panel */}
+      <div className={`flex flex-col border-r border-slate-800/80 bg-slate-900/80 flex-shrink-0 w-full lg:w-72 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/80">
+          <div>
+            <div className="text-sm font-bold text-white">My Tickets</div>
+            {myTickets.length > 0 && <div className="text-xs text-slate-500">{myTickets.length} open</div>}
           </div>
-          <div><label className={labelCls}>Details</label>
-            <textarea value={form.description} onChange={e => set("description", e.target.value)} rows={3} placeholder="Describe the problem in full…" className={`${inputCls} resize-none`}/>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className={labelCls}>Category</label>
-              <select value={form.category} onChange={e => set("category", e.target.value)} className={inputCls}>
-                {HELPDESK_CATEGORIES.map(c => <option key={c}>{c}</option>)}
-              </select>
-            </div>
-            <div><label className={labelCls}>How urgent?</label>
-              <select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}>
-                {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
-              </select>
-            </div>
-          </div>
-          <button onClick={handleSubmit} disabled={!form.title.trim()}
-            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors">
-            Submit Ticket
+          <button onClick={() => { setShowNewForm(true); setActiveTicket(null); setMobileShowChat(true); }}
+            className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-all shadow-md" title="New ticket">
+            <Plus size={17} className="text-white"/>
           </button>
         </div>
-      )}
-
-      {/* My tickets */}
-      {myTickets.length > 0 ? (
-        <div className="space-y-3">
-          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Your Open Tickets</div>
-          {myTickets.map(ticket => (
-            <button key={ticket.id} onClick={() => setSelected(ticket)}
-              className="w-full text-left bg-slate-900/60 border border-slate-700/60 hover:border-slate-500/60 rounded-2xl p-4 transition-all">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex-1 overflow-y-auto">
+          {myTickets.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
+              <LifeBuoy size={28} className="mb-2 text-slate-700"/>
+              <div className="text-sm font-semibold text-center">No open tickets</div>
+              <div className="text-xs text-slate-700 text-center mt-1">Tap + to raise one</div>
+            </div>
+          )}
+          {myTickets.map(ticket => {
+            const isActive = activeTicket?.id === ticket.id;
+            const lastComment = ticket.comments?.[ticket.comments.length-1];
+            const hasManagerReply = ticket.comments?.some(c => c.authorRole === "manager" || c.authorRole === "owner");
+            return (
+              <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setShowNewForm(false); setMobileShowChat(true); }}
+                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/40 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${statusDot(ticket.status)}`}/>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
-                    <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
-                    <span className="text-xs text-slate-500">{new Date(ticket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</span>
+                  <div className="flex items-center justify-between gap-1 mb-0.5">
+                    <div className="text-sm font-semibold text-white truncate">{ticket.title}</div>
+                    <div className="text-xs text-slate-600 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
                   </div>
-                  {ticket.assignedTo?.length > 0 && <div className="text-xs text-indigo-400 mt-1">Being handled by: {ticket.assignedTo.join(", ")}</div>}
-                  {ticket.comments?.length > 0 && <div className="text-xs text-amber-400 mt-1 flex items-center gap-1"><MessageSquare size={10}/> {ticket.comments.length} update{ticket.comments.length > 1 ? "s" : ""} from your team</div>}
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status]||"slate"}/>
+                  </div>
+                  <div className="text-xs text-slate-500 truncate">
+                    {lastComment ? `${lastComment.author === currentUser.name ? "You" : lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
+                  </div>
+                  {hasManagerReply && <div className="text-xs text-indigo-400 mt-1 flex items-center gap-1"><MessageSquare size={10}/> Manager replied</div>}
                 </div>
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
-      ) : !showForm && (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-          <LifeBuoy size={32} className="mb-3 text-slate-700"/>
-          <div className="text-sm font-semibold">No open tickets</div>
-          <div className="text-xs mt-1">Use the button above to raise one</div>
-        </div>
-      )}
-
-      {/* Employee ticket detail (read + comment only) */}
-      {selected && (
-        <Modal title={selected.title} onClose={() => setSelected(null)} maxW="max-w-lg">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <Badge label={selected.status} color={HD_STATUS_COLOR[selected.status] || "slate"}/>
-              <Badge label={selected.priority} color={HD_PRIORITY_COLOR[selected.priority] || "slate"}/>
-              <Badge label={selected.category} color="slate"/>
+      </div>
+      {/* Right panel */}
+      <div className={`flex-1 flex flex-col min-w-0 ${!mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        {showNewForm ? (
+          <NewTicketForm brands={myBrands} currentUser={currentUser}
+            onSubmit={ticket => { onAdd(ticket); setShowNewForm(false); }}
+            onCancel={() => { setShowNewForm(false); setMobileShowChat(false); }}/>
+        ) : activeTicket ? (
+          <>
+            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/80 bg-slate-900/40">
+              <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
+              <span className="text-xs text-slate-400">Back to my tickets</span>
             </div>
-            {selected.description && <div className="bg-slate-800/40 rounded-xl p-3 text-sm text-slate-300">{selected.description}</div>}
-            {selected.assignedTo?.length > 0 && (
-              <div className="bg-indigo-950/30 border border-indigo-500/20 rounded-xl px-4 py-3 text-xs text-indigo-300">
-                Being handled by: <span className="font-semibold">{selected.assignedTo.join(", ")}</span>
-              </div>
-            )}
-            <div>
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Updates ({selected.comments?.length || 0})</div>
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {(selected.comments || []).length === 0 && <div className="text-xs text-slate-600 text-center py-3">No updates yet</div>}
-                {(selected.comments || []).map(c => (
-                  <div key={c.id} className={`rounded-xl p-3 text-sm ${c.authorRole === "employee" && c.author === currentUser.name ? "bg-indigo-950/40 border border-indigo-500/20 text-indigo-200 ml-4" : "bg-slate-800/60 border border-slate-700/40 text-slate-300"}`}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-bold">{c.author === currentUser.name ? "You" : c.author}</span>
-                      <span className="text-xs text-slate-500 ml-auto">{new Date(c.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
-                    </div>
-                    {c.text}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <TicketChatPanel ticket={activeTicket} currentUser={currentUser}
+              onSendComment={handleSendComment} onStatusChange={() => {}} onAssignToggle={() => {}}
+              allPeople={[]} brands={brands} isManager={false}/>
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
+            <LifeBuoy size={32} className="text-slate-700"/>
+            <div className="text-base font-semibold text-slate-500">Select a ticket</div>
+            <div className="text-sm text-slate-600">or tap + to raise a new one</div>
           </div>
-        </Modal>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -3912,6 +4030,103 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMMUNICATION HUB — Chat + Help Desk in one panel
+// ═══════════════════════════════════════════════════════════════════════════════
+function CommunicationView({
+  currentUser, brands, opsTeam, users,
+  messages, onSend, onMarkRead,
+  tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
+  isEmployee,
+}) {
+  const [tab, setTab] = useState("chat");
+
+  // Badge counts
+  const myId    = currentUser.id;
+  const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+  const myBrandIds = currentUser.brandIds || [];
+
+  const inboxUnread = messages.filter(m => {
+    if (m.fromId === myId || m.fromId === myOpsId) return false;
+    if (m.toScope === "all_locations") return true;
+    if (m.toScope === "location" && myBrandIds.includes(m.toBrandId)) return true;
+    if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
+    return false;
+  }).filter(m => !m.readBy?.includes(myId)).length;
+
+  const hdBadge = isEmployee
+    ? tickets.filter(t => t.createdById === myOpsId && t.status !== "Closed").length
+    : tickets.filter(t => brands.some(b => b.id === t.brandId) && ["Open","In Progress"].includes(t.status)).length;
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
+      {/* ── Toggle bar ── */}
+      <div className="flex items-center gap-2 mb-4">
+        {/* Radio-style pill toggle */}
+        <div className="flex items-center bg-slate-900/80 border border-slate-700/60 rounded-2xl p-1 gap-1">
+          <button
+            onClick={() => setTab("chat")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+              tab === "chat"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <MessageSquare size={14}/>
+            Chat
+            {inboxUnread > 0 && (
+              <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === "chat" ? "bg-white/20 text-white" : "bg-indigo-500 text-white"}`}>
+                {inboxUnread}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setTab("helpdesk")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+              tab === "helpdesk"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <LifeBuoy size={14}/>
+            Help Desk
+            {hdBadge > 0 && (
+              <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === "helpdesk" ? "bg-white/20 text-white" : "bg-red-500 text-white"}`}>
+                {hdBadge}
+              </span>
+            )}
+          </button>
+        </div>
+        <div className="text-xs text-slate-600 hidden sm:block">
+          {tab === "chat" ? "Messaging & group channels" : "Support tickets & requests"}
+        </div>
+      </div>
+
+      {/* ── Panel ── */}
+      <div className="flex-1 min-h-0">
+        {tab === "chat" && (
+          <InboxView
+            currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users}
+            messages={messages} onSend={onSend} onMarkRead={onMarkRead}
+          />
+        )}
+        {tab === "helpdesk" && (
+          isEmployee
+            ? <EmployeeHelpdeskView
+                brands={brands} tickets={tickets} currentUser={currentUser}
+                onAdd={onAddTicket} onUpdate={onUpdateTicket}
+              />
+            : <HelpdeskManagerView
+                brands={brands} tickets={tickets} opsTeam={opsTeam} users={users}
+                currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}
+              />
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 // ─── Main App (merged: live financial + new ops) ───────────────────────────────
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
@@ -4232,6 +4447,7 @@ export default function App() {
         onUpdateIssue={updateIssue}
         hdTickets={hdTickets}
         onAddHdTicket={addHdTicket}
+        onUpdateHdTicket={updateHdTicket}
         messages={messages}
         onSendMessage={sendMessage}
         onMarkRead={handleMarkRead}
@@ -4279,9 +4495,8 @@ export default function App() {
     {
       group: "Team",
       items: [
-        { key: "helpdesk", label: "Help Desk", icon: LifeBuoy, badge: hdOpenCount > 0 ? hdOpenCount.toString() : null },
-        { key: "inbox",    label: "Inbox",     icon: Inbox,    badge: inboxUnread > 0 ? inboxUnread.toString() : null },
-        { key: "issues",   label: "Issues",    icon: Wrench,   badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+        { key: "comms",  label: "Communication", icon: MessageSquare, badge: (() => { const total = (hdOpenCount > 0 ? hdOpenCount : 0) + (inboxUnread > 0 ? inboxUnread : 0); return total > 0 ? total.toString() : null; })() },
+        { key: "issues", label: "Issues",        icon: Wrench,        badge: openIssueCount > 0 ? openIssueCount.toString() : null },
       ],
     },
     {
@@ -4295,7 +4510,7 @@ export default function App() {
     },
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox" };
+  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication" };
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
@@ -4456,8 +4671,12 @@ export default function App() {
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {activeView === "ops-settings"    && <OpsSettingsView brands={brands} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist} onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit} onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask} onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}/>}
-            {activeView === "helpdesk"   && <HelpdeskManagerView brands={visibleBrands} tickets={hdTickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={updateHdTicket} onDelete={deleteHdTicket}/>}
-            {activeView === "inbox"      && <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}/>}
+            {activeView === "comms" && <CommunicationView
+              currentUser={currentUser} brands={visibleBrands} opsTeam={opsTeam} users={users}
+              messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
+              tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
+              isEmployee={false}
+            />}
             {activeView === "admin" && currentUser.role === "owner" && <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>}
           </div>
         </main>
