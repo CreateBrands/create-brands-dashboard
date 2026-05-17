@@ -319,8 +319,8 @@ function dbCleanTaskToApp(t) { return { id: t.id, name: t.name, area: t.area, fr
 function appAssignmentToDb(a) { return { id: a.id, brand_id: a.brandId, type: a.type, task_id: a.taskId, role: a.role || "", person_id: a.personId || "", freq: a.freq, weekday: a.weekday || null, once_date: a.date || null, custom_days: a.customDays || [], win_start: a.winStart, win_end: a.winEnd, priority: a.priority, notes: a.notes || "", updated_at: new Date().toISOString() }; }
 function dbAssignmentToApp(a) { return { id: a.id, brandId: a.brand_id, type: a.type, taskId: a.task_id, role: a.role, personId: a.person_id, freq: a.freq, weekday: a.weekday, date: a.once_date, customDays: a.custom_days || [], winStart: a.win_start, winEnd: a.win_end, priority: a.priority, notes: a.notes }; }
 
-function appOpsTeamToDb(m) { return { id: m.id, brand_id: m.brandId, first_name: m.firstName, last_name: m.lastName || "", role: m.role, pin: m.pin || "", color: m.color || "#6366f1", updated_at: new Date().toISOString() }; }
-function dbOpsTeamToApp(m) { return { id: m.id, brandId: m.brand_id, firstName: m.first_name, lastName: m.last_name, role: m.role, pin: m.pin, color: m.color }; }
+function appOpsTeamToDb(m) { return { id: m.id, brand_id: m.brandId, first_name: m.firstName, last_name: m.lastName || "", nickname: m.nickname || "", department: m.department || "", role: m.role, pin: m.pin || "", color: m.color || "#6366f1", updated_at: new Date().toISOString() }; }
+function dbOpsTeamToApp(m) { return { id: m.id, brandId: m.brand_id, firstName: m.first_name, lastName: m.last_name, nickname: m.nickname || "", department: m.department || "", role: m.role, pin: m.pin, color: m.color }; }
 
 function appTempLogToDb(l) { return { id: l.id, brand_id: l.brandId, unit_id: l.unitId, date: l.date, time: l.time, value: l.value, is_breach: l.isBreach || false, notes: l.notes || "", logged_by: l.loggedBy || "" }; }
 function dbTempLogToApp(l) { return { id: l.id, brandId: l.brand_id, unitId: l.unit_id, date: l.date, time: l.time, value: Number(l.value), isBreach: l.is_breach, notes: l.notes, loggedBy: l.logged_by }; }
@@ -510,5 +510,53 @@ function dbAvailToApp(a) {
     amendedDayOfWeek: a.amended_day_of_week || null,
     comments: a.comments || [],
     createdAt: a.created_at, updatedAt: a.updated_at,
+  };
+}
+
+// ── SCHEDULES ─────────────────────────────────────────────────────────────────
+
+export async function fetchSchedules() {
+  const { data, error } = await supabase
+    .from("schedules").select("*")
+    .order("date").order("start_time");
+  if (error) throw error;
+  return data.map(dbScheduleToApp);
+}
+
+export async function upsertSchedule(s) {
+  const { data, error } = await supabase
+    .from("schedules")
+    .upsert(appScheduleToDb(s), { onConflict: "id" })
+    .select().single();
+  if (error) throw error;
+  return dbScheduleToApp(data);
+}
+
+export async function removeSchedule(id) {
+  const { error } = await supabase.from("schedules").delete().eq("id", id);
+  if (error) throw error;
+}
+
+function appScheduleToDb(s) {
+  return {
+    id: s.id, brand_id: s.brandId,
+    employee_id: s.employeeId || "", employee_name: s.employeeName || "",
+    date: s.date, shift: s.shift || "Morning",
+    start_time: s.startTime || "08:00", end_time: s.endTime || "16:00",
+    role: s.role || "", department: s.department || "",
+    notes: s.notes || "", status: s.status || "scheduled",
+    created_by: s.createdBy || "", updated_at: new Date().toISOString(),
+  };
+}
+function dbScheduleToApp(s) {
+  return {
+    id: s.id, brandId: s.brand_id,
+    employeeId: s.employee_id, employeeName: s.employee_name,
+    date: s.date, shift: s.shift,
+    startTime: s.start_time?.slice(0,5) || "08:00",
+    endTime: s.end_time?.slice(0,5) || "16:00",
+    role: s.role, department: s.department,
+    notes: s.notes, status: s.status,
+    createdBy: s.created_by, createdAt: s.created_at, updatedAt: s.updated_at,
   };
 }

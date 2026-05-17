@@ -16,6 +16,7 @@ import {
   fetchChecklistStates, upsertChecklistState,
   fetchAuditTrail, insertAuditEntry, clearAuditTrail,
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
+  fetchSchedules, upsertSchedule, removeSchedule,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -31,7 +32,7 @@ import {
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
-  Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck,
+  Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign
 } from "lucide-react";
 
@@ -2808,9 +2809,13 @@ function CleaningTaskFormModal({ item, onSave, onClose }) {
 function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
   const [form, setFormState] = useState({
-    firstName: item?.firstName || "", lastName: item?.lastName || "",
-    role: item?.role || "", brandId: item?.brandId || brands[0]?.id || "",
-    pin: item?.pin || "",
+    firstName:  item?.firstName  || "",
+    lastName:   item?.lastName   || "",
+    nickname:   item?.nickname   || "",
+    role:       item?.role       || "",
+    department: item?.department || "",
+    brandId:    item?.brandId    || brands[0]?.id || "",
+    pin:        item?.pin        || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
   const handleSave = () => {
@@ -2826,10 +2831,14 @@ function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
           <div><label className={labelCls}>Last Name</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} className={inputCls}/></div>
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <div><label className={labelCls}>Role</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
+          <div><label className={labelCls}>Nickname / Preferred name</label><input value={form.nickname} onChange={e => set("nickname", e.target.value)} placeholder="e.g. Jimmy" className={inputCls}/></div>
+          <div><label className={labelCls}>Department</label><input value={form.department} onChange={e => set("department", e.target.value)} placeholder="e.g. Kitchen, Front of House" className={inputCls}/></div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Role / Job title</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
           <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
         </div>
-        <div><label className={labelCls}>PIN (optional)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="4–6 digits" className={inputCls}/></div>
+        <div><label className={labelCls}>PIN (4–6 digits, used for sign in)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="e.g. 1234" className={inputCls}/></div>
       </div>
     </Modal>
   );
@@ -2960,7 +2969,10 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
             return (
               <div key={m.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
-                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{m.firstName} {m.lastName}</div><div className="text-xs text-slate-400">{m.role} · {brand?.name || "—"}</div></div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-400 font-normal ml-1">({m.nickname})</span> : ""}</div>
+                  <div className="text-xs text-slate-400">{[m.role, m.department, brand?.name].filter(Boolean).join(" · ")}</div>
+                </div>
                 <div className="flex gap-1.5">
                   <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
                   <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
@@ -5189,6 +5201,476 @@ function CommunicationView({
 }
 
 
+// ─── SCHEDULING ───────────────────────────────────────────────────────────────
+
+const SHIFTS = [
+  { key: "Morning",   label: "Morning",   start: "07:00", end: "15:00", color: "#f59e0b" },
+  { key: "Afternoon", label: "Afternoon", start: "12:00", end: "20:00", color: "#6366f1" },
+  { key: "Evening",   label: "Evening",   start: "17:00", end: "23:00", color: "#10b981" },
+  { key: "Night",     label: "Night",     start: "22:00", end: "06:00", color: "#8b5cf6" },
+  { key: "Custom",    label: "Custom",    start: "09:00", end: "17:00", color: "#64748b" },
+];
+const SHIFT_COLOR = Object.fromEntries(SHIFTS.map(s => [s.key, s.color]));
+
+// ── Schedule Shift Modal ───────────────────────────────────────────────────────
+function ShiftFormModal({ date, slot, brands, opsTeam, availability, currentUser, onSave, onClose }) {
+  const isEdit = !!slot;
+  const vb = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
+
+  const [brandId,    setBrandId]    = useState(slot?.brandId    || vb[0]?.id || "");
+  const [employeeId, setEmployeeId] = useState(slot?.employeeId || "");
+  const [shift,      setShift]      = useState(slot?.shift      || "Morning");
+  const [startTime,  setStartTime]  = useState(slot?.startTime  || "08:00");
+  const [endTime,    setEndTime]    = useState(slot?.endTime    || "16:00");
+  const [role,       setRole]       = useState(slot?.role       || "");
+  const [dept,       setDept]       = useState(slot?.department || "");
+  const [notes,      setNotes]      = useState(slot?.notes      || "");
+  const [status,     setStatus]     = useState(slot?.status     || "scheduled");
+
+  // When shift preset changes, auto-fill start/end unless Custom
+  const handleShiftChange = (s) => {
+    setShift(s);
+    const preset = SHIFTS.find(x => x.key === s);
+    if (preset && s !== "Custom") { setStartTime(preset.start); setEndTime(preset.end); }
+  };
+
+  // Team members for selected brand
+  const brandMembers = opsTeam.filter(m => m.brandId === brandId);
+  const selectedMember = opsTeam.find(m => m.id === employeeId);
+
+  // Departments & roles for dropdowns
+  const allDepts = [...new Set(opsTeam.filter(m => m.brandId === brandId).map(m => m.department).filter(Boolean))];
+  const allRoles = [...new Set(opsTeam.filter(m => m.brandId === brandId).map(m => m.role).filter(Boolean))];
+
+  // Check if selected employee has submitted availability for this date
+  const memberAvail = availability.filter(a => {
+    if (a.employeeId !== employeeId) return false;
+    if (a.status === "rejected") return false;
+    const dateStr = date;
+    const dayName = DAYS_OF_WEEK[new Date(date + "T00:00:00").getDay() === 0 ? 6 : new Date(date + "T00:00:00").getDay() - 1];
+    if (a.type === "one_off") return a.date === dateStr;
+    if (a.type === "weekly") return (a.amendedDayOfWeek || a.dayOfWeek) === dayName;
+    if (a.type === "recurring") return a.startDate <= dateStr && a.endDate >= dateStr;
+    return false;
+  });
+  const isAvailable = memberAvail.some(a => a.available);
+  const isUnavailable = memberAvail.some(a => !a.available);
+  const availWindow = memberAvail.find(a => a.available);
+
+  const handleSave = () => {
+    if (!employeeId) return;
+    const member = opsTeam.find(m => m.id === employeeId);
+    onSave({
+      id: slot?.id || `sch-${Date.now()}`,
+      brandId, date,
+      employeeId,
+      employeeName: member ? `${member.firstName} ${member.lastName}`.trim() : "",
+      shift, startTime, endTime,
+      role: role || member?.role || "",
+      department: dept || member?.department || "",
+      notes, status,
+      createdBy: currentUser.name,
+    });
+  };
+
+  const dateDisplay = new Date(date + "T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long", year:"numeric" });
+
+  return (
+    <Modal title={isEdit ? "Edit Shift" : "Add Shift"} onClose={onClose} maxW="max-w-lg"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSave} disabled={!employeeId}
+          className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
+          {isEdit ? "Save" : "Add Shift"}
+        </button>
+      </>}>
+      <div className="space-y-4">
+        {/* Date display */}
+        <div className="bg-slate-800/60 rounded-xl px-4 py-2.5 flex items-center gap-2">
+          <Calendar size={14} className="text-slate-400"/>
+          <span className="text-sm font-semibold text-white">{dateDisplay}</span>
+        </div>
+
+        {/* Location */}
+        {vb.length > 1 && (
+          <div><label className={labelCls}>Location</label>
+            <LocationDropdown brands={vb} value={brandId} onChange={v => { setBrandId(v); setEmployeeId(""); }} className="w-full"/>
+          </div>
+        )}
+
+        {/* Employee */}
+        <div>
+          <label className={labelCls}>Employee *</label>
+          <SelectDropdown value={employeeId} onChange={setEmployeeId} className="w-full">
+            <option value="">— Select employee —</option>
+            {brandMembers.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.firstName} {m.lastName}{m.nickname ? ` (${m.nickname})` : ""} · {m.role}{m.department ? ` · ${m.department}` : ""}
+              </option>
+            ))}
+          </SelectDropdown>
+          {/* Availability indicator */}
+          {employeeId && (
+            <div className={`mt-2 rounded-xl px-3 py-2 text-xs font-semibold flex items-center gap-2 ${
+              isUnavailable ? "bg-red-950/30 border border-red-500/20 text-red-400" :
+              isAvailable   ? "bg-emerald-950/30 border border-emerald-500/20 text-emerald-400" :
+              "bg-slate-800/40 border border-slate-700/40 text-slate-500"
+            }`}>
+              {isUnavailable ? "⚠ Employee marked as unavailable this day" :
+               isAvailable   ? `✓ Available${availWindow ? ` · ${availWindow.startTime}–${availWindow.endTime}` : ""}` :
+               "ℹ No availability submitted for this day"}
+            </div>
+          )}
+        </div>
+
+        {/* Filter by dept/role (optional) */}
+        {(allDepts.length > 0 || allRoles.length > 0) && (
+          <div className="grid grid-cols-2 gap-3">
+            {allDepts.length > 0 && (
+              <div><label className={labelCls}>Department</label>
+                <SelectDropdown value={dept} onChange={setDept} className="w-full">
+                  <option value="">Any</option>
+                  {allDepts.map(d => <option key={d}>{d}</option>)}
+                </SelectDropdown>
+              </div>
+            )}
+            {allRoles.length > 0 && (
+              <div><label className={labelCls}>Role</label>
+                <SelectDropdown value={role} onChange={setRole} className="w-full">
+                  <option value="">Any</option>
+                  {allRoles.map(r => <option key={r}>{r}</option>)}
+                </SelectDropdown>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Shift preset */}
+        <div>
+          <label className={labelCls}>Shift</label>
+          <div className="flex flex-wrap gap-2">
+            {SHIFTS.map(s => (
+              <button key={s.key} onClick={() => handleShiftChange(s.key)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${shift === s.key ? "text-white border-transparent" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
+                style={shift === s.key ? { background: s.color } : {}}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Times */}
+        <div className="grid grid-cols-2 gap-3">
+          <AvailTimeField label="Start time" value={startTime} onChange={setStartTime}/>
+          <AvailTimeField label="End time"   value={endTime}   onChange={setEndTime}/>
+        </div>
+
+        {/* Status */}
+        <div>
+          <label className={labelCls}>Status</label>
+          <div className="flex gap-2">
+            {["scheduled","confirmed","cancelled"].map(s => (
+              <button key={s} onClick={() => setStatus(s)}
+                className={`flex-1 py-2 rounded-xl text-xs font-semibold border capitalize transition-all ${status === s ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div><label className={labelCls}>Notes</label>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+            placeholder="Any shift notes…" className={`${inputCls} resize-none`}/>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Schedule View ─────────────────────────────────────────────────────────────
+function ScheduleView({ brands, opsTeam, schedules, availability, currentUser, onAdd, onUpdate, onDelete }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+
+  const [brandId,    setBrandId]    = useState(vb[0]?.id || "");
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [filterDept, setFilterDept] = useState("all");
+  const [filterRole, setFilterRole] = useState("all");
+  const [filterShift,setFilterShift]= useState("all");
+  const [shiftModal, setShiftModal] = useState(null); // { date } | { date, slot }
+  const [deleteId,   setDeleteId]   = useState(null);
+  const [viewMode,   setViewMode]   = useState("week"); // week | list
+
+  // Week days
+  const today = new Date(); today.setHours(0,0,0,0);
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - today.getDay() + 1 + weekOffset * 7);
+  const weekDays = Array.from({length:7}, (_, i) => {
+    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d;
+  });
+
+  // Team members for selected brand, filtered
+  const brandMembers = opsTeam.filter(m => m.brandId === brandId);
+  const allDepts = [...new Set(brandMembers.map(m => m.department).filter(Boolean))];
+  const allRoles = [...new Set(brandMembers.map(m => m.role).filter(Boolean))];
+  const filteredMembers = brandMembers.filter(m => {
+    if (filterDept !== "all" && m.department !== filterDept) return false;
+    if (filterRole !== "all" && m.role !== filterRole) return false;
+    return true;
+  });
+
+  // Schedules for this brand + week
+  const weekDayStrs = weekDays.map(d => d.toISOString().split("T")[0]);
+  const weekSchedules = schedules.filter(s =>
+    s.brandId === brandId &&
+    weekDayStrs.includes(s.date) &&
+    (filterShift === "all" || s.shift === filterShift) &&
+    (filterDept === "all" || s.department === filterDept) &&
+    (filterRole === "all" || s.role === filterRole)
+  );
+
+  // Get schedules for a specific member + date
+  const getSlotsFor = (memberId, dateStr) =>
+    weekSchedules.filter(s => s.employeeId === memberId && s.date === dateStr);
+
+  // Get availability for a member on a date
+  const getAvailFor = (memberId, dateStr) => {
+    const dayName = DAYS_OF_WEEK[new Date(dateStr + "T00:00:00").getDay() === 0 ? 6 : new Date(dateStr + "T00:00:00").getDay() - 1];
+    return availability.filter(a => {
+      if (a.employeeId !== memberId || a.status === "rejected") return false;
+      if (a.type === "one_off") return a.date === dateStr;
+      if (a.type === "weekly") return (a.amendedDayOfWeek || a.dayOfWeek) === dayName;
+      if (a.type === "recurring") return a.startDate <= dateStr && a.endDate >= dateStr;
+      return false;
+    });
+  };
+
+  const totalScheduled = weekSchedules.filter(s => s.status !== "cancelled").length;
+  const pendingAvail   = availability.filter(a => vb.some(b => b.id === a.brandId) && a.status === "pending").length;
+
+  const brand = vb.find(b => b.id === brandId);
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white">Schedule</h2>
+          <div className="text-xs text-slate-400 mt-0.5">
+            {totalScheduled} shift{totalScheduled !== 1 ? "s" : ""} this week
+            {pendingAvail > 0 && <span className="text-amber-400 ml-2">· {pendingAvail} availability pending</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
+            <button onClick={() => setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
+            <button onClick={() => setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        {vb.length > 1 && (
+          <LocationDropdown brands={vb} value={brandId} onChange={setBrandId} className="w-44"/>
+        )}
+        {allDepts.length > 0 && (
+          <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-36">
+            <option value="all">All Depts</option>
+            {allDepts.map(d => <option key={d}>{d}</option>)}
+          </SelectDropdown>
+        )}
+        {allRoles.length > 0 && (
+          <SelectDropdown value={filterRole} onChange={setFilterRole} className="w-36">
+            <option value="all">All Roles</option>
+            {allRoles.map(r => <option key={r}>{r}</option>)}
+          </SelectDropdown>
+        )}
+        <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-36">
+          <option value="all">All Shifts</option>
+          {SHIFTS.map(s => <option key={s.key}>{s.key}</option>)}
+        </SelectDropdown>
+      </div>
+
+      {/* Week nav */}
+      <div className="flex items-center justify-between">
+        <button onClick={() => setWeekOffset(w => w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+        <div className="text-sm font-semibold text-white">
+          {weekDays[0].toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {weekDays[6].toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+        </div>
+        <button onClick={() => setWeekOffset(w => w+1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronRight size={16}/></button>
+      </div>
+
+      {/* ── Week grid view ── */}
+      {viewMode === "week" && (
+        <div className="overflow-x-auto">
+          <div className="min-w-[700px]">
+            {/* Day headers */}
+            <div className="grid gap-1 mb-2" style={{gridTemplateColumns: "160px repeat(7, 1fr)"}}>
+              <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
+              {weekDays.map((day, idx) => {
+                const isToday = day.toDateString() === today.toDateString();
+                const dateStr = day.toISOString().split("T")[0];
+                return (
+                  <div key={idx} className={`text-center rounded-xl py-2 px-1 ${isToday ? "bg-indigo-600/20 border border-indigo-500/30" : "bg-slate-900/40"}`}>
+                    <div className={`text-xs font-semibold ${isToday ? "text-indigo-300" : "text-slate-400"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
+                    <div className={`text-sm font-bold ${isToday ? "text-indigo-200" : "text-slate-300"}`}>{day.getDate()}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Member rows */}
+            {filteredMembers.length === 0 && (
+              <div className="text-center py-12 text-slate-500 text-sm">No team members match your filters</div>
+            )}
+            {filteredMembers.map(member => (
+              <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns: "160px repeat(7, 1fr)"}}>
+                {/* Member name col */}
+                <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900/60 rounded-xl">
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{ background: (member.color || "#6366f1") + "30", color: member.color || "#6366f1" }}>
+                    {member.firstName[0]}{member.lastName?.[0] || ""}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-white truncate">
+                      {member.nickname || member.firstName} {!member.nickname && member.lastName}
+                    </div>
+                    <div className="text-xs text-slate-500 truncate">{member.department || member.role}</div>
+                  </div>
+                </div>
+
+                {/* Day cells */}
+                {weekDays.map((day, dIdx) => {
+                  const dateStr = day.toISOString().split("T")[0];
+                  const slots   = getSlotsFor(member.id, dateStr);
+                  const avails  = getAvailFor(member.id, dateStr);
+                  const isAvail = avails.some(a => a.available);
+                  const isUnavail = avails.some(a => !a.available);
+                  const isToday = day.toDateString() === today.toDateString();
+
+                  return (
+                    <div key={dIdx}
+                      className={`relative rounded-xl min-h-14 p-1 border transition-all cursor-pointer group ${
+                        isToday ? "border-indigo-500/20" : "border-transparent"
+                      } ${isUnavail ? "bg-red-950/20" : isAvail ? "bg-emerald-950/10" : "bg-slate-900/30 hover:bg-slate-800/40"}`}
+                      onClick={() => setShiftModal({ date: dateStr })}>
+                      {/* Availability dot */}
+                      {avails.length > 0 && (
+                        <div className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${isAvail ? "bg-emerald-400" : "bg-red-400"}`}
+                          title={isAvail ? "Available" : "Unavailable"}/>
+                      )}
+                      {/* Shift chips */}
+                      <div className="space-y-0.5">
+                        {slots.map(s => (
+                          <div key={s.id}
+                            onClick={e => { e.stopPropagation(); setShiftModal({ date: dateStr, slot: s }); }}
+                            className={`text-xs rounded-lg px-1.5 py-1 font-semibold truncate cursor-pointer transition-all hover:opacity-80 ${s.status === "cancelled" ? "opacity-40 line-through" : ""}`}
+                            style={{ background: (SHIFT_COLOR[s.shift] || "#6366f1") + "30", color: SHIFT_COLOR[s.shift] || "#6366f1" }}
+                            title={`${s.shift}: ${s.startTime}–${s.endTime}`}>
+                            {s.shift.slice(0,3)} {s.startTime}
+                          </div>
+                        ))}
+                        {slots.length === 0 && (
+                          <div className="hidden group-hover:flex items-center justify-center h-8 text-slate-600 hover:text-slate-400">
+                            <Plus size={14}/>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+
+            {/* Legend */}
+            <div className="flex items-center gap-4 mt-4 text-xs text-slate-500 flex-wrap">
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400"/> Available</div>
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400"/> Unavailable</div>
+              {SHIFTS.filter(s => s.key !== "Custom").map(s => (
+                <div key={s.key} className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full" style={{background:s.color}}/>
+                  {s.label}
+                </div>
+              ))}
+              <span className="text-slate-600">· Click any cell to add a shift</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── List view ── */}
+      {viewMode === "list" && (
+        <div className="space-y-3">
+          {weekDays.map(day => {
+            const dateStr = day.toISOString().split("T")[0];
+            const daySlots = weekSchedules.filter(s => s.date === dateStr).sort((a,b) => a.startTime.localeCompare(b.startTime));
+            const isToday = day.toDateString() === today.toDateString();
+            return (
+              <div key={dateStr} className={`rounded-2xl border overflow-hidden ${isToday ? "border-indigo-500/30" : "border-slate-800/60"}`}>
+                <div className={`flex items-center justify-between px-4 py-2.5 ${isToday ? "bg-indigo-950/30" : "bg-slate-900/60"}`}>
+                  <div className={`text-sm font-bold ${isToday ? "text-indigo-300" : "text-slate-300"}`}>
+                    {day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
+                  </div>
+                  <button onClick={() => setShiftModal({ date: dateStr })}
+                    className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
+                    <Plus size={12}/> Add shift
+                  </button>
+                </div>
+                {daySlots.length === 0 ? (
+                  <div className="px-4 py-3 text-xs text-slate-600 italic">No shifts scheduled</div>
+                ) : (
+                  <div className="divide-y divide-slate-800/40">
+                    {daySlots.map(s => (
+                      <div key={s.id} className={`flex items-center gap-3 px-4 py-3 ${s.status === "cancelled" ? "opacity-50" : ""}`}>
+                        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background: SHIFT_COLOR[s.shift] || "#6366f1"}}/>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-white">{s.employeeName}</div>
+                          <div className="text-xs text-slate-400">
+                            {s.shift} · {s.startTime}–{s.endTime}
+                            {s.role && ` · ${s.role}`}
+                            {s.department && ` · ${s.department}`}
+                          </div>
+                          {s.notes && <div className="text-xs text-slate-500 italic mt-0.5">{s.notes}</div>}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <Badge label={s.status} color={s.status === "confirmed" ? "emerald" : s.status === "cancelled" ? "red" : "slate"}/>
+                          <button onClick={() => setShiftModal({ date: dateStr, slot: s })} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
+                          <button onClick={() => setDeleteId(s.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={13}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Shift add/edit modal */}
+      {shiftModal && (
+        <ShiftFormModal
+          date={shiftModal.date}
+          slot={shiftModal.slot || null}
+          brands={vb} opsTeam={opsTeam}
+          availability={availability}
+          currentUser={currentUser}
+          onSave={s => {
+            onAdd(s); // upsert handles both add + edit
+            setShiftModal(null);
+          }}
+          onClose={() => setShiftModal(null)}
+        />
+      )}
+      {deleteId && (
+        <OpsConfirmModal message="Delete this shift?" onConfirm={() => { onDelete(deleteId); setDeleteId(null); }} onClose={() => setDeleteId(null)}/>
+      )}
+    </div>
+  );
+}
+
 // ─── Main App (merged: live financial + new ops) ───────────────────────────────
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
@@ -5214,6 +5696,7 @@ export default function App() {
   const [hdTickets,       setHdTickets]       = useState([]);
   const [messages,        setMessages]        = useState([]);
   const [availability,    setAvailability]    = useState([]);
+  const [schedules,       setSchedules]       = useState([]);
 
   const [activeView, setActiveView] = useState("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -5225,16 +5708,16 @@ export default function App() {
   useEffect(() => {
     async function loadAll() {
       try {
-        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs, avail] = await Promise.all([
+        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs, avail, scheds] = await Promise.all([
           fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
           fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
           fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail(),
-          fetchHelpdeskTickets(), fetchInboxMessages(), fetchAvailability(),
+          fetchHelpdeskTickets(), fetchInboxMessages(), fetchAvailability(), fetchSchedules(),
         ]);
         setBrands(b); setUsers(u); setEntries(e); setIssues(i);
         setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
         setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl); setChecklistStates(cs); setAuditTrail(at);
-        setHdTickets(hd); setMessages(msgs); setAvailability(avail);
+        setHdTickets(hd); setMessages(msgs); setAvailability(avail); setSchedules(scheds);
         setDbReady(true);
       } catch (err) {
         console.error("Supabase load error:", err);
@@ -5354,11 +5837,29 @@ export default function App() {
       })
       .subscribe();
 
+    const schedChannel = supabase
+      .channel("realtime:schedules")
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setSchedules(ss => ss.filter(s => s.id !== oldRow.id)); return; }
+        const s = {
+          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          date: r.date, shift: r.shift, startTime: r.start_time?.slice(0,5)||"08:00",
+          endTime: r.end_time?.slice(0,5)||"16:00", role: r.role, department: r.department,
+          notes: r.notes, status: r.status, createdBy: r.created_by,
+          createdAt: r.created_at, updatedAt: r.updated_at,
+        };
+        if (eventType === "INSERT") setSchedules(ss => ss.some(x => x.id === s.id) ? ss : [s, ...ss]);
+        if (eventType === "UPDATE") setSchedules(ss => ss.map(x => x.id === s.id ? s : x));
+      })
+      .subscribe();
+
     return () => {
       clearInterval(interval);
       supabase.removeChannel(ticketChannel);
       supabase.removeChannel(msgChannel);
       supabase.removeChannel(availChannel);
+      supabase.removeChannel(schedChannel);
     };
   }, [dbReady]);
 
@@ -5515,6 +6016,17 @@ export default function App() {
       setAuditTrail([]);
       showToast("Audit trail cleared");
     } catch (err) { showToast("Failed to clear audit trail: " + err.message, "error"); }
+  }, [showToast]);
+
+  // ── Schedules ────────────────────────────────────────────────────────────────
+  const addSchedule = useCallback(async s => {
+    try { const saved = await upsertSchedule(s); setSchedules(ss => { const f = ss.filter(x => x.id !== saved.id); return [...f, saved]; }); showToast("Shift saved"); }
+    catch (err) { showToast("Failed to save shift: " + err.message, "error"); }
+  }, [showToast]);
+
+  const deleteSchedule = useCallback(async id => {
+    try { await removeSchedule(id); setSchedules(ss => ss.filter(s => s.id !== id)); showToast("Shift deleted"); }
+    catch (err) { showToast("Failed to delete shift: " + err.message, "error"); }
   }, [showToast]);
 
   // ── Availability ─────────────────────────────────────────────────────────────
@@ -5703,6 +6215,7 @@ export default function App() {
     {
       group: "Settings",
       items: [
+        { key: "schedule",     label: "Schedule",      icon: CalendarDays },
         { key: "ops-assigns",  label: "Assignments",   icon: Clipboard },
         { key: "ops-settings", label: "Ops Setup",     icon: Settings },
         { key: "ops-audit",    label: "Audit Trail",   icon: ScrollText },
@@ -5711,7 +6224,7 @@ export default function App() {
     },
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication", availability: "Availability" };
+  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication", availability: "Availability", schedule: "Schedule" };
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
@@ -5873,6 +6386,11 @@ export default function App() {
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {activeView === "ops-settings"    && <OpsSettingsView brands={brands} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist} onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit} onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask} onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}/>}
+            {activeView === "schedule" && <ScheduleView
+              brands={visibleBrands} opsTeam={opsTeam} schedules={schedules}
+              availability={availability} currentUser={currentUser}
+              onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule}
+            />}
             {activeView === "availability" && <ManagerAvailabilityView
               brands={visibleBrands} opsTeam={opsTeam} availability={availability}
               currentUser={currentUser}
