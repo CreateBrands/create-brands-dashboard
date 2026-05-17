@@ -1212,8 +1212,6 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
     { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
     { key: "ops-network",    label: "Ops Status",       icon: ShieldCheck },
     { key: "issues",         label: "Report Issue",     icon: Wrench },
-    { key: "availability", label: "Availability", icon: Calendar },
-    { key: "emp-schedule",  label: "My Schedule",  icon: CalendarDays },
     { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => {
         const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
         const unread = (messages || []).filter(m => {
@@ -1313,23 +1311,14 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
             />
           )}
-          {activeView === "emp-schedule" && (
-            <EmployeeScheduleView
-              currentUser={currentUser} brands={brands} opsTeam={opsTeam}
-              schedules={schedules || []}
-            />
-          )}
-          {activeView === "availability" && (
-            <EmployeeAvailabilityView
-              brands={myBrands} currentUser={currentUser}
-              availability={availability || []} onAdd={onAddAvailability} onUpdate={onUpdateAvailability}
-            />
-          )}
+
           {activeView === "comms" && (
             <CommunicationView
               currentUser={currentUser} brands={myBrands} opsTeam={opsTeam} users={[]}
               messages={messages || []} onSend={onSendMessage} onMarkRead={onMarkRead}
               tickets={hdTickets || []} onAddTicket={onAddHdTicket} onUpdateTicket={onUpdateHdTicket} onDeleteTicket={() => {}}
+              availability={availability || []} onAddAvailability={onAddAvailability} onUpdateAvailability={onUpdateAvailability}
+              schedules={schedules || []} shiftPresets={[]} onAddSchedule={() => {}} onDeleteSchedule={() => {}} onPublishWeek={() => {}}
               isEmployee={true}
             />
           )}
@@ -5127,11 +5116,12 @@ function CommunicationView({
   currentUser, brands, opsTeam, users,
   messages, onSend, onMarkRead,
   tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
+  availability, onAddAvailability, onUpdateAvailability,
+  schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
   isEmployee,
 }) {
-  const [tab, setTab] = useState("helpdesk"); // Help Desk opens first
+  const [tab, setTab] = useState("helpdesk");
 
-  // Badge counts
   const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
   const myBrandIds = currentUser.brandIds || [];
@@ -5144,73 +5134,66 @@ function CommunicationView({
     return false;
   }).filter(m => !m.readBy?.includes(myId)).length;
 
-  // Badge on Help Desk tab = pending tickets needing action
   const hdBadge = isEmployee
     ? tickets.filter(t => t.createdById === myOpsId && ["Open","In Progress","Pending"].includes(t.status)).length
     : tickets.filter(t => brands.some(b => b.id === t.brandId) && t.status === "Open").length;
 
+  const pendingAvail = isEmployee
+    ? (availability||[]).filter(a => a.employeeId === myOpsId && a.status === "pending").length
+    : (availability||[]).filter(a => brands.some(b => b.id === a.brandId) && a.status === "pending").length;
+
+  const TABS = [
+    { key: "helpdesk",     label: "Help Desk",    icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
+    { key: "chat",         label: "Chat",          icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
+    { key: "availability", label: "Availability",  icon: Calendar,      badge: pendingAvail > 0 ? pendingAvail : null },
+    ...(!isEmployee ? [{ key: "schedule", label: "Schedule", icon: CalendarDays, badge: null }] : [
+      { key: "emp-schedule", label: "My Schedule", icon: CalendarDays, badge: null }
+    ]),
+  ];
+
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
-      {/* ── Toggle bar ── */}
-      <div className="flex items-center gap-2 mb-4">
-        {/* Radio-style pill toggle */}
-        <div className="flex items-center bg-slate-900/80 border border-slate-700/60 rounded-2xl p-1 gap-1">
-          <button
-            onClick={() => setTab("chat")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              tab === "chat"
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            <MessageSquare size={14}/>
-            Chat
-            {inboxUnread > 0 && (
-              <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === "chat" ? "bg-white/20 text-white" : "bg-indigo-500 text-white"}`}>
-                {inboxUnread}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setTab("helpdesk")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              tab === "helpdesk"
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            <LifeBuoy size={14}/>
-            Help Desk
-            {hdBadge > 0 && (
-              <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === "helpdesk" ? "bg-white/20 text-white" : "bg-red-500 text-white"}`}>
-                {hdBadge}
-              </span>
-            )}
-          </button>
-        </div>
-        <div className="text-xs text-slate-600 hidden sm:block">
-          {tab === "chat" ? "Messaging & group channels" : "Support tickets & requests"}
-        </div>
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 bg-slate-900/80 border border-slate-700/60 rounded-2xl p-1 mb-4 flex-wrap">
+        {TABS.map(t => {
+          const TIcon = t.icon;
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
+                tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-slate-200"
+              }`}>
+              <TIcon size={13}/>
+              {t.label}
+              {t.badge && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === t.key ? "bg-white/20 text-white" : "bg-red-500 text-white"}`}>
+                  {t.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {/* ── Panel ── */}
-      <div className="flex-1 min-h-0">
-        {tab === "chat" && (
-          <InboxView
-            currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users}
-            messages={messages} onSend={onSend} onMarkRead={onMarkRead}
-          />
-        )}
+      {/* Panels */}
+      <div className="flex-1 min-h-0 overflow-auto">
         {tab === "helpdesk" && (
           isEmployee
-            ? <EmployeeHelpdeskView
-                brands={brands} tickets={tickets} currentUser={currentUser}
-                onAdd={onAddTicket} onUpdate={onUpdateTicket}
-              />
-            : <HelpdeskManagerView
-                brands={brands} tickets={tickets} opsTeam={opsTeam} users={users}
-                currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}
-              />
+            ? <EmployeeHelpdeskView brands={brands} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
+            : <HelpdeskManagerView  brands={brands} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
+        )}
+        {tab === "chat" && (
+          <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead}/>
+        )}
+        {tab === "availability" && (
+          isEmployee
+            ? <EmployeeAvailabilityView brands={brands} currentUser={currentUser} availability={availability||[]} onAdd={onAddAvailability} onUpdate={onUpdateAvailability}/>
+            : <ManagerAvailabilityView  brands={brands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={onUpdateAvailability} onAdd={onAddAvailability} onDelete={id => onUpdateAvailability({id, status:"rejected"})}/>
+        )}
+        {tab === "schedule" && !isEmployee && (
+          <ScheduleView brands={brands} opsTeam={opsTeam} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} currentUser={currentUser} onAdd={onAddSchedule} onUpdate={onAddSchedule} onDelete={onDeleteSchedule} onPublish={onPublishWeek}/>
+        )}
+        {tab === "emp-schedule" && isEmployee && (
+          <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]}/>
         )}
       </div>
     </div>
@@ -6033,8 +6016,9 @@ export default function App() {
           id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
           date: r.date, shift: r.shift, startTime: r.start_time?.slice(0,5)||"08:00",
           endTime: r.end_time?.slice(0,5)||"16:00", role: r.role, department: r.department,
-          notes: r.notes, status: r.status, createdBy: r.created_by,
-          createdAt: r.created_at, updatedAt: r.updated_at,
+          notes: r.notes, status: r.status,
+          published: r.published ?? false, weekStart: r.week_start || null,
+          createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
         };
         if (eventType === "INSERT") setSchedules(ss => ss.some(x => x.id === s.id) ? ss : [s, ...ss]);
         if (eventType === "UPDATE") setSchedules(ss => ss.map(x => x.id === s.id ? s : x));
@@ -6421,15 +6405,13 @@ export default function App() {
     {
       group: "Team",
       items: [
-        { key: "comms",        label: "Communication", icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread.toString() : null },
-        { key: "availability", label: "Availability",  icon: Calendar,      badge: (() => { const pending = availability.filter(a => visibleBrands.some(b => b.id === a.brandId) && a.status === "pending").length; return pending > 0 ? pending.toString() : null; })() },
+        { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => { const pendAvail = availability.filter(a => visibleBrands.some(b => b.id === a.brandId) && a.status === "pending").length; const total = inboxUnread + (pendAvail > 0 ? pendAvail : 0); return total > 0 ? total.toString() : null; })() },
         { key: "issues",       label: "Issues",        icon: Wrench,        badge: openIssueCount > 0 ? openIssueCount.toString() : null },
       ],
     },
     {
       group: "Settings",
       items: [
-        { key: "schedule",     label: "Schedule",      icon: CalendarDays },
         { key: "ops-assigns",  label: "Assignments",   icon: Clipboard },
         { key: "ops-settings", label: "Ops Setup",     icon: Settings },
         { key: "ops-audit",    label: "Audit Trail",   icon: ScrollText },
@@ -6438,7 +6420,7 @@ export default function App() {
     },
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication", availability: "Availability", schedule: "Schedule" };
+  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication" };
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
@@ -6599,23 +6581,24 @@ export default function App() {
             {activeView === "ops-assigns"     && <AssignmentsView brands={brands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {activeView === "ops-settings"    && <OpsSettingsView brands={brands} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist} onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit} onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask} onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}/>}
-            {activeView === "schedule" && <ScheduleView
-              brands={visibleBrands} opsTeam={opsTeam} schedules={schedules}
-              availability={availability} shiftPresets={shiftPresets}
+            {activeView === "ops-settings" && <OpsSettingsView
+              brands={visibleBrands} checklists={checklists} tempUnits={tempUnits}
+              cleaningTasks={cleaningTasks} opsTeam={opsTeam} shiftPresets={shiftPresets}
+              onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist}
+              onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit}
+              onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask}
+              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+              onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
               currentUser={currentUser}
-              onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule}
-              onPublish={handlePublishWeek}
             />}
-            {activeView === "availability" && <ManagerAvailabilityView
-              brands={visibleBrands} opsTeam={opsTeam} availability={availability}
-              currentUser={currentUser}
-              onUpdate={updateAvailability} onAdd={addAvailability} onDelete={deleteAvailability}
-            />}
+
+
             {activeView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
+              availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
+              schedules={schedules} shiftPresets={shiftPresets} onAddSchedule={addSchedule} onDeleteSchedule={deleteSchedule} onPublishWeek={handlePublishWeek}
               isEmployee={false}
             />}
             {activeView === "admin" && currentUser.role === "owner" && <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>}
