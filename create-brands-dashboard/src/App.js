@@ -5945,7 +5945,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 // KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
+function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, onPunchOut }) {
   const [pin,         setPin]       = useState("");
   const [matched,     setMatched]   = useState(null); // ops_team member
   const [error,       setError]     = useState("");
@@ -6077,10 +6077,26 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
       const punchInTime = new Date(openRecord.punchIn);
       const hoursWorked = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
       const grossPay    = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
-      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs: 0, isUnscheduled: false });
+      // Compute overtime & unscheduled flag for the success screen
+      const scheduledStart = openRecord.scheduledStart;
+      const scheduledEnd   = openRecord.scheduledEnd;
+      let overtimeHrs = 0;
+      const isUnscheduled = !scheduledStart || !scheduledEnd;
+      if (scheduledStart && scheduledEnd) {
+        const ss = new Date(openRecord.date+"T"+scheduledStart+":00");
+        const se = new Date(openRecord.date+"T"+scheduledEnd  +":00");
+        const schedHours = se <= ss ? (se-ss+86400000)/3600000 : (se-ss)/3600000;
+        overtimeHrs = Math.max(0, Math.round((hoursWorked - schedHours)*100)/100);
+      }
+      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs, isUnscheduled });
       onPunchOut(openRecord.id, now, hoursWorked, grossPay)
         .catch(err => console.error("PunchOut failed:", err));
     } else {
+      // Look up the employee's published schedule for today
+      const todaysSched = schedules.find(s =>
+        s.brandId === matched.brandId && s.employeeId === matched.id &&
+        s.date === todayStr && s.published
+      );
       setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
       onPunchIn({
         id: recordId,
@@ -6091,6 +6107,9 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
         punchIn: now, punchOut: null, hoursWorked: null,
         hourlyRate: matched.hourlyRate || 0, grossPay: null,
         notes: "", status: "open", amendedBy: "",
+        // Stamp the schedule on the record so it's locked in at clock-in time
+        scheduledStart: todaysSched?.startTime || null,
+        scheduledEnd:   todaysSched?.endTime   || null,
       }).catch(err => console.error("PunchIn failed:", err));
     }
 
@@ -7146,12 +7165,15 @@ function KioskShell() {
   const [opsTeam,      setOpsTeam]      = useState([]);
   const [brands,       setBrands]       = useState([]);
   const [punchRecords, setPunchRecords] = useState([]);
+  const [schedules,    setSchedules]    = useState([]);
   const [ready,        setReady]        = useState(false);
   const inFlightRef = useRef(new Set()); // employees currently being punched in
 
   useEffect(() => {
-    Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords()])
-      .then(([team, br, punches]) => { setOpsTeam(team); setBrands(br); setPunchRecords(punches); setReady(true); })
+    Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords(), fetchSchedules()])
+      .then(([team, br, punches, scheds]) => {
+        setOpsTeam(team); setBrands(br); setPunchRecords(punches); setSchedules(scheds || []); setReady(true);
+      })
       .catch(() => setReady(true));
   }, []);
 
@@ -7165,6 +7187,8 @@ function KioskShell() {
           hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
           hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
           notes: r.notes, status: r.status, approved: r.approved,
+          scheduledStart: r.scheduled_start?.slice(0,5) || null,
+          scheduledEnd: r.scheduled_end?.slice(0,5) || null,
           createdAt: r.created_at, updatedAt: r.updated_at };
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
@@ -7198,7 +7222,7 @@ function KioskShell() {
       <span style={{fontSize:15}}>Loading kiosk…</span>
     </div>
   );
-  return <KioskApp opsTeam={opsTeam} brands={brands} punchRecords={punchRecords} onPunchIn={handlePunchIn} onPunchOut={handlePunchOut}/>;
+  return <KioskApp opsTeam={opsTeam} brands={brands} punchRecords={punchRecords} schedules={schedules} onPunchIn={handlePunchIn} onPunchOut={handlePunchOut}/>;
 }
 
 const IS_KIOSK = window.location.pathname === "/kiosk" ||
