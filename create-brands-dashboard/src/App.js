@@ -1193,7 +1193,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
-  availability, onAddAvailability,
+  availability, onAddAvailability, onUpdateAvailability,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -1212,7 +1212,6 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
     { key: "availability", label: "Availability", icon: Calendar },
     { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => {
         const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
-        const hdOpen = (hdTickets || []).filter(t => t.createdById === myOpsId && t.status !== "Closed").length;
         const unread = (messages || []).filter(m => {
           if (m.fromId === myId || m.fromId === myOpsId) return false;
           if (m.toScope === "all_locations") return true;
@@ -1220,7 +1219,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
           if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
           return false;
         }).filter(m => !m.readBy?.includes(myId)).length;
-        const total = hdOpen + unread; return total > 0 ? total.toString() : null;
+        return unread > 0 ? unread.toString() : null;
       })() },
   ];
 
@@ -1312,7 +1311,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
           {activeView === "availability" && (
             <EmployeeAvailabilityView
               brands={myBrands} currentUser={currentUser}
-              availability={availability || []} onAdd={onAddAvailability}
+              availability={availability || []} onAdd={onAddAvailability} onUpdate={onUpdateAvailability}
             />
           )}
           {activeView === "comms" && (
@@ -3122,12 +3121,17 @@ function AvailDateField({ label, value, onChange, minDate, placeholder }) {
     : placeholder || "Select date";
   return (
     <div className="relative">
-      {label && <label className={labelCls}>{label}</label>}
+      {/* Entire block is clickable — label + input row */}
       <button
         onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
-        className={`${inputCls} text-left flex items-center justify-between w-full ${!value ? "text-slate-500" : "text-white"}`}>
-        <span className="truncate">{display}</span>
-        <Calendar size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
+        className="w-full text-left group">
+        {label && (
+          <div className={`${labelCls} group-hover:text-slate-300 transition-colors`}>{label}</div>
+        )}
+        <div className={`${inputCls} flex items-center justify-between w-full ${!value ? "text-slate-500" : "text-white"}`}>
+          <span className="truncate">{display}</span>
+          <Calendar size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
+        </div>
       </button>
       {open && (
         <AvailCalendarPicker
@@ -3160,12 +3164,16 @@ function AvailTimeField({ label, value, onChange }) {
 
   return (
     <div className="relative">
-      {label && <label className={labelCls}>{label}</label>}
       <button
         onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
-        className={`${inputCls} text-left flex items-center justify-between w-full`}>
-        <span className="text-white font-mono">{value || "09:00"}</span>
-        <Clock size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
+        className="w-full text-left group">
+        {label && (
+          <div className={`${labelCls} group-hover:text-slate-300 transition-colors`}>{label}</div>
+        )}
+        <div className={`${inputCls} flex items-center justify-between w-full`}>
+          <span className="text-white font-mono">{value || "09:00"}</span>
+          <Clock size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
+        </div>
       </button>
       {open && (
         <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 w-52"
@@ -3348,26 +3356,228 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
 }
 
 // ── Employee: My Availability List ────────────────────────────────────────────
-function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd }) {
+// ── Shared: Availability Detail Modal (comments + re-submit for rejected) ────
+function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
+  const [comment, setComment]     = useState("");
+  const [localItem, setLocalItem] = useState(item);
+  const [showResubmit, setShowResubmit] = useState(false);
+  const isManager = currentUser.role === "manager" || currentUser.role === "owner";
+  const isRejected = localItem.status === "rejected";
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [localItem.comments?.length]);
+
+  const handleAddComment = () => {
+    const text = comment.trim();
+    if (!text) return;
+    const newComment = {
+      id: `ac-${Date.now()}`,
+      author: currentUser.name,
+      authorRole: currentUser.role,
+      text,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = {
+      ...localItem,
+      comments: [...(localItem.comments || []), newComment],
+      updatedAt: new Date().toISOString(),
+    };
+    setLocalItem(updated);
+    onUpdate(updated);
+    setComment("");
+  };
+
+  // Group comments by date
+  const grouped = [];
+  let lastDate = null;
+  (localItem.comments || []).forEach(c => {
+    const d = new Date(c.createdAt).toLocaleDateString("en-GB", { day:"numeric", month:"long", year:"numeric" });
+    if (d !== lastDate) { grouped.push({ type:"date", label:d }); lastDate=d; }
+    grouped.push({ type:"comment", c });
+  });
+
+  const statusBg = {
+    pending:  "bg-amber-950/30 border-amber-500/30",
+    approved: "bg-emerald-950/30 border-emerald-500/30",
+    rejected: "bg-red-950/30 border-red-500/30",
+    amended:  "bg-indigo-950/30 border-indigo-500/30",
+  }[localItem.status] || "bg-slate-900/60 border-slate-700/60";
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg flex flex-col" style={{maxHeight:"90vh"}}>
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-700 flex-shrink-0">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-white truncate">{localItem.employeeName}</div>
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              <Badge label={`${AVAIL_STATUS_ICON[localItem.status]} ${localItem.status.charAt(0).toUpperCase()+localItem.status.slice(1)}`} color={AVAIL_STATUS_COLOR[localItem.status]}/>
+              <Badge label={localItem.available ? "✓ Available" : "✗ Unavailable"} color={localItem.available ? "emerald" : "red"}/>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex-shrink-0">
+            <X size={16}/>
+          </button>
+        </div>
+
+        {/* Availability summary card */}
+        <div className={`mx-4 mt-4 rounded-xl border p-3 ${statusBg} flex-shrink-0`}>
+          <div className="text-sm font-bold text-white">{fmtAvailDate(localItem)}</div>
+          <div className="text-xs text-slate-400 mt-0.5">{fmtAvailTime(localItem)}</div>
+          {localItem.notes && <div className="text-xs text-slate-500 mt-1 italic">"{localItem.notes}"</div>}
+          {localItem.status === "amended" && (
+            <div className="mt-2 text-xs text-indigo-300 space-y-0.5">
+              {localItem.amendedDate && <div>✎ Date → {new Date(localItem.amendedDate).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}</div>}
+              {localItem.amendedDayOfWeek && <div>✎ Day → {localItem.amendedDayOfWeek}</div>}
+              {(localItem.amendedStartTime||localItem.amendedEndTime) && <div>✎ Time → {localItem.amendedStartTime||localItem.startTime}–{localItem.amendedEndTime||localItem.endTime}</div>}
+            </div>
+          )}
+          {localItem.managerNotes && (
+            <div className="mt-2 pt-2 border-t border-white/10 text-xs text-slate-400 italic">
+              Manager note: "{localItem.managerNotes}"
+            </div>
+          )}
+        </div>
+
+        {/* Re-submit option for rejected items (employee only) */}
+        {isRejected && !isManager && (
+          <div className="mx-4 mt-3 flex-shrink-0">
+            {!showResubmit ? (
+              <button onClick={() => setShowResubmit(true)}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+                <RefreshCw size={14}/> Re-submit with changes
+              </button>
+            ) : (
+              <div className="bg-slate-800/60 rounded-xl p-3 space-y-3">
+                <div className="text-xs font-bold text-slate-300">Re-submit availability</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <AvailDateField label="New date" value={localItem.date || ""} onChange={v => setLocalItem(x => ({...x, date: v}))} placeholder="Select date"/>
+                  <div/>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <AvailTimeField label="Start" value={localItem.startTime} onChange={v => setLocalItem(x => ({...x, startTime: v}))}/>
+                  <AvailTimeField label="End"   value={localItem.endTime}   onChange={v => setLocalItem(x => ({...x, endTime:   v}))}/>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowResubmit(false)} className="flex-1 py-2 rounded-xl bg-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-600 transition-colors">Cancel</button>
+                  <button onClick={() => {
+                    const updated = { ...localItem, status: "pending", managerNotes: "", updatedAt: new Date().toISOString() };
+                    setLocalItem(updated); onUpdate(updated); setShowResubmit(false);
+                  }} className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition-colors">Re-submit</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Comment thread */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1 min-h-0">
+          {grouped.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-20 text-slate-600">
+              <div className="text-xs">No messages yet — start the conversation below</div>
+            </div>
+          )}
+          {grouped.map((item, idx) => {
+            if (item.type === "date") {
+              return (
+                <div key={`d-${idx}`} className="flex items-center justify-center my-2">
+                  <span className="bg-slate-800/80 border border-slate-700/60 text-slate-500 text-xs px-3 py-0.5 rounded-full">{item.label}</span>
+                </div>
+              );
+            }
+            const c = item.c;
+            const isMe = c.author === currentUser.name;
+            const isStaff = c.authorRole === "manager" || c.authorRole === "owner";
+            const av = avatarFor(c.author);
+            return (
+              <div key={c.id} className={`flex items-end gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                {!isMe && (
+                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mb-0.5"
+                    style={{ background: av.bg + "30", color: av.bg }}>
+                    {av.initials}
+                  </div>
+                )}
+                <div className={`max-w-[75%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                  {!isMe && (
+                    <div className="text-xs font-semibold mb-0.5 px-1" style={{ color: av.bg }}>
+                      {c.author}{isStaff && <span className="text-slate-500 font-normal ml-1">· {c.authorRole}</span>}
+                    </div>
+                  )}
+                  <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                    isMe
+                      ? "bg-indigo-600 text-white rounded-br-md"
+                      : isStaff
+                        ? "bg-slate-700 text-slate-100 border border-slate-600/60 rounded-bl-md"
+                        : "bg-slate-800 text-slate-100 border border-slate-700/60 rounded-bl-md"
+                  }`}>{c.text}</div>
+                  <div className="text-xs text-slate-600 mt-0.5 px-1">
+                    {new Date(c.createdAt).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
+                  </div>
+                </div>
+                {isMe && <div className="w-6 flex-shrink-0"/>}
+              </div>
+            );
+          })}
+          <div ref={bottomRef}/>
+        </div>
+
+        {/* Message input */}
+        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAddComment(); } }}
+              placeholder={isManager ? "Add a note or update for the employee…" : "Message your manager…"}
+              rows={1}
+              className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-24 transition-colors"
+            />
+            <button onClick={handleAddComment} disabled={!comment.trim()}
+              className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
+              <Send size={14} className="text-white ml-0.5"/>
+            </button>
+          </div>
+          <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Employee: My Availability View ────────────────────────────────────────────
+function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd, onUpdate }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
-  const [showForm, setShowForm] = useState(false);
+  const [showForm,   setShowForm]   = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+
   const myAvail = availability
     .filter(a => a.employeeId === myId)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    .sort((a, b) => new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
 
   const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
 
+  // Keep detail item in sync with live availability prop (realtime updates)
+  useEffect(() => {
+    if (detailItem) {
+      const fresh = availability.find(a => a.id === detailItem.id);
+      if (fresh && JSON.stringify(fresh) !== JSON.stringify(detailItem)) setDetailItem(fresh);
+    }
+  }, [availability]);
+
   if (showForm) {
     return (
-      <div className="h-full">
-        <EmployeeAvailabilityForm
-          brands={myBrands} currentUser={currentUser}
-          onSubmit={a => { onAdd(a); setShowForm(false); }}
-          onCancel={() => setShowForm(false)}
-        />
-      </div>
+      <EmployeeAvailabilityForm
+        brands={myBrands} currentUser={currentUser}
+        onSubmit={a => { onAdd(a); setShowForm(false); }}
+        onCancel={() => setShowForm(false)}
+      />
     );
   }
+
+  const hasUnreadComment = (a) =>
+    (a.comments || []).some(c => (c.authorRole === "manager" || c.authorRole === "owner") && c.author !== currentUser.name);
 
   return (
     <div className="space-y-5">
@@ -3391,50 +3601,59 @@ function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd }) 
       )}
 
       <div className="space-y-3">
-        {myAvail.map(a => (
-          <div key={a.id} className={`rounded-2xl border p-4 ${
-            a.status === "approved" ? "bg-emerald-950/20 border-emerald-500/30" :
-            a.status === "rejected" ? "bg-red-950/20 border-red-500/30" :
-            a.status === "amended"  ? "bg-indigo-950/20 border-indigo-500/30" :
-            "bg-slate-900/60 border-slate-700/60"
-          }`}>
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <Badge label={`${AVAIL_STATUS_ICON[a.status]} ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}`} color={AVAIL_STATUS_COLOR[a.status]}/>
-                  <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
-                  <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
+        {myAvail.map(a => {
+          const hasComment = hasUnreadComment(a);
+          const commentCount = (a.comments||[]).length;
+          return (
+            <button key={a.id} onClick={() => setDetailItem(a)}
+              className={`w-full text-left rounded-2xl border p-4 transition-all hover:border-slate-500/60 ${
+                a.status === "approved" ? "bg-emerald-950/20 border-emerald-500/30" :
+                a.status === "rejected" ? "bg-red-950/20 border-red-500/30" :
+                a.status === "amended"  ? "bg-indigo-950/20 border-indigo-500/30" :
+                "bg-slate-900/60 border-slate-700/60"
+              }`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <Badge label={`${AVAIL_STATUS_ICON[a.status]} ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}`} color={AVAIL_STATUS_COLOR[a.status]}/>
+                    <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
+                    <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
+                  </div>
+                  <div className="text-sm font-bold text-white">{fmtAvailDate(a)}</div>
+                  <div className="text-xs text-slate-400">{fmtAvailTime(a)}</div>
+                  <div className="flex items-center gap-3 mt-1.5">
+                    {commentCount > 0 && (
+                      <span className={`flex items-center gap-1 text-xs ${hasComment ? "text-indigo-400 font-semibold" : "text-slate-500"}`}>
+                        <MessageSquare size={11}/>{commentCount} {hasComment && "· Manager replied"}
+                      </span>
+                    )}
+                    {a.status === "rejected" && (
+                      <span className="text-xs text-red-400 font-semibold">Tap to re-submit →</span>
+                    )}
+                  </div>
                 </div>
-                <div className="text-sm font-bold text-white mt-1">{fmtAvailDate(a)}</div>
-                <div className="text-xs text-slate-400 mt-0.5">{fmtAvailTime(a)}</div>
-                {a.notes && <div className="text-xs text-slate-500 mt-1 italic">{a.notes}</div>}
+                <ChevronRight size={16} className="text-slate-600 flex-shrink-0 mt-1"/>
               </div>
-            </div>
-            {/* Manager response */}
-            {a.status === "amended" && (
-              <div className="mt-3 bg-indigo-950/40 border border-indigo-500/20 rounded-xl p-3">
-                <div className="text-xs font-bold text-indigo-400 mb-1">✎ Manager amended your submission</div>
-                <div className="text-xs text-slate-300">
-                  {a.amendedDate && <div>Date changed to: {new Date(a.amendedDate).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"})}</div>}
-                  {a.amendedDayOfWeek && <div>Day changed to: {a.amendedDayOfWeek}</div>}
-                  {(a.amendedStartTime || a.amendedEndTime) && <div>Time changed to: {a.amendedStartTime||a.startTime} – {a.amendedEndTime||a.endTime}</div>}
+              {a.managerNotes && a.status !== "pending" && (
+                <div className={`mt-2 text-xs italic px-1 ${a.status === "rejected" ? "text-red-400" : a.status === "amended" ? "text-indigo-400" : "text-slate-500"}`}>
+                  "{a.managerNotes}"
                 </div>
-                {a.managerNotes && <div className="text-xs text-slate-400 mt-1 italic">"{a.managerNotes}"</div>}
+              )}
+              <div className="text-xs text-slate-600 mt-1.5">
+                Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
               </div>
-            )}
-            {a.status === "rejected" && a.managerNotes && (
-              <div className="mt-3 bg-red-950/30 border border-red-500/20 rounded-xl p-3">
-                <div className="text-xs font-bold text-red-400 mb-1">✗ Rejected</div>
-                <div className="text-xs text-slate-400 italic">"{a.managerNotes}"</div>
-              </div>
-            )}
-            {a.status === "approved" && a.managerNotes && (
-              <div className="mt-2 text-xs text-slate-400 italic">"{a.managerNotes}"</div>
-            )}
-            <div className="text-xs text-slate-600 mt-2">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
-          </div>
-        ))}
+            </button>
+          );
+        })}
       </div>
+
+      {detailItem && (
+        <AvailabilityDetailModal
+          item={detailItem} currentUser={currentUser}
+          onUpdate={updated => { onUpdate(updated); setDetailItem(updated); }}
+          onClose={() => setDetailItem(null)}
+        />
+      )}
     </div>
   );
 }
@@ -3452,8 +3671,7 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
 
   const handleSave = () => {
     onSave({
-      ...item,
-      status: "amended",
+      ...item, status: "amended",
       amendedDate:      item.type === "one_off"   ? form.amendedDate       : null,
       amendedDayOfWeek: item.type === "weekly"    ? form.amendedDayOfWeek  : null,
       amendedStartTime: form.amendedStartTime,
@@ -3476,24 +3694,23 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
           <div>Original: {fmtAvailDate(item)} · {item.startTime}–{item.endTime}</div>
         </div>
         {item.type === "one_off" && (
-          <div><label className={labelCls}>Amended Date</label>
-            <input type="date" value={form.amendedDate} onChange={e => set("amendedDate", e.target.value)} className={inputCls}/>
-          </div>
+          <AvailDateField label="Amended Date" value={form.amendedDate} onChange={v => set("amendedDate", v)} placeholder="Select new date"/>
         )}
         {item.type === "weekly" && (
           <div><label className={labelCls}>Amended Day</label>
-            <SelectDropdown value={form.amendedDayOfWeek} onChange={v => set("amendedDayOfWeek", v)} className="w-full">
-              {DAYS_OF_WEEK.map(d => <option key={d}>{d}</option>)}
-            </SelectDropdown>
+            <div className="grid grid-cols-4 gap-2">
+              {DAYS_OF_WEEK.map(d => (
+                <button key={d} onClick={() => set("amendedDayOfWeek", d)}
+                  className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.amendedDayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                  {d.slice(0,3)}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         <div className="grid grid-cols-2 gap-3">
-          <div><label className={labelCls}>Amended Start</label>
-            <input type="time" value={form.amendedStartTime} onChange={e => set("amendedStartTime", e.target.value)} className={inputCls}/>
-          </div>
-          <div><label className={labelCls}>Amended End</label>
-            <input type="time" value={form.amendedEndTime} onChange={e => set("amendedEndTime", e.target.value)} className={inputCls}/>
-          </div>
+          <AvailTimeField label="Amended Start" value={form.amendedStartTime} onChange={v => set("amendedStartTime", v)}/>
+          <AvailTimeField label="Amended End"   value={form.amendedEndTime}   onChange={v => set("amendedEndTime",   v)}/>
         </div>
         <div><label className={labelCls}>Note to employee</label>
           <textarea value={form.managerNotes} onChange={e => set("managerNotes", e.target.value)}
@@ -3513,7 +3730,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
     notes: "", managerNotes: "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
-  const brandMembers = opsTeam.filter(m => m.brandId === form.brandId);
+  const brandMembers   = opsTeam.filter(m => m.brandId === form.brandId);
   const selectedMember = opsTeam.find(m => m.id === form.employeeId);
 
   const isValid = () => {
@@ -3539,6 +3756,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
       startTime: form.startTime, endTime: form.endTime,
       notes: form.notes, status: "approved",
       managerNotes: form.managerNotes || "Added by manager",
+      comments: [],
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
     onClose();
@@ -3560,27 +3778,25 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
             {brandMembers.map(m => <option key={m.id} value={m.id}>{m.firstName} {m.lastName} · {m.role}</option>)}
           </SelectDropdown>
         </div>
-        <div>
-          <label className={labelCls}>Availability</label>
+        <div><label className={labelCls}>Availability</label>
           <div className="flex gap-2">
             <button onClick={() => set("available", true)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${form.available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>✓ Available</button>
             <button onClick={() => set("available", false)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${!form.available ? "bg-red-600 border-red-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>✗ Unavailable</button>
           </div>
         </div>
-        <div>
-          <label className={labelCls}>Schedule Type</label>
+        <div><label className={labelCls}>Schedule Type</label>
           <div className="flex gap-2">
             {[{key:"one_off",label:"One-off"},{key:"weekly",label:"Weekly"},{key:"recurring",label:"Date Range"}].map(t => (
               <button key={t.key} onClick={() => set("type", t.key)} className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{t.label}</button>
             ))}
           </div>
         </div>
-        {form.type === "one_off"   && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
-        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><SelectDropdown value={form.dayOfWeek} onChange={v => set("dayOfWeek", v)} className="w-full">{DAYS_OF_WEEK.map(d => <option key={d}>{d}</option>)}</SelectDropdown></div>}
-        {form.type === "recurring" && <div className="grid grid-cols-2 gap-3"><div><label className={labelCls}>From</label><input type="date" value={form.startDate} onChange={e => set("startDate", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>To</label><input type="date" value={form.endDate} min={form.startDate} onChange={e => set("endDate", e.target.value)} className={inputCls}/></div></div>}
+        {form.type === "one_off"   && <AvailDateField label="Date" value={form.date} onChange={v => set("date", v)} placeholder="Select date"/>}
+        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><div className="grid grid-cols-4 gap-2">{DAYS_OF_WEEK.map(d => <button key={d} onClick={() => set("dayOfWeek", d)} className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{d.slice(0,3)}</button>)}</div></div>}
+        {form.type === "recurring" && <div className="grid grid-cols-2 gap-3"><AvailDateField label="From" value={form.startDate} onChange={v => set("startDate", v)} placeholder="Start date"/><AvailDateField label="To" value={form.endDate} onChange={v => set("endDate", v)} minDate={form.startDate} placeholder="End date"/></div>}
         <div className="grid grid-cols-2 gap-3">
-          <div><label className={labelCls}>Start Time</label><input type="time" value={form.startTime} onChange={e => set("startTime", e.target.value)} className={inputCls}/></div>
-          <div><label className={labelCls}>End Time</label><input type="time" value={form.endTime} onChange={e => set("endTime", e.target.value)} className={inputCls}/></div>
+          <AvailTimeField label="Start Time" value={form.startTime} onChange={v => set("startTime", v)}/>
+          <AvailTimeField label="End Time"   value={form.endTime}   onChange={v => set("endTime",   v)}/>
         </div>
         <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Any notes…"/></div>
       </div>
@@ -3588,7 +3804,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
   );
 }
 
-// ── Manager: Availability Tracker ────────────────────────────────────────────
+// ── Manager: Availability Tracker ─────────────────────────────────────────────
 function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
@@ -3600,7 +3816,16 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
   const [addModal,       setAddModal]       = useState(false);
   const [rejectModal,    setRejectModal]    = useState(null);
   const [rejectNote,     setRejectNote]     = useState("");
-  const [viewMode,       setViewMode]       = useState("list"); // list | calendar
+  const [detailItem,     setDetailItem]     = useState(null);
+  const [viewMode,       setViewMode]       = useState("list");
+
+  // Keep detail in sync with realtime updates
+  useEffect(() => {
+    if (detailItem) {
+      const fresh = availability.find(a => a.id === detailItem.id);
+      if (fresh && JSON.stringify(fresh) !== JSON.stringify(detailItem)) setDetailItem(fresh);
+    }
+  }, [availability]);
 
   const visible = availability.filter(a => {
     if (!vb.some(b => b.id === a.brandId)) return false;
@@ -3610,25 +3835,21 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
     if (filterEmployee !== "all" && a.employeeId !== filterEmployee) return false;
     return true;
   }).sort((a, b) => {
-    // pending first, then by date submitted
     if (a.status === "pending" && b.status !== "pending") return -1;
     if (b.status === "pending" && a.status !== "pending") return 1;
-    return new Date(b.createdAt) - new Date(a.createdAt);
+    return new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt);
   });
 
   const pendingCount = availability.filter(a => vb.some(b => b.id === a.brandId) && a.status === "pending").length;
-
   const handleApprove = (a) => onUpdate({ ...a, status: "approved", updatedAt: new Date().toISOString() });
   const handleReject  = (a, note) => onUpdate({ ...a, status: "rejected", managerNotes: note, updatedAt: new Date().toISOString() });
 
-  // Unique employees in visible availability
   const employeeOptions = [...new Map(
     availability.filter(a => vb.some(b => b.id === a.brandId)).map(a => [a.employeeId, { id: a.employeeId, name: a.employeeName }])
   ).values()];
 
   const statusColor = s => ({ pending:"amber", approved:"emerald", rejected:"red", amended:"indigo" }[s]||"slate");
 
-  // Calendar view - show availability by week
   const today = new Date();
   const [calWeekOffset, setCalWeekOffset] = useState(0);
   const weekStart = new Date(today);
@@ -3650,26 +3871,22 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
 
   return (
     <div className="space-y-5">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-base font-bold text-white">Availability Tracker</h2>
           {pendingCount > 0 && <div className="text-xs text-amber-400 mt-0.5">{pendingCount} pending review</div>}
         </div>
         <div className="flex items-center gap-2">
-          {/* View mode toggle */}
           <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
             <button onClick={() => setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
             <button onClick={() => setViewMode("calendar")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="calendar"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
           </div>
-          <button onClick={() => setAddModal(true)}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
+          <button onClick={() => setAddModal(true)} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
             <Plus size={14}/> Add
           </button>
         </div>
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-40"/>
         <SelectDropdown value={filterStatus} onChange={setFilterStatus} className="w-36">
@@ -3691,7 +3908,6 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
         </SelectDropdown>
       </div>
 
-      {/* ── List View ── */}
       {viewMode === "list" && (
         <>
           {visible.length === 0 && (
@@ -3703,6 +3919,8 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
           <div className="space-y-3">
             {visible.map(a => {
               const brand = brands.find(b => b.id === a.brandId);
+              const commentCount = (a.comments||[]).length;
+              const hasEmployeeComment = (a.comments||[]).some(c => c.authorRole === "employee");
               return (
                 <div key={a.id} className={`rounded-2xl border p-4 ${
                   a.status === "pending"  ? "bg-amber-950/20 border-amber-500/30" :
@@ -3722,33 +3940,28 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
                       <div className="text-sm font-semibold text-slate-200">{fmtAvailDate(a)}</div>
                       <div className="text-xs text-slate-400">{fmtAvailTime(a)}</div>
                       {a.notes && <div className="text-xs text-slate-500 mt-1 italic">"{a.notes}"</div>}
-                      {a.status === "amended" && (
-                        <div className="text-xs text-indigo-400 mt-1">
-                          ✎ Amended: {a.amendedDate ? new Date(a.amendedDate).toLocaleDateString("en-GB",{day:"numeric",month:"short"}) : a.amendedDayOfWeek || ""}{(a.amendedStartTime||a.amendedEndTime) ? ` · ${a.amendedStartTime||a.startTime}–${a.amendedEndTime||a.endTime}` : ""}
-                        </div>
-                      )}
-                      {a.managerNotes && <div className="text-xs text-slate-500 mt-1 italic">Note: "{a.managerNotes}"</div>}
-                      <div className="text-xs text-slate-600 mt-1.5">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                      <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                        {commentCount > 0 && (
+                          <button onClick={() => setDetailItem(a)}
+                            className={`flex items-center gap-1 text-xs transition-colors ${hasEmployeeComment ? "text-amber-400 font-semibold hover:text-amber-300" : "text-slate-500 hover:text-slate-300"}`}>
+                            <MessageSquare size={11}/>{commentCount} {hasEmployeeComment && "· Employee commented"}
+                          </button>
+                        )}
+                        <div className="text-xs text-slate-600">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                      </div>
                     </div>
 
-                    {/* Action buttons */}
                     <div className="flex flex-col gap-1.5 flex-shrink-0">
                       {a.status === "pending" && (
                         <>
-                          <button onClick={() => handleApprove(a)}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">
-                            ✓ Approve
-                          </button>
-                          <button onClick={() => { setRejectModal(a); setRejectNote(""); }}
-                            className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors">
-                            ✗ Reject
-                          </button>
-                          <button onClick={() => setAmendModal(a)}
-                            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors">
-                            ✎ Amend
-                          </button>
+                          <button onClick={() => handleApprove(a)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">✓ Approve</button>
+                          <button onClick={() => { setRejectModal(a); setRejectNote(""); }} className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors">✗ Reject</button>
+                          <button onClick={() => setAmendModal(a)} className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors">✎ Amend</button>
                         </>
                       )}
+                      <button onClick={() => setDetailItem(a)} className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5">
+                        <MessageSquare size={11}/> Chat
+                      </button>
                       {a.status !== "pending" && (
                         <div className="flex gap-1.5">
                           <button onClick={() => setAmendModal(a)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
@@ -3764,7 +3977,6 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
         </>
       )}
 
-      {/* ── Week Calendar View ── */}
       {viewMode === "calendar" && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -3785,28 +3997,34 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
                     <div className={`text-sm ${isToday ? "text-indigo-300" : "text-slate-300"}`}>{day.getDate()}</div>
                   </div>
                   <div className="space-y-1">
-                    {dayAvail.map(a => {
-                      const av = avatarFor(a.employeeName);
-                      return (
-                        <div key={a.id} className={`text-xs rounded-lg px-1.5 py-1 truncate font-medium ${a.available ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}
-                          title={`${a.employeeName} · ${fmtAvailTime(a)}`}>
-                          {a.employeeName.split(" ")[0]}
-                        </div>
-                      );
-                    })}
+                    {dayAvail.map(a => (
+                      <button key={a.id} onClick={() => setDetailItem(a)}
+                        className={`w-full text-xs rounded-lg px-1.5 py-1 truncate font-medium text-left transition-all ${a.available ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30" : "bg-red-500/20 text-red-300 hover:bg-red-500/30"}`}
+                        title={`${a.employeeName} · ${fmtAvailTime(a)}`}>
+                        {a.employeeName.split(" ")[0]}
+                      </button>
+                    ))}
                   </div>
                 </div>
               );
             })}
           </div>
-          <div className="flex items-center gap-4 text-xs text-slate-500 mt-2">
+          <div className="flex items-center gap-4 text-xs text-slate-500">
             <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-emerald-500/40"/> Available</div>
             <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-red-500/40"/> Unavailable</div>
           </div>
         </div>
       )}
 
-      {/* Modals */}
+      {/* Detail / comment modal */}
+      {detailItem && (
+        <AvailabilityDetailModal
+          item={detailItem} currentUser={currentUser}
+          onUpdate={updated => { onUpdate(updated); setDetailItem(updated); }}
+          onClose={() => setDetailItem(null)}
+        />
+      )}
+
       {amendModal && (
         <AmendAvailabilityModal item={amendModal}
           onSave={updated => { onUpdate(updated); setAmendModal(null); }}
@@ -3838,7 +4056,6 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
     </div>
   );
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPDESK — WhatsApp-style ticket chat
@@ -4884,9 +5101,10 @@ function CommunicationView({
     return false;
   }).filter(m => !m.readBy?.includes(myId)).length;
 
+  // Badge on Help Desk tab = pending tickets needing action
   const hdBadge = isEmployee
-    ? tickets.filter(t => t.createdById === myOpsId && t.status !== "Closed").length
-    : tickets.filter(t => brands.some(b => b.id === t.brandId) && ["Open","In Progress"].includes(t.status)).length;
+    ? tickets.filter(t => t.createdById === myOpsId && ["Open","In Progress","Pending"].includes(t.status)).length
+    : tickets.filter(t => brands.some(b => b.id === t.brandId) && t.status === "Open").length;
 
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
@@ -5415,6 +5633,7 @@ export default function App() {
         onUpdateHdTicket={updateHdTicket}
         availability={availability}
         onAddAvailability={addAvailability}
+        onUpdateAvailability={updateAvailability}
         messages={messages}
         onSendMessage={sendMessage}
         onMarkRead={handleMarkRead}
@@ -5462,7 +5681,7 @@ export default function App() {
     {
       group: "Team",
       items: [
-        { key: "comms",        label: "Communication", icon: MessageSquare, badge: (() => { const total = (hdOpenCount > 0 ? hdOpenCount : 0) + (inboxUnread > 0 ? inboxUnread : 0); return total > 0 ? total.toString() : null; })() },
+        { key: "comms",        label: "Communication", icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread.toString() : null },
         { key: "availability", label: "Availability",  icon: Calendar,      badge: (() => { const pending = availability.filter(a => visibleBrands.some(b => b.id === a.brandId) && a.status === "pending").length; return pending > 0 ? pending.toString() : null; })() },
         { key: "issues",       label: "Issues",        icon: Wrench,        badge: openIssueCount > 0 ? openIssueCount.toString() : null },
       ],
@@ -5618,10 +5837,11 @@ export default function App() {
               <div className="text-xs text-slate-500 mt-0.5">{todayDisplay}</div>
             </div>
             {/* Notification badges in header for quick access */}
-            {(hdOpenCount > 0 || inboxUnread > 0) && (
+            {inboxUnread > 0 && (
               <div className="hidden sm:flex items-center gap-2">
-                {hdOpenCount > 0 && <button onClick={() => setActiveView("helpdesk")} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold hover:bg-amber-500/20 transition-all"><LifeBuoy size={12}/>{hdOpenCount} ticket{hdOpenCount > 1 ? "s" : ""}</button>}
-                {inboxUnread > 0 && <button onClick={() => setActiveView("inbox")} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold hover:bg-indigo-500/20 transition-all"><Inbox size={12}/>{inboxUnread} unread</button>}
+                <button onClick={() => setActiveView("comms")} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold hover:bg-indigo-500/20 transition-all">
+                  <Inbox size={12}/>{inboxUnread} unread
+                </button>
               </div>
             )}
             <div className="lg:hidden"><UserChip user={currentUser} onLogout={handleLogout} compact/></div>

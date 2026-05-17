@@ -488,6 +488,7 @@ function appAvailToDb(a) {
     amended_end_time: a.amendedEndTime || null,
     amended_date: a.amendedDate || null,
     amended_day_of_week: a.amendedDayOfWeek || null,
+    comments: a.comments || [],
     updated_at: new Date().toISOString(),
   };
 }
@@ -507,6 +508,7 @@ function dbAvailToApp(a) {
     amendedEndTime: a.amended_end_time?.slice(0,5) || null,
     amendedDate: a.amended_date || null,
     amendedDayOfWeek: a.amended_day_of_week || null,
+    comments: a.comments || [],
     createdAt: a.created_at, updatedAt: a.updated_at,
   };
 }
