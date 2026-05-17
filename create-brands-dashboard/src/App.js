@@ -6529,8 +6529,6 @@ const IS_KIOSK = window.location.pathname === "/kiosk" ||
                  window.location.search.includes("kiosk");
 
 export default function App() {
-  // If kiosk mode, render the standalone kiosk shell
-  if (IS_KIOSK) return <KioskShell />;
   const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
 
   // ── Financial state (Supabase) ────────────────────────────────────────────
@@ -7018,6 +7016,9 @@ export default function App() {
     setBrands(savedBrands); setUsers(savedUsers); setEntries([]); setIssues([]);
     localStorage.removeItem("cb_session"); setCurrentUser(null);
   };
+
+  // Kiosk mode — all hooks have run above, safe to early-return here
+  if (IS_KIOSK) return <KioskShell />;
 
   if (dbError) return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#f87171",fontFamily:"sans-serif",gap:12}}>
