@@ -6420,6 +6420,7 @@ export default function App() {
         availability={availability}
         onAddAvailability={addAvailability}
         onUpdateAvailability={updateAvailability}
+        schedules={schedules}
         messages={messages}
         onSendMessage={sendMessage}
         onMarkRead={handleMarkRead}
