@@ -650,6 +650,12 @@ function appPunchToDb(p) {
     hours_worked: p.hoursWorked || null, hourly_rate: p.hourlyRate || 0,
     gross_pay: p.grossPay || null, notes: p.notes || "",
     status: p.status || "open", amended_by: p.amendedBy || "",
+    approved: p.approved ?? false, approved_by: p.approvedBy || "",
+    scheduled_start: p.scheduledStart || null, scheduled_end: p.scheduledEnd || null,
+    overtime_hours: p.overtimeHours || null,
+    overtime_reason: p.overtimeReason || "",
+    overtime_approved: p.overtimeApproved ?? false,
+    overtime_approved_by: p.overtimeApprovedBy || "",
     updated_at: new Date().toISOString(),
   };
 }
@@ -662,6 +668,13 @@ function dbPunchToApp(p) {
     hourlyRate: p.hourly_rate ? parseFloat(p.hourly_rate) : 0,
     grossPay: p.gross_pay ? parseFloat(p.gross_pay) : null,
     notes: p.notes, status: p.status, amendedBy: p.amended_by,
+    approved: p.approved ?? false, approvedBy: p.approved_by || "",
+    scheduledStart: p.scheduled_start?.slice(0,5) || null,
+    scheduledEnd: p.scheduled_end?.slice(0,5) || null,
+    overtimeHours: p.overtime_hours ? parseFloat(p.overtime_hours) : null,
+    overtimeReason: p.overtime_reason || "",
+    overtimeApproved: p.overtime_approved ?? false,
+    overtimeApprovedBy: p.overtime_approved_by || "",
     createdAt: p.created_at, updatedAt: p.updated_at,
   };
 }
