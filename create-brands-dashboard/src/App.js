@@ -1690,23 +1690,9 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div>
-          <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-widest">Location</div>
-          <div className="flex flex-wrap gap-2">
-            {visibleBrands.map(b => (
-              <button key={b.id} onClick={() => setSelectedBrandId(b.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border ${selectedBrandId === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`}
-                style={selectedBrandId === b.id ? { background: b.color } : {}}>
-                {b.name}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-widest">Period</div>
-          <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
-        </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <LocationDropdown brands={visibleBrands} value={selectedBrandId} onChange={setSelectedBrandId} className="w-44"/>
+        <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo}/>
       </div>
 
       {selectedBrand && (
@@ -3446,207 +3432,480 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Compose Message Modal ──────────────────────────────────────────────────────
-function ComposeModal({ currentUser, brands, opsTeam, users, onSend, onClose }) {
-  const [toScope, setToScope]     = useState("location");
-  const [toBrandId, setToBrandId] = useState(currentUser.brandIds[0] || "");
-  const [toPerson, setToPerson]   = useState(null); // { id, name }
-  const [subject, setSubject]     = useState("");
-  const [body, setBody]           = useState("");
 
-  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
-  const isOwner  = currentUser.role === "owner";
-  const isManager = currentUser.role === "manager";
+// ═══════════════════════════════════════════════════════════════════════════════
+// INBOX — WhatsApp-style chat
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  // Build recipient list for individual send
-  const allPeople = [
-    ...users.filter(u => u.id !== currentUser.id && (isOwner || u.brandIds?.some(bid => currentUser.brandIds.includes(bid)))).map(u => ({ id: u.id, name: u.name, sub: u.role })),
-    ...opsTeam.filter(m => isOwner || currentUser.brandIds.includes(m.brandId)).map(m => ({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), sub: m.role })),
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtChatTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const diffDays = Math.floor((now - d) / 86400000);
+  if (diffDays === 0) return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7)  return d.toLocaleDateString("en-GB", { weekday: "short" });
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function fmtChatFull(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+// Build a unique conversation "thread key" from a message so we can group them
+function threadKey(msg, myId, myOpsId) {
+  if (msg.toScope === "individual") {
+    // DM — key is sorted pair of sender + recipient
+    const ids = [msg.fromId, msg.toPersonId].sort();
+    return `dm:${ids[0]}:${ids[1]}`;
+  }
+  if (msg.toScope === "location") return `loc:${msg.toBrandId}`;
+  return "broadcast:all";
+}
+
+// Build avatar initials + colour from a name
+function avatarFor(name = "", color = "") {
+  const initials = name.trim().split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) || "??";
+  const colours  = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899","#14b8a6","#f97316"];
+  if (color) return { initials, bg: color };
+  // deterministic colour from name
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  return { initials, bg: colours[Math.abs(h) % colours.length] };
+}
+
+// ── New Chat / Compose ────────────────────────────────────────────────────────
+function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose }) {
+  const [search, setSearch] = useState("");
+  const isOwner   = currentUser.role === "owner";
+  const myBrands  = brands.filter(b => currentUser.brandIds.includes(b.id));
+
+  // All people I can message
+  const people = [
+    ...users
+      .filter(u => u.id !== currentUser.id && (isOwner || u.brandIds?.some(bid => currentUser.brandIds.includes(bid))))
+      .map(u => ({ id: u.id, name: u.name, sub: u.role, type: "user" })),
+    ...opsTeam
+      .filter(m => isOwner || currentUser.brandIds.includes(m.brandId))
+      .map(m => {
+        const b = brands.find(x => x.id === m.brandId);
+        return { id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), sub: `${m.role}${b ? " · " + b.name : ""}`, type: "ops" };
+      }),
   ];
 
-  const scopeOptions = [
-    { key: "location", label: "My Location", show: myBrands.length > 0 },
-    { key: "all_locations", label: "All Locations", show: isOwner },
-    { key: "individual", label: "One Person", show: true },
-  ].filter(o => o.show);
+  // Groups (channels)
+  const groups = [
+    ...myBrands.map(b => ({ id: `loc:${b.id}`, name: b.name, sub: "Whole location", type: "location", color: b.color })),
+    ...(isOwner ? [{ id: "broadcast:all", name: "All Locations", sub: "Everyone in the group", type: "broadcast" }] : []),
+  ];
 
-  const handleSend = () => {
-    if (!body.trim() || !subject.trim()) return;
-    onSend({
-      id: `msg-${Date.now()}`,
-      brandId: toScope === "location" ? toBrandId : null,
-      fromId: currentUser.id, fromName: currentUser.name, fromRole: currentUser.role,
-      toScope, toBrandId: toScope === "location" ? toBrandId : null,
-      toPersonId: toScope === "individual" ? toPerson?.id : null,
-      toPersonName: toScope === "individual" ? toPerson?.name : null,
-      subject: subject.trim(), body: body.trim(),
-      readBy: [currentUser.id],
-      createdAt: new Date().toISOString(),
-    });
-  };
+  const allOptions = [...groups, ...people];
+  const filtered   = allOptions.filter(o => o.name.toLowerCase().includes(search.toLowerCase()));
 
   return (
-    <Modal title="New Message" onClose={onClose}
-      footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-        <button onClick={handleSend} disabled={!subject.trim() || !body.trim() || (toScope === "individual" && !toPerson)}
-          className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2"><Send size={13}/> Send</button>
-      </>}>
-      <div className="space-y-4">
-        {/* To */}
-        <div>
-          <label className={labelCls}>To</label>
-          <div className="flex flex-wrap gap-2 mb-2">
-            {scopeOptions.map(o => (
-              <button key={o.key} onClick={() => setToScope(o.key)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${toScope === o.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
-                {o.label}
+    <Modal title="New Chat" onClose={onClose}>
+      <div className="space-y-3">
+        <input
+          value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search people or channels…"
+          autoFocus
+          className={inputCls}
+        />
+        <div className="space-y-1 max-h-80 overflow-y-auto -mx-1 px-1">
+          {filtered.length === 0 && (
+            <div className="text-xs text-slate-500 text-center py-6">No matches</div>
+          )}
+          {filtered.map(o => {
+            const av = avatarFor(o.name, o.color || "");
+            const icon = o.type === "location" ? "📍" : o.type === "broadcast" ? "📢" : null;
+            return (
+              <button key={o.id} onClick={() => onStart(o)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-800/60 transition-all text-left">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+                  style={{ background: av.bg + "30", color: av.bg }}>
+                  {icon || av.initials}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-white">{o.name}</div>
+                  <div className="text-xs text-slate-500">{o.sub}</div>
+                </div>
               </button>
-            ))}
-          </div>
-          {toScope === "location" && myBrands.length > 1 && (
-            <div className="flex flex-wrap gap-2">
-              {myBrands.map(b => (
-                <button key={b.id} onClick={() => setToBrandId(b.id)}
-                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${toBrandId === b.id ? "text-white border-transparent" : "bg-slate-800 border-slate-700 text-slate-400"}`}
-                  style={toBrandId === b.id ? { background: b.color } : {}}>{b.name}</button>
-              ))}
-            </div>
-          )}
-          {toScope === "all_locations" && <div className="text-xs text-slate-500 px-1">Will be sent to everyone across all locations</div>}
-          {toScope === "individual" && (
-            <div className="bg-slate-800/40 rounded-xl p-2 max-h-40 overflow-y-auto space-y-1">
-              {allPeople.map(p => (
-                <button key={p.id} onClick={() => setToPerson(toPerson?.id === p.id ? null : p)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${toPerson?.id === p.id ? "bg-indigo-600/20 text-indigo-300" : "text-slate-400 hover:bg-slate-700/60"}`}>
-                  <span>{p.name} <span className="opacity-50">· {p.sub}</span></span>
-                  {toPerson?.id === p.id && <Check size={12} className="text-indigo-400"/>}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div><label className={labelCls}>Subject *</label>
-          <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="What's this about?" className={inputCls}/>
-        </div>
-        <div><label className={labelCls}>Message *</label>
-          <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} placeholder="Write your message…" className={`${inputCls} resize-none`}/>
+            );
+          })}
         </div>
       </div>
     </Modal>
   );
 }
 
-// ── Inbox View (shared for all roles) ─────────────────────────────────────────
-function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead }) {
-  const [tab, setTab]       = useState("inbox");
-  const [selected, setSelected] = useState(null);
-  const [compose, setCompose]   = useState(false);
-
-  const myId = currentUser.id;
-  const myBrandIds = currentUser.brandIds || [];
+// ── Chat Thread (the right panel) ─────────────────────────────────────────────
+function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead }) {
+  const [body, setBody] = useState("");
+  const bottomRef = useRef(null);
+  const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
 
-  // Determine if a message is addressed to me
-  const isForMe = (msg) => {
-    if (msg.fromId === myId || msg.fromId === myOpsId) return false; // sent by me
+  // Filter messages for this thread
+  const threadMsgs = messages
+    .filter(m => threadKey(m, myId, myOpsId) === thread.key)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  // Mark unread on mount / when thread changes
+  useEffect(() => {
+    threadMsgs.forEach(m => {
+      const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
+      if (isForMe && !m.readBy?.includes(myId)) onMarkRead(m.id, myId);
+    });
+  }, [thread.key]);
+
+  // Scroll to bottom when new messages arrive
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [threadMsgs.length]);
+
+  const handleSend = () => {
+    const text = body.trim();
+    if (!text) return;
+    const msg = {
+      id:        `msg-${Date.now()}`,
+      brandId:   thread.type === "location" ? thread.brandId : null,
+      fromId:    myId, fromName: currentUser.name, fromRole: currentUser.role,
+      toScope:   thread.type === "location" ? "location" : thread.type === "broadcast" ? "all_locations" : "individual",
+      toBrandId: thread.type === "location" ? thread.brandId : null,
+      toPersonId:   thread.type === "dm" ? thread.personId   : null,
+      toPersonName: thread.type === "dm" ? thread.personName : null,
+      subject: thread.name, body: text,
+      readBy:  [myId],
+      createdAt: new Date().toISOString(),
+    };
+    onSend(msg);
+    setBody("");
+  };
+
+  // Group messages by date
+  const grouped = [];
+  let lastDate = null;
+  threadMsgs.forEach(m => {
+    const d = new Date(m.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    if (d !== lastDate) { grouped.push({ type: "date", label: d }); lastDate = d; }
+    grouped.push({ type: "msg", msg: m });
+  });
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Thread messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+        {threadMsgs.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-slate-600">
+            <MessageSquare size={32} className="mb-3 text-slate-700"/>
+            <div className="text-sm font-semibold">No messages yet</div>
+            <div className="text-xs mt-1">Send the first message below</div>
+          </div>
+        )}
+        {grouped.map((item, idx) => {
+          if (item.type === "date") {
+            return (
+              <div key={`date-${idx}`} className="flex items-center justify-center my-3">
+                <span className="bg-slate-800/80 border border-slate-700/60 text-slate-400 text-xs px-3 py-1 rounded-full">{item.label}</span>
+              </div>
+            );
+          }
+          const m   = item.msg;
+          const isMe = m.fromId === myId || m.fromId === myOpsId;
+          const av  = avatarFor(m.fromName);
+          return (
+            <div key={m.id} className={`flex items-end gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+              {/* Avatar — only show for others */}
+              {!isMe && (
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mb-0.5"
+                  style={{ background: av.bg + "30", color: av.bg }}>
+                  {av.initials}
+                </div>
+              )}
+              <div className={`max-w-[72%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                {/* Sender name for group threads (not DMs) */}
+                {!isMe && thread.type !== "dm" && (
+                  <div className="text-xs font-semibold mb-0.5 px-1" style={{ color: av.bg }}>{m.fromName}</div>
+                )}
+                {/* Bubble */}
+                <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                  isMe
+                    ? "bg-indigo-600 text-white rounded-br-md"
+                    : "bg-slate-800 text-slate-100 border border-slate-700/60 rounded-bl-md"
+                }`}>
+                  {m.body}
+                </div>
+                {/* Timestamp + read receipt */}
+                <div className={`flex items-center gap-1 mt-0.5 px-1 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                  <span className="text-xs text-slate-600">{fmtChatFull(m.createdAt)}</span>
+                  {isMe && (
+                    <span className="text-xs text-slate-600">
+                      {(m.readBy?.length || 0) > 1 ? "✓✓" : "✓"}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {/* Spacer for my messages */}
+              {isMe && <div className="w-7 flex-shrink-0"/>}
+            </div>
+          );
+        })}
+        <div ref={bottomRef}/>
+      </div>
+
+      {/* Input bar */}
+      <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80 bg-slate-900/60">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+            placeholder="Type a message…"
+            rows={1}
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-32 transition-colors"
+            style={{ lineHeight: "1.5" }}
+          />
+          <button
+            onClick={handleSend}
+            disabled={!body.trim()}
+            className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0"
+          >
+            <Send size={16} className="text-white ml-0.5"/>
+          </button>
+        </div>
+        <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main InboxView ─────────────────────────────────────────────────────────────
+function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead }) {
+  const [activeThread, setActiveThread] = useState(null);
+  const [newChat, setNewChat]           = useState(false);
+  const [search, setSearch]             = useState("");
+  const [mobileShowThread, setMobileShowThread] = useState(false);
+
+  const myId    = currentUser.id;
+  const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+  const myBrandIds = currentUser.brandIds || [];
+
+  // Determine if a message is visible to me (either sent or received)
+  const isVisible = (msg) => {
+    if (msg.fromId === myId || msg.fromId === myOpsId) return true;
     if (msg.toScope === "all_locations") return true;
     if (msg.toScope === "location" && myBrandIds.includes(msg.toBrandId)) return true;
     if (msg.toScope === "individual" && (msg.toPersonId === myId || msg.toPersonId === myOpsId)) return true;
     return false;
   };
 
-  const inbox = messages.filter(isForMe).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const sent  = messages.filter(m => m.fromId === myId || m.fromId === myOpsId).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const unread = inbox.filter(m => !m.readBy?.includes(myId) && !m.readBy?.includes(myOpsId)).length;
+  const myMessages = messages.filter(isVisible);
 
-  const handleOpen = (msg) => {
-    setSelected(msg);
-    if (!msg.readBy?.includes(myId)) onMarkRead(msg.id, myId);
+  // Group messages into threads (conversations)
+  const threadMap = {};
+  myMessages.forEach(m => {
+    const key = threadKey(m, myId, myOpsId);
+    if (!threadMap[key]) {
+      // Build thread meta
+      let name, sub, type, brandId, personId, personName, color;
+      if (m.toScope === "all_locations") {
+        name = "All Locations"; sub = "Group broadcast"; type = "broadcast"; color = "#6366f1";
+      } else if (m.toScope === "location") {
+        const b = brands.find(x => x.id === m.toBrandId);
+        name = b?.name || "Location"; sub = "Location channel"; type = "location"; brandId = m.toBrandId; color = b?.color || "#6366f1";
+      } else {
+        // DM — the "other" person
+        const isFromMe = m.fromId === myId || m.fromId === myOpsId;
+        name = isFromMe ? (m.toPersonName || "Unknown") : m.fromName;
+        const otherId = isFromMe ? m.toPersonId : m.fromId;
+        const otherPerson = [...users, ...opsTeam.map(o => ({ ...o, id: o.id, name: `${o.firstName} ${o.lastName}`.trim() }))].find(p => p.id === otherId);
+        sub = otherPerson?.role || otherPerson?.employeeRole || "";
+        type = "dm"; personId = otherId; personName = name;
+      }
+      threadMap[key] = { key, name, sub, type, brandId, personId, personName, color, messages: [] };
+    }
+    threadMap[key].messages.push(m);
+  });
+
+  // Sort threads by latest message
+  const threads = Object.values(threadMap).sort((a, b) => {
+    const aLast = a.messages[a.messages.length - 1]?.createdAt || "";
+    const bLast = b.messages[b.messages.length - 1]?.createdAt || "";
+    return new Date(bLast) - new Date(aLast);
+  });
+
+  const filtered = threads.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
+
+  const totalUnread = threads.reduce((sum, t) => {
+    return sum + t.messages.filter(m => {
+      const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
+      return isForMe && !m.readBy?.includes(myId);
+    }).length;
+  }, 0);
+
+  const handleStartChat = (option) => {
+    setNewChat(false);
+    let key, name, sub, type, brandId, personId, personName, color;
+    if (option.type === "location") {
+      const bId = option.id.replace("loc:", "");
+      const b = brands.find(x => x.id === bId);
+      key = `loc:${bId}`; name = b?.name || "Location"; sub = "Location channel";
+      type = "location"; brandId = bId; color = b?.color;
+    } else if (option.type === "broadcast") {
+      key = "broadcast:all"; name = "All Locations"; sub = "Group broadcast"; type = "broadcast"; color = "#6366f1";
+    } else {
+      const ids = [myId, option.id].sort();
+      key = `dm:${ids[0]}:${ids[1]}`; name = option.name; sub = option.sub;
+      type = "dm"; personId = option.id; personName = option.name;
+    }
+    setActiveThread({ key, name, sub, type, brandId, personId, personName, color, messages: threadMap[key]?.messages || [] });
+    setMobileShowThread(true);
   };
 
-  const list = tab === "inbox" ? inbox : sent;
-  const brand = selected ? brands.find(b => b.id === (selected.toBrandId || selected.brandId)) : null;
-
-  const scopeLabel = (msg) => {
-    if (msg.toScope === "all_locations") return "All Locations";
-    if (msg.toScope === "location") { const b = brands.find(x => x.id === msg.toBrandId); return b?.name || "Location"; }
-    return msg.toPersonName || "Individual";
+  const handleThreadClick = (thread) => {
+    setActiveThread(thread);
+    setMobileShowThread(true);
   };
+
+  const getThreadUnread = (thread) =>
+    thread.messages.filter(m => m.fromId !== myId && m.fromId !== myOpsId && !m.readBy?.includes(myId)).length;
+
+  const getLastMsg = (thread) => thread.messages[thread.messages.length - 1];
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex gap-2">
-          <button onClick={() => setTab("inbox")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === "inbox" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
-            <Inbox size={14}/> Inbox {unread > 0 && <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{unread}</span>}
-          </button>
-          <button onClick={() => setTab("sent")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === "sent" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
-            <Send size={14}/> Sent
-          </button>
-        </div>
-        <button onClick={() => setCompose(true)}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
-          <Plus size={14}/> Compose
-        </button>
-      </div>
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/80 bg-slate-950">
 
-      {list.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-          <Inbox size={32} className="mb-3 text-slate-700"/>
-          <div className="text-sm font-semibold">{tab === "inbox" ? "Your inbox is empty" : "No sent messages"}</div>
-          <div className="text-xs mt-1 text-slate-600">{tab === "inbox" ? "Messages from your team will appear here" : "Messages you send will appear here"}</div>
-        </div>
-      )}
+      {/* ── Left panel: thread list ─────────────────────────────────────────── */}
+      <div className={`flex flex-col border-r border-slate-800/80 bg-slate-900/80 flex-shrink-0
+        ${mobileShowThread ? "hidden" : "flex"} w-full lg:flex lg:w-80 xl:w-96`}>
 
-      <div className="space-y-2">
-        {list.map(msg => {
-          const isUnread = tab === "inbox" && !msg.readBy?.includes(myId) && !msg.readBy?.includes(myOpsId);
-          return (
-            <button key={msg.id} onClick={() => handleOpen(msg)}
-              className={`w-full text-left rounded-2xl border px-5 py-4 transition-all ${isUnread ? "bg-indigo-950/30 border-indigo-500/30 hover:border-indigo-400/50" : "bg-slate-900/60 border-slate-700/60 hover:border-slate-500/60 hover:bg-slate-800/60"}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    {isUnread && <div className="w-2 h-2 rounded-full bg-indigo-400 flex-shrink-0"/>}
-                    <div className={`text-sm truncate ${isUnread ? "font-bold text-white" : "font-semibold text-slate-200"}`}>{msg.subject}</div>
-                  </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    {tab === "inbox" ? <span className="text-slate-400">{msg.fromName}</span> : <span className="text-slate-400">To: {scopeLabel(msg)}</span>}
-                    {" · "}{msg.body.slice(0, 80)}{msg.body.length > 80 ? "…" : ""}
-                  </div>
-                </div>
-                <div className="text-xs text-slate-600 flex-shrink-0 mt-0.5">
-                  {new Date(msg.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Message detail */}
-      {selected && (
-        <Modal title={selected.subject} onClose={() => setSelected(null)} maxW="max-w-lg">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2 text-xs text-slate-400">
-              <span>From: <span className="text-slate-200 font-semibold">{selected.fromName}</span></span>
-              <span>·</span>
-              <span>To: <span className="text-slate-200 font-semibold">{scopeLabel(selected)}</span></span>
-              <span>·</span>
-              <span>{new Date(selected.createdAt).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
-            </div>
-            <div className="bg-slate-800/40 border border-slate-700/40 rounded-xl p-4 text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{selected.body}</div>
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/80">
+          <div>
+            <div className="text-sm font-bold text-white">Messages</div>
+            {totalUnread > 0 && <div className="text-xs text-indigo-400">{totalUnread} unread</div>}
           </div>
-        </Modal>
-      )}
+          <button onClick={() => setNewChat(true)}
+            className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-all shadow-md"
+            title="New chat">
+            <Plus size={18} className="text-white"/>
+          </button>
+        </div>
 
-      {compose && (
-        <ComposeModal
+        {/* Search */}
+        <div className="px-3 py-2.5 border-b border-slate-800/50">
+          <div className="relative">
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search conversations…"
+              className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl pl-3 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
+          </div>
+        </div>
+
+        {/* Thread list */}
+        <div className="flex-1 overflow-y-auto">
+          {filtered.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
+              <MessageSquare size={28} className="mb-2 text-slate-700"/>
+              <div className="text-sm font-semibold text-center">{search ? "No matches" : "No conversations yet"}</div>
+              <div className="text-xs mt-1 text-center text-slate-700">Tap + to start a new chat</div>
+            </div>
+          )}
+          {filtered.map(thread => {
+            const last    = getLastMsg(thread);
+            const unread  = getThreadUnread(thread);
+            const isActive = activeThread?.key === thread.key;
+            const av = avatarFor(thread.name, thread.color || "");
+            const icon = thread.type === "location" ? "📍" : thread.type === "broadcast" ? "📢" : null;
+            return (
+              <button key={thread.key} onClick={() => handleThreadClick(thread)}
+                className={`w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-800/40 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                {/* Avatar */}
+                <div className="relative flex-shrink-0">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold"
+                    style={{ background: av.bg + "25", color: av.bg }}>
+                    {icon || av.initials}
+                  </div>
+                  {unread > 0 && (
+                    <div className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center">
+                      <span className="text-white text-xs font-bold leading-none">{unread > 9 ? "9+" : unread}</span>
+                    </div>
+                  )}
+                </div>
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1">
+                    <div className={`text-sm truncate ${unread > 0 ? "font-bold text-white" : "font-semibold text-slate-200"}`}>{thread.name}</div>
+                    <div className="text-xs text-slate-600 flex-shrink-0">{last ? fmtChatTime(last.createdAt) : ""}</div>
+                  </div>
+                  <div className={`text-xs truncate mt-0.5 ${unread > 0 ? "text-slate-300 font-medium" : "text-slate-500"}`}>
+                    {last
+                      ? `${last.fromId === myId || last.fromId === myOpsId ? "You: " : ""}${last.body}`
+                      : <span className="italic text-slate-600">No messages yet</span>
+                    }
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Right panel: active chat ─────────────────────────────────────────── */}
+      <div className={`flex-1 flex flex-col min-w-0 ${!mobileShowThread ? "hidden" : "flex"} lg:flex`}>
+        {!activeThread ? (
+          <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
+            <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center">
+              <MessageSquare size={28} className="text-slate-600"/>
+            </div>
+            <div className="text-base font-semibold text-slate-500">Select a conversation</div>
+            <div className="text-sm text-slate-600">or tap + to start a new chat</div>
+          </div>
+        ) : (
+          <>
+            {/* Thread header */}
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
+              {/* Back button on mobile */}
+              <button onClick={() => setMobileShowThread(false)} className="lg:hidden p-1.5 -ml-1 text-slate-400 hover:text-white transition-colors">
+                <ChevronLeft size={20}/>
+              </button>
+              {/* Avatar */}
+              {(() => {
+                const av = avatarFor(activeThread.name, activeThread.color || "");
+                const icon = activeThread.type === "location" ? "📍" : activeThread.type === "broadcast" ? "📢" : null;
+                return (
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+                    style={{ background: av.bg + "25", color: av.bg }}>
+                    {icon || av.initials}
+                  </div>
+                );
+              })()}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-white">{activeThread.name}</div>
+                <div className="text-xs text-slate-500">{activeThread.sub}</div>
+              </div>
+            </div>
+            {/* Messages + input */}
+            <ChatThread
+              thread={activeThread}
+              messages={messages}
+              currentUser={currentUser}
+              brands={brands}
+              onSend={msg => { onSend(msg); }}
+              onMarkRead={onMarkRead}
+            />
+          </>
+        )}
+      </div>
+
+      {/* New chat modal */}
+      {newChat && (
+        <NewChatModal
           currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users}
-          onSend={msg => { onSend(msg); setCompose(false); }}
-          onClose={() => setCompose(false)}
+          onStart={handleStartChat}
+          onClose={() => setNewChat(false)}
         />
       )}
     </div>
@@ -3732,49 +3991,86 @@ export default function App() {
   }, []);
 
   // ── Brands ────────────────────────────────────────────────────────────────
-  const addBrand = useCallback(async b => { const saved = await insertBrand(b); setBrands(bs => [...bs, saved]); }, []);
-  const updateBrand = useCallback(async b => { const saved = await upsertBrand(b); setBrands(bs => bs.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteBrand = useCallback(async id => { await removeBrand(id); setBrands(bs => bs.filter(b => b.id !== id)); setEntries(es => es.filter(e => e.brandId !== id)); setUsers(us => us.map(u => ({ ...u, brandIds: u.brandIds.filter(bid => bid !== id) }))); setIssues(is => is.filter(i => i.brandId !== id)); setAssignments(as => as.filter(a => a.brandId !== id)); }, []);
-  const updateKPITargets = useCallback(async (brandId, targets) => { const brand = brands.find(b => b.id === brandId); if (!brand) return; const updated = { ...brand, kpiTargets: { ...brand.kpiTargets, ...targets } }; const saved = await upsertBrand(updated); setBrands(bs => bs.map(b => b.id === brandId ? saved : b)); }, [brands]);
+  const addBrand = useCallback(async b => { try { const saved = await insertBrand(b); setBrands(bs => [...bs, saved]); showToast(`${b.name} added`); } catch (err) { showToast("Failed to add location: " + err.message, "error"); } }, [showToast]);
+  const updateBrand = useCallback(async b => { try { const saved = await upsertBrand(b); setBrands(bs => bs.map(x => x.id === saved.id ? saved : x)); showToast(`${b.name} updated`); } catch (err) { showToast("Failed to update location: " + err.message, "error"); } }, [showToast]);
+  const deleteBrand = useCallback(async id => { try { await removeBrand(id); setBrands(bs => bs.filter(b => b.id !== id)); setEntries(es => es.filter(e => e.brandId !== id)); setUsers(us => us.map(u => ({ ...u, brandIds: u.brandIds.filter(bid => bid !== id) }))); setIssues(is => is.filter(i => i.brandId !== id)); setAssignments(as => as.filter(a => a.brandId !== id)); showToast("Location deleted"); } catch (err) { showToast("Failed to delete location: " + err.message, "error"); } }, [showToast]);
+  const updateKPITargets = useCallback(async (brandId, targets) => { try { const brand = brands.find(b => b.id === brandId); if (!brand) return; const updated = { ...brand, kpiTargets: { ...brand.kpiTargets, ...targets } }; const saved = await upsertBrand(updated); setBrands(bs => bs.map(b => b.id === brandId ? saved : b)); showToast("KPI targets saved"); } catch (err) { showToast("Failed to save KPI targets: " + err.message, "error"); } }, [brands, showToast]);
 
   // ── Users ─────────────────────────────────────────────────────────────────
-  const addUser    = useCallback(async u => { const saved = await insertUser(u); setUsers(us => [...us, saved]); }, []);
-  const updateUser = useCallback(async u => { const saved = await upsertUser(u); setUsers(us => us.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteUser = useCallback(async id => { await removeUser(id); setUsers(us => us.filter(u => u.id !== id)); }, []);
+  const addUser    = useCallback(async u => { try { const saved = await insertUser(u); setUsers(us => [...us, saved]); showToast(`${u.name} added`); } catch (err) { showToast("Failed to add user: " + err.message, "error"); } }, [showToast]);
+  const updateUser = useCallback(async u => { try { const saved = await upsertUser(u); setUsers(us => us.map(x => x.id === saved.id ? saved : x)); showToast(`${u.name} updated`); } catch (err) { showToast("Failed to update user: " + err.message, "error"); } }, [showToast]);
+  const deleteUser = useCallback(async id => { try { await removeUser(id); setUsers(us => us.filter(u => u.id !== id)); showToast("User removed"); } catch (err) { showToast("Failed to remove user: " + err.message, "error"); } }, [showToast]);
 
   // ── EOD Entries ───────────────────────────────────────────────────────────
-  const addEntry = useCallback(async entry => { const saved = await upsertEntry(entry); setEntries(es => { const f = es.filter(e => e.id !== saved.id); return [...f, saved].sort((a,b) => a.date.localeCompare(b.date)); }); }, []);
-  const bulkImport = useCallback(async rows => { const saved = await upsertEntries(rows); setEntries(es => { const map = new Map(es.map(e => [e.id, e])); saved.forEach(r => map.set(r.id, r)); return [...map.values()].sort((a,b) => a.date.localeCompare(b.date)); }); }, []);
+  const addEntry = useCallback(async entry => {
+    try {
+      const saved = await upsertEntry(entry);
+      setEntries(es => { const f = es.filter(e => e.id !== saved.id); return [...f, saved].sort((a,b) => a.date.localeCompare(b.date)); });
+      showToast("EOD report saved");
+    } catch (err) {
+      showToast("Failed to save EOD report: " + err.message, "error");
+    }
+  }, [showToast]);
+  const bulkImport = useCallback(async rows => { try { const saved = await upsertEntries(rows); setEntries(es => { const map = new Map(es.map(e => [e.id, e])); saved.forEach(r => map.set(r.id, r)); return [...map.values()].sort((a,b) => a.date.localeCompare(b.date)); }); showToast(`${rows.length} entries imported`); } catch (err) { showToast("Import failed: " + err.message, "error"); } }, [showToast]);
 
   // ── Issues ────────────────────────────────────────────────────────────────
-  const addIssue    = useCallback(async issue => { const saved = await insertIssue(issue); setIssues(is => [...is, saved]); }, []);
-  const updateIssue = useCallback(async issue => { const saved = await upsertIssue(issue); setIssues(is => is.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteIssue = useCallback(async id => { await removeIssue(id); setIssues(is => is.filter(i => i.id !== id)); }, []);
+  const addIssue    = useCallback(async issue => { try { const saved = await insertIssue(issue); setIssues(is => [...is, saved]); showToast("Issue reported"); } catch (err) { showToast("Failed to report issue: " + err.message, "error"); } }, [showToast]);
+  const updateIssue = useCallback(async issue => { try { const saved = await upsertIssue(issue); setIssues(is => is.map(x => x.id === saved.id ? saved : x)); } catch (err) { showToast("Failed to update issue: " + err.message, "error"); } }, [showToast]);
+  const deleteIssue = useCallback(async id => { try { await removeIssue(id); setIssues(is => is.filter(i => i.id !== id)); showToast("Issue deleted"); } catch (err) { showToast("Failed to delete issue: " + err.message, "error"); } }, [showToast]);
 
   // ── Checklists ────────────────────────────────────────────────────────────
-  const addChecklist    = useCallback(async cl => { const saved = await upsertChecklist(cl); setChecklists(cs => [...cs, saved]); }, []);
-  const updateChecklist = useCallback(async cl => { const saved = await upsertChecklist(cl); setChecklists(cs => cs.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteChecklist = useCallback(async id => { await removeChecklist(id); setChecklists(cs => cs.filter(c => c.id !== id)); }, []);
+  const addChecklist    = useCallback(async cl => { try { const saved = await upsertChecklist(cl); setChecklists(cs => [...cs, saved]); showToast(`"${cl.name}" checklist created`); } catch (err) { showToast("Failed to save checklist: " + err.message, "error"); } }, [showToast]);
+  const updateChecklist = useCallback(async cl => { try { const saved = await upsertChecklist(cl); setChecklists(cs => cs.map(x => x.id === saved.id ? saved : x)); showToast(`"${cl.name}" updated`); } catch (err) { showToast("Failed to update checklist: " + err.message, "error"); } }, [showToast]);
+  const deleteChecklist = useCallback(async id => { try { await removeChecklist(id); setChecklists(cs => cs.filter(c => c.id !== id)); showToast("Checklist deleted"); } catch (err) { showToast("Failed to delete checklist: " + err.message, "error"); } }, [showToast]);
 
   // ── Temp Units ────────────────────────────────────────────────────────────
-  const addTempUnit    = useCallback(async u => { const saved = await upsertTempUnit(u); setTempUnits(ts => [...ts, saved]); }, []);
-  const updateTempUnit = useCallback(async u => { const saved = await upsertTempUnit(u); setTempUnits(ts => ts.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteTempUnit = useCallback(async id => { await removeTempUnit(id); setTempUnits(ts => ts.filter(u => u.id !== id)); }, []);
+  const addTempUnit    = useCallback(async u => { try { const saved = await upsertTempUnit(u); setTempUnits(ts => [...ts, saved]); showToast(`"${u.name}" added`); } catch (err) { showToast("Failed to add temp unit: " + err.message, "error"); } }, [showToast]);
+  const updateTempUnit = useCallback(async u => { try { const saved = await upsertTempUnit(u); setTempUnits(ts => ts.map(x => x.id === saved.id ? saved : x)); showToast(`"${u.name}" updated`); } catch (err) { showToast("Failed to update temp unit: " + err.message, "error"); } }, [showToast]);
+  const deleteTempUnit = useCallback(async id => { try { await removeTempUnit(id); setTempUnits(ts => ts.filter(u => u.id !== id)); showToast("Temp unit deleted"); } catch (err) { showToast("Failed to delete temp unit: " + err.message, "error"); } }, [showToast]);
 
   // ── Cleaning Tasks ────────────────────────────────────────────────────────
-  const addCleanTask    = useCallback(async t => { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => [...ts, saved]); }, []);
-  const updateCleanTask = useCallback(async t => { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => ts.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteCleanTask = useCallback(async id => { await removeCleaningTask(id); setCleaningTasks(ts => ts.filter(t => t.id !== id)); }, []);
+  const addCleanTask    = useCallback(async t => { try { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => [...ts, saved]); showToast(`"${t.name}" added`); } catch (err) { showToast("Failed to add cleaning task: " + err.message, "error"); } }, [showToast]);
+  const updateCleanTask = useCallback(async t => { try { const saved = await upsertCleaningTask(t); setCleaningTasks(ts => ts.map(x => x.id === saved.id ? saved : x)); showToast(`"${t.name}" updated`); } catch (err) { showToast("Failed to update cleaning task: " + err.message, "error"); } }, [showToast]);
+  const deleteCleanTask = useCallback(async id => { try { await removeCleaningTask(id); setCleaningTasks(ts => ts.filter(t => t.id !== id)); showToast("Cleaning task deleted"); } catch (err) { showToast("Failed to delete cleaning task: " + err.message, "error"); } }, [showToast]);
 
   // ── Assignments ───────────────────────────────────────────────────────────
-  const addAssignment    = useCallback(async a => { const saved = await upsertAssignment(a); setAssignments(as => [...as, saved]); }, []);
-  const updateAssignment = useCallback(async a => { const saved = await upsertAssignment(a); setAssignments(as => as.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteAssignment = useCallback(async id => { await removeAssignment(id); setAssignments(as => as.filter(a => a.id !== id)); }, []);
+  const addAssignment    = useCallback(async a => { try { const saved = await upsertAssignment(a); setAssignments(as => [...as, saved]); showToast("Assignment created"); } catch (err) { showToast("Failed to create assignment: " + err.message, "error"); } }, [showToast]);
+  const updateAssignment = useCallback(async a => { try { const saved = await upsertAssignment(a); setAssignments(as => as.map(x => x.id === saved.id ? saved : x)); showToast("Assignment updated"); } catch (err) { showToast("Failed to update assignment: " + err.message, "error"); } }, [showToast]);
+  const deleteAssignment = useCallback(async id => { try { await removeAssignment(id); setAssignments(as => as.filter(a => a.id !== id)); showToast("Assignment deleted"); } catch (err) { showToast("Failed to delete assignment: " + err.message, "error"); } }, [showToast]);
 
   // ── Ops Team ──────────────────────────────────────────────────────────────
-  const addOpsTeam    = useCallback(async m => { const saved = await upsertOpsTeamMember(m); setOpsTeam(ms => [...ms, saved]); }, []);
-  const updateOpsTeam = useCallback(async m => { const saved = await upsertOpsTeamMember(m); setOpsTeam(ms => ms.map(x => x.id === saved.id ? saved : x)); }, []);
-  const deleteOpsTeam = useCallback(async id => { await removeOpsTeamMember(id); setOpsTeam(ms => ms.filter(m => m.id !== id)); }, []);
+  const addOpsTeam = useCallback(async m => {
+    try {
+      const saved = await upsertOpsTeamMember(m);
+      setOpsTeam(ms => [...ms, saved]);
+      showToast(`${saved.firstName} ${saved.lastName} added to team`);
+    } catch (err) {
+      console.error("addOpsTeam failed:", err);
+      showToast("Failed to add team member: " + err.message, "error");
+    }
+  }, [showToast]);
+
+  const updateOpsTeam = useCallback(async m => {
+    try {
+      const saved = await upsertOpsTeamMember(m);
+      setOpsTeam(ms => ms.map(x => x.id === saved.id ? saved : x));
+      showToast(`${saved.firstName} ${saved.lastName} updated`);
+    } catch (err) {
+      console.error("updateOpsTeam failed:", err);
+      showToast("Failed to update team member: " + err.message, "error");
+    }
+  }, [showToast]);
+
+  const deleteOpsTeam = useCallback(async id => {
+    try {
+      await removeOpsTeamMember(id);
+      setOpsTeam(ms => ms.filter(m => m.id !== id));
+      showToast("Team member removed");
+    } catch (err) {
+      console.error("deleteOpsTeam failed:", err);
+      showToast("Failed to remove team member: " + err.message, "error");
+    }
+  }, [showToast]);
 
   // ── Temp Logs ─────────────────────────────────────────────────────────────
   const handleTempLog = useCallback(async log => {
@@ -4003,7 +4299,7 @@ export default function App() {
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
-    const [collapsed, setCollapsed] = useState({});
+    const [collapsed, setCollapsed] = useState({ Overview: false, "Daily Ops": true, Team: true, Settings: true });
     const toggleGroup = (g) => setCollapsed(c => ({ ...c, [g]: !c[g] }));
     const groupIcons = { Overview: LayoutDashboard, "Daily Ops": Activity, Team: Users, Settings: Settings };
 
