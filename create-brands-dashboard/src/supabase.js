@@ -657,6 +657,8 @@ function appPunchToDb(p) {
     overtime_approved: p.overtimeApproved ?? false,
     overtime_approved_by: p.overtimeApprovedBy || "",
     overtime_rejected_reason: p.overtimeRejectedReason || "",
+    photo_url_in: p.photoUrlIn || "",
+    photo_url_out: p.photoUrlOut || "",
     updated_at: new Date().toISOString(),
   };
 }
@@ -677,6 +679,33 @@ function dbPunchToApp(p) {
     overtimeApproved: p.overtime_approved ?? false,
     overtimeApprovedBy: p.overtime_approved_by || "",
     overtimeRejectedReason: p.overtime_rejected_reason || "",
+    photoUrlIn: p.photo_url_in || "",
+    photoUrlOut: p.photo_url_out || "",
     createdAt: p.created_at, updatedAt: p.updated_at,
   };
+}
+
+// ── PUNCH PHOTOS ──────────────────────────────────────────────────────────────
+
+/** Upload a JPEG blob and return its public URL. Used by the kiosk for punch-in/out photos. */
+export async function uploadPunchPhoto(blob, employeeId) {
+  // Random suffix prevents URL guessing
+  const random = Math.random().toString(36).slice(2, 10);
+  const filename = `${employeeId}/${Date.now()}-${random}.jpg`;
+  const { error } = await supabase.storage
+    .from("punch-photos")
+    .upload(filename, blob, { contentType: "image/jpeg", upsert: false });
+  if (error) throw error;
+  const { data } = supabase.storage.from("punch-photos").getPublicUrl(filename);
+  return data.publicUrl;
+}
+
+/** Attach photo URL to a punch record (in or out). */
+export async function attachPunchPhoto(recordId, photoUrl, which /* "in" | "out" */) {
+  const field = which === "out" ? "photo_url_out" : "photo_url_in";
+  const { error } = await supabase
+    .from("punch_records")
+    .update({ [field]: photoUrl, updated_at: new Date().toISOString() })
+    .eq("id", recordId);
+  if (error) throw error;
 }
