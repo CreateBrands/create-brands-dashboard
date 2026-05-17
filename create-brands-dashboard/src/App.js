@@ -5937,7 +5937,8 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
   const [shake,       setShake]     = useState(false);
   const [lastAction,  setLastAction]= useState(null); // { type:"in"|"out", name, time }
   const [clock,       setClock]     = useState(new Date());
-  const [submitting,  setSubmitting]= useState(false); // prevents double-tap
+  const [submitting,  setSubmitting]= useState(false);
+  const submittingRef = useRef(false); // synchronous guard — prevents double-tap before React re-renders
 
   // Live clock
   useEffect(() => {
@@ -5948,7 +5949,10 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
   // Auto-clear last action message after 5 seconds
   useEffect(() => {
     if (!lastAction) return;
-    const t = setTimeout(() => { setLastAction(null); setPin(""); setMatched(null); }, 5000);
+    const t = setTimeout(() => {
+      setLastAction(null); setPin(""); setMatched(null);
+      submittingRef.current = false; setSubmitting(false);
+    }, 5000);
     return () => clearTimeout(t);
   }, [lastAction]);
 
@@ -5979,60 +5983,52 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
   const handleClear = () => { setPin(""); setMatched(null); setError(""); };
 
   const handleConfirm = async () => {
-    if (submitting) return; // prevent double-tap
+    // SYNCHRONOUS guard via ref — fires instantly on second tap, no waiting for re-render
+    if (submittingRef.current) return;
     if (!matched) {
       setError("PIN not recognised");
       setShake(true);
       setTimeout(() => { setShake(false); setPin(""); }, 600);
       return;
     }
+    submittingRef.current = true;
     setSubmitting(true);
 
     const toLocalDate = () => {
       const d = new Date();
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     };
-
-    // Check if already punched in today
     const todayStr = toLocalDate();
     const openRecord = punchRecords.find(r =>
       r.employeeId === matched.id && r.date === todayStr && r.status === "open"
     );
-
     const now = new Date().toISOString();
 
+    // OPTIMISTIC UI — show the success screen immediately, don't wait for the network
+    // The actual DB call happens in the background. If it fails, the next punch
+    // attempt will still work because the realtime channel keeps state fresh.
     if (openRecord) {
-      // Punch OUT
-      const punchInTime  = new Date(openRecord.punchIn);
-      const hoursWorked  = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
-      const grossPay     = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
-      await onPunchOut(openRecord.id, now, hoursWorked, grossPay);
-      setSubmitting(false);
-      // Calculate if there was OT for the summary screen
-      const emp = matched;
-      // Find schedule for today (simplified — just show hours)
+      const punchInTime = new Date(openRecord.punchIn);
+      const hoursWorked = Math.round(((Date.now() - punchInTime.getTime()) / 3600000) * 100) / 100;
+      const grossPay    = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
       setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs: 0, isUnscheduled: false });
+      // Fire DB write in background — don't await
+      onPunchOut(openRecord.id, now, hoursWorked, grossPay)
+        .catch(err => console.error("PunchOut failed:", err));
     } else {
-      // Punch IN
-      const brand = brands.find(b => b.id === matched.brandId);
-      await onPunchIn({
+      setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
+      onPunchIn({
         id: `pr-${Date.now()}`,
         brandId: matched.brandId,
         employeeId: matched.id,
         employeeName: `${matched.firstName} ${matched.lastName}`.trim(),
         date: todayStr,
-        punchIn: now,
-        punchOut: null,
-        hoursWorked: null,
-        hourlyRate: matched.hourlyRate || 0,
-        grossPay: null,
-        notes: "",
-        status: "open",
-        amendedBy: "",
-      });
-      setSubmitting(false);
-      setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
+        punchIn: now, punchOut: null, hoursWorked: null,
+        hourlyRate: matched.hourlyRate || 0, grossPay: null,
+        notes: "", status: "open", amendedBy: "",
+      }).catch(err => console.error("PunchIn failed:", err));
     }
+    // Reset submitting after the success screen auto-clears (5s, set in useEffect on lastAction)
   };
 
   const fmtTime = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -6931,6 +6927,7 @@ function KioskShell() {
   const [brands,       setBrands]       = useState([]);
   const [punchRecords, setPunchRecords] = useState([]);
   const [ready,        setReady]        = useState(false);
+  const inFlightRef = useRef(new Set()); // employees currently being punched in
 
   useEffect(() => {
     Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords()])
@@ -6956,10 +6953,19 @@ function KioskShell() {
   }, []);
 
   const handlePunchIn  = async (record) => {
+    // Synchronous in-flight guard — blocks duplicate inserts even before DB confirms
+    if (inFlightRef.current.has(record.employeeId)) return;
     const alreadyOpen = punchRecords.some(p => p.employeeId === record.employeeId && p.date === record.date && p.status === "open");
     if (alreadyOpen) return;
-    const saved = await insertPunchIn(record);
-    setPunchRecords(ps => [saved, ...ps]);
+    inFlightRef.current.add(record.employeeId);
+    try {
+      const saved = await insertPunchIn(record);
+      setPunchRecords(ps => ps.some(p => p.id === saved.id) ? ps : [saved, ...ps]);
+    } catch (err) {
+      console.error("PunchIn failed:", err);
+    } finally {
+      inFlightRef.current.delete(record.employeeId);
+    }
   };
   const handlePunchOut = async (id, punchOut, hoursWorked, grossPay) => {
     const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
