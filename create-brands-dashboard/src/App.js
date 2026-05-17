@@ -3041,172 +3041,182 @@ function fmtAvailTime(a) {
   return `${st || "09:00"} – ${et || "17:00"}`;
 }
 
-// ── Employee: Submit Availability ─────────────────────────────────────────────
+// ── Availability: standalone picker components (top-level — no hooks-in-functions) ──
+
+function AvailCalendarPicker({ value, minDate, onSelect, onClose }) {
+  const initMonth = () => {
+    const d = value ? new Date(value + "T00:00:00") : new Date();
+    d.setDate(1); return d;
+  };
+  const [calMonth, setCalMonth] = useState(initMonth);
+  const prevMonth = () => setCalMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()-1); return d; });
+  const nextMonth = () => setCalMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()+1); return d; });
+
+  const year  = calMonth.getFullYear();
+  const month = calMonth.getMonth();
+  const firstDay    = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const offset = firstDay === 0 ? 6 : firstDay - 1;
+  const today  = new Date().toISOString().split("T")[0];
+
+  const cells = [];
+  for (let i = 0; i < offset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const mm = String(month+1).padStart(2,"0");
+    const dd = String(d).padStart(2,"0");
+    cells.push(`${year}-${mm}-${dd}`);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  return (
+    <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 w-72"
+      onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <button onClick={prevMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+          <ChevronLeft size={15}/>
+        </button>
+        <div className="text-sm font-bold text-white">
+          {calMonth.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
+        </div>
+        <button onClick={nextMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+          <ChevronRight size={15}/>
+        </button>
+      </div>
+      <div className="grid grid-cols-7 mb-1">
+        {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => (
+          <div key={d} className="text-center text-xs font-semibold text-slate-500 py-1">{d}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((dateStr, i) => {
+          if (!dateStr) return <div key={i}/>;
+          const isSelected  = dateStr === value;
+          const isToday     = dateStr === today;
+          const isDisabled  = minDate && dateStr < minDate;
+          return (
+            <button key={i} disabled={isDisabled}
+              onClick={() => { onSelect(dateStr); }}
+              className={`h-8 w-full rounded-lg text-xs font-medium transition-all ${
+                isDisabled  ? "text-slate-700 cursor-not-allowed" :
+                isSelected  ? "bg-indigo-600 text-white font-bold" :
+                isToday     ? "border border-indigo-500/50 text-indigo-300 hover:bg-indigo-600/20" :
+                              "text-slate-300 hover:bg-slate-800"
+              }`}>
+              {parseInt(dateStr.split("-")[2])}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex justify-between mt-2 pt-2 border-t border-slate-800">
+        <button onClick={() => { onSelect(""); onClose(); }} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+        <button onClick={onClose} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">Done</button>
+      </div>
+    </div>
+  );
+}
+
+function AvailDateField({ label, value, onChange, minDate, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const display = value
+    ? new Date(value + "T00:00:00").toLocaleDateString("en-GB", { weekday:"short", day:"numeric", month:"short", year:"numeric" })
+    : placeholder || "Select date";
+  return (
+    <div className="relative">
+      {label && <label className={labelCls}>{label}</label>}
+      <button
+        onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+        className={`${inputCls} text-left flex items-center justify-between w-full ${!value ? "text-slate-500" : "text-white"}`}>
+        <span className="truncate">{display}</span>
+        <Calendar size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
+      </button>
+      {open && (
+        <AvailCalendarPicker
+          value={value} minDate={minDate}
+          onSelect={v => { onChange(v); if (v) setOpen(false); }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function AvailTimeField({ label, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [hh, mm] = (value || "09:00").split(":").map(Number);
+  const hours   = Array.from({ length: 24 }, (_, i) => i);
+  const minutes = [0, 15, 30, 45];
+  const hhRef = useRef(null);
+  const mmRef = useRef(null);
+
+  useEffect(() => {
+    if (open) {
+      // Scroll selected hour/minute into view
+      setTimeout(() => {
+        hhRef.current?.children[hh]?.scrollIntoView({ block: "center" });
+        mmRef.current?.children[minutes.indexOf(mm < 8 ? 0 : mm < 23 ? 15 : mm < 38 ? 30 : 45)]?.scrollIntoView({ block: "center" });
+      }, 50);
+    }
+  }, [open]);
+
+  return (
+    <div className="relative">
+      {label && <label className={labelCls}>{label}</label>}
+      <button
+        onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+        className={`${inputCls} text-left flex items-center justify-between w-full`}>
+        <span className="text-white font-mono">{value || "09:00"}</span>
+        <Clock size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 w-52"
+          onClick={e => e.stopPropagation()}>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <div className="text-xs font-semibold text-slate-400 text-center mb-1">Hour</div>
+              <div className="max-h-44 overflow-y-auto space-y-0.5 scroll-smooth" ref={hhRef}>
+                {hours.map(h => (
+                  <button key={h}
+                    onClick={() => onChange(`${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}`)}
+                    className={`w-full text-center text-sm py-1.5 rounded-lg transition-all font-mono ${hh === h ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"}`}>
+                    {String(h).padStart(2,"0")}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="w-px bg-slate-800"/>
+            <div className="flex-1">
+              <div className="text-xs font-semibold text-slate-400 text-center mb-1">Min</div>
+              <div className="space-y-0.5" ref={mmRef}>
+                {minutes.map(m => (
+                  <button key={m}
+                    onClick={() => onChange(`${String(hh).padStart(2,"0")}:${String(m).padStart(2,"0")}`)}
+                    className={`w-full text-center text-sm py-1.5 rounded-lg transition-all font-mono ${mm === m ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"}`}>
+                    {String(m).padStart(2,"0")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <button onClick={() => setOpen(false)}
+            className="w-full mt-3 pt-2 border-t border-slate-800 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
+            Done
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
-  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
-  const [brandId,    setBrandId]  = useState(myBrands[0]?.id || "");
-  const [type,       setType]     = useState("one_off");
-  const [available,  setAvailable]= useState(true);
-  const [form, setFormState]      = useState({
+  const myBrands  = brands.filter(b => currentUser.brandIds.includes(b.id));
+  const [brandId, setBrandId]   = useState(myBrands[0]?.id || "");
+  const [type,    setType]      = useState("one_off");
+  const [available, setAvailable] = useState(true);
+  const [form, setFormState]    = useState({
     date: "", dayOfWeek: "Monday", startDate: "", endDate: "",
     startTime: "09:00", endTime: "17:00", notes: "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
-
-  // ── Inline calendar picker ────────────────────────────────────────────────
-  const [calField,      setCalField]   = useState(null);  // "date"|"startDate"|"endDate"|null
-  const [calMonth,      setCalMonth]   = useState(() => { const d = new Date(); d.setDate(1); return d; });
-
-  const openCal = (field) => {
-    const existing = form[field];
-    if (existing) { const d = new Date(existing + "T00:00:00"); d.setDate(1); setCalMonth(d); }
-    else { const d = new Date(); d.setDate(1); setCalMonth(d); }
-    setCalField(field);
-  };
-
-  const selectDay = (dateStr) => {
-    set(calField, dateStr);
-    // for recurring: if picking startDate, auto-open endDate next
-    if (calField === "startDate") {
-      setTimeout(() => openCal("endDate"), 0);
-    } else {
-      setCalField(null);
-    }
-  };
-
-  const prevMonth = () => setCalMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()-1); return d; });
-  const nextMonth = () => setCalMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()+1); return d; });
-
-  const renderCalendar = (field) => {
-    const year  = calMonth.getFullYear();
-    const month = calMonth.getMonth();
-    const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
-    const daysInMonth = new Date(year, month+1, 0).getDate();
-    const offset = firstDay === 0 ? 6 : firstDay - 1; // Mon-start offset
-    const today  = new Date().toISOString().split("T")[0];
-    const selected = form[field];
-    const minDate  = field === "endDate" ? form.startDate : "";
-
-    const cells = [];
-    for (let i = 0; i < offset; i++) cells.push(null);
-    for (let d = 1; d <= daysInMonth; d++) {
-      const mm = String(month+1).padStart(2,"0");
-      const dd = String(d).padStart(2,"0");
-      cells.push(`${year}-${mm}-${dd}`);
-    }
-    while (cells.length % 7 !== 0) cells.push(null);
-
-    return (
-      <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-xl p-3 w-72">
-        {/* Month nav */}
-        <div className="flex items-center justify-between mb-2 px-1">
-          <button onClick={prevMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all"><ChevronLeft size={15}/></button>
-          <div className="text-sm font-bold text-white">
-            {calMonth.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
-          </div>
-          <button onClick={nextMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all"><ChevronRight size={15}/></button>
-        </div>
-        {/* Day headers */}
-        <div className="grid grid-cols-7 mb-1">
-          {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => (
-            <div key={d} className="text-center text-xs font-semibold text-slate-500 py-1">{d}</div>
-          ))}
-        </div>
-        {/* Day cells */}
-        <div className="grid grid-cols-7 gap-0.5">
-          {cells.map((dateStr, i) => {
-            if (!dateStr) return <div key={i}/>;
-            const isSelected = dateStr === selected;
-            const isToday    = dateStr === today;
-            const isDisabled = minDate && dateStr < minDate;
-            const isInRange  = field === "endDate" && form.startDate && dateStr > form.startDate && dateStr < selected;
-            return (
-              <button key={i} disabled={isDisabled}
-                onClick={() => selectDay(dateStr)}
-                className={`h-8 w-full rounded-lg text-xs font-medium transition-all ${
-                  isDisabled  ? "text-slate-700 cursor-not-allowed" :
-                  isSelected  ? "bg-indigo-600 text-white font-bold" :
-                  isInRange   ? "bg-indigo-600/20 text-indigo-300" :
-                  isToday     ? "border border-indigo-500/50 text-indigo-300 hover:bg-indigo-600/20" :
-                  "text-slate-300 hover:bg-slate-800"
-                }`}>
-                {parseInt(dateStr.split("-")[2])}
-              </button>
-            );
-          })}
-        </div>
-        {/* Clear */}
-        <div className="flex justify-between mt-2 pt-2 border-t border-slate-800">
-          <button onClick={() => { set(calField, ""); setCalField(null); }} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
-          <button onClick={() => setCalField(null)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-semibold">Done</button>
-        </div>
-      </div>
-    );
-  };
-
-  // ── Styled time picker ────────────────────────────────────────────────────
-  const TimePickerField = ({ label, value, onChange }) => {
-    const [open, setOpen] = useState(false);
-    const [hh, mm] = (value || "09:00").split(":").map(Number);
-
-    const hours   = Array.from({length:24},(_,i)=>i);
-    const minutes = [0,15,30,45];
-
-    return (
-      <div className="relative">
-        <label className={labelCls}>{label}</label>
-        <button onClick={() => setOpen(o => !o)}
-          className={`${inputCls} text-left flex items-center justify-between`}>
-          <span>{value || "09:00"}</span>
-          <Clock size={14} className="text-slate-400"/>
-        </button>
-        {open && (
-          <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-xl p-3 w-52">
-            <div className="flex gap-2">
-              {/* Hours */}
-              <div className="flex-1">
-                <div className="text-xs font-semibold text-slate-400 text-center mb-1">Hour</div>
-                <div className="max-h-40 overflow-y-auto space-y-0.5">
-                  {hours.map(h => (
-                    <button key={h} onClick={() => { onChange(`${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}`); }}
-                      className={`w-full text-center text-sm py-1 rounded-lg transition-all ${hh===h ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"}`}>
-                      {String(h).padStart(2,"0")}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {/* Minutes */}
-              <div className="flex-1">
-                <div className="text-xs font-semibold text-slate-400 text-center mb-1">Min</div>
-                <div className="space-y-0.5">
-                  {minutes.map(m => (
-                    <button key={m} onClick={() => { onChange(`${String(hh).padStart(2,"0")}:${String(m).padStart(2,"0")}`); }}
-                      className={`w-full text-center text-sm py-1 rounded-lg transition-all ${mm===m ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"}`}>
-                      {String(m).padStart(2,"0")}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <button onClick={() => setOpen(false)} className="w-full mt-2 pt-2 border-t border-slate-800 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">Done</button>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ── Date button helper ────────────────────────────────────────────────────
-  const DateButton = ({ label, field, placeholder }) => (
-    <div className="relative">
-      <label className={labelCls}>{label}</label>
-      <button onClick={() => calField === field ? setCalField(null) : openCal(field)}
-        className={`${inputCls} text-left flex items-center justify-between ${!form[field] ? "text-slate-500" : "text-white"}`}>
-        <span>{form[field] ? new Date(form[field]+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}) : placeholder}</span>
-        <Calendar size={14} className="text-slate-400 flex-shrink-0"/>
-      </button>
-      {calField === field && renderCalendar(field)}
-    </div>
-  );
 
   const isValid = () => {
     if (type === "one_off")   return !!form.date;
@@ -3219,20 +3229,27 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
     if (!isValid()) return;
     onSubmit({
       id: `av-${Date.now()}`,
-      brandId, employeeId: currentUser.opsTeamMemberId || currentUser.id,
-      employeeName: currentUser.name, type, available,
+      brandId,
+      employeeId:   currentUser.opsTeamMemberId || currentUser.id,
+      employeeName: currentUser.name,
+      type, available,
       date:       type === "one_off"   ? form.date      : null,
       dayOfWeek:  type === "weekly"    ? form.dayOfWeek : null,
       startDate:  type === "recurring" ? form.startDate : null,
       endDate:    type === "recurring" ? form.endDate   : null,
-      startTime: form.startTime, endTime: form.endTime,
-      notes: form.notes, status: "pending",
-      managerNotes: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      startTime:   form.startTime,
+      endTime:     form.endTime,
+      notes:       form.notes,
+      status:      "pending",
+      managerNotes: "",
+      createdAt:   new Date().toISOString(),
+      updatedAt:   new Date().toISOString(),
     });
   };
 
   return (
-    <div className="flex flex-col h-full" onClick={() => { if (calField) setCalField(null); }}>
+    <div className="flex flex-col h-full">
+      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
         <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
           <ChevronLeft size={18}/>
@@ -3240,10 +3257,11 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
         <div className="text-sm font-bold text-white">Submit Availability</div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-5" onClick={e => e.stopPropagation()}>
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
         {/* Location */}
         {myBrands.length > 1 && (
-          <div><label className={labelCls}>Location</label>
+          <div>
+            <label className={labelCls}>Location</label>
             <LocationDropdown brands={myBrands} value={brandId} onChange={setBrandId} className="w-full"/>
           </div>
         )}
@@ -3278,7 +3296,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
 
         {/* Date pickers */}
         {type === "one_off" && (
-          <DateButton label="Date" field="date" placeholder="Select a date"/>
+          <AvailDateField label="Date" value={form.date} onChange={v => set("date", v)} placeholder="Select a date"/>
         )}
         {type === "weekly" && (
           <div>
@@ -3286,7 +3304,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
             <div className="grid grid-cols-4 gap-2">
               {DAYS_OF_WEEK.map(d => (
                 <button key={d} onClick={() => set("dayOfWeek", d)}
-                  className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                  className={`py-2.5 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
                   {d.slice(0,3)}
                 </button>
               ))}
@@ -3295,15 +3313,15 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
         )}
         {type === "recurring" && (
           <div className="grid grid-cols-2 gap-3">
-            <DateButton label="From" field="startDate" placeholder="Start date"/>
-            <DateButton label="To"   field="endDate"   placeholder="End date"/>
+            <AvailDateField label="From" value={form.startDate} onChange={v => set("startDate", v)} placeholder="Start date"/>
+            <AvailDateField label="To" value={form.endDate} onChange={v => set("endDate", v)} minDate={form.startDate} placeholder="End date"/>
           </div>
         )}
 
         {/* Time pickers */}
         <div className="grid grid-cols-2 gap-3">
-          <TimePickerField label="Start time" value={form.startTime} onChange={v => set("startTime", v)}/>
-          <TimePickerField label="End time"   value={form.endTime}   onChange={v => set("endTime",   v)}/>
+          <AvailTimeField label="Start time" value={form.startTime} onChange={v => set("startTime", v)}/>
+          <AvailTimeField label="End time"   value={form.endTime}   onChange={v => set("endTime",   v)}/>
         </div>
 
         {/* Notes */}
@@ -3319,6 +3337,11 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
           className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
           <Send size={14}/> Submit Availability
         </button>
+        {!isValid() && (
+          <div className="text-xs text-slate-500 text-center mt-2">
+            {type === "one_off" ? "Please select a date" : type === "recurring" ? "Please select start and end dates" : ""}
+          </div>
+        )}
       </div>
     </div>
   );
