@@ -5213,139 +5213,125 @@ const SHIFTS = [
 const SHIFT_COLOR = Object.fromEntries(SHIFTS.map(s => [s.key, s.color]));
 
 // ── Schedule Shift Modal ───────────────────────────────────────────────────────
-function ShiftFormModal({ date, slot, brands, opsTeam, availability, currentUser, onSave, onClose }) {
+function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole, filterDept, opsTeam, availability, currentUser, onSave, onClose }) {
+  // brandId, memberId, filterRole, filterDept all come from the calendar context —
+  // no need to re-select them here.
   const isEdit = !!slot;
-  const vb = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
 
-  const [brandId,    setBrandId]    = useState(slot?.brandId    || vb[0]?.id || "");
-  const [employeeId, setEmployeeId] = useState(slot?.employeeId || "");
+  const [employeeId, setEmployeeId] = useState(slot?.employeeId || memberId || "");
   const [shift,      setShift]      = useState(slot?.shift      || "Morning");
   const [startTime,  setStartTime]  = useState(slot?.startTime  || "08:00");
   const [endTime,    setEndTime]    = useState(slot?.endTime    || "16:00");
-  const [role,       setRole]       = useState(slot?.role       || "");
-  const [dept,       setDept]       = useState(slot?.department || "");
   const [notes,      setNotes]      = useState(slot?.notes      || "");
-  const [status,     setStatus]     = useState(slot?.status     || "scheduled");
 
-  // When shift preset changes, auto-fill start/end unless Custom
+  // All members for this brand (for the employee dropdown when opening from a blank cell)
+  const brandMembers = opsTeam.filter(m => {
+    if (m.brandId !== brandId) return false;
+    if (filterDept && filterDept !== "all" && m.department !== filterDept) return false;
+    if (filterRole && filterRole !== "all" && m.role !== filterRole) return false;
+    return true;
+  });
+
   const handleShiftChange = (s) => {
     setShift(s);
     const preset = SHIFTS.find(x => x.key === s);
     if (preset && s !== "Custom") { setStartTime(preset.start); setEndTime(preset.end); }
   };
 
-  // Team members for selected brand
-  const brandMembers = opsTeam.filter(m => m.brandId === brandId);
-  const selectedMember = opsTeam.find(m => m.id === employeeId);
-
-  // Departments & roles for dropdowns
-  const allDepts = [...new Set(opsTeam.filter(m => m.brandId === brandId).map(m => m.department).filter(Boolean))];
-  const allRoles = [...new Set(opsTeam.filter(m => m.brandId === brandId).map(m => m.role).filter(Boolean))];
-
-  // Check if selected employee has submitted availability for this date
+  // Availability check for selected employee on this date
   const memberAvail = availability.filter(a => {
     if (a.employeeId !== employeeId) return false;
     if (a.status === "rejected") return false;
-    const dateStr = date;
     const dayName = DAYS_OF_WEEK[new Date(date + "T00:00:00").getDay() === 0 ? 6 : new Date(date + "T00:00:00").getDay() - 1];
-    if (a.type === "one_off") return a.date === dateStr;
+    if (a.type === "one_off") return a.date === date;
     if (a.type === "weekly") return (a.amendedDayOfWeek || a.dayOfWeek) === dayName;
-    if (a.type === "recurring") return a.startDate <= dateStr && a.endDate >= dateStr;
+    if (a.type === "recurring") return a.startDate <= date && a.endDate >= date;
     return false;
   });
-  const isAvailable = memberAvail.some(a => a.available);
+  const isAvailable   = memberAvail.some(a => a.available);
   const isUnavailable = memberAvail.some(a => !a.available);
-  const availWindow = memberAvail.find(a => a.available);
+  const availWindow   = memberAvail.find(a => a.available);
 
   const handleSave = () => {
     if (!employeeId) return;
     const member = opsTeam.find(m => m.id === employeeId);
     onSave({
-      id: slot?.id || `sch-${Date.now()}`,
-      brandId, date,
-      employeeId,
-      employeeName: member ? `${member.firstName} ${member.lastName}`.trim() : "",
+      id:           slot?.id || `sch-${Date.now()}`,
+      brandId, date, employeeId,
+      employeeName: member ? `${member.firstName} ${member.lastName}`.trim() : memberName || "",
       shift, startTime, endTime,
-      role: role || member?.role || "",
-      department: dept || member?.department || "",
-      notes, status,
+      role:         member?.role       || filterRole || "",
+      department:   member?.department || filterDept || "",
+      notes, status: slot?.status || "scheduled",
       createdBy: currentUser.name,
     });
   };
 
-  const dateDisplay = new Date(date + "T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long", year:"numeric" });
+  const dateDisplay = new Date(date + "T00:00:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" });
+  const selectedMember = opsTeam.find(m => m.id === employeeId);
 
   return (
-    <Modal title={isEdit ? "Edit Shift" : "Add Shift"} onClose={onClose} maxW="max-w-lg"
+    <Modal title={isEdit ? "Edit Shift" : "Add Shift"} onClose={onClose} maxW="max-w-sm"
       footer={<>
         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} disabled={!employeeId}
           className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
-          {isEdit ? "Save" : "Add Shift"}
+          {isEdit ? "Save changes" : "Add Shift"}
         </button>
       </>}>
       <div className="space-y-4">
-        {/* Date display */}
-        <div className="bg-slate-800/60 rounded-xl px-4 py-2.5 flex items-center gap-2">
-          <Calendar size={14} className="text-slate-400"/>
-          <span className="text-sm font-semibold text-white">{dateDisplay}</span>
-        </div>
 
-        {/* Location */}
-        {vb.length > 1 && (
-          <div><label className={labelCls}>Location</label>
-            <LocationDropdown brands={vb} value={brandId} onChange={v => { setBrandId(v); setEmployeeId(""); }} className="w-full"/>
+        {/* Date + employee context — read-only display */}
+        <div className="bg-slate-800/50 rounded-xl px-4 py-3 space-y-1.5">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <Calendar size={13} className="text-slate-400"/>{dateDisplay}
           </div>
-        )}
-
-        {/* Employee */}
-        <div>
-          <label className={labelCls}>Employee *</label>
-          <SelectDropdown value={employeeId} onChange={setEmployeeId} className="w-full">
-            <option value="">— Select employee —</option>
-            {brandMembers.map(m => (
-              <option key={m.id} value={m.id}>
-                {m.firstName} {m.lastName}{m.nickname ? ` (${m.nickname})` : ""} · {m.role}{m.department ? ` · ${m.department}` : ""}
-              </option>
-            ))}
-          </SelectDropdown>
-          {/* Availability indicator */}
-          {employeeId && (
-            <div className={`mt-2 rounded-xl px-3 py-2 text-xs font-semibold flex items-center gap-2 ${
-              isUnavailable ? "bg-red-950/30 border border-red-500/20 text-red-400" :
-              isAvailable   ? "bg-emerald-950/30 border border-emerald-500/20 text-emerald-400" :
-              "bg-slate-800/40 border border-slate-700/40 text-slate-500"
-            }`}>
-              {isUnavailable ? "⚠ Employee marked as unavailable this day" :
-               isAvailable   ? `✓ Available${availWindow ? ` · ${availWindow.startTime}–${availWindow.endTime}` : ""}` :
-               "ℹ No availability submitted for this day"}
+          {selectedMember && (
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                style={{ background: (selectedMember.color||"#6366f1")+"30", color: selectedMember.color||"#6366f1" }}>
+                {selectedMember.firstName[0]}{selectedMember.lastName?.[0]||""}
+              </div>
+              <span className="text-sm font-semibold text-slate-200">
+                {selectedMember.nickname || selectedMember.firstName} {!selectedMember.nickname && selectedMember.lastName}
+              </span>
+              <span className="text-xs text-slate-500">{selectedMember.role}{selectedMember.department ? ` · ${selectedMember.department}` : ""}</span>
             </div>
           )}
         </div>
 
-        {/* Filter by dept/role (optional) */}
-        {(allDepts.length > 0 || allRoles.length > 0) && (
-          <div className="grid grid-cols-2 gap-3">
-            {allDepts.length > 0 && (
-              <div><label className={labelCls}>Department</label>
-                <SelectDropdown value={dept} onChange={setDept} className="w-full">
-                  <option value="">Any</option>
-                  {allDepts.map(d => <option key={d}>{d}</option>)}
-                </SelectDropdown>
-              </div>
-            )}
-            {allRoles.length > 0 && (
-              <div><label className={labelCls}>Role</label>
-                <SelectDropdown value={role} onChange={setRole} className="w-full">
-                  <option value="">Any</option>
-                  {allRoles.map(r => <option key={r}>{r}</option>)}
-                </SelectDropdown>
-              </div>
-            )}
+        {/* Employee picker — only shown when opening from a blank cell (no memberId) */}
+        {!memberId && (
+          <div>
+            <label className={labelCls}>Employee *</label>
+            <SelectDropdown value={employeeId} onChange={setEmployeeId} className="w-full">
+              <option value="">— Select employee —</option>
+              {brandMembers.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.firstName} {m.lastName}{m.nickname ? ` (${m.nickname})` : ""} · {m.role}
+                </option>
+              ))}
+            </SelectDropdown>
           </div>
         )}
 
-        {/* Shift preset */}
+        {/* Availability indicator */}
+        {employeeId && (
+          <div className={`rounded-xl px-3 py-2.5 text-xs font-semibold flex items-center gap-2 ${
+            isUnavailable ? "bg-red-950/40 border border-red-500/30 text-red-300" :
+            isAvailable   ? "bg-emerald-950/40 border border-emerald-500/30 text-emerald-300" :
+            "bg-slate-800/40 border border-slate-700/40 text-slate-500"
+          }`}>
+            <span className="text-base">{isUnavailable ? "⚠️" : isAvailable ? "✅" : "ℹ️"}</span>
+            <span>
+              {isUnavailable ? "Marked unavailable this day" :
+               isAvailable   ? `Available${availWindow ? ` · ${availWindow.startTime}–${availWindow.endTime}` : ""}` :
+               "No availability submitted"}
+            </span>
+          </div>
+        )}
+
+        {/* Shift preset pills */}
         <div>
           <label className={labelCls}>Shift</label>
           <div className="flex flex-wrap gap-2">
@@ -5354,32 +5340,20 @@ function ShiftFormModal({ date, slot, brands, opsTeam, availability, currentUser
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${shift === s.key ? "text-white border-transparent" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
                 style={shift === s.key ? { background: s.color } : {}}>
                 {s.label}
+                {s.key !== "Custom" && <span className="ml-1 opacity-60 text-xs">{s.start}–{s.end}</span>}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Times */}
+        {/* Times — always editable */}
         <div className="grid grid-cols-2 gap-3">
-          <AvailTimeField label="Start time" value={startTime} onChange={setStartTime}/>
-          <AvailTimeField label="End time"   value={endTime}   onChange={setEndTime}/>
-        </div>
-
-        {/* Status */}
-        <div>
-          <label className={labelCls}>Status</label>
-          <div className="flex gap-2">
-            {["scheduled","confirmed","cancelled"].map(s => (
-              <button key={s} onClick={() => setStatus(s)}
-                className={`flex-1 py-2 rounded-xl text-xs font-semibold border capitalize transition-all ${status === s ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
-                {s}
-              </button>
-            ))}
-          </div>
+          <AvailTimeField label="Start" value={startTime} onChange={setStartTime}/>
+          <AvailTimeField label="End"   value={endTime}   onChange={setEndTime}/>
         </div>
 
         {/* Notes */}
-        <div><label className={labelCls}>Notes</label>
+        <div><label className={labelCls}>Notes (optional)</label>
           <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
             placeholder="Any shift notes…" className={`${inputCls} resize-none`}/>
         </div>
@@ -5548,33 +5522,41 @@ function ScheduleView({ brands, opsTeam, schedules, availability, currentUser, o
                   const avails  = getAvailFor(member.id, dateStr);
                   const isAvail = avails.some(a => a.available);
                   const isUnavail = avails.some(a => !a.available);
+                  const availWindow = avails.find(a => a.available);
                   const isToday = day.toDateString() === today.toDateString();
 
                   return (
                     <div key={dIdx}
-                      className={`relative rounded-xl min-h-14 p-1 border transition-all cursor-pointer group ${
-                        isToday ? "border-indigo-500/20" : "border-transparent"
-                      } ${isUnavail ? "bg-red-950/20" : isAvail ? "bg-emerald-950/10" : "bg-slate-900/30 hover:bg-slate-800/40"}`}
-                      onClick={() => setShiftModal({ date: dateStr })}>
-                      {/* Availability dot */}
+                      className={`relative rounded-xl min-h-14 p-1.5 border transition-all cursor-pointer group ${
+                        isToday ? "border-indigo-500/30 bg-indigo-950/10" : "border-slate-800/40 bg-slate-900/30 hover:bg-slate-800/40"
+                      }`}
+                      onClick={() => setShiftModal({ date: dateStr, memberId: member.id, memberName: `${member.firstName} ${member.lastName}`.trim() })}>
+                      {/* Availability bar — full width, clearly visible */}
                       {avails.length > 0 && (
-                        <div className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${isAvail ? "bg-emerald-400" : "bg-red-400"}`}
-                          title={isAvail ? "Available" : "Unavailable"}/>
+                        <div className={`w-full rounded-md px-1.5 py-0.5 mb-0.5 text-xs font-semibold truncate ${
+                          isAvail
+                            ? "bg-emerald-500/25 text-emerald-300 border border-emerald-500/30"
+                            : "bg-red-500/25 text-red-300 border border-red-500/30"
+                        }`}>
+                          {isAvail
+                            ? availWindow ? `✓ ${availWindow.startTime}–${availWindow.endTime}` : "✓ Avail"
+                            : "✗ Unavail"}
+                        </div>
                       )}
                       {/* Shift chips */}
                       <div className="space-y-0.5">
                         {slots.map(s => (
                           <div key={s.id}
-                            onClick={e => { e.stopPropagation(); setShiftModal({ date: dateStr, slot: s }); }}
-                            className={`text-xs rounded-lg px-1.5 py-1 font-semibold truncate cursor-pointer transition-all hover:opacity-80 ${s.status === "cancelled" ? "opacity-40 line-through" : ""}`}
-                            style={{ background: (SHIFT_COLOR[s.shift] || "#6366f1") + "30", color: SHIFT_COLOR[s.shift] || "#6366f1" }}
+                            onClick={e => { e.stopPropagation(); setShiftModal({ date: dateStr, slot: s, memberId: member.id, memberName: `${member.firstName} ${member.lastName}`.trim() }); }}
+                            className={`text-xs rounded-md px-1.5 py-0.5 font-bold truncate cursor-pointer transition-all hover:opacity-80 ${s.status === "cancelled" ? "opacity-40 line-through" : ""}`}
+                            style={{ background: (SHIFT_COLOR[s.shift] || "#6366f1") + "40", color: SHIFT_COLOR[s.shift] || "#6366f1" }}
                             title={`${s.shift}: ${s.startTime}–${s.endTime}`}>
-                            {s.shift.slice(0,3)} {s.startTime}
+                            {s.startTime}–{s.endTime}
                           </div>
                         ))}
                         {slots.length === 0 && (
-                          <div className="hidden group-hover:flex items-center justify-center h-8 text-slate-600 hover:text-slate-400">
-                            <Plus size={14}/>
+                          <div className="hidden group-hover:flex items-center justify-center h-6 text-slate-600 hover:text-slate-400">
+                            <Plus size={12}/>
                           </div>
                         )}
                       </div>
@@ -5586,8 +5568,8 @@ function ScheduleView({ brands, opsTeam, schedules, availability, currentUser, o
 
             {/* Legend */}
             <div className="flex items-center gap-4 mt-4 text-xs text-slate-500 flex-wrap">
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400"/> Available</div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400"/> Unavailable</div>
+              <div className="flex items-center gap-1.5"><div className="w-8 h-3 rounded bg-emerald-500/25 border border-emerald-500/30"/> Available</div>
+              <div className="flex items-center gap-1.5"><div className="w-8 h-3 rounded bg-red-500/25 border border-red-500/30"/> Unavailable</div>
               {SHIFTS.filter(s => s.key !== "Custom").map(s => (
                 <div key={s.key} className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full" style={{background:s.color}}/>
@@ -5613,7 +5595,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, currentUser, o
                   <div className={`text-sm font-bold ${isToday ? "text-indigo-300" : "text-slate-300"}`}>
                     {day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
                   </div>
-                  <button onClick={() => setShiftModal({ date: dateStr })}
+                  <button onClick={() => setShiftModal({ date: dateStr, memberId: member.id, memberName: `${member.firstName} ${member.lastName}`.trim() })}
                     className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
                     <Plus size={12}/> Add shift
                   </button>
@@ -5654,13 +5636,15 @@ function ScheduleView({ brands, opsTeam, schedules, availability, currentUser, o
         <ShiftFormModal
           date={shiftModal.date}
           slot={shiftModal.slot || null}
-          brands={vb} opsTeam={opsTeam}
+          brandId={brandId}
+          memberId={shiftModal.memberId || null}
+          memberName={shiftModal.memberName || ""}
+          filterRole={filterRole !== "all" ? filterRole : ""}
+          filterDept={filterDept !== "all" ? filterDept : ""}
+          opsTeam={opsTeam}
           availability={availability}
           currentUser={currentUser}
-          onSave={s => {
-            onAdd(s); // upsert handles both add + edit
-            setShiftModal(null);
-          }}
+          onSave={s => { onAdd(s); setShiftModal(null); }}
           onClose={() => setShiftModal(null)}
         />
       )}
