@@ -3475,8 +3475,11 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
         {/* Comment thread */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1 min-h-0">
           {grouped.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-20 text-slate-600">
-              <div className="text-xs">No messages yet — start the conversation below</div>
+            <div className="flex flex-col items-center justify-center h-24 text-slate-600">
+              <MessageSquare size={20} className="mb-2 text-slate-700"/>
+              <div className="text-xs text-center">
+                {isManager ? "Add a note for the employee below" : "Message your manager about this — type below and hit Enter"}
+              </div>
             </div>
           )}
           {grouped.map((item, idx) => {
@@ -3524,19 +3527,24 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
         </div>
 
         {/* Message input */}
-        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80">
+        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80 bg-slate-900/40">
+          {!isManager && (
+            <div className="text-xs text-slate-500 mb-2 px-1">
+              💬 Reply to your manager
+            </div>
+          )}
           <div className="flex items-end gap-2">
             <textarea
               value={comment}
               onChange={e => setComment(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAddComment(); } }}
-              placeholder={isManager ? "Add a note or update for the employee…" : "Message your manager…"}
-              rows={1}
+              placeholder={isManager ? "Add a note or update for the employee…" : "Type your message here…"}
+              rows={2}
               className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-24 transition-colors"
             />
             <button onClick={handleAddComment} disabled={!comment.trim()}
-              className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
-              <Send size={14} className="text-white ml-0.5"/>
+              className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
+              <Send size={15} className="text-white ml-0.5"/>
             </button>
           </div>
           <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
@@ -3632,11 +3640,17 @@ function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd, on
                     )}
                   </div>
                 </div>
-                <ChevronRight size={16} className="text-slate-600 flex-shrink-0 mt-1"/>
+                {/* Always-visible open button */}
+                <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs font-semibold">
+                    <MessageSquare size={11}/>
+                    {commentCount > 0 ? `Reply (${commentCount})` : "Open"}
+                  </div>
+                </div>
               </div>
               {a.managerNotes && a.status !== "pending" && (
                 <div className={`mt-2 text-xs italic px-1 ${a.status === "rejected" ? "text-red-400" : a.status === "amended" ? "text-indigo-400" : "text-slate-500"}`}>
-                  "{a.managerNotes}"
+                  Manager: "{a.managerNotes}"
                 </div>
               )}
               <div className="text-xs text-slate-600 mt-1.5">
