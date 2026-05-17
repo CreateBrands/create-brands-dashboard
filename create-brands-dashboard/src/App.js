@@ -3061,27 +3061,33 @@ function fmtAvailTime(a) {
 // ── Availability: standalone picker components (top-level — no hooks-in-functions) ──
 
 function AvailCalendarPicker({ value, minDate, onSelect, onClose }) {
+  // Use local date string to avoid UTC/BST shifting
+  const toLocal = (d) => {
+    const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,"0"), dd = String(d.getDate()).padStart(2,"0");
+    return `${y}-${mo}-${dd}`;
+  };
+
   const initMonth = () => {
     const d = value ? new Date(value + "T00:00:00") : new Date();
-    d.setDate(1); return d;
+    return new Date(d.getFullYear(), d.getMonth(), 1);
   };
   const [calMonth, setCalMonth] = useState(initMonth);
-  const prevMonth = () => setCalMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()-1); return d; });
-  const nextMonth = () => setCalMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()+1); return d; });
+  const prevMonth = () => setCalMonth(m => new Date(m.getFullYear(), m.getMonth()-1, 1));
+  const nextMonth = () => setCalMonth(m => new Date(m.getFullYear(), m.getMonth()+1, 1));
 
   const year  = calMonth.getFullYear();
   const month = calMonth.getMonth();
-  const firstDay    = new Date(year, month, 1).getDay();
+  // getDay(): 0=Sun,1=Mon,...,6=Sat → Mon-start offset
+  const firstDayOfWeek = new Date(year, month, 1).getDay();
+  const offset = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1;
   const daysInMonth = new Date(year, month+1, 0).getDate();
-  const offset = firstDay === 0 ? 6 : firstDay - 1;
-  const today  = new Date().toISOString().split("T")[0];
+  const todayStr = toLocal(new Date()); // local today
 
+  // Build cell array: null for padding, dateStr for real days
   const cells = [];
   for (let i = 0; i < offset; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) {
-    const mm = String(month+1).padStart(2,"0");
-    const dd = String(d).padStart(2,"0");
-    cells.push(`${year}-${mm}-${dd}`);
+    cells.push(`${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`);
   }
   while (cells.length % 7 !== 0) cells.push(null);
 
@@ -3108,7 +3114,7 @@ function AvailCalendarPicker({ value, minDate, onSelect, onClose }) {
         {cells.map((dateStr, i) => {
           if (!dateStr) return <div key={i}/>;
           const isSelected  = dateStr === value;
-          const isToday     = dateStr === today;
+          const isToday     = dateStr === todayStr;
           const isDisabled  = minDate && dateStr < minDate;
           return (
             <button key={i} disabled={isDisabled}
@@ -5303,7 +5309,7 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
 }
 
 // ── Shift Form Modal (uses custom presets) ────────────────────────────────────
-function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, currentUser, onSave, onClose }) {
+function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, currentUser, onSave, onDelete, onClose }) {
   const isEdit = !!slot;
   const brandPresets = shiftPresets.filter(p => p.brandId === brandId);
 
@@ -5366,6 +5372,12 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
   return (
     <Modal title={isEdit ? "Edit Shift" : "Add Shift"} onClose={onClose} maxW="max-w-sm"
       footer={<>
+        {isEdit && onDelete && (
+          <button onClick={() => { onDelete(slot.id); onClose(); }}
+            className="p-2.5 rounded-xl bg-red-950/40 border border-red-500/30 text-red-400 hover:bg-red-950/60 transition-colors" title="Delete shift">
+            <Trash2 size={16}/>
+          </button>
+        )}
         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} disabled={!employeeId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
           {isEdit ? "Save changes" : "Add Shift"}
@@ -5724,6 +5736,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
           opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets}
           currentUser={currentUser}
           onSave={s=>{onAdd(s);setShiftModal(null);}}
+          onDelete={id=>{onDelete(id);setShiftModal(null);}}
           onClose={()=>setShiftModal(null)}
         />
       )}
@@ -5805,12 +5818,28 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
     );
   };
 
+  // Also show this week's upcoming shifts
+  const weekDates = Array.from({length:7}, (_,i) => {
+    const d = new Date(today); d.setDate(today.getDate() - (today.getDay()===0?6:today.getDay()-1) + i);
+    return toLocalDateStr(d);
+  });
+  const upcomingMyShifts = schedules.filter(s =>
+    s.brandId === myBrandId &&
+    weekDates.includes(s.date) &&
+    s.date > viewDate && // only future days this week
+    (s.published === true || s.published === "true") &&
+    s.status !== "cancelled" &&
+    (s.employeeId === myId || s.employeeId === currentUser.id)
+  ).sort((a,b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+
   return (
-    <div className="space-y-5 max-w-lg">
+    <div className="space-y-5 max-w-xl">
       {/* Header */}
-      <div>
-        <h2 className="text-base font-bold text-white">My Schedule</h2>
-        {brand && <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-bold text-white">My Schedule</h2>
+          {brand && <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
+        </div>
       </div>
 
       {/* Today / Tomorrow toggle */}
@@ -5827,10 +5856,10 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 
       {/* Date display */}
       <div className="text-xs text-slate-500">
-        {new Date(viewDate+"T00:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+        {new Date(viewDate+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
       </div>
 
-      {/* My shifts */}
+      {/* My shifts for selected day */}
       <div>
         <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Your Shifts</div>
         {myShifts.length === 0
@@ -5839,14 +5868,31 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
         }
       </div>
 
-      {/* Department shifts */}
-      {myDept && (
+      {/* Department shifts for selected day */}
+      {myDept && deptShifts.length > 0 && (
         <div>
           <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">{myDept} Team {viewLabel}</div>
-          {deptShifts.length === 0
-            ? <div className="text-xs text-slate-600 py-2">No other {myDept} shifts scheduled</div>
-            : <div className="space-y-2">{deptShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={false}/>)}</div>
-          }
+          <div className="space-y-2">{deptShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={false}/>)}</div>
+        </div>
+      )}
+
+      {/* Upcoming shifts this week */}
+      {upcomingMyShifts.length > 0 && (
+        <div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Coming Up This Week</div>
+          <div className="space-y-2">
+            {upcomingMyShifts.map(s => (
+              <div key={s.id} className="flex items-center gap-3 bg-slate-900/60 border border-slate-700/60 rounded-xl px-4 py-3">
+                <div className="text-xs font-bold text-slate-400 w-16 flex-shrink-0">
+                  {new Date(s.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-white">{s.shift}</div>
+                  <div className="text-xs text-slate-400">{s.startTime} – {s.endTime}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
