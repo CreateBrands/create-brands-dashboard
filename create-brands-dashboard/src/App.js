@@ -15,6 +15,8 @@ import {
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
   fetchAuditTrail, insertAuditEntry, clearAuditTrail,
+  fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
+  fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -28,7 +30,8 @@ import {
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
-  Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks
+  Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck,
+  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign
 } from "lucide-react";
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
@@ -249,18 +252,56 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
+// ─── Shared Dropdown Primitives ──────────────────────────────────────────────
+
+// Styled <select> wrapper used everywhere for location and period pickers
+function SelectDropdown({ value, onChange, children, className = "" }) {
+  return (
+    <div className={`relative ${className}`}>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="appearance-none w-full bg-slate-900 border border-slate-700 rounded-xl pl-3.5 pr-8 py-2 text-sm text-white font-medium focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 cursor-pointer transition-colors hover:border-slate-600"
+      >
+        {children}
+      </select>
+      <ChevronDownIcon size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+    </div>
+  );
+}
+
+// Location dropdown — shows a colour dot next to each brand
+function LocationDropdown({ brands, value, onChange, allLabel = null, className = "" }) {
+  if (brands.length <= 1 && !allLabel) return null; // single brand = no picker needed
+  return (
+    <SelectDropdown value={value} onChange={onChange} className={className}>
+      {allLabel && <option value="all">{allLabel}</option>}
+      {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+    </SelectDropdown>
+  );
+}
+
+// Period dropdown — collapses all the preset buttons into one <select>
 function PeriodFilterBar({ preset, onPreset, customFrom, customTo, onCustomFrom, onCustomTo }) {
-  const presets = [{ key: "today", label: "Today" }, { key: "yesterday", label: "Yesterday" }, { key: "this_week", label: "This Week" }, { key: "last_week", label: "Last Week" }, { key: "custom", label: "Custom" }];
+  const presets = [
+    { key: "today",     label: "Today" },
+    { key: "yesterday", label: "Yesterday" },
+    { key: "this_week", label: "This Week" },
+    { key: "last_week", label: "Last Week" },
+    { key: "custom",    label: "Custom range…" },
+  ];
   return (
     <div className="flex flex-wrap gap-2 items-center">
-      {presets.map(p => (
-        <button key={p.key} onClick={() => onPreset(p.key)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${preset === p.key ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{p.label}</button>
-      ))}
+      <SelectDropdown value={preset} onChange={onPreset} className="w-40">
+        {presets.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+      </SelectDropdown>
       {preset === "custom" && (
-        <div className="flex items-center gap-2 mt-1 flex-wrap">
-          <input type="date" value={customFrom} onChange={e => onCustomFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none" />
-          <span className="text-slate-500 text-xs">to</span>
-          <input type="date" value={customTo} min={customFrom} onChange={e => onCustomTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none" />
+        <div className="flex items-center gap-2">
+          <input type="date" value={customFrom} onChange={e => onCustomFrom(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none" />
+          <span className="text-slate-500 text-xs">→</span>
+          <input type="date" value={customTo} min={customFrom} onChange={e => onCustomTo(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none" />
         </div>
       )}
     </div>
@@ -891,16 +932,11 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex flex-wrap gap-1.5">
-            <button onClick={() => setFilterBrand("All")} className={filterBtnCls(filterBrand === "All")}>All Locations</button>
-            {visibleBrands.map(b => <button key={b.id} onClick={() => setFilterBrand(filterBrand === b.id ? "All" : b.id)} className={filterBtnCls(filterBrand === b.id)}>{b.name}</button>)}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {ISSUE_PRIORITIES.map(p => (
-              <button key={p} onClick={() => setFilterPriority(filterPriority === p ? "All" : p)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${filterPriority === p ? "text-white border-transparent bg-slate-600" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`}>{p}</button>
-            ))}
-          </div>
+          <LocationDropdown brands={visibleBrands} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
+          <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="w-36">
+            <option value="All">All Priorities</option>
+            {ISSUE_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+          </SelectDropdown>
         </div>
       </div>
 
@@ -987,7 +1023,418 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ users, onLogin }) {
+// ─── Employee Login Screen ────────────────────────────────────────────────────
+// PIN-based login: pick your name from a list, enter your 4–6 digit PIN.
+function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [shake, setShake] = useState(false);
+
+  const brand = selectedMember ? brands.find(b => b.id === selectedMember.brandId) : null;
+
+  const handlePinDigit = (digit) => {
+    if (pin.length >= 6) return;
+    setPin(p => p + digit);
+    setError("");
+  };
+
+  const handleBackspace = () => setPin(p => p.slice(0, -1));
+
+  const handleSubmit = () => {
+    if (!selectedMember) return;
+    if (pin === selectedMember.pin) {
+      onLogin({
+        id: selectedMember.id,
+        name: `${selectedMember.firstName} ${selectedMember.lastName}`.trim(),
+        role: "employee",
+        brandIds: [selectedMember.brandId],
+        avatar: (selectedMember.firstName[0] + (selectedMember.lastName?.[0] || "")).toUpperCase(),
+        opsTeamMemberId: selectedMember.id,
+        employeeRole: selectedMember.role,
+        color: selectedMember.color,
+      });
+    } else {
+      setError("Incorrect PIN. Try again.");
+      setShake(true);
+      setPin("");
+      setTimeout(() => setShake(false), 600);
+    }
+  };
+
+  const handleClear = () => { setSelectedMember(null); setPin(""); setError(""); };
+
+  // Group team members by brand
+  const byBrand = brands.map(b => ({
+    brand: b,
+    members: opsTeam.filter(m => m.brandId === b.id),
+  })).filter(g => g.members.length > 0);
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md space-y-6">
+        {/* Header */}
+        <div className="text-center">
+          <div className="inline-flex items-center gap-2 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl px-4 py-2 mb-4">
+            <BarChart2 size={18} className="text-indigo-400"/>
+            <span className="text-indigo-300 font-bold text-sm tracking-wide">CREATE BRANDS</span>
+          </div>
+          <h1 className="text-2xl font-bold text-white">Team Sign In</h1>
+          <p className="text-slate-400 text-sm mt-1">Select your name and enter your PIN</p>
+        </div>
+
+        {!selectedMember ? (
+          /* ── Step 1: Pick name ── */
+          <div className="space-y-4">
+            {byBrand.map(({ brand: b, members }) => (
+              <div key={b.id}>
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <div className="w-2 h-2 rounded-full" style={{ background: b.color }}/>
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{b.name}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {members.map(m => (
+                    <button key={m.id} onClick={() => { setSelectedMember(m); setPin(""); setError(""); }}
+                      className="flex items-center gap-3 bg-slate-900/80 border border-slate-700/60 hover:border-indigo-500/50 hover:bg-slate-800/80 rounded-2xl p-4 transition-all text-left group">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0 transition-all"
+                        style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>
+                        {m.firstName[0]}{m.lastName?.[0] || ""}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-white truncate">{m.firstName} {m.lastName}</div>
+                        <div className="text-xs text-slate-500 truncate">{m.role}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {opsTeam.length === 0 && (
+              <div className="text-center py-8 text-slate-500 text-sm">
+                No team members set up yet. Ask your manager to add staff in Ops Settings.
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ── Step 2: Enter PIN ── */
+          <div className="space-y-5">
+            {/* Selected user */}
+            <div className="flex items-center gap-3 bg-slate-900/80 border border-slate-700/60 rounded-2xl p-4">
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-base font-bold flex-shrink-0"
+                style={{ background: (selectedMember.color || "#6366f1") + "30", color: selectedMember.color || "#6366f1" }}>
+                {selectedMember.firstName[0]}{selectedMember.lastName?.[0] || ""}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-base font-bold text-white">{selectedMember.firstName} {selectedMember.lastName}</div>
+                <div className="text-xs text-slate-400">{selectedMember.role} · {brand?.name}</div>
+              </div>
+              <button onClick={handleClear} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
+                <X size={16}/>
+              </button>
+            </div>
+
+            {/* PIN dots */}
+            <div className="flex justify-center gap-3">
+              {Array.from({ length: Math.max(4, pin.length + (pin.length < 6 ? 1 : 0)) }).map((_, i) => (
+                <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${
+                  i < pin.length
+                    ? "bg-indigo-500 border-indigo-500"
+                    : "bg-transparent border-slate-600"
+                } ${shake ? "animate-bounce" : ""}`}/>
+              ))}
+            </div>
+
+            {error && (
+              <div className="flex items-center justify-center gap-2 text-red-400 text-sm font-semibold">
+                <AlertTriangle size={13}/> {error}
+              </div>
+            )}
+
+            {/* Numpad */}
+            <div className="grid grid-cols-3 gap-3">
+              {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
+                if (key === "") return <div key={idx}/>;
+                return (
+                  <button key={key} onClick={() => key === "⌫" ? handleBackspace() : handlePinDigit(key)}
+                    className={`h-16 rounded-2xl text-xl font-bold transition-all active:scale-95 ${
+                      key === "⌫"
+                        ? "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white"
+                        : "bg-slate-800 text-white hover:bg-slate-700"
+                    }`}>
+                    {key}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Submit */}
+            <button onClick={handleSubmit} disabled={pin.length < 4}
+              className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base transition-all active:scale-98">
+              Sign In
+            </button>
+          </div>
+        )}
+
+        {/* Switch to manager login */}
+        <div className="text-center">
+          <button onClick={onSwitchToManager} className="text-xs text-slate-600 hover:text-slate-400 transition-colors">
+            Manager / Owner sign in →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Employee Shell ───────────────────────────────────────────────────────────
+// Restricted layout shown to employees — only ops-relevant views, no financial data.
+function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, tempUnits,
+  cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
+  onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
+  hdTickets, onAddHdTicket, messages, onSendMessage, onMarkRead,
+  onLogout }) {
+
+  const brand = brands.find(b => b.id === currentUser.brandIds[0]);
+  const [activeView, setActiveView] = useState("ops-tasks");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const overdueCount = assignments.filter(a =>
+    currentUser.brandIds.includes(a.brandId) && isActiveToday(a) && isOverdue(a)
+  ).length;
+
+  const NAV = [
+    { key: "ops-tasks",      label: "Today's Tasks",    icon: ListChecks,  badge: overdueCount > 0 ? overdueCount.toString() : null },
+    { key: "ops-temps",      label: "Temperature Log",  icon: Thermometer },
+    { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
+    { key: "ops-network",    label: "Ops Status",       icon: ShieldCheck },
+    { key: "issues",         label: "Report Issue",     icon: Wrench },
+    { key: "helpdesk",       label: "Help Desk",        icon: LifeBuoy, badge: (() => { const myOpen = (hdTickets || []).filter(t => t.createdById === currentUser.opsTeamMemberId && t.status !== "Closed").length; return myOpen > 0 ? myOpen.toString() : null; })() },
+    { key: "inbox",          label: "Inbox",            icon: Inbox,   badge: (() => { const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id; const unread = (messages || []).filter(m => { if (m.fromId === myId || m.fromId === myOpsId) return false; if (m.toScope === "all_locations") return true; if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true; if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true; return false; }).filter(m => !m.readBy?.includes(myId)).length; return unread > 0 ? unread.toString() : null; })() },
+  ];
+
+  const titles = {
+    "ops-tasks":      "Today's Tasks",
+    "ops-temps":      "Temperature Log",
+    "ops-deliveries": "Deliveries",
+    "ops-network":    "Ops Status",
+    "issues":         "Report an Issue",
+    "helpdesk":       "Help Desk",
+    "inbox":          "Inbox",
+  };
+
+  const NavBar = () => (
+    <nav className="flex items-center gap-1 overflow-x-auto px-3 py-2 bg-slate-900/80 border-b border-slate-800">
+      {NAV.map(n => {
+        const NIcon = n.icon; const active = activeView === n.key;
+        return (
+          <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
+            <NIcon size={13}/>{n.label}
+            {n.badge && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+          </button>
+        );
+      })}
+    </nav>
+  );
+
+  // Employee-filtered versions
+  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+  const myIssues = issues.filter(i => currentUser.brandIds.includes(i.brandId));
+
+  return (
+    <AuthContext.Provider value={{ user: currentUser }}>
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+        {/* Header */}
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/80 sticky top-0 z-10">
+          <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
+            <BarChart2 size={15} className="text-white"/>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
+            <div className="text-xs text-slate-500">{currentUser.employeeRole} · {brand?.name || "—"}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
+            <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 text-xs font-semibold transition-all">
+              <LogOut size={13}/> Sign out
+            </button>
+          </div>
+        </header>
+
+        {/* Nav bar */}
+        <NavBar />
+
+        {/* Content */}
+        <main className="flex-1 overflow-auto p-4 lg:p-6">
+          {activeView === "ops-tasks" && (
+            <TodaysTasks
+              brands={myBrands} assignments={assignments} checklists={checklists}
+              tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
+              checklistStates={checklistStates} onSignOff={onSignOff}
+              onChecklistItemToggle={onChecklistItemToggle}
+            />
+          )}
+          {activeView === "ops-temps" && (
+            <TemperatureLog
+              brands={myBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={onTempLog}
+            />
+          )}
+          {activeView === "ops-deliveries" && (
+            <DeliveriesView
+              brands={myBrands} deliveries={deliveries} onAdd={onDeliveryAdd}
+            />
+          )}
+          {activeView === "ops-network" && (
+            <OpsNetworkDashboard
+              brands={myBrands} assignments={assignments} auditTrail={auditTrail}
+              opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits}
+              cleaningTasks={cleaningTasks}
+            />
+          )}
+          {activeView === "issues" && (
+            <EmployeeIssueReporter
+              brands={myBrands} issues={myIssues} currentUser={currentUser}
+              onAdd={onAddIssue} onUpdate={onUpdateIssue}
+            />
+          )}
+          {activeView === "helpdesk" && (
+            <EmployeeHelpdeskView
+              brands={myBrands} tickets={hdTickets || []} currentUser={currentUser}
+              onAdd={onAddHdTicket}
+            />
+          )}
+          {activeView === "inbox" && (
+            <InboxView
+              currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={[]}
+              messages={messages || []} onSend={onSendMessage} onMarkRead={onMarkRead}
+            />
+          )}
+        </main>
+      </div>
+    </AuthContext.Provider>
+  );
+}
+
+// ─── Employee Issue Reporter ──────────────────────────────────────────────────
+// Simplified issue reporting for employees — just report + see your own reports.
+function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setFormState] = useState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  const handleSubmit = () => {
+    if (!form.title.trim()) return;
+    const brand = brands.find(b => b.id === form.brandId);
+    onAdd({
+      id: `issue-${Date.now()}`,
+      brandId: form.brandId,
+      brandName: brand?.name || "",
+      title: form.title.trim(),
+      description: form.description,
+      category: form.category,
+      priority: form.priority,
+      status: "Open",
+      type: "Issue",
+      reportedBy: currentUser.name,
+      assignedTo: "",
+      comments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    setFormState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
+    setShowForm(false);
+  };
+
+  const myIssues = [...issues]
+    .filter(i => i.reportedBy === currentUser.name)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const priorityColor = p => ({ Critical: "red", High: "amber", Medium: "indigo", Low: "slate" }[p] || "slate");
+  const statusColor  = s => ({ Open: "red", "In Progress": "amber", "Awaiting Parts": "indigo", Resolved: "emerald", Closed: "slate" }[s] || "slate");
+
+  return (
+    <div className="space-y-5 max-w-xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-bold text-white">Report an Issue</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Let your manager know about anything that needs attention</p>
+        </div>
+        <button onClick={() => setShowForm(s => !s)}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
+          <Plus size={14}/> {showForm ? "Cancel" : "New Report"}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-slate-900/80 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+          <h3 className="text-sm font-bold text-white">New Issue Report</h3>
+          {brands.length > 1 && (
+            <div><label className={labelCls}>Location</label>
+              <div className="flex flex-wrap gap-2">{brands.map(b => <button key={b.id} onClick={() => set("brandId", b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={form.brandId === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+            </div>
+          )}
+          <div><label className={labelCls}>What's the issue? *</label>
+            <input value={form.title} onChange={e => set("title", e.target.value)} placeholder="e.g. Dishwasher not draining" className={inputCls}/>
+          </div>
+          <div><label className={labelCls}>More details</label>
+            <textarea value={form.description} onChange={e => set("description", e.target.value)} rows={3} placeholder="Describe what happened, when you noticed it, any relevant info…" className={`${inputCls} resize-none`}/>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className={labelCls}>Category</label>
+              <select value={form.category} onChange={e => set("category", e.target.value)} className={inputCls}>
+                {ISSUE_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div><label className={labelCls}>How urgent?</label>
+              <select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}>
+                {ISSUE_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+          <button onClick={handleSubmit} disabled={!form.title.trim()}
+            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors">
+            Submit Report
+          </button>
+        </div>
+      )}
+
+      {/* My recent reports */}
+      {myIssues.length > 0 && (
+        <div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Your Recent Reports</div>
+          <div className="space-y-3">
+            {myIssues.slice(0, 10).map(issue => (
+              <div key={issue.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
+                <div className="flex items-start justify-between gap-2 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-white">{issue.title}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{new Date(issue.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+                  </div>
+                  <div className="flex gap-2 flex-shrink-0">
+                    <Badge label={issue.priority} color={priorityColor(issue.priority)}/>
+                    <Badge label={issue.status} color={statusColor(issue.status)}/>
+                  </div>
+                </div>
+                {issue.description && <div className="text-xs text-slate-400 mt-2 line-clamp-2">{issue.description}</div>}
+                {issue.assignedTo && <div className="text-xs text-indigo-400 mt-1.5">→ Assigned to {issue.assignedTo}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {myIssues.length === 0 && !showForm && (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <Wrench size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No reports yet</div>
+          <div className="text-xs mt-1">Use the button above to report an issue</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -1040,6 +1487,13 @@ function LoginScreen({ users, onLogin }) {
             {loading ? "Signing in…" : "Sign In"}
           </button>
         </div>
+        {onSwitchToEmployee && (
+          <div className="text-center">
+            <button onClick={onSwitchToEmployee} className="text-xs text-slate-600 hover:text-slate-400 transition-colors">
+              ← Back to team sign in
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2026,7 +2480,7 @@ function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks
   const typeIcons = { checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" };
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap gap-2">{vb.map(b => <button key={b.id} onClick={() => setSelBrand(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${selBrand === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={selBrand === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+      <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
       {overdue.length > 0 && <div className="bg-red-950/30 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
       {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments for this location today</div></div>}
       <div className="space-y-3">
@@ -2095,7 +2549,7 @@ function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex flex-wrap gap-2">{vb.map(b => <button key={b.id} onClick={() => setSelBrand(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${selBrand === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={selBrand === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+        <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
         <button onClick={() => { setForm({ unitId: brandUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2142,7 +2596,7 @@ function DeliveriesView({ brands, deliveries, onAdd }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex flex-wrap gap-2">{vb.map(b => <button key={b.id} onClick={() => setSelBrand(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${selBrand === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={selBrand === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+        <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
         <button onClick={() => { setForm({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Delivery</button>
       </div>
       {brandDeliveries.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Truck size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No deliveries logged</div></div>}
@@ -2215,7 +2669,9 @@ function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningT
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex flex-wrap gap-2">{tabs.map(t => <button key={t.key} onClick={() => setFilter(t.key)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filter === t.key ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{t.label}</button>)}</div>
+        <SelectDropdown value={filter} onChange={setFilter} className="w-44">
+          {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+        </SelectDropdown>
         {user.role === "owner" && <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>}
       </div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm">No assignments found</div></div>}
@@ -2273,7 +2729,7 @@ function AuditTrailView({ brands, auditTrail, onClear }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex flex-wrap gap-2"><button onClick={() => setFilterBrand("all")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterBrand === "all" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>All Locations</button>{vb.map(b => <button key={b.id} onClick={() => setFilterBrand(b.id)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterBrand === b.id ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{b.name}</button>)}</div>
+        <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
         {user.role === "owner" && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
       </div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ScrollText size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No audit entries yet</div></div>}
@@ -2551,6 +3007,652 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPDESK — Ticket System
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const HELPDESK_CATEGORIES = ["General","Equipment","IT / Tech","Cleaning","HR","Health & Safety","Stock","Training","Other"];
+const HELPDESK_PRIORITIES  = ["Urgent","High","Normal","Low"];
+const HELPDESK_STATUSES    = ["Open","In Progress","Pending","Resolved","Closed"];
+const HD_STATUS_COLOR = { Open:"red", "In Progress":"amber", Pending:"indigo", Resolved:"emerald", Closed:"slate" };
+const HD_PRIORITY_COLOR = { Urgent:"red", High:"amber", Normal:"indigo", Low:"slate" };
+
+// ── Ticket Detail Modal (managers/owners) ─────────────────────────────────────
+function HelpdeskTicketModal({ ticket, brands, opsTeam, users, currentUser, onUpdate, onDelete, onClose }) {
+  const [status, setStatus]       = useState(ticket.status);
+  const [assignedTo, setAssignedTo] = useState(ticket.assignedTo || []);
+  const [comment, setComment]     = useState("");
+  const [localTicket, setLocal]   = useState(ticket);
+  const [delConfirm, setDelConfirm] = useState(false);
+
+  const brand    = brands.find(b => b.id === ticket.brandId);
+  const allPeople = [
+    ...users.filter(u => u.role !== "employee").map(u => ({ id: u.id, name: u.name, role: u.role })),
+    ...opsTeam.map(m => ({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), role: m.role })),
+  ];
+
+  const toggleAssign = (name) => {
+    const next = assignedTo.includes(name)
+      ? assignedTo.filter(n => n !== name)
+      : [...assignedTo, name];
+    setAssignedTo(next);
+    const updated = { ...localTicket, assignedTo: next, updatedAt: new Date().toISOString() };
+    setLocal(updated);
+    onUpdate(updated);
+  };
+
+  const handleStatusChange = (s) => {
+    setStatus(s);
+    const updated = { ...localTicket, status: s, updatedAt: new Date().toISOString() };
+    setLocal(updated);
+    onUpdate(updated);
+  };
+
+  const handleAddComment = () => {
+    if (!comment.trim()) return;
+    const newComment = {
+      id: `cmt-${Date.now()}`, author: currentUser.name,
+      authorRole: currentUser.role, text: comment.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    const updated = {
+      ...localTicket,
+      comments: [...(localTicket.comments || []), newComment],
+      updatedAt: new Date().toISOString(),
+    };
+    setLocal(updated);
+    onUpdate(updated);
+    setComment("");
+  };
+
+  const statusColors = { Open:"#dc2626","In Progress":"#d97706",Pending:"#4f46e5",Resolved:"#059669",Closed:"#475569" };
+
+  return (
+    <Modal title={localTicket.title} onClose={onClose} maxW="max-w-2xl">
+      <div className="space-y-5">
+        {/* Meta row */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <Badge label={localTicket.category} color="slate"/>
+          <Badge label={localTicket.priority} color={HD_PRIORITY_COLOR[localTicket.priority] || "slate"}/>
+          {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+          <span className="text-xs text-slate-500">by {localTicket.createdByName}</span>
+          <span className="text-xs text-slate-600">{new Date(localTicket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+        </div>
+
+        {/* Description */}
+        {localTicket.description && (
+          <div className="bg-slate-800/40 border border-slate-700/40 rounded-xl p-4 text-sm text-slate-300">{localTicket.description}</div>
+        )}
+
+        {/* Status changer */}
+        <div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Status</div>
+          <div className="flex flex-wrap gap-2">
+            {HELPDESK_STATUSES.map(s => (
+              <button key={s} onClick={() => handleStatusChange(s)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${status === s ? "text-white border-transparent" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
+                style={status === s ? { background: statusColors[s], borderColor: "transparent" } : {}}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Multi-assign */}
+        <div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Assigned To ({assignedTo.length})</div>
+          {assignedTo.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {assignedTo.map(name => (
+                <span key={name} className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-semibold">
+                  {name}
+                  <button onClick={() => toggleAssign(name)} className="opacity-60 hover:opacity-100 hover:text-red-400 transition-colors"><X size={11}/></button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="bg-slate-800/40 rounded-xl p-3 max-h-40 overflow-y-auto space-y-1">
+            {allPeople.map(p => {
+              const assigned = assignedTo.includes(p.name);
+              return (
+                <button key={p.id} onClick={() => toggleAssign(p.name)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-400 hover:bg-slate-700/60"}`}>
+                  <span>{p.name} <span className="opacity-50 ml-1">· {p.role}</span></span>
+                  {assigned && <Check size={12} className="text-indigo-400"/>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Comments thread */}
+        <div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Comments ({localTicket.comments?.length || 0})</div>
+          <div className="space-y-3 mb-3 max-h-64 overflow-y-auto">
+            {(localTicket.comments || []).length === 0 && (
+              <div className="text-xs text-slate-600 py-2 text-center">No comments yet — be the first</div>
+            )}
+            {(localTicket.comments || []).map(c => (
+              <div key={c.id} className={`rounded-xl p-3 ${c.authorRole === "employee" ? "bg-slate-800/60 border border-slate-700/40" : "bg-indigo-950/40 border border-indigo-500/20"}`}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-xs font-bold text-slate-300">{c.author}</span>
+                  <Badge label={c.authorRole} color={c.authorRole === "owner" ? "violet" : c.authorRole === "manager" ? "indigo" : "slate"}/>
+                  <span className="text-xs text-slate-600 ml-auto">{new Date(c.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                </div>
+                <div className="text-sm text-slate-300">{c.text}</div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <textarea value={comment} onChange={e => setComment(e.target.value)}
+              placeholder="Add a comment…" rows={2}
+              onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey) handleAddComment(); }}
+              className={`${inputCls} resize-none flex-1`}/>
+            <button onClick={handleAddComment} disabled={!comment.trim()}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold transition-colors self-end flex items-center gap-1.5">
+              <Send size={13}/> Post
+            </button>
+          </div>
+          <div className="text-xs text-slate-600 mt-1">Ctrl+Enter to post</div>
+        </div>
+
+        {/* Danger zone */}
+        {currentUser.role === "owner" && (
+          <div className="border-t border-slate-700/60 pt-4">
+            {!delConfirm
+              ? <button onClick={() => setDelConfirm(true)} className="text-xs text-red-500 hover:text-red-400 transition-colors">Delete ticket</button>
+              : <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-400">Are you sure?</span>
+                  <button onClick={() => { onDelete(ticket.id); onClose(); }} className="text-xs bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors">Delete</button>
+                  <button onClick={() => setDelConfirm(false)} className="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+                </div>
+            }
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ── Manager Helpdesk View ──────────────────────────────────────────────────────
+function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onUpdate, onDelete }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [filterStatus,   setFilterStatus]   = useState("all");
+  const [filterBrand,    setFilterBrand]    = useState("all");
+  const [filterPriority, setFilterPriority] = useState("all");
+  const [search,         setSearch]         = useState("");
+  const [selected,       setSelected]       = useState(null);
+
+  const visible = tickets.filter(t => {
+    if (!vb.some(b => b.id === t.brandId)) return false;
+    if (filterStatus !== "all" && t.status !== filterStatus) return false;
+    if (filterBrand  !== "all" && t.brandId !== filterBrand) return false;
+    if (filterPriority !== "all" && t.priority !== filterPriority) return false;
+    if (search && !t.title.toLowerCase().includes(search.toLowerCase()) && !t.createdByName.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }).sort((a, b) => {
+    const prio = { Urgent: 0, High: 1, Normal: 2, Low: 3 };
+    if (a.status === "Closed" && b.status !== "Closed") return 1;
+    if (b.status === "Closed" && a.status !== "Closed") return -1;
+    return (prio[a.priority] - prio[b.priority]) || new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  const counts = HELPDESK_STATUSES.reduce((acc, s) => {
+    acc[s] = tickets.filter(t => vb.some(b => b.id === t.brandId) && t.status === s).length;
+    return acc;
+  }, {});
+
+  return (
+    <div className="space-y-6">
+      {/* Status KPI cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {HELPDESK_STATUSES.map(s => (
+          <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)}
+            className={`rounded-2xl border p-4 text-left transition-all ${filterStatus === s ? "ring-2 ring-white/20" : ""} ${s === "Open" ? "bg-red-950/30 border-red-500/30" : s === "In Progress" ? "bg-amber-950/30 border-amber-500/30" : s === "Pending" ? "bg-indigo-950/30 border-indigo-500/30" : s === "Resolved" ? "bg-emerald-950/30 border-emerald-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+            <div className="text-2xl font-bold text-white mb-1">{counts[s] || 0}</div>
+            <div className="text-xs font-semibold text-slate-400">{s}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
+          className="bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none w-48"/>
+        <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
+        <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="w-36">
+          <option value="all">All Priorities</option>
+          {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+        </SelectDropdown>
+        {(filterStatus !== "all" || filterBrand !== "all" || filterPriority !== "all" || search) && (
+          <button onClick={() => { setFilterStatus("all"); setFilterBrand("all"); setFilterPriority("all"); setSearch(""); }}
+            className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 transition-colors">
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Ticket list */}
+      {visible.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <LifeBuoy size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No tickets match your filters</div>
+        </div>
+      )}
+      <div className="space-y-3">
+        {visible.map(ticket => {
+          const brand = brands.find(b => b.id === ticket.brandId);
+          const commentCount = ticket.comments?.length || 0;
+          const unreadComments = ticket.comments?.filter(c => c.authorRole === "employee").length || 0;
+          return (
+            <button key={ticket.id} onClick={() => setSelected(ticket)}
+              className="w-full text-left rounded-2xl border bg-slate-900/60 border-slate-700/60 hover:border-slate-500/60 hover:bg-slate-800/60 transition-all p-4">
+              <div className="flex items-start gap-3">
+                <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${ticket.status === "Open" ? "bg-red-400" : ticket.status === "In Progress" ? "bg-amber-400" : ticket.status === "Resolved" ? "bg-emerald-400" : ticket.status === "Pending" ? "bg-indigo-400" : "bg-slate-600"}`}/>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
+                        <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
+                        <Badge label={ticket.category} color="slate"/>
+                        {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                        <span className="text-xs text-slate-500">by {ticket.createdByName}</span>
+                        <span className="text-xs text-slate-600">{new Date(ticket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                        {ticket.assignedTo?.length > 0 && <span className="text-xs text-indigo-400">→ {ticket.assignedTo.join(", ")}</span>}
+                        {commentCount > 0 && <span className="flex items-center gap-1 text-xs text-slate-500"><MessageSquare size={10}/>{commentCount}</span>}
+                        {unreadComments > 0 && <Badge label={`${unreadComments} from staff`} color="amber"/>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {selected && (
+        <HelpdeskTicketModal
+          ticket={selected} brands={brands} opsTeam={opsTeam} users={users}
+          currentUser={currentUser}
+          onUpdate={t => { onUpdate(t); setSelected(t); }}
+          onDelete={id => { onDelete(id); setSelected(null); }}
+          onClose={() => setSelected(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Employee Helpdesk View ─────────────────────────────────────────────────────
+function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd }) {
+  const [showForm, setShowForm] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [form, setFormState] = useState({ title: "", description: "", category: "General", priority: "Normal" });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+  const [brandId, setBrandId] = useState(myBrands[0]?.id || "");
+
+  // Employees see only their own tickets, and not Closed ones
+  const myTickets = tickets
+    .filter(t => t.createdById === currentUser.opsTeamMemberId && t.status !== "Closed")
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const handleSubmit = () => {
+    if (!form.title.trim()) return;
+    const brand = myBrands.find(b => b.id === brandId);
+    onAdd({
+      id: `hd-${Date.now()}`,
+      brandId,
+      brandName: brand?.name || "",
+      title: form.title.trim(),
+      description: form.description,
+      category: form.category,
+      priority: form.priority,
+      status: "Open",
+      createdById: currentUser.opsTeamMemberId || currentUser.id,
+      createdByName: currentUser.name,
+      assignedTo: [],
+      comments: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    setFormState({ title: "", description: "", category: "General", priority: "Normal" });
+    setShowForm(false);
+  };
+
+  return (
+    <div className="space-y-5 max-w-xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-bold text-white">Help Desk</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Raise a ticket and track its progress</p>
+        </div>
+        <button onClick={() => setShowForm(s => !s)}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
+          <Plus size={14}/>{showForm ? "Cancel" : "New Ticket"}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-slate-900/80 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+          <h3 className="text-sm font-bold text-white">New Help Desk Ticket</h3>
+          {myBrands.length > 1 && (
+            <div><label className={labelCls}>Location</label>
+              <div className="flex flex-wrap gap-2">{myBrands.map(b => <button key={b.id} onClick={() => setBrandId(b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${brandId === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={brandId === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+            </div>
+          )}
+          <div><label className={labelCls}>What do you need help with? *</label>
+            <input value={form.title} onChange={e => set("title", e.target.value)} placeholder="Brief summary of the issue" className={inputCls}/>
+          </div>
+          <div><label className={labelCls}>Details</label>
+            <textarea value={form.description} onChange={e => set("description", e.target.value)} rows={3} placeholder="Describe the problem in full…" className={`${inputCls} resize-none`}/>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className={labelCls}>Category</label>
+              <select value={form.category} onChange={e => set("category", e.target.value)} className={inputCls}>
+                {HELPDESK_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div><label className={labelCls}>How urgent?</label>
+              <select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}>
+                {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+          <button onClick={handleSubmit} disabled={!form.title.trim()}
+            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors">
+            Submit Ticket
+          </button>
+        </div>
+      )}
+
+      {/* My tickets */}
+      {myTickets.length > 0 ? (
+        <div className="space-y-3">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Your Open Tickets</div>
+          {myTickets.map(ticket => (
+            <button key={ticket.id} onClick={() => setSelected(ticket)}
+              className="w-full text-left bg-slate-900/60 border border-slate-700/60 hover:border-slate-500/60 rounded-2xl p-4 transition-all">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
+                    <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
+                    <span className="text-xs text-slate-500">{new Date(ticket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</span>
+                  </div>
+                  {ticket.assignedTo?.length > 0 && <div className="text-xs text-indigo-400 mt-1">Being handled by: {ticket.assignedTo.join(", ")}</div>}
+                  {ticket.comments?.length > 0 && <div className="text-xs text-amber-400 mt-1 flex items-center gap-1"><MessageSquare size={10}/> {ticket.comments.length} update{ticket.comments.length > 1 ? "s" : ""} from your team</div>}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : !showForm && (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <LifeBuoy size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No open tickets</div>
+          <div className="text-xs mt-1">Use the button above to raise one</div>
+        </div>
+      )}
+
+      {/* Employee ticket detail (read + comment only) */}
+      {selected && (
+        <Modal title={selected.title} onClose={() => setSelected(null)} maxW="max-w-lg">
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <Badge label={selected.status} color={HD_STATUS_COLOR[selected.status] || "slate"}/>
+              <Badge label={selected.priority} color={HD_PRIORITY_COLOR[selected.priority] || "slate"}/>
+              <Badge label={selected.category} color="slate"/>
+            </div>
+            {selected.description && <div className="bg-slate-800/40 rounded-xl p-3 text-sm text-slate-300">{selected.description}</div>}
+            {selected.assignedTo?.length > 0 && (
+              <div className="bg-indigo-950/30 border border-indigo-500/20 rounded-xl px-4 py-3 text-xs text-indigo-300">
+                Being handled by: <span className="font-semibold">{selected.assignedTo.join(", ")}</span>
+              </div>
+            )}
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Updates ({selected.comments?.length || 0})</div>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {(selected.comments || []).length === 0 && <div className="text-xs text-slate-600 text-center py-3">No updates yet</div>}
+                {(selected.comments || []).map(c => (
+                  <div key={c.id} className={`rounded-xl p-3 text-sm ${c.authorRole === "employee" && c.author === currentUser.name ? "bg-indigo-950/40 border border-indigo-500/20 text-indigo-200 ml-4" : "bg-slate-800/60 border border-slate-700/40 text-slate-300"}`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-bold">{c.author === currentUser.name ? "You" : c.author}</span>
+                      <span className="text-xs text-slate-500 ml-auto">{new Date(c.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                    </div>
+                    {c.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INBOX — Messaging System
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Compose Message Modal ──────────────────────────────────────────────────────
+function ComposeModal({ currentUser, brands, opsTeam, users, onSend, onClose }) {
+  const [toScope, setToScope]     = useState("location");
+  const [toBrandId, setToBrandId] = useState(currentUser.brandIds[0] || "");
+  const [toPerson, setToPerson]   = useState(null); // { id, name }
+  const [subject, setSubject]     = useState("");
+  const [body, setBody]           = useState("");
+
+  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+  const isOwner  = currentUser.role === "owner";
+  const isManager = currentUser.role === "manager";
+
+  // Build recipient list for individual send
+  const allPeople = [
+    ...users.filter(u => u.id !== currentUser.id && (isOwner || u.brandIds?.some(bid => currentUser.brandIds.includes(bid)))).map(u => ({ id: u.id, name: u.name, sub: u.role })),
+    ...opsTeam.filter(m => isOwner || currentUser.brandIds.includes(m.brandId)).map(m => ({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), sub: m.role })),
+  ];
+
+  const scopeOptions = [
+    { key: "location", label: "My Location", show: myBrands.length > 0 },
+    { key: "all_locations", label: "All Locations", show: isOwner },
+    { key: "individual", label: "One Person", show: true },
+  ].filter(o => o.show);
+
+  const handleSend = () => {
+    if (!body.trim() || !subject.trim()) return;
+    onSend({
+      id: `msg-${Date.now()}`,
+      brandId: toScope === "location" ? toBrandId : null,
+      fromId: currentUser.id, fromName: currentUser.name, fromRole: currentUser.role,
+      toScope, toBrandId: toScope === "location" ? toBrandId : null,
+      toPersonId: toScope === "individual" ? toPerson?.id : null,
+      toPersonName: toScope === "individual" ? toPerson?.name : null,
+      subject: subject.trim(), body: body.trim(),
+      readBy: [currentUser.id],
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <Modal title="New Message" onClose={onClose}
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSend} disabled={!subject.trim() || !body.trim() || (toScope === "individual" && !toPerson)}
+          className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2"><Send size={13}/> Send</button>
+      </>}>
+      <div className="space-y-4">
+        {/* To */}
+        <div>
+          <label className={labelCls}>To</label>
+          <div className="flex flex-wrap gap-2 mb-2">
+            {scopeOptions.map(o => (
+              <button key={o.key} onClick={() => setToScope(o.key)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${toScope === o.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {toScope === "location" && myBrands.length > 1 && (
+            <div className="flex flex-wrap gap-2">
+              {myBrands.map(b => (
+                <button key={b.id} onClick={() => setToBrandId(b.id)}
+                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${toBrandId === b.id ? "text-white border-transparent" : "bg-slate-800 border-slate-700 text-slate-400"}`}
+                  style={toBrandId === b.id ? { background: b.color } : {}}>{b.name}</button>
+              ))}
+            </div>
+          )}
+          {toScope === "all_locations" && <div className="text-xs text-slate-500 px-1">Will be sent to everyone across all locations</div>}
+          {toScope === "individual" && (
+            <div className="bg-slate-800/40 rounded-xl p-2 max-h-40 overflow-y-auto space-y-1">
+              {allPeople.map(p => (
+                <button key={p.id} onClick={() => setToPerson(toPerson?.id === p.id ? null : p)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${toPerson?.id === p.id ? "bg-indigo-600/20 text-indigo-300" : "text-slate-400 hover:bg-slate-700/60"}`}>
+                  <span>{p.name} <span className="opacity-50">· {p.sub}</span></span>
+                  {toPerson?.id === p.id && <Check size={12} className="text-indigo-400"/>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div><label className={labelCls}>Subject *</label>
+          <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="What's this about?" className={inputCls}/>
+        </div>
+        <div><label className={labelCls}>Message *</label>
+          <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} placeholder="Write your message…" className={`${inputCls} resize-none`}/>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Inbox View (shared for all roles) ─────────────────────────────────────────
+function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead }) {
+  const [tab, setTab]       = useState("inbox");
+  const [selected, setSelected] = useState(null);
+  const [compose, setCompose]   = useState(false);
+
+  const myId = currentUser.id;
+  const myBrandIds = currentUser.brandIds || [];
+  const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+
+  // Determine if a message is addressed to me
+  const isForMe = (msg) => {
+    if (msg.fromId === myId || msg.fromId === myOpsId) return false; // sent by me
+    if (msg.toScope === "all_locations") return true;
+    if (msg.toScope === "location" && myBrandIds.includes(msg.toBrandId)) return true;
+    if (msg.toScope === "individual" && (msg.toPersonId === myId || msg.toPersonId === myOpsId)) return true;
+    return false;
+  };
+
+  const inbox = messages.filter(isForMe).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const sent  = messages.filter(m => m.fromId === myId || m.fromId === myOpsId).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const unread = inbox.filter(m => !m.readBy?.includes(myId) && !m.readBy?.includes(myOpsId)).length;
+
+  const handleOpen = (msg) => {
+    setSelected(msg);
+    if (!msg.readBy?.includes(myId)) onMarkRead(msg.id, myId);
+  };
+
+  const list = tab === "inbox" ? inbox : sent;
+  const brand = selected ? brands.find(b => b.id === (selected.toBrandId || selected.brandId)) : null;
+
+  const scopeLabel = (msg) => {
+    if (msg.toScope === "all_locations") return "All Locations";
+    if (msg.toScope === "location") { const b = brands.find(x => x.id === msg.toBrandId); return b?.name || "Location"; }
+    return msg.toPersonName || "Individual";
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex gap-2">
+          <button onClick={() => setTab("inbox")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === "inbox" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
+            <Inbox size={14}/> Inbox {unread > 0 && <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{unread}</span>}
+          </button>
+          <button onClick={() => setTab("sent")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === "sent" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
+            <Send size={14}/> Sent
+          </button>
+        </div>
+        <button onClick={() => setCompose(true)}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
+          <Plus size={14}/> Compose
+        </button>
+      </div>
+
+      {list.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <Inbox size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">{tab === "inbox" ? "Your inbox is empty" : "No sent messages"}</div>
+          <div className="text-xs mt-1 text-slate-600">{tab === "inbox" ? "Messages from your team will appear here" : "Messages you send will appear here"}</div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {list.map(msg => {
+          const isUnread = tab === "inbox" && !msg.readBy?.includes(myId) && !msg.readBy?.includes(myOpsId);
+          return (
+            <button key={msg.id} onClick={() => handleOpen(msg)}
+              className={`w-full text-left rounded-2xl border px-5 py-4 transition-all ${isUnread ? "bg-indigo-950/30 border-indigo-500/30 hover:border-indigo-400/50" : "bg-slate-900/60 border-slate-700/60 hover:border-slate-500/60 hover:bg-slate-800/60"}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    {isUnread && <div className="w-2 h-2 rounded-full bg-indigo-400 flex-shrink-0"/>}
+                    <div className={`text-sm truncate ${isUnread ? "font-bold text-white" : "font-semibold text-slate-200"}`}>{msg.subject}</div>
+                  </div>
+                  <div className="text-xs text-slate-500 truncate">
+                    {tab === "inbox" ? <span className="text-slate-400">{msg.fromName}</span> : <span className="text-slate-400">To: {scopeLabel(msg)}</span>}
+                    {" · "}{msg.body.slice(0, 80)}{msg.body.length > 80 ? "…" : ""}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-600 flex-shrink-0 mt-0.5">
+                  {new Date(msg.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Message detail */}
+      {selected && (
+        <Modal title={selected.subject} onClose={() => setSelected(null)} maxW="max-w-lg">
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+              <span>From: <span className="text-slate-200 font-semibold">{selected.fromName}</span></span>
+              <span>·</span>
+              <span>To: <span className="text-slate-200 font-semibold">{scopeLabel(selected)}</span></span>
+              <span>·</span>
+              <span>{new Date(selected.createdAt).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+            </div>
+            <div className="bg-slate-800/40 border border-slate-700/40 rounded-xl p-4 text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">{selected.body}</div>
+          </div>
+        </Modal>
+      )}
+
+      {compose && (
+        <ComposeModal
+          currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users}
+          onSend={msg => { onSend(msg); setCompose(false); }}
+          onClose={() => setCompose(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Main App (merged: live financial + new ops) ───────────────────────────────
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => { try { const s=localStorage.getItem("cb_session"); return s?JSON.parse(s):null; } catch { return null; } });
@@ -2573,9 +3675,12 @@ export default function App() {
   const [deliveries,      setDeliveries]      = useState([]);
   const [checklistStates, setChecklistStates] = useState({});
   const [auditTrail,      setAuditTrail]      = useState([]);
+  const [hdTickets,       setHdTickets]       = useState([]);
+  const [messages,        setMessages]        = useState([]);
 
   const [activeView, setActiveView] = useState("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [loginMode, setLoginMode] = useState("employee"); // "employee" | "manager"
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [toast, setToast] = useState(null); // { msg, type: "success"|"error" }
 
@@ -2583,14 +3688,16 @@ export default function App() {
   useEffect(() => {
     async function loadAll() {
       try {
-        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at] = await Promise.all([
+        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs] = await Promise.all([
           fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
           fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
-          fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail()
+          fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail(),
+          fetchHelpdeskTickets(), fetchInboxMessages(),
         ]);
         setBrands(b); setUsers(u); setEntries(e); setIssues(i);
         setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
         setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl); setChecklistStates(cs); setAuditTrail(at);
+        setHdTickets(hd); setMessages(msgs);
         setDbReady(true);
       } catch (err) {
         console.error("Supabase load error:", err);
@@ -2602,8 +3709,15 @@ export default function App() {
 
   useEffect(() => { try { if(currentUser) localStorage.setItem("cb_session",JSON.stringify(currentUser)); else localStorage.removeItem("cb_session"); } catch {} }, [currentUser]);
 
-  const handleLogin  = useCallback(user => { setCurrentUser(user); setActiveView("dashboard"); }, []);
-  const handleLogout = useCallback(() => { setCurrentUser(null); setActiveView("dashboard"); }, []);
+  const handleLogin  = useCallback(user => {
+    setCurrentUser(user);
+    setActiveView(user.role === "employee" ? "ops-tasks" : "dashboard");
+  }, []);
+  const handleLogout = useCallback(() => {
+    setCurrentUser(null);
+    setActiveView("dashboard");
+    setLoginMode("employee"); // always return to employee screen after logout
+  }, []);
 
   // ── Audit helper ──────────────────────────────────────────────────────────
   const showToast = useCallback((msg, type = "success") => {
@@ -2711,6 +3825,33 @@ export default function App() {
     } catch (err) { showToast("Failed to clear audit trail: " + err.message, "error"); }
   }, [showToast]);
 
+  // ── Helpdesk ─────────────────────────────────────────────────────────────────
+  const addHdTicket = useCallback(async t => {
+    try { const saved = await insertHelpdeskTicket(t); setHdTickets(ts => [saved, ...ts]); showToast("Ticket submitted"); }
+    catch (err) { showToast("Failed to submit ticket: " + err.message, "error"); }
+  }, [showToast]);
+
+  const updateHdTicket = useCallback(async t => {
+    try { const saved = await upsertHelpdeskTicket(t); setHdTickets(ts => ts.map(x => x.id === saved.id ? saved : x)); }
+    catch (err) { showToast("Failed to update ticket: " + err.message, "error"); }
+  }, [showToast]);
+
+  const deleteHdTicket = useCallback(async id => {
+    try { await removeHelpdeskTicket(id); setHdTickets(ts => ts.filter(t => t.id !== id)); showToast("Ticket deleted"); }
+    catch (err) { showToast("Failed to delete ticket: " + err.message, "error"); }
+  }, [showToast]);
+
+  // ── Inbox ─────────────────────────────────────────────────────────────────────
+  const sendMessage = useCallback(async msg => {
+    try { const saved = await insertInboxMessage(msg); setMessages(ms => [saved, ...ms]); showToast("Message sent"); }
+    catch (err) { showToast("Failed to send: " + err.message, "error"); }
+  }, [showToast]);
+
+  const handleMarkRead = useCallback(async (id, readerId) => {
+    await markMessageRead(id, readerId);
+    setMessages(ms => ms.map(m => m.id === id && !m.readBy?.includes(readerId) ? { ...m, readBy: [...(m.readBy || []), readerId] } : m));
+  }, []);
+
   // ── Data utilities ────────────────────────────────────────────────────────
   const exportData = () => {
     const data = JSON.stringify({ brands, users, entries, issues }, null, 2);
@@ -2747,74 +3888,221 @@ export default function App() {
     </div>
   );
 
-  if (!currentUser) return <AuthContext.Provider value={{user:null}}><LoginScreen users={users} onLogin={handleLogin}/></AuthContext.Provider>;
+  if (!currentUser) {
+    if (loginMode === "manager") {
+      return (
+        <AuthContext.Provider value={{ user: null }}>
+          <LoginScreen
+            users={users}
+            onLogin={handleLogin}
+            onSwitchToEmployee={() => setLoginMode("employee")}
+          />
+        </AuthContext.Provider>
+      );
+    }
+    return (
+      <AuthContext.Provider value={{ user: null }}>
+        <EmployeeLoginScreen
+          opsTeam={opsTeam}
+          brands={brands}
+          onLogin={handleLogin}
+          onSwitchToManager={() => setLoginMode("manager")}
+        />
+      </AuthContext.Provider>
+    );
+  }
+
+  // ── Employee shell — restricted view ───────────────────────────────────────
+  if (currentUser.role === "employee") {
+    return (
+      <EmployeeShell
+        currentUser={currentUser}
+        brands={brands}
+        opsTeam={opsTeam}
+        assignments={assignments}
+        checklists={checklists}
+        tempUnits={tempUnits}
+        cleaningTasks={cleaningTasks}
+        auditTrail={auditTrail}
+        checklistStates={checklistStates}
+        tempLogs={tempLogs}
+        deliveries={deliveries}
+        issues={issues}
+        onSignOff={handleSignOff}
+        onChecklistItemToggle={handleChecklistItemToggle}
+        onTempLog={handleTempLog}
+        onDeliveryAdd={handleDeliveryAdd}
+        onAddIssue={addIssue}
+        onUpdateIssue={updateIssue}
+        hdTickets={hdTickets}
+        onAddHdTicket={addHdTicket}
+        messages={messages}
+        onSendMessage={sendMessage}
+        onMarkRead={handleMarkRead}
+        onLogout={handleLogout}
+      />
+    );
+  }
 
   const visibleBrands = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
   const overdueOpsCount = assignments.filter(a => visibleBrands.some(b => b.id === a.brandId) && isActiveToday(a) && isOverdue(a)).length;
 
+  // ── Badge helpers (memoised) ─────────────────────────────────────────────
+  const hdOpenCount = hdTickets.filter(t => visibleBrands.some(b => b.id === t.brandId) && ["Open","In Progress"].includes(t.status)).length;
+  const inboxUnread = (() => {
+    const myId = currentUser.id;
+    return messages.filter(m => {
+      if (m.fromId === myId) return false;
+      if (m.toScope === "all_locations") return true;
+      if (m.toScope === "location" && visibleBrands.some(b => b.id === m.toBrandId)) return true;
+      if (m.toScope === "individual" && m.toPersonId === myId) return true;
+      return false;
+    }).filter(m => !m.readBy?.includes(myId)).length;
+  })();
+
   const NAV_GROUPS = [
-    { group: "Financial", items: [
-      { key: "dashboard", label: "Dashboard",           icon: LayoutDashboard },
-      { key: "tactical",  label: "Tactical Ops",        icon: BarChart2 },
-      { key: "eod",       label: "EOD Report",           icon: ClipboardList },
-      { key: "issues",    label: "Issues & Maintenance", icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
-    ]},
-    { group: "Operations", items: [
-      { key: "ops-network",    label: "Ops Network",       icon: LayoutDashboard, badge: overdueOpsCount > 0 ? overdueOpsCount.toString() : null },
-      { key: "ops-tasks",      label: "Today's Tasks",     icon: ClipboardList },
-      { key: "ops-temps",      label: "Temperature Log",   icon: Thermometer },
-      { key: "ops-deliveries", label: "Deliveries",        icon: Truck },
-      { key: "ops-assigns",    label: "Assignments",       icon: Clipboard },
-      { key: "ops-compliance", label: "Compliance",        icon: ShieldCheck },
-      { key: "ops-audit",      label: "Audit Trail",       icon: ScrollText },
-      { key: "ops-settings",   label: "Ops Settings",      icon: Settings },
-    ]},
-    ...(currentUser.role === "owner" ? [{ group: "System", items: [{ key: "admin", label: "Admin Panel", icon: Settings, badge: "OWNER" }] }] : []),
+    {
+      group: "Overview",
+      items: [
+        { key: "dashboard", label: "Dashboard",     icon: LayoutDashboard },
+        { key: "tactical",  label: "Performance",   icon: BarChart2 },
+      ],
+    },
+    {
+      group: "Daily Ops",
+      items: [
+        { key: "ops-tasks",      label: "Today's Tasks",   icon: ListChecks,  badge: overdueOpsCount > 0 ? overdueOpsCount.toString() : null },
+        { key: "eod",            label: "EOD Report",       icon: ClipboardList },
+        { key: "ops-temps",      label: "Temperatures",     icon: Thermometer },
+        { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
+        { key: "ops-network",    label: "Ops Overview",     icon: ShieldCheck },
+        { key: "ops-compliance", label: "Compliance",       icon: CheckSquare },
+      ],
+    },
+    {
+      group: "Team",
+      items: [
+        { key: "helpdesk", label: "Help Desk", icon: LifeBuoy, badge: hdOpenCount > 0 ? hdOpenCount.toString() : null },
+        { key: "inbox",    label: "Inbox",     icon: Inbox,    badge: inboxUnread > 0 ? inboxUnread.toString() : null },
+        { key: "issues",   label: "Issues",    icon: Wrench,   badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+      ],
+    },
+    {
+      group: "Settings",
+      items: [
+        { key: "ops-assigns",  label: "Assignments",   icon: Clipboard },
+        { key: "ops-settings", label: "Ops Setup",     icon: Settings },
+        { key: "ops-audit",    label: "Audit Trail",   icon: ScrollText },
+        ...(currentUser.role === "owner" ? [{ key: "admin", label: "Admin", icon: Users, badge: "OWNER" }] : []),
+      ],
+    },
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Tactical Ops", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Network", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Settings", admin: "Admin Panel" };
+  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox" };
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
-  const Sidebar = ({ mobile = false }) => (
-    <div className={`flex flex-col h-full ${mobile ? "w-72" : ""}`}>
-      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-slate-800">
-        <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center"><BarChart2 size={16} className="text-white"/></div>
-        <div><div className="text-sm font-bold text-white">Create Brands</div><div className="text-xs text-slate-500">Hospitality Group</div></div>
-        {mobile && <button onClick={() => setDrawerOpen(false)} className="ml-auto text-slate-400 hover:text-white"><X size={18}/></button>}
-      </div>
-      <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-4">
-        {NAV_GROUPS.map(({ group, items }) => (
-          <div key={group}>
-            <div className="text-xs font-bold text-slate-600 uppercase tracking-widest px-2 mb-1">{group}</div>
-            <div className="space-y-0.5">
-              {items.map(n => {
-                const NIcon = n.icon; const active = activeView === n.key;
-                return (
-                  <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
-                    <NIcon size={14}/><span className="flex-1 text-left">{n.label}</span>
-                    {n.badge && <span className={`text-xs px-1.5 py-0.5 rounded-lg font-semibold ${n.badge === "OWNER" ? "bg-violet-500/20 text-violet-400 border border-violet-500/30" : "bg-red-500 text-white"}`}>{n.badge}</span>}
-                  </button>
-                );
-              })}
-            </div>
+  const Sidebar = ({ mobile = false }) => {
+    const [collapsed, setCollapsed] = useState({});
+    const toggleGroup = (g) => setCollapsed(c => ({ ...c, [g]: !c[g] }));
+    const groupIcons = { Overview: LayoutDashboard, "Daily Ops": Activity, Team: Users, Settings: Settings };
+
+    return (
+      <div className="flex flex-col h-full">
+        {/* Logo */}
+        <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/80">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-lg flex-shrink-0">
+            <BarChart2 size={15} className="text-white"/>
           </div>
-        ))}
-      </nav>
-      <div className="px-4 py-4 border-t border-slate-800 space-y-3">
-        <UserChip user={currentUser} onLogout={handleLogout}/>
-        <div className="flex flex-wrap gap-1.5">
-          <button onClick={exportData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700"><Download size={11}/>Export</button>
-          {currentUser.role === "owner" && <>
-            <button onClick={importData} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700"><Upload size={11}/>Import</button>
-            <button onClick={() => setResetConfirmOpen(true)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-red-400"><RotateCcw size={11}/>Reset</button>
-          </>}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-white leading-tight">Create Brands</div>
+            <div className="text-xs text-slate-500 leading-tight">Hospitality Group</div>
+          </div>
+          {mobile && (
+            <button onClick={() => setDrawerOpen(false)} className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-all flex-shrink-0">
+              <X size={16}/>
+            </button>
+          )}
         </div>
-        <div className="text-xs text-slate-600">{entries.length} entries · {brands.length} locations · {issues.length} issues · {assignments.length} assignments</div>
+
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+          {NAV_GROUPS.map(({ group, items }) => {
+            const GIcon = groupIcons[group] || LayoutDashboard;
+            const isCollapsed = collapsed[group];
+            return (
+              <div key={group}>
+                {/* Group header — clickable to collapse */}
+                <button
+                  onClick={() => toggleGroup(group)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-slate-500 hover:text-slate-300 transition-all group mb-0.5"
+                >
+                  <GIcon size={12} className="flex-shrink-0"/>
+                  <span className="flex-1 text-left text-xs font-bold uppercase tracking-widest">{group}</span>
+                  <ChevronDownIcon size={12} className={`transition-transform duration-200 ${isCollapsed ? "-rotate-90" : ""}`}/>
+                </button>
+
+                {/* Nav items */}
+                {!isCollapsed && (
+                  <div className="space-y-0.5 mb-2">
+                    {items.map(n => {
+                      const NIcon = n.icon;
+                      const active = activeView === n.key;
+                      return (
+                        <button key={n.key}
+                          onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                            active
+                              ? "bg-indigo-600 text-white shadow-sm shadow-indigo-900/50"
+                              : "text-slate-400 hover:bg-slate-800/80 hover:text-slate-200"
+                          }`}
+                        >
+                          <NIcon size={14} className="flex-shrink-0"/>
+                          <span className="flex-1 text-left">{n.label}</span>
+                          {n.badge && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded-md font-bold leading-none ${
+                              n.badge === "OWNER"
+                                ? "bg-violet-500/20 text-violet-400 border border-violet-500/30"
+                                : "bg-red-500 text-white"
+                            }`}>{n.badge}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
+
+        {/* Footer */}
+        <div className="px-3 py-3 border-t border-slate-800/80 space-y-3">
+          <UserChip user={currentUser} onLogout={handleLogout}/>
+          {/* Data tools — owner only */}
+          {currentUser.role === "owner" && (
+            <div className="flex gap-1.5">
+              <button onClick={exportData} title="Export data" className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-800/80 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-slate-200 transition-all">
+                <Download size={11}/> Export
+              </button>
+              <button onClick={importData} title="Import data" className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-800/80 text-slate-400 text-xs font-semibold hover:bg-slate-700 hover:text-slate-200 transition-all">
+                <Upload size={11}/> Import
+              </button>
+              <button onClick={() => setResetConfirmOpen(true)} title="Reset data" className="p-1.5 rounded-lg bg-slate-800/80 text-slate-500 text-xs font-semibold hover:bg-red-950/40 hover:text-red-400 transition-all">
+                <RotateCcw size={11}/>
+              </button>
+            </div>
+          )}
+          {currentUser.role !== "owner" && (
+            <button onClick={exportData} className="w-full flex items-center justify-center gap-1 py-1.5 rounded-lg bg-slate-800/80 text-slate-400 text-xs font-semibold hover:bg-slate-700 transition-all">
+              <Download size={11}/> Export
+            </button>
+          )}
+          <div className="text-xs text-slate-600 text-center tabular-nums">{brands.length} locations · {issues.length} issues</div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <AuthContext.Provider value={{user:currentUser}}>
@@ -2822,13 +4110,24 @@ export default function App() {
         <aside className="hidden lg:flex w-60 flex-col bg-slate-900/80 border-r border-slate-800 flex-shrink-0"><Sidebar/></aside>
         {drawerOpen && <div className="fixed inset-0 z-50 lg:hidden"><div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDrawerOpen(false)}/><div className="absolute left-0 top-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col"><Sidebar mobile/></div></div>}
         <main className="flex-1 flex flex-col min-w-0">
-          <header className="flex items-center gap-4 px-5 py-4 border-b border-slate-800 bg-slate-900/50 sticky top-0 z-10 backdrop-blur-sm">
-            <button onClick={() => setDrawerOpen(true)} className="lg:hidden text-slate-400 hover:text-white"><Menu size={20}/></button>
+          <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 sticky top-0 z-10 backdrop-blur-sm">
+            <button onClick={() => setDrawerOpen(true)} className="lg:hidden p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all"><Menu size={18}/></button>
             <div className="flex-1 min-w-0">
-              <h1 className="text-base font-bold text-white">{titles[activeView]}</h1>
-              <div className="flex items-center gap-2"><span className="text-xs text-slate-500">{todayDisplay}</span><span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 text-xs font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>Live</span></div>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-sm font-bold text-white">{titles[activeView] || activeView}</h1>
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/20">
+                  <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"/>Live
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">{todayDisplay}</div>
             </div>
-            <div className="hidden md:flex items-center gap-2 flex-wrap">{visibleBrands.slice(0,3).map(b => <span key={b.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{background:b.color}}/>{b.name}</span>)}</div>
+            {/* Notification badges in header for quick access */}
+            {(hdOpenCount > 0 || inboxUnread > 0) && (
+              <div className="hidden sm:flex items-center gap-2">
+                {hdOpenCount > 0 && <button onClick={() => setActiveView("helpdesk")} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold hover:bg-amber-500/20 transition-all"><LifeBuoy size={12}/>{hdOpenCount} ticket{hdOpenCount > 1 ? "s" : ""}</button>}
+                {inboxUnread > 0 && <button onClick={() => setActiveView("inbox")} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold hover:bg-indigo-500/20 transition-all"><Inbox size={12}/>{inboxUnread} unread</button>}
+              </div>
+            )}
             <div className="lg:hidden"><UserChip user={currentUser} onLogout={handleLogout} compact/></div>
           </header>
           <div className="flex-1 p-5 lg:p-6 overflow-auto">
@@ -2844,6 +4143,8 @@ export default function App() {
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {activeView === "ops-settings"    && <OpsSettingsView brands={brands} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist} onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit} onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask} onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}/>}
+            {activeView === "helpdesk"   && <HelpdeskManagerView brands={visibleBrands} tickets={hdTickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={updateHdTicket} onDelete={deleteHdTicket}/>}
+            {activeView === "inbox"      && <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}/>}
             {activeView === "admin" && currentUser.role === "owner" && <AdminPanelView brands={brands} users={users} entries={entries} onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser} onUpdateKPITargets={updateKPITargets} onBulkImport={bulkImport}/>}
           </div>
         </main>

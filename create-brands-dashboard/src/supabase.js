@@ -323,3 +323,112 @@ function dbDeliveryToApp(d) { return { id: d.id, brandId: d.brand_id, date: d.da
 
 function appAuditToDb(a) { return { brand_id: a.brandId || null, action: a.action, detail: a.detail || "", performed_by: a.by || "", date: a.date, time: a.time }; }
 function dbAuditToApp(a) { return { id: a.id, brandId: a.brand_id, action: a.action, detail: a.detail, by: a.performed_by, date: a.date, time: a.time, timestamp: a.created_at }; }
+
+// ── HELPDESK TICKETS ─────────────────────────────────────────────────────────
+
+export async function fetchHelpdeskTickets() {
+  const { data, error } = await supabase
+    .from("helpdesk_tickets")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data.map(dbTicketToHelpdesk);
+}
+
+export async function insertHelpdeskTicket(ticket) {
+  const { data, error } = await supabase
+    .from("helpdesk_tickets")
+    .insert(helpdeskTicketToDb(ticket))
+    .select().single();
+  if (error) throw error;
+  return dbTicketToHelpdesk(data);
+}
+
+export async function upsertHelpdeskTicket(ticket) {
+  const { data, error } = await supabase
+    .from("helpdesk_tickets")
+    .upsert(helpdeskTicketToDb(ticket))
+    .select().single();
+  if (error) throw error;
+  return dbTicketToHelpdesk(data);
+}
+
+export async function removeHelpdeskTicket(id) {
+  const { error } = await supabase.from("helpdesk_tickets").delete().eq("id", id);
+  if (error) throw error;
+}
+
+function helpdeskTicketToDb(t) {
+  return {
+    id: t.id, brand_id: t.brandId, title: t.title,
+    description: t.description || "", category: t.category || "General",
+    priority: t.priority || "Normal", status: t.status || "Open",
+    created_by_id: t.createdById || "", created_by_name: t.createdByName || "",
+    assigned_to: t.assignedTo || [], comments: t.comments || [],
+    updated_at: new Date().toISOString(),
+  };
+}
+function dbTicketToHelpdesk(t) {
+  return {
+    id: t.id, brandId: t.brand_id, title: t.title,
+    description: t.description, category: t.category,
+    priority: t.priority, status: t.status,
+    createdById: t.created_by_id, createdByName: t.created_by_name,
+    assignedTo: t.assigned_to || [], comments: t.comments || [],
+    createdAt: t.created_at, updatedAt: t.updated_at,
+  };
+}
+
+// ── INBOX MESSAGES ────────────────────────────────────────────────────────────
+
+export async function fetchInboxMessages() {
+  const { data, error } = await supabase
+    .from("inbox_messages")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(300);
+  if (error) throw error;
+  return data.map(dbMsgToApp);
+}
+
+export async function insertInboxMessage(msg) {
+  const { data, error } = await supabase
+    .from("inbox_messages")
+    .insert(appMsgToDb(msg))
+    .select().single();
+  if (error) throw error;
+  return dbMsgToApp(data);
+}
+
+export async function markMessageRead(id, readerId) {
+  // Append readerId to read_by array if not already present
+  const { error } = await supabase.rpc("mark_message_read", { msg_id: id, reader_id: readerId })
+    .catch(() => null); // graceful fallback if RPC not set up
+  // Fallback: fetch + update
+  if (error || true) {
+    const { data: existing } = await supabase.from("inbox_messages").select("read_by").eq("id", id).single();
+    if (existing && !existing.read_by.includes(readerId)) {
+      await supabase.from("inbox_messages").update({ read_by: [...existing.read_by, readerId] }).eq("id", id);
+    }
+  }
+}
+
+function appMsgToDb(m) {
+  return {
+    id: m.id, brand_id: m.brandId || null,
+    from_id: m.fromId || "", from_name: m.fromName || "", from_role: m.fromRole || "",
+    to_scope: m.toScope || "location", to_brand_id: m.toBrandId || null,
+    to_person_id: m.toPersonId || null, to_person_name: m.toPersonName || null,
+    subject: m.subject || "", body: m.body || "", read_by: m.readBy || [],
+  };
+}
+function dbMsgToApp(m) {
+  return {
+    id: m.id, brandId: m.brand_id,
+    fromId: m.from_id, fromName: m.from_name, fromRole: m.from_role,
+    toScope: m.to_scope, toBrandId: m.to_brand_id,
+    toPersonId: m.to_person_id, toPersonName: m.to_person_name,
+    subject: m.subject, body: m.body, readBy: m.read_by || [],
+    createdAt: m.created_at,
+  };
+}
