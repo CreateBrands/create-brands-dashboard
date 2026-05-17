@@ -3895,7 +3895,8 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
   const weekDays = DAYS_OF_WEEK.map((_, i) => { const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d; });
 
   const getAvailForDay = (date) => {
-    const dateStr = date.toISOString().split("T")[0];
+    const y=date.getFullYear(),mo=String(date.getMonth()+1).padStart(2,"0"),dd=String(date.getDate()).padStart(2,"0");
+    const dateStr = `${y}-${mo}-${dd}`;
     const dayName = DAYS_OF_WEEK[date.getDay() === 0 ? 6 : date.getDay() - 1];
     return availability.filter(a => {
       if (!vb.some(b => b.id === a.brandId)) return false;
@@ -5632,7 +5633,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
 
                 {/* Day cells */}
                 {weekDays.map((day,dIdx)=>{
-                  const dateStr = day.toISOString().split("T")[0];
+                  const dateStr = toLocalDateStr(day);
                   const slots   = getSlotsFor(member.id, dateStr);
                   const avails  = getAvailFor(member.id, dateStr);
                   const isAvail = avails.some(a=>a.available);
@@ -5685,7 +5686,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       {viewMode==="list" && (
         <div className="space-y-3">
           {weekDays.map(day=>{
-            const dateStr = day.toISOString().split("T")[0];
+            const dateStr = toLocalDateStr(day);
             const daySlots = weekSchedules.filter(s=>s.date===dateStr).sort((a,b)=>a.startTime.localeCompare(b.startTime));
             const isToday = toLocalDateStr(day)===toLocalDateStr(today);
             return (
@@ -5771,7 +5772,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
   // Only published schedules for this brand on this date
   const daySchedules = schedules.filter(s =>
     s.brandId === myBrandId && s.date === viewDate &&
-    (s.published === true || s.published === "true") &&
+    !!s.published &&
     s.status !== "cancelled"
   );
 
@@ -5827,7 +5828,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
     s.brandId === myBrandId &&
     weekDates.includes(s.date) &&
     s.date > viewDate && // only future days this week
-    (s.published === true || s.published === "true") &&
+    !!s.published &&
     s.status !== "cancelled" &&
     (s.employeeId === myId || s.employeeId === currentUser.id)
   ).sort((a,b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
