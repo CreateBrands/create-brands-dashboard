@@ -5595,7 +5595,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, currentUser, o
                   <div className={`text-sm font-bold ${isToday ? "text-indigo-300" : "text-slate-300"}`}>
                     {day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
                   </div>
-                  <button onClick={() => setShiftModal({ date: dateStr, memberId: member.id, memberName: `${member.firstName} ${member.lastName}`.trim() })}
+                  <button onClick={() => setShiftModal({ date: dateStr })}
                     className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
                     <Plus size={12}/> Add shift
                   </button>
