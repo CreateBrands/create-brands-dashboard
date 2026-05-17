@@ -659,6 +659,7 @@ function appPunchToDb(p) {
     overtime_rejected_reason: p.overtimeRejectedReason || "",
     photo_url_in: p.photoUrlIn || "",
     photo_url_out: p.photoUrlOut || "",
+    overtime_comments: p.overtimeComments || [],
     updated_at: new Date().toISOString(),
   };
 }
@@ -681,6 +682,7 @@ function dbPunchToApp(p) {
     overtimeRejectedReason: p.overtime_rejected_reason || "",
     photoUrlIn: p.photo_url_in || "",
     photoUrlOut: p.photo_url_out || "",
+    overtimeComments: p.overtime_comments || [],
     createdAt: p.created_at, updatedAt: p.updated_at,
   };
 }
@@ -708,4 +710,24 @@ export async function attachPunchPhoto(recordId, photoUrl, which /* "in" | "out"
     .update({ [field]: photoUrl, updated_at: new Date().toISOString() })
     .eq("id", recordId);
   if (error) throw error;
+}
+
+/** Append a comment to a punch record's overtime conversation thread. */
+export async function addPunchOvertimeComment(recordId, comment) {
+  // Fetch current comments, append, save back. Last-write-wins; fine for low-traffic conversations.
+  const { data: current, error: fetchErr } = await supabase
+    .from("punch_records")
+    .select("overtime_comments")
+    .eq("id", recordId)
+    .single();
+  if (fetchErr) throw fetchErr;
+  const next = [...(current.overtime_comments || []), comment];
+  const { data, error } = await supabase
+    .from("punch_records")
+    .update({ overtime_comments: next, updated_at: new Date().toISOString() })
+    .eq("id", recordId)
+    .select()
+    .single();
+  if (error) throw error;
+  return dbPunchToApp(data);
 }

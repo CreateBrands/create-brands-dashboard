@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -1197,7 +1197,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
   availability, onAddAvailability, onUpdateAvailability,
-  schedules, punchRecords, onAmendPunch,
+  schedules, punchRecords, onAmendPunch, onAddPunchComment,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -1320,7 +1320,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
               tickets={hdTickets || []} onAddTicket={onAddHdTicket} onUpdateTicket={onUpdateHdTicket} onDeleteTicket={() => {}}
               availability={availability || []} onAddAvailability={onAddAvailability} onUpdateAvailability={onUpdateAvailability}
               schedules={schedules || []} shiftPresets={[]} onAddSchedule={() => {}} onDeleteSchedule={() => {}} onPublishWeek={() => {}}
-              punchRecords={punchRecords || []} onUpdatePunchRecord={onAmendPunch}
+              punchRecords={punchRecords || []} onUpdatePunchRecord={onAmendPunch} onAddPunchComment={onAddPunchComment}
               isEmployee={true}
             />
           )}
@@ -5131,7 +5131,7 @@ function CommunicationView({
   tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
   availability, onAddAvailability, onUpdateAvailability,
   schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
-  punchRecords, onUpdatePunchRecord,
+  punchRecords, onUpdatePunchRecord, onAddPunchComment,
   isEmployee,
 }) {
   const [tab, setTab] = useState("helpdesk");
@@ -5164,7 +5164,22 @@ function CommunicationView({
       { key: "schedule", label: "Schedule", icon: CalendarDays, badge: null },
     ] : [
       { key: "emp-schedule", label: "My Schedule", icon: CalendarDays, badge: null },
-      { key: "my-hours",     label: "My Hours",    icon: Clock,         badge: (() => { const needsReason = (punchRecords||[]).filter(r => (r.employeeId===myOpsId||r.employeeId===myId) && r.overtimeHours>0 && !r.overtimeReason).length; return needsReason>0?needsReason.toString():null; })() },
+      { key: "my-hours",     label: "My Hours",    icon: Clock,         badge: (() => {
+        const records = (punchRecords||[]).filter(r => (r.employeeId===myOpsId||r.employeeId===myId));
+        const count = records.filter(r => {
+          const hasOT = (r.overtimeHours||0) > 0;
+          if (!hasOT) return false;
+          // Conclusion reached — nothing to do
+          if (r.overtimeApproved || r.overtimeRejectedReason) return false;
+          // No reason yet — employee needs to start
+          if (!r.overtimeReason && (r.overtimeComments?.length||0) === 0) return true;
+          // Last comment was from the manager → employee's turn
+          const cs = r.overtimeComments || [];
+          if (cs.length > 0 && cs[cs.length-1].authorRole === "manager") return true;
+          return false;
+        }).length;
+        return count > 0 ? count.toString() : null;
+      })() },
     ]),
   ];
 
@@ -5213,7 +5228,7 @@ function CommunicationView({
           <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]}/>
         )}
         {tab === "my-hours" && isEmployee && (
-          <EmployeeHoursView currentUser={currentUser} brands={brands} schedules={schedules||[]} punchRecords={punchRecords||[]} onUpdate={onUpdatePunchRecord}/>
+          <EmployeeHoursView currentUser={currentUser} brands={brands} schedules={schedules||[]} punchRecords={punchRecords||[]} onUpdate={onUpdatePunchRecord} onAddComment={onAddPunchComment}/>
         )}
       </div>
     </div>
@@ -6283,7 +6298,7 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
 // TIME & ATTENDANCE — Manager view with approval + overtime comparison
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete }) {
+function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment }) {
   const { user } = useAuth();
   const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
 
@@ -6566,20 +6581,19 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
                 {/* Overtime section */}
                 {hasOT && (
-                  <div className={`rounded-xl p-3 border ${r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" : "bg-red-950/20 border-red-500/20"}`}>
+                  <div className={`rounded-xl p-3 border space-y-3 ${r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" : "bg-red-950/20 border-red-500/20"}`}>
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-bold text-red-400 mb-1">
                           ⏱ {r.overtimeHrs.toFixed(2)}h overtime
                           {r.overtimeApproved && <span className="text-emerald-400 ml-2">✓ Approved by {r.overtimeApprovedBy}</span>}
+                          {r.overtimeApproved === false && r.overtimeRejectedReason && <span className="text-red-400 ml-2">✗ Rejected</span>}
                         </div>
-                        {r.overtimeReason ? (
-                          <div className="text-xs text-slate-300 italic">Employee: "{r.overtimeReason}"</div>
-                        ) : (
+                        {!r.overtimeReason && (r.overtimeComments?.length || 0) === 0 && (
                           <div className="text-xs text-slate-500">Awaiting employee reason</div>
                         )}
                         {r.overtimeApproved === false && r.overtimeRejectedReason && (
-                          <div className="text-xs text-red-400 mt-1">Rejected: "{r.overtimeRejectedReason}"</div>
+                          <div className="text-xs text-red-300 mt-1">Final note: "{r.overtimeRejectedReason}"</div>
                         )}
                       </div>
                       {/* Approve/reject OT */}
@@ -6590,6 +6604,10 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                         </div>
                       )}
                     </div>
+                    {/* Conversation thread */}
+                    {(r.overtimeReason || (r.overtimeComments?.length || 0) > 0) && onAddComment && (
+                      <OvertimeConversation record={r} currentUser={currentUser} isEmployee={false} onAddComment={onAddComment} compact/>
+                    )}
                     {/* Gross pay with/without OT */}
                     {r.hourlyRate > 0 && r.punchOut && (
                       <div className="mt-2 pt-2 border-t border-white/10 flex gap-4 text-xs">
@@ -6776,6 +6794,90 @@ function RejectOTModal({ record, onReject, onClose }) {
 }
 
 // ── Add Manual Hours Modal ────────────────────────────────────────────────────
+// ── Overtime Conversation Thread — shared by employee and manager views ───────
+function OvertimeConversation({ record, currentUser, isEmployee, onAddComment, compact = false }) {
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const comments = record.overtimeComments || [];
+  // Show initial reason as first message if present and no comments yet
+  const allMessages = (record.overtimeReason && comments.length === 0)
+    ? [{ id: "initial", authorId: record.employeeId, authorName: record.employeeName, authorRole: "employee", body: record.overtimeReason, at: record.updatedAt || record.createdAt }]
+    : comments;
+
+  const handleSend = async () => {
+    const text = body.trim();
+    if (!text || sending) return;
+    setSending(true);
+    const comment = {
+      id: `c-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      authorId: currentUser.id,
+      authorName: currentUser.name || currentUser.firstName || "User",
+      authorRole: isEmployee ? "employee" : "manager",
+      body: text,
+      at: new Date().toISOString(),
+    };
+    setBody("");
+    try { await onAddComment(record.id, comment); }
+    finally { setSending(false); }
+  };
+
+  const decided = record.overtimeApproved || (record.overtimeApproved === false && record.overtimeRejectedReason);
+  const fmtAt = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  };
+
+  return (
+    <div className="space-y-2">
+      {allMessages.length > 0 && (
+        <div className={`space-y-2 ${compact ? "max-h-48" : "max-h-64"} overflow-y-auto pr-1`}>
+          {allMessages.map(c => {
+            const isMine = c.authorId === currentUser.id;
+            const isFromManager = c.authorRole === "manager";
+            return (
+              <div key={c.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[80%] rounded-2xl px-3 py-2 ${
+                  isMine
+                    ? "bg-indigo-600 text-white"
+                    : isFromManager
+                      ? "bg-amber-950/40 border border-amber-500/30 text-amber-100"
+                      : "bg-slate-800 text-slate-200"
+                }`}>
+                  <div className="text-xs font-semibold mb-0.5 opacity-80">
+                    {c.authorName}{isFromManager && !isMine ? " · Manager" : ""}
+                  </div>
+                  <div className="text-xs whitespace-pre-wrap break-words">{c.body}</div>
+                  <div className="text-xs opacity-60 mt-1">{fmtAt(c.at)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!decided && (
+        <div className="flex gap-2">
+          <input
+            value={body} onChange={e => setBody(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+            placeholder={isEmployee ? "Reply to your manager…" : "Reply to employee…"}
+            className={`flex-1 ${inputCls} text-xs`}
+            disabled={sending}
+          />
+          <button onClick={handleSend} disabled={!body.trim() || sending}
+            className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-colors flex-shrink-0">
+            {sending ? "…" : "Send"}
+          </button>
+        </div>
+      )}
+      {decided && (
+        <div className="text-xs text-slate-500 italic text-center py-1">
+          {record.overtimeApproved ? "Conversation closed — overtime approved" : "Conversation closed — overtime not approved"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) {
   const vb = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
   const [brandId,   setBrandId]   = useState(vb[0]?.id || "");
@@ -6841,7 +6943,7 @@ function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) 
 // ═══════════════════════════════════════════════════════════════════════════════
 // EMPLOYEE HOURS VIEW — own records + overtime reason submission
 // ═══════════════════════════════════════════════════════════════════════════════
-function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpdate }) {
+function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpdate, onAddComment }) {
   const myId      = currentUser.opsTeamMemberId || currentUser.id;
   const myBrandId = currentUser.brandIds[0];
 
@@ -6993,15 +7095,12 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   {rejected && (
                     <div className="text-xs text-slate-400">
                       <div className="font-semibold text-slate-300 mb-0.5">Not approved</div>
-                      {r.overtimeRejectedReason && <div className="italic">Manager note: "{r.overtimeRejectedReason}"</div>}
+                      {r.overtimeRejectedReason && <div className="italic">Manager final note: "{r.overtimeRejectedReason}"</div>}
                     </div>
                   )}
 
-                  {r.overtimeReason && !r.overtimeApproved && !rejected && (
-                    <div className="text-xs text-slate-300 italic">Your reason: "{r.overtimeReason}"</div>
-                  )}
-
-                  {needsReason && (
+                  {/* Initial reason prompt — shown only if no reason yet AND no comments yet */}
+                  {needsReason && (r.overtimeComments?.length || 0) === 0 && (
                     <div className="space-y-2">
                       <div className="text-xs text-red-300 font-semibold">
                         {r.isUnscheduled
@@ -7024,6 +7123,11 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                         Submit Reason
                       </button>
                     </div>
+                  )}
+
+                  {/* Conversation thread — once a reason exists OR there are comments */}
+                  {(r.overtimeReason || (r.overtimeComments?.length || 0) > 0) && onAddComment && (
+                    <OvertimeConversation record={r} currentUser={currentUser} isEmployee={true} onAddComment={onAddComment}/>
                   )}
                 </div>
               )}
@@ -7223,6 +7327,7 @@ export default function App() {
           overtimeRejectedReason: r.overtime_rejected_reason || "",
           photoUrlIn: r.photo_url_in || "",
           photoUrlOut: r.photo_url_out || "",
+          overtimeComments: r.overtime_comments || [],
           createdAt: r.created_at, updatedAt: r.updated_at };
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
@@ -7359,6 +7464,12 @@ export default function App() {
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
   const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
   const handleAmendPunch = useCallback(async record=>{try{const saved=await upsertPunchRecord(record);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
+  const handleAddPunchComment = useCallback(async (recordId, comment) => {
+    try {
+      const saved = await addPunchOvertimeComment(recordId, comment);
+      setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+    } catch (err) { showToast("Couldn't post comment: " + err.message, "error"); }
+  }, [showToast]);
   const removeSchedulePunchRecord = useCallback(async(id)=>{try{const{error}=await supabase.from("punch_records").delete().eq("id",id);if(error)throw error;setPunchRecords(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
   const addHdTicket    = useCallback(async t=>{const s=await insertHelpdeskTicket(t);setHdTickets(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[s,...ts]);}, []);
   const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
@@ -7409,7 +7520,7 @@ export default function App() {
           hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
           messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
           availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
-          schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch}
+          schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch} onAddPunchComment={handleAddPunchComment}
           onLogout={handleLogout}
         />
       </AuthContext.Provider>
@@ -7514,6 +7625,7 @@ export default function App() {
               brands={visibleBrands} opsTeam={opsTeam} schedules={schedules}
               punchRecords={punchRecords} currentUser={currentUser}
               onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
+              onAddComment={handleAddPunchComment}
             />}
             {activeView === "admin"          && currentUser.role === "owner" && <AdminPanelView
               brands={brands} users={users} entries={entries}
