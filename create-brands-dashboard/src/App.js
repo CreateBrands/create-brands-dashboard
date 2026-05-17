@@ -4039,7 +4039,7 @@ function CommunicationView({
   tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
   isEmployee,
 }) {
-  const [tab, setTab] = useState("chat");
+  const [tab, setTab] = useState("helpdesk"); // Help Desk opens first
 
   // Badge counts
   const myId    = currentUser.id;
@@ -4180,6 +4180,80 @@ export default function App() {
     }
     loadAll();
   }, []);
+
+  // ── Supabase Realtime — live updates for tickets + messages ─────────────────
+  // This makes comments appear instantly on both manager and employee sides
+  // without any manual refresh.
+  useEffect(() => {
+    if (!dbReady) return;
+
+    // Subscribe to helpdesk_tickets changes
+    const ticketChannel = supabase
+      .channel("realtime:helpdesk_tickets")
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "helpdesk_tickets",
+      }, (payload) => {
+        const { eventType, new: newRow, old: oldRow } = payload;
+        if (eventType === "INSERT") {
+          const ticket = {
+            id: newRow.id, brandId: newRow.brand_id, title: newRow.title,
+            description: newRow.description, category: newRow.category,
+            priority: newRow.priority, status: newRow.status,
+            createdById: newRow.created_by_id, createdByName: newRow.created_by_name,
+            assignedTo: newRow.assigned_to || [], comments: newRow.comments || [],
+            createdAt: newRow.created_at, updatedAt: newRow.updated_at,
+          };
+          setHdTickets(ts => {
+            if (ts.some(t => t.id === ticket.id)) return ts;
+            return [ticket, ...ts];
+          });
+        } else if (eventType === "UPDATE") {
+          const ticket = {
+            id: newRow.id, brandId: newRow.brand_id, title: newRow.title,
+            description: newRow.description, category: newRow.category,
+            priority: newRow.priority, status: newRow.status,
+            createdById: newRow.created_by_id, createdByName: newRow.created_by_name,
+            assignedTo: newRow.assigned_to || [], comments: newRow.comments || [],
+            createdAt: newRow.created_at, updatedAt: newRow.updated_at,
+          };
+          setHdTickets(ts => ts.map(t => t.id === ticket.id ? ticket : t));
+        } else if (eventType === "DELETE") {
+          setHdTickets(ts => ts.filter(t => t.id !== oldRow.id));
+        }
+      })
+      .subscribe();
+
+    // Subscribe to inbox_messages changes
+    const msgChannel = supabase
+      .channel("realtime:inbox_messages")
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "inbox_messages",
+      }, (payload) => {
+        const r = payload.new;
+        const msg = {
+          id: r.id, brandId: r.brand_id,
+          fromId: r.from_id, fromName: r.from_name, fromRole: r.from_role,
+          toScope: r.to_scope, toBrandId: r.to_brand_id,
+          toPersonId: r.to_person_id, toPersonName: r.to_person_name,
+          subject: r.subject, body: r.body, readBy: r.read_by || [],
+          createdAt: r.created_at,
+        };
+        setMessages(ms => {
+          if (ms.some(m => m.id === msg.id)) return ms;
+          return [msg, ...ms];
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ticketChannel);
+      supabase.removeChannel(msgChannel);
+    };
+  }, [dbReady]);
 
   useEffect(() => { try { if(currentUser) localStorage.setItem("cb_session",JSON.stringify(currentUser)); else localStorage.removeItem("cb_session"); } catch {} }, [currentUser]);
 
