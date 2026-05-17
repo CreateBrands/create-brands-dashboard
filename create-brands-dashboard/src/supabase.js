@@ -439,3 +439,74 @@ function dbMsgToApp(m) {
     createdAt: m.created_at,
   };
 }
+
+// ── AVAILABILITY ──────────────────────────────────────────────────────────────
+
+export async function fetchAvailability() {
+  const { data, error } = await supabase
+    .from("availability")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data.map(dbAvailToApp);
+}
+
+export async function insertAvailability(a) {
+  const { data, error } = await supabase
+    .from("availability")
+    .insert(appAvailToDb(a))
+    .select().single();
+  if (error) throw error;
+  return dbAvailToApp(data);
+}
+
+export async function upsertAvailability(a) {
+  const { data, error } = await supabase
+    .from("availability")
+    .upsert(appAvailToDb(a), { onConflict: "id" })
+    .select().single();
+  if (error) throw error;
+  return dbAvailToApp(data);
+}
+
+export async function removeAvailability(id) {
+  const { error } = await supabase.from("availability").delete().eq("id", id);
+  if (error) throw error;
+}
+
+function appAvailToDb(a) {
+  return {
+    id: a.id, brand_id: a.brandId,
+    employee_id: a.employeeId || "", employee_name: a.employeeName || "",
+    type: a.type, date: a.date || null,
+    day_of_week: a.dayOfWeek || null,
+    start_date: a.startDate || null, end_date: a.endDate || null,
+    start_time: a.startTime || "09:00", end_time: a.endTime || "17:00",
+    available: a.available ?? true, notes: a.notes || "",
+    status: a.status || "pending", manager_notes: a.managerNotes || "",
+    amended_start_time: a.amendedStartTime || null,
+    amended_end_time: a.amendedEndTime || null,
+    amended_date: a.amendedDate || null,
+    amended_day_of_week: a.amendedDayOfWeek || null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function dbAvailToApp(a) {
+  return {
+    id: a.id, brandId: a.brand_id,
+    employeeId: a.employee_id, employeeName: a.employee_name,
+    type: a.type, date: a.date,
+    dayOfWeek: a.day_of_week,
+    startDate: a.start_date, endDate: a.end_date,
+    startTime: a.start_time?.slice(0,5) || "09:00",
+    endTime: a.end_time?.slice(0,5) || "17:00",
+    available: a.available, notes: a.notes,
+    status: a.status, managerNotes: a.manager_notes || "",
+    amendedStartTime: a.amended_start_time?.slice(0,5) || null,
+    amendedEndTime: a.amended_end_time?.slice(0,5) || null,
+    amendedDate: a.amended_date || null,
+    amendedDayOfWeek: a.amended_day_of_week || null,
+    createdAt: a.created_at, updatedAt: a.updated_at,
+  };
+}

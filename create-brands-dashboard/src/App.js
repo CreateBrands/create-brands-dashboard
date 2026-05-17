@@ -15,6 +15,7 @@ import {
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
   fetchAuditTrail, insertAuditEntry, clearAuditTrail,
+  fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -31,7 +32,8 @@ import {
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck,
-  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign
+  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign,
+  Calendar
 } from "lucide-react";
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
@@ -1192,6 +1194,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
+  availability, onAddAvailability,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -1207,6 +1210,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
     { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
     { key: "ops-network",    label: "Ops Status",       icon: ShieldCheck },
     { key: "issues",         label: "Report Issue",     icon: Wrench },
+    { key: "availability", label: "Availability", icon: Calendar },
     { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => {
         const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
         const hdOpen = (hdTickets || []).filter(t => t.createdById === myOpsId && t.status !== "Closed").length;
@@ -1228,6 +1232,7 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
     "ops-network":    "Ops Status",
     "issues":         "Report an Issue",
     "comms":          "Communication",
+    "availability":   "Availability",
   };
 
   const NavBar = () => (
@@ -1303,6 +1308,12 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
             <EmployeeIssueReporter
               brands={myBrands} issues={myIssues} currentUser={currentUser}
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
+            />
+          )}
+          {activeView === "availability" && (
+            <EmployeeAvailabilityView
+              brands={myBrands} currentUser={currentUser}
+              availability={availability || []} onAdd={onAddAvailability}
             />
           )}
           {activeView === "comms" && (
@@ -3011,6 +3022,649 @@ const HD_PRIORITY_COLOR = { Urgent:"red", High:"amber", Normal:"indigo", Low:"sl
 // ── Ticket Detail Modal (managers/owners) ─────────────────────────────────────
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// AVAILABILITY — Employee submission + Manager review
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DAYS_OF_WEEK = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const AVAIL_STATUS_COLOR = { pending:"amber", approved:"emerald", rejected:"red", amended:"indigo" };
+const AVAIL_STATUS_ICON  = { pending:"⏳", approved:"✓", rejected:"✗", amended:"✎" };
+
+function fmtAvailDate(a) {
+  if (a.type === "one_off")   return a.date ? new Date(a.date).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}) : "—";
+  if (a.type === "weekly")    return a.dayOfWeek || "—";
+  if (a.type === "recurring") return `${a.startDate ? new Date(a.startDate).toLocaleDateString("en-GB",{day:"numeric",month:"short"}) : "?"} – ${a.endDate ? new Date(a.endDate).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}) : "?"}`;
+  return "—";
+}
+
+function fmtAvailTime(a) {
+  const st = (a.status === "amended" && a.amendedStartTime) ? a.amendedStartTime : a.startTime;
+  const et = (a.status === "amended" && a.amendedEndTime)   ? a.amendedEndTime   : a.endTime;
+  return `${st || "09:00"} – ${et || "17:00"}`;
+}
+
+// ── Employee: Submit Availability ─────────────────────────────────────────────
+function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
+  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+  const [brandId, setBrandId] = useState(myBrands[0]?.id || "");
+  const [type, setType]       = useState("one_off");
+  const [available, setAvailable] = useState(true);
+  const [form, setFormState]  = useState({
+    date: "", dayOfWeek: "Monday", startDate: "", endDate: "",
+    startTime: "09:00", endTime: "17:00", notes: "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  const isValid = () => {
+    if (type === "one_off")   return !!form.date;
+    if (type === "weekly")    return !!form.dayOfWeek;
+    if (type === "recurring") return !!form.startDate && !!form.endDate;
+    return false;
+  };
+
+  const handleSubmit = () => {
+    if (!isValid()) return;
+    onSubmit({
+      id: `av-${Date.now()}`,
+      brandId, employeeId: currentUser.opsTeamMemberId || currentUser.id,
+      employeeName: currentUser.name, type, available,
+      date:        type === "one_off"   ? form.date       : null,
+      dayOfWeek:   type === "weekly"    ? form.dayOfWeek  : null,
+      startDate:   type === "recurring" ? form.startDate  : null,
+      endDate:     type === "recurring" ? form.endDate    : null,
+      startTime: form.startTime, endTime: form.endTime,
+      notes: form.notes, status: "pending",
+      managerNotes: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
+        <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+          <ChevronLeft size={18}/>
+        </button>
+        <div className="text-sm font-bold text-white">Submit Availability</div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        {/* Location */}
+        {myBrands.length > 1 && (
+          <div><label className={labelCls}>Location</label>
+            <LocationDropdown brands={myBrands} value={brandId} onChange={setBrandId} className="w-full"/>
+          </div>
+        )}
+
+        {/* Available / Unavailable toggle */}
+        <div>
+          <label className={labelCls}>Availability Type</label>
+          <div className="flex gap-2">
+            <button onClick={() => setAvailable(true)}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all flex items-center justify-center gap-2 ${available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+              ✓ Available
+            </button>
+            <button onClick={() => setAvailable(false)}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all flex items-center justify-center gap-2 ${!available ? "bg-red-600 border-red-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+              ✗ Unavailable
+            </button>
+          </div>
+        </div>
+
+        {/* Schedule type */}
+        <div>
+          <label className={labelCls}>Schedule</label>
+          <div className="flex gap-2">
+            {[{key:"one_off",label:"One-off"},{key:"weekly",label:"Weekly"},{key:"recurring",label:"Date Range"}].map(t => (
+              <button key={t.key} onClick={() => setType(t.key)}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all ${type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Date inputs based on type */}
+        {type === "one_off" && (
+          <div><label className={labelCls}>Date</label>
+            <input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/>
+          </div>
+        )}
+        {type === "weekly" && (
+          <div><label className={labelCls}>Day of Week</label>
+            <SelectDropdown value={form.dayOfWeek} onChange={v => set("dayOfWeek", v)} className="w-full">
+              {DAYS_OF_WEEK.map(d => <option key={d}>{d}</option>)}
+            </SelectDropdown>
+          </div>
+        )}
+        {type === "recurring" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={labelCls}>From</label>
+              <input type="date" value={form.startDate} onChange={e => set("startDate", e.target.value)} className={inputCls}/>
+            </div>
+            <div><label className={labelCls}>To</label>
+              <input type="date" value={form.endDate} min={form.startDate} onChange={e => set("endDate", e.target.value)} className={inputCls}/>
+            </div>
+          </div>
+        )}
+
+        {/* Time range */}
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Start Time</label>
+            <input type="time" value={form.startTime} onChange={e => set("startTime", e.target.value)} className={inputCls}/>
+          </div>
+          <div><label className={labelCls}>End Time</label>
+            <input type="time" value={form.endTime} onChange={e => set("endTime", e.target.value)} className={inputCls}/>
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div><label className={labelCls}>Notes (optional)</label>
+          <textarea value={form.notes} onChange={e => set("notes", e.target.value)}
+            rows={3} placeholder="Any additional context…" className={`${inputCls} resize-none`}/>
+        </div>
+      </div>
+      <div className="flex-shrink-0 p-4 border-t border-slate-800/80">
+        <button onClick={handleSubmit} disabled={!isValid()}
+          className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
+          <Send size={14}/> Submit Availability
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Employee: My Availability List ────────────────────────────────────────────
+function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd }) {
+  const myId = currentUser.opsTeamMemberId || currentUser.id;
+  const [showForm, setShowForm] = useState(false);
+  const myAvail = availability
+    .filter(a => a.employeeId === myId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+
+  if (showForm) {
+    return (
+      <div className="h-full">
+        <EmployeeAvailabilityForm
+          brands={myBrands} currentUser={currentUser}
+          onSubmit={a => { onAdd(a); setShowForm(false); }}
+          onCancel={() => setShowForm(false)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-bold text-white">My Availability</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Submit your availability for your manager to review</p>
+        </div>
+        <button onClick={() => setShowForm(true)}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
+          <Plus size={14}/> Add Availability
+        </button>
+      </div>
+
+      {myAvail.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <Calendar size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No availability submitted yet</div>
+          <div className="text-xs mt-1 text-slate-600">Tap the button above to get started</div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {myAvail.map(a => (
+          <div key={a.id} className={`rounded-2xl border p-4 ${
+            a.status === "approved" ? "bg-emerald-950/20 border-emerald-500/30" :
+            a.status === "rejected" ? "bg-red-950/20 border-red-500/30" :
+            a.status === "amended"  ? "bg-indigo-950/20 border-indigo-500/30" :
+            "bg-slate-900/60 border-slate-700/60"
+          }`}>
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <Badge label={`${AVAIL_STATUS_ICON[a.status]} ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}`} color={AVAIL_STATUS_COLOR[a.status]}/>
+                  <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
+                  <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
+                </div>
+                <div className="text-sm font-bold text-white mt-1">{fmtAvailDate(a)}</div>
+                <div className="text-xs text-slate-400 mt-0.5">{fmtAvailTime(a)}</div>
+                {a.notes && <div className="text-xs text-slate-500 mt-1 italic">{a.notes}</div>}
+              </div>
+            </div>
+            {/* Manager response */}
+            {a.status === "amended" && (
+              <div className="mt-3 bg-indigo-950/40 border border-indigo-500/20 rounded-xl p-3">
+                <div className="text-xs font-bold text-indigo-400 mb-1">✎ Manager amended your submission</div>
+                <div className="text-xs text-slate-300">
+                  {a.amendedDate && <div>Date changed to: {new Date(a.amendedDate).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"})}</div>}
+                  {a.amendedDayOfWeek && <div>Day changed to: {a.amendedDayOfWeek}</div>}
+                  {(a.amendedStartTime || a.amendedEndTime) && <div>Time changed to: {a.amendedStartTime||a.startTime} – {a.amendedEndTime||a.endTime}</div>}
+                </div>
+                {a.managerNotes && <div className="text-xs text-slate-400 mt-1 italic">"{a.managerNotes}"</div>}
+              </div>
+            )}
+            {a.status === "rejected" && a.managerNotes && (
+              <div className="mt-3 bg-red-950/30 border border-red-500/20 rounded-xl p-3">
+                <div className="text-xs font-bold text-red-400 mb-1">✗ Rejected</div>
+                <div className="text-xs text-slate-400 italic">"{a.managerNotes}"</div>
+              </div>
+            )}
+            {a.status === "approved" && a.managerNotes && (
+              <div className="mt-2 text-xs text-slate-400 italic">"{a.managerNotes}"</div>
+            )}
+            <div className="text-xs text-slate-600 mt-2">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Manager: Amend Modal ──────────────────────────────────────────────────────
+function AmendAvailabilityModal({ item, onSave, onClose }) {
+  const [form, setFormState] = useState({
+    amendedDate:      item.amendedDate      || item.date        || "",
+    amendedDayOfWeek: item.amendedDayOfWeek || item.dayOfWeek   || "Monday",
+    amendedStartTime: item.amendedStartTime || item.startTime   || "09:00",
+    amendedEndTime:   item.amendedEndTime   || item.endTime     || "17:00",
+    managerNotes:     item.managerNotes     || "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  const handleSave = () => {
+    onSave({
+      ...item,
+      status: "amended",
+      amendedDate:      item.type === "one_off"   ? form.amendedDate       : null,
+      amendedDayOfWeek: item.type === "weekly"    ? form.amendedDayOfWeek  : null,
+      amendedStartTime: form.amendedStartTime,
+      amendedEndTime:   form.amendedEndTime,
+      managerNotes:     form.managerNotes,
+      updatedAt:        new Date().toISOString(),
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title="Amend Availability" onClose={onClose}
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Amendment</button>
+      </>}>
+      <div className="space-y-4">
+        <div className="bg-slate-800/50 rounded-xl p-3 text-xs text-slate-400 space-y-1">
+          <div><span className="font-semibold text-slate-300">{item.employeeName}</span> · {item.type === "one_off" ? "One-off" : item.type === "weekly" ? "Weekly" : "Date Range"}</div>
+          <div>Original: {fmtAvailDate(item)} · {item.startTime}–{item.endTime}</div>
+        </div>
+        {item.type === "one_off" && (
+          <div><label className={labelCls}>Amended Date</label>
+            <input type="date" value={form.amendedDate} onChange={e => set("amendedDate", e.target.value)} className={inputCls}/>
+          </div>
+        )}
+        {item.type === "weekly" && (
+          <div><label className={labelCls}>Amended Day</label>
+            <SelectDropdown value={form.amendedDayOfWeek} onChange={v => set("amendedDayOfWeek", v)} className="w-full">
+              {DAYS_OF_WEEK.map(d => <option key={d}>{d}</option>)}
+            </SelectDropdown>
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Amended Start</label>
+            <input type="time" value={form.amendedStartTime} onChange={e => set("amendedStartTime", e.target.value)} className={inputCls}/>
+          </div>
+          <div><label className={labelCls}>Amended End</label>
+            <input type="time" value={form.amendedEndTime} onChange={e => set("amendedEndTime", e.target.value)} className={inputCls}/>
+          </div>
+        </div>
+        <div><label className={labelCls}>Note to employee</label>
+          <textarea value={form.managerNotes} onChange={e => set("managerNotes", e.target.value)}
+            rows={3} placeholder="Explain the change…" className={`${inputCls} resize-none`}/>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Manager: Add Availability for Employee ────────────────────────────────────
+function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
+  const [form, setFormState] = useState({
+    brandId: brands[0]?.id || "", employeeId: "", type: "one_off",
+    available: true, date: "", dayOfWeek: "Monday",
+    startDate: "", endDate: "", startTime: "09:00", endTime: "17:00",
+    notes: "", managerNotes: "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const brandMembers = opsTeam.filter(m => m.brandId === form.brandId);
+  const selectedMember = opsTeam.find(m => m.id === form.employeeId);
+
+  const isValid = () => {
+    if (!form.employeeId) return false;
+    if (form.type === "one_off")   return !!form.date;
+    if (form.type === "weekly")    return !!form.dayOfWeek;
+    if (form.type === "recurring") return !!form.startDate && !!form.endDate;
+    return false;
+  };
+
+  const handleSave = () => {
+    if (!isValid()) return;
+    onSave({
+      id: `av-${Date.now()}`,
+      brandId: form.brandId,
+      employeeId: form.employeeId,
+      employeeName: selectedMember ? `${selectedMember.firstName} ${selectedMember.lastName}`.trim() : "",
+      type: form.type, available: form.available,
+      date:       form.type === "one_off"   ? form.date       : null,
+      dayOfWeek:  form.type === "weekly"    ? form.dayOfWeek  : null,
+      startDate:  form.type === "recurring" ? form.startDate  : null,
+      endDate:    form.type === "recurring" ? form.endDate    : null,
+      startTime: form.startTime, endTime: form.endTime,
+      notes: form.notes, status: "approved",
+      managerNotes: form.managerNotes || "Added by manager",
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title="Add Employee Availability" onClose={onClose} maxW="max-w-lg"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSave} disabled={!isValid()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add</button>
+      </>}>
+      <div className="space-y-4">
+        <div><label className={labelCls}>Location</label>
+          <LocationDropdown brands={brands} value={form.brandId} onChange={v => { set("brandId", v); set("employeeId", ""); }} className="w-full"/>
+        </div>
+        <div><label className={labelCls}>Employee *</label>
+          <SelectDropdown value={form.employeeId} onChange={v => set("employeeId", v)} className="w-full">
+            <option value="">— Select employee —</option>
+            {brandMembers.map(m => <option key={m.id} value={m.id}>{m.firstName} {m.lastName} · {m.role}</option>)}
+          </SelectDropdown>
+        </div>
+        <div>
+          <label className={labelCls}>Availability</label>
+          <div className="flex gap-2">
+            <button onClick={() => set("available", true)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${form.available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>✓ Available</button>
+            <button onClick={() => set("available", false)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${!form.available ? "bg-red-600 border-red-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>✗ Unavailable</button>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Schedule Type</label>
+          <div className="flex gap-2">
+            {[{key:"one_off",label:"One-off"},{key:"weekly",label:"Weekly"},{key:"recurring",label:"Date Range"}].map(t => (
+              <button key={t.key} onClick={() => set("type", t.key)} className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{t.label}</button>
+            ))}
+          </div>
+        </div>
+        {form.type === "one_off"   && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
+        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><SelectDropdown value={form.dayOfWeek} onChange={v => set("dayOfWeek", v)} className="w-full">{DAYS_OF_WEEK.map(d => <option key={d}>{d}</option>)}</SelectDropdown></div>}
+        {form.type === "recurring" && <div className="grid grid-cols-2 gap-3"><div><label className={labelCls}>From</label><input type="date" value={form.startDate} onChange={e => set("startDate", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>To</label><input type="date" value={form.endDate} min={form.startDate} onChange={e => set("endDate", e.target.value)} className={inputCls}/></div></div>}
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Start Time</label><input type="time" value={form.startTime} onChange={e => set("startTime", e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>End Time</label><input type="time" value={form.endTime} onChange={e => set("endTime", e.target.value)} className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Any notes…"/></div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Manager: Availability Tracker ────────────────────────────────────────────
+function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
+  const { user } = useAuth();
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const [filterBrand,    setFilterBrand]    = useState("all");
+  const [filterStatus,   setFilterStatus]   = useState("pending");
+  const [filterType,     setFilterType]     = useState("all");
+  const [filterEmployee, setFilterEmployee] = useState("all");
+  const [amendModal,     setAmendModal]     = useState(null);
+  const [addModal,       setAddModal]       = useState(false);
+  const [rejectModal,    setRejectModal]    = useState(null);
+  const [rejectNote,     setRejectNote]     = useState("");
+  const [viewMode,       setViewMode]       = useState("list"); // list | calendar
+
+  const visible = availability.filter(a => {
+    if (!vb.some(b => b.id === a.brandId)) return false;
+    if (filterBrand    !== "all" && a.brandId    !== filterBrand)    return false;
+    if (filterStatus   !== "all" && a.status     !== filterStatus)   return false;
+    if (filterType     !== "all" && a.type       !== filterType)     return false;
+    if (filterEmployee !== "all" && a.employeeId !== filterEmployee) return false;
+    return true;
+  }).sort((a, b) => {
+    // pending first, then by date submitted
+    if (a.status === "pending" && b.status !== "pending") return -1;
+    if (b.status === "pending" && a.status !== "pending") return 1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  const pendingCount = availability.filter(a => vb.some(b => b.id === a.brandId) && a.status === "pending").length;
+
+  const handleApprove = (a) => onUpdate({ ...a, status: "approved", updatedAt: new Date().toISOString() });
+  const handleReject  = (a, note) => onUpdate({ ...a, status: "rejected", managerNotes: note, updatedAt: new Date().toISOString() });
+
+  // Unique employees in visible availability
+  const employeeOptions = [...new Map(
+    availability.filter(a => vb.some(b => b.id === a.brandId)).map(a => [a.employeeId, { id: a.employeeId, name: a.employeeName }])
+  ).values()];
+
+  const statusColor = s => ({ pending:"amber", approved:"emerald", rejected:"red", amended:"indigo" }[s]||"slate");
+
+  // Calendar view - show availability by week
+  const today = new Date();
+  const [calWeekOffset, setCalWeekOffset] = useState(0);
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - today.getDay() + 1 + calWeekOffset * 7);
+  const weekDays = DAYS_OF_WEEK.map((_, i) => { const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d; });
+
+  const getAvailForDay = (date) => {
+    const dateStr = date.toISOString().split("T")[0];
+    const dayName = DAYS_OF_WEEK[date.getDay() === 0 ? 6 : date.getDay() - 1];
+    return availability.filter(a => {
+      if (!vb.some(b => b.id === a.brandId)) return false;
+      if (a.status === "rejected") return false;
+      if (a.type === "one_off") return a.date === dateStr;
+      if (a.type === "weekly") return (a.amendedDayOfWeek || a.dayOfWeek) === dayName;
+      if (a.type === "recurring") return a.startDate <= dateStr && a.endDate >= dateStr;
+      return false;
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white">Availability Tracker</h2>
+          {pendingCount > 0 && <div className="text-xs text-amber-400 mt-0.5">{pendingCount} pending review</div>}
+        </div>
+        <div className="flex items-center gap-2">
+          {/* View mode toggle */}
+          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
+            <button onClick={() => setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
+            <button onClick={() => setViewMode("calendar")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="calendar"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
+          </div>
+          <button onClick={() => setAddModal(true)}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
+            <Plus size={14}/> Add
+          </button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2">
+        <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-40"/>
+        <SelectDropdown value={filterStatus} onChange={setFilterStatus} className="w-36">
+          <option value="all">All Status</option>
+          <option value="pending">⏳ Pending</option>
+          <option value="approved">✓ Approved</option>
+          <option value="rejected">✗ Rejected</option>
+          <option value="amended">✎ Amended</option>
+        </SelectDropdown>
+        <SelectDropdown value={filterType} onChange={setFilterType} className="w-36">
+          <option value="all">All Types</option>
+          <option value="one_off">One-off</option>
+          <option value="weekly">Weekly</option>
+          <option value="recurring">Date Range</option>
+        </SelectDropdown>
+        <SelectDropdown value={filterEmployee} onChange={setFilterEmployee} className="w-44">
+          <option value="all">All Employees</option>
+          {employeeOptions.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+        </SelectDropdown>
+      </div>
+
+      {/* ── List View ── */}
+      {viewMode === "list" && (
+        <>
+          {visible.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+              <Calendar size={32} className="mb-3 text-slate-700"/>
+              <div className="text-sm font-semibold">No availability records found</div>
+            </div>
+          )}
+          <div className="space-y-3">
+            {visible.map(a => {
+              const brand = brands.find(b => b.id === a.brandId);
+              return (
+                <div key={a.id} className={`rounded-2xl border p-4 ${
+                  a.status === "pending"  ? "bg-amber-950/20 border-amber-500/30" :
+                  a.status === "approved" ? "bg-emerald-950/10 border-emerald-500/20" :
+                  a.status === "rejected" ? "bg-red-950/10 border-red-500/20" :
+                  "bg-indigo-950/10 border-indigo-500/20"
+                }`}>
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <div className="text-sm font-bold text-white">{a.employeeName}</div>
+                        <Badge label={`${AVAIL_STATUS_ICON[a.status]} ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}`} color={statusColor(a.status)}/>
+                        <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
+                        <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
+                        {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+                      </div>
+                      <div className="text-sm font-semibold text-slate-200">{fmtAvailDate(a)}</div>
+                      <div className="text-xs text-slate-400">{fmtAvailTime(a)}</div>
+                      {a.notes && <div className="text-xs text-slate-500 mt-1 italic">"{a.notes}"</div>}
+                      {a.status === "amended" && (
+                        <div className="text-xs text-indigo-400 mt-1">
+                          ✎ Amended: {a.amendedDate ? new Date(a.amendedDate).toLocaleDateString("en-GB",{day:"numeric",month:"short"}) : a.amendedDayOfWeek || ""}{(a.amendedStartTime||a.amendedEndTime) ? ` · ${a.amendedStartTime||a.startTime}–${a.amendedEndTime||a.endTime}` : ""}
+                        </div>
+                      )}
+                      {a.managerNotes && <div className="text-xs text-slate-500 mt-1 italic">Note: "{a.managerNotes}"</div>}
+                      <div className="text-xs text-slate-600 mt-1.5">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex flex-col gap-1.5 flex-shrink-0">
+                      {a.status === "pending" && (
+                        <>
+                          <button onClick={() => handleApprove(a)}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">
+                            ✓ Approve
+                          </button>
+                          <button onClick={() => { setRejectModal(a); setRejectNote(""); }}
+                            className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors">
+                            ✗ Reject
+                          </button>
+                          <button onClick={() => setAmendModal(a)}
+                            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors">
+                            ✎ Amend
+                          </button>
+                        </>
+                      )}
+                      {a.status !== "pending" && (
+                        <div className="flex gap-1.5">
+                          <button onClick={() => setAmendModal(a)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
+                          <button onClick={() => onDelete(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors" title="Delete"><Trash2 size={13}/></button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* ── Week Calendar View ── */}
+      {viewMode === "calendar" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <button onClick={() => setCalWeekOffset(w => w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+            <div className="text-sm font-semibold text-white">
+              {weekDays[0].toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {weekDays[6].toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+            </div>
+            <button onClick={() => setCalWeekOffset(w => w+1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronRight size={16}/></button>
+          </div>
+          <div className="grid grid-cols-7 gap-1.5">
+            {weekDays.map((day, idx) => {
+              const dayAvail = getAvailForDay(day);
+              const isToday  = day.toDateString() === new Date().toDateString();
+              return (
+                <div key={idx} className={`rounded-xl border p-2 min-h-24 ${isToday ? "border-indigo-500/50 bg-indigo-950/20" : "border-slate-800/60 bg-slate-900/40"}`}>
+                  <div className={`text-xs font-bold mb-1.5 ${isToday ? "text-indigo-400" : "text-slate-400"}`}>
+                    <div>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
+                    <div className={`text-sm ${isToday ? "text-indigo-300" : "text-slate-300"}`}>{day.getDate()}</div>
+                  </div>
+                  <div className="space-y-1">
+                    {dayAvail.map(a => {
+                      const av = avatarFor(a.employeeName);
+                      return (
+                        <div key={a.id} className={`text-xs rounded-lg px-1.5 py-1 truncate font-medium ${a.available ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}
+                          title={`${a.employeeName} · ${fmtAvailTime(a)}`}>
+                          {a.employeeName.split(" ")[0]}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-4 text-xs text-slate-500 mt-2">
+            <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-emerald-500/40"/> Available</div>
+            <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-red-500/40"/> Unavailable</div>
+          </div>
+        </div>
+      )}
+
+      {/* Modals */}
+      {amendModal && (
+        <AmendAvailabilityModal item={amendModal}
+          onSave={updated => { onUpdate(updated); setAmendModal(null); }}
+          onClose={() => setAmendModal(null)}/>
+      )}
+      {rejectModal && (
+        <Modal title="Reject Availability" onClose={() => setRejectModal(null)}
+          footer={<>
+            <button onClick={() => setRejectModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={() => { handleReject(rejectModal, rejectNote); setRejectModal(null); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reject</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="bg-slate-800/50 rounded-xl p-3 text-xs text-slate-400">
+              <div className="font-semibold text-slate-300 mb-1">{rejectModal.employeeName}</div>
+              <div>{fmtAvailDate(rejectModal)} · {fmtAvailTime(rejectModal)}</div>
+            </div>
+            <div><label className={labelCls}>Reason (optional)</label>
+              <textarea value={rejectNote} onChange={e => setRejectNote(e.target.value)}
+                rows={3} placeholder="Explain to the employee why this was rejected…" className={`${inputCls} resize-none`}/>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {addModal && (
+        <AddAvailabilityModal brands={vb} opsTeam={opsTeam}
+          onSave={a => { onAdd(a); setAddModal(false); }}
+          onClose={() => setAddModal(false)}/>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // HELPDESK — WhatsApp-style ticket chat
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -4151,6 +4805,7 @@ export default function App() {
   const [auditTrail,      setAuditTrail]      = useState([]);
   const [hdTickets,       setHdTickets]       = useState([]);
   const [messages,        setMessages]        = useState([]);
+  const [availability,    setAvailability]    = useState([]);
 
   const [activeView, setActiveView] = useState("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -4162,16 +4817,16 @@ export default function App() {
   useEffect(() => {
     async function loadAll() {
       try {
-        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs] = await Promise.all([
+        const [b, u, e, i, cl, tu, ct, as, ot, tl, dl, cs, at, hd, msgs, avail] = await Promise.all([
           fetchBrands(), fetchUsers(), fetchEntries(), fetchIssues(),
           fetchChecklists(), fetchTempUnits(), fetchCleaningTasks(), fetchAssignments(),
           fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(), fetchAuditTrail(),
-          fetchHelpdeskTickets(), fetchInboxMessages(),
+          fetchHelpdeskTickets(), fetchInboxMessages(), fetchAvailability(),
         ]);
         setBrands(b); setUsers(u); setEntries(e); setIssues(i);
         setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
         setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl); setChecklistStates(cs); setAuditTrail(at);
-        setHdTickets(hd); setMessages(msgs);
+        setHdTickets(hd); setMessages(msgs); setAvailability(avail);
         setDbReady(true);
       } catch (err) {
         console.error("Supabase load error:", err);
@@ -4249,9 +4904,30 @@ export default function App() {
       })
       .subscribe();
 
+    // Subscribe to availability changes
+    const availChannel = supabase
+      .channel("realtime:availability")
+      .on("postgres_changes", { event: "*", schema: "public", table: "availability" }, (payload) => {
+        const { eventType, new: r, old: oldRow } = payload;
+        if (eventType === "DELETE") { setAvailability(as => as.filter(a => a.id !== oldRow.id)); return; }
+        const a = {
+          id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+          type: r.type, date: r.date, dayOfWeek: r.day_of_week, startDate: r.start_date, endDate: r.end_date,
+          startTime: r.start_time?.slice(0,5)||"09:00", endTime: r.end_time?.slice(0,5)||"17:00",
+          available: r.available, notes: r.notes, status: r.status, managerNotes: r.manager_notes||"",
+          amendedStartTime: r.amended_start_time?.slice(0,5)||null, amendedEndTime: r.amended_end_time?.slice(0,5)||null,
+          amendedDate: r.amended_date||null, amendedDayOfWeek: r.amended_day_of_week||null,
+          createdAt: r.created_at, updatedAt: r.updated_at,
+        };
+        if (eventType === "INSERT") setAvailability(as => as.some(x => x.id === a.id) ? as : [a, ...as]);
+        if (eventType === "UPDATE") setAvailability(as => as.map(x => x.id === a.id ? a : x));
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(ticketChannel);
       supabase.removeChannel(msgChannel);
+      supabase.removeChannel(availChannel);
     };
   }, [dbReady]);
 
@@ -4410,6 +5086,22 @@ export default function App() {
     } catch (err) { showToast("Failed to clear audit trail: " + err.message, "error"); }
   }, [showToast]);
 
+  // ── Availability ─────────────────────────────────────────────────────────────
+  const addAvailability = useCallback(async a => {
+    try { const saved = await insertAvailability(a); setAvailability(as => [saved, ...as]); showToast("Availability submitted"); }
+    catch (err) { showToast("Failed to submit: " + err.message, "error"); }
+  }, [showToast]);
+
+  const updateAvailability = useCallback(async a => {
+    try { const saved = await upsertAvailability(a); setAvailability(as => as.map(x => x.id === saved.id ? saved : x)); showToast("Availability updated"); }
+    catch (err) { showToast("Failed to update: " + err.message, "error"); }
+  }, [showToast]);
+
+  const deleteAvailability = useCallback(async id => {
+    try { await removeAvailability(id); setAvailability(as => as.filter(a => a.id !== id)); showToast("Availability deleted"); }
+    catch (err) { showToast("Failed to delete: " + err.message, "error"); }
+  }, [showToast]);
+
   // ── Helpdesk ─────────────────────────────────────────────────────────────────
   const addHdTicket = useCallback(async t => {
     try { const saved = await insertHelpdeskTicket(t); setHdTickets(ts => [saved, ...ts]); showToast("Ticket submitted"); }
@@ -4522,6 +5214,8 @@ export default function App() {
         hdTickets={hdTickets}
         onAddHdTicket={addHdTicket}
         onUpdateHdTicket={updateHdTicket}
+        availability={availability}
+        onAddAvailability={addAvailability}
         messages={messages}
         onSendMessage={sendMessage}
         onMarkRead={handleMarkRead}
@@ -4569,8 +5263,9 @@ export default function App() {
     {
       group: "Team",
       items: [
-        { key: "comms",  label: "Communication", icon: MessageSquare, badge: (() => { const total = (hdOpenCount > 0 ? hdOpenCount : 0) + (inboxUnread > 0 ? inboxUnread : 0); return total > 0 ? total.toString() : null; })() },
-        { key: "issues", label: "Issues",        icon: Wrench,        badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+        { key: "comms",        label: "Communication", icon: MessageSquare, badge: (() => { const total = (hdOpenCount > 0 ? hdOpenCount : 0) + (inboxUnread > 0 ? inboxUnread : 0); return total > 0 ? total.toString() : null; })() },
+        { key: "availability", label: "Availability",  icon: Calendar,      badge: (() => { const pending = availability.filter(a => visibleBrands.some(b => b.id === a.brandId) && a.status === "pending").length; return pending > 0 ? pending.toString() : null; })() },
+        { key: "issues",       label: "Issues",        icon: Wrench,        badge: openIssueCount > 0 ? openIssueCount.toString() : null },
       ],
     },
     {
@@ -4584,7 +5279,7 @@ export default function App() {
     },
   ];
 
-  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication" };
+  const titles = { dashboard: "Executive Dashboard", tactical: "Performance", eod: "EOD Report", issues: "Issues & Maintenance", "ops-network": "Ops Overview", "ops-tasks": "Today's Tasks", "ops-temps": "Temperature Log", "ops-deliveries": "Deliveries", "ops-assigns": "Assignments", "ops-compliance": "Compliance", "ops-audit": "Audit Trail", "ops-settings": "Ops Setup", admin: "Admin", helpdesk: "Help Desk", inbox: "Inbox", comms: "Communication", availability: "Availability" };
   const todayDisplay = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
   const Sidebar = ({ mobile = false }) => {
@@ -4745,6 +5440,11 @@ export default function App() {
             {activeView === "ops-compliance"  && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {activeView === "ops-audit"       && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {activeView === "ops-settings"    && <OpsSettingsView brands={brands} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist} onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit} onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask} onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}/>}
+            {activeView === "availability" && <ManagerAvailabilityView
+              brands={visibleBrands} opsTeam={opsTeam} availability={availability}
+              currentUser={currentUser}
+              onUpdate={updateAvailability} onAdd={addAvailability} onDelete={deleteAvailability}
+            />}
             {activeView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
