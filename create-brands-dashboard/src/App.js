@@ -5132,6 +5132,7 @@ function CommunicationView({
   availability, onAddAvailability, onUpdateAvailability,
   schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
   punchRecords, onUpdatePunchRecord, onAddPunchComment,
+  onUpdateBrand,
   isEmployee,
 }) {
   const [tab, setTab] = useState("helpdesk");
@@ -5222,7 +5223,7 @@ function CommunicationView({
             : <ManagerAvailabilityView  brands={brands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={onUpdateAvailability} onAdd={onAddAvailability} onDelete={id => onUpdateAvailability({id, status:"rejected"})}/>
         )}
         {tab === "schedule" && !isEmployee && (
-          <ScheduleView brands={brands} opsTeam={opsTeam} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} currentUser={currentUser} onAdd={onAddSchedule} onUpdate={onAddSchedule} onDelete={onDeleteSchedule} onPublish={onPublishWeek}/>
+          <ScheduleView brands={brands} opsTeam={opsTeam} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={onAddSchedule} onUpdate={onAddSchedule} onDelete={onDeleteSchedule} onPublish={onPublishWeek} onUpdateBrand={onUpdateBrand}/>
         )}
         {tab === "emp-schedule" && isEmployee && (
           <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]}/>
@@ -5498,9 +5499,15 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
 }
 
 // ── Manager Schedule View ─────────────────────────────────────────────────────
-function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, currentUser, onAdd, onUpdate, onDelete, onPublish }) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCHEDULE VIEW — production-grade with totals, costs, copy-week, conflicts
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCHEDULE VIEW — totals, costs, copy-week, conflicts, coverage, drag-resize,
+// auto-fill, forecasted SPLH, lock, multi-select bulk, mobile day view
+// ═══════════════════════════════════════════════════════════════════════════════
+function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role==="owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
 
   const [brandId,    setBrandId]    = useState(vb[0]?.id || "");
   const [weekOffset, setWeekOffset] = useState(0);
@@ -5509,9 +5516,28 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
   const [filterShift,setFilterShift]= useState("all");
   const [shiftModal, setShiftModal] = useState(null);
   const [deleteId,   setDeleteId]   = useState(null);
-  const [viewMode,   setViewMode]   = useState("week");
+  const [viewMode,   setViewMode]   = useState("week");  // week | list | coverage
   const [publishing, setPublishing] = useState(false);
+  const [copying,    setCopying]    = useState(false);
+  const [showCosts,  setShowCosts]  = useState(true);
+  const [locked,     setLocked]     = useState(true);    // edits locked when published
+  const [selected,   setSelected]   = useState(new Set()); // multi-select shift IDs
+  const [autofillModal, setAutofillModal] = useState(null);
+  const [salesModal,    setSalesModal]    = useState(false);
+  const [bulkDeleting,  setBulkDeleting]  = useState(false);
+  const [resizingShift, setResizingShift] = useState(null); // { id, startX, originalEndTime }
+  const [mobileDay,     setMobileDay]     = useState(0);    // 0-6 for mobile day view
+  const [isMobile,      setIsMobile]      = useState(false);
 
+  // Detect mobile viewport
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // ── Date helpers ───────────────────────────────────────────────────────────
   const today = new Date(); today.setHours(0,0,0,0);
   const toLocalDateStr = (d) => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),dd=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${dd}`; };
   const weekStart = new Date(today);
@@ -5520,6 +5546,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
   const weekDays = Array.from({length:7},(_,i)=>{const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);return d;});
   const weekDayStrs = weekDays.map(d=>toLocalDateStr(d));
 
+  // ── Membership / filters ───────────────────────────────────────────────────
   const brandMembers = opsTeam.filter(m=>m.brandId===brandId);
   const allDepts = [...new Set(brandMembers.map(m=>m.department).filter(Boolean))];
   const allRoles = [...new Set(brandMembers.map(m=>m.role).filter(Boolean))];
@@ -5532,18 +5559,27 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
     return true;
   });
 
+  // ── This week's schedules ──────────────────────────────────────────────────
   const weekSchedules = schedules.filter(s=>
     s.brandId===brandId && weekDayStrs.includes(s.date) &&
     (filterShift==="all" || s.shift===filterShift) &&
     (filterDept==="all" || s.department===filterDept) &&
     (filterRole==="all" || s.role===filterRole)
   );
-
   const allWeekSlots = schedules.filter(s=>s.brandId===brandId && weekDayStrs.includes(s.date));
   const isWeekPublished = allWeekSlots.length > 0 && allWeekSlots.every(s=>s.published);
   const isDraft = allWeekSlots.length > 0 && !isWeekPublished;
+  const editLocked = isWeekPublished && locked;
 
-  const getSlotsFor = (memberId, dateStr) => weekSchedules.filter(s=>s.employeeId===memberId && s.date===dateStr);
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const calcShiftHours = (start, end) => {
+    if (!start || !end) return 0;
+    const s = new Date("2000-01-01T"+start+":00");
+    const e = new Date("2000-01-01T"+end+":00");
+    const hrs = (e - s) / 3600000;
+    return hrs < 0 ? hrs + 24 : hrs;
+  };
+  const getSlotsFor = (memberId, dateStr) => weekSchedules.filter(s=>s.employeeId===memberId && s.date===dateStr && s.status!=="cancelled");
   const getAvailFor = (memberId, dateStr) => {
     const dayName = DAYS_OF_WEEK[new Date(dateStr+"T00:00:00").getDay()===0?6:new Date(dateStr+"T00:00:00").getDay()-1];
     return availability.filter(a=>{
@@ -5554,46 +5590,278 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       return false;
     });
   };
-
   const getPresetColor = (shiftName) => brandPresets.find(p=>p.name===shiftName)?.color || "#6366f1";
 
+  // ── Conflict detection ─────────────────────────────────────────────────────
+  const getSlotConflict = (slot, member) => {
+    if (!slot || !member) return null;
+    const avails = getAvailFor(member.id, slot.date);
+    if (avails.some(a=>!a.available)) return "unavailable";
+    const availWin = avails.find(a=>a.available);
+    if (availWin && availWin.startTime && availWin.endTime) {
+      if (slot.startTime < availWin.startTime || slot.endTime > availWin.endTime) return "outside-window";
+    }
+    return null;
+  };
+
+  // ── Totals: per employee, per day, week ─────────────────────────────────────
+  const employeeTotals = filteredMembers.map(member => {
+    let hours = 0, cost = 0;
+    weekDayStrs.forEach(d => {
+      const slots = getSlotsFor(member.id, d);
+      slots.forEach(s => {
+        const h = calcShiftHours(s.startTime, s.endTime);
+        hours += h;
+        cost += h * (member.hourlyRate || 0);
+      });
+    });
+    return { member, hours, cost };
+  });
+
+  const dailyTotals = weekDayStrs.map(d => {
+    let hours = 0, cost = 0, headcount = 0;
+    filteredMembers.forEach(m => {
+      const slots = getSlotsFor(m.id, d);
+      if (slots.length > 0) headcount++;
+      slots.forEach(s => {
+        const h = calcShiftHours(s.startTime, s.endTime);
+        hours += h;
+        cost += h * (m.hourlyRate || 0);
+      });
+    });
+    let actualHours = 0, actualCost = 0;
+    punchRecords.filter(p => p.brandId === brandId && p.date === d && p.status !== "open").forEach(p => {
+      actualHours += p.hoursWorked || 0;
+      actualCost += p.grossPay || 0;
+    });
+    return { date: d, hours, cost, headcount, actualHours, actualCost };
+  });
+
+  const weekTotals = {
+    hours: dailyTotals.reduce((a,d) => a + d.hours, 0),
+    cost: dailyTotals.reduce((a,d) => a + d.cost, 0),
+    actualHours: dailyTotals.reduce((a,d) => a + d.actualHours, 0),
+    actualCost: dailyTotals.reduce((a,d) => a + d.actualCost, 0),
+    totalShifts: allWeekSlots.filter(s => s.status !== "cancelled").length,
+  };
+
+  // ── Sales forecast — stored on brand.kpiTargets.salesForecasts[date] ───────
+  const brand = brands.find(b => b.id === brandId);
+  const salesForecasts = brand?.kpiTargets?.salesForecasts || {};
+  const dailySales = weekDayStrs.map(d => parseFloat(salesForecasts[d]) || 0);
+  const weekSalesForecast = dailySales.reduce((a,n) => a+n, 0);
+  const splh = weekTotals.cost > 0 ? weekSalesForecast / weekTotals.cost : 0; // sales per £1 labour cost
+  const splhRating = splh === 0 ? "" : splh >= 8 ? "green" : splh >= 5 ? "amber" : "red";
+
+  const fmtHrs = (h) => h ? `${Math.floor(h)}h${h%1?` ${Math.round((h%1)*60)}m`:""}` : "0h";
+  const fmtMoney = (n) => "£" + (n||0).toFixed(2);
+
+  // ── Coverage matrix ────────────────────────────────────────────────────────
+  const coverageMatrix = useMemo(() => {
+    const hours = Array.from({length:24}, (_, i) => i);
+    return weekDayStrs.map(dateStr => {
+      const counts = hours.map(h => {
+        let count = 0;
+        filteredMembers.forEach(m => {
+          const slots = getSlotsFor(m.id, dateStr);
+          slots.forEach(s => {
+            const startH = parseInt(s.startTime.slice(0,2));
+            const endH = parseInt(s.endTime.slice(0,2));
+            if (endH > startH) { if (h >= startH && h < endH) count++; }
+            else { if (h >= startH || h < endH) count++; }
+          });
+        });
+        return count;
+      });
+      return { date: dateStr, counts };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekDayStrs.join(","), filteredMembers.map(m=>m.id).join(","), JSON.stringify(weekSchedules.map(s=>s.id+s.startTime+s.endTime))]);
+
+  // ── Actions ────────────────────────────────────────────────────────────────
   const handlePublish = async () => {
     setPublishing(true);
     await onPublish(brandId, weekStartStr, !isWeekPublished);
     setPublishing(false);
+    if (!isWeekPublished) setLocked(true);
   };
 
-  const totalSlots = allWeekSlots.filter(s=>s.status!=="cancelled").length;
+  const handleCopyWeek = async () => {
+    if (allWeekSlots.length === 0) return;
+    setCopying(true);
+    try {
+      for (const s of allWeekSlots.filter(s=>s.status!=="cancelled")) {
+        const srcDate = new Date(s.date+"T00:00:00");
+        const tgtDate = new Date(srcDate); tgtDate.setDate(srcDate.getDate()+7);
+        const tgtStr = toLocalDateStr(tgtDate);
+        await onAdd({
+          ...s,
+          id: `sch-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          date: tgtStr,
+          published: false,
+          status: "scheduled",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      setWeekOffset(w => w + 1);
+    } finally { setCopying(false); }
+  };
+
+  // ── Drag-to-resize ─────────────────────────────────────────────────────────
+  const handleResizeStart = (e, slot) => {
+    if (editLocked) return;
+    e.stopPropagation(); e.preventDefault();
+    setResizingShift({ id: slot.id, slot, startX: e.clientX || e.touches?.[0]?.clientX || 0, originalEndTime: slot.endTime });
+  };
+  useEffect(() => {
+    if (!resizingShift) return;
+    const onMove = (e) => {
+      const x = e.clientX || e.touches?.[0]?.clientX || 0;
+      const deltaX = x - resizingShift.startX;
+      const minutesPerPx = 4; // rough: every 4px = 15 mins
+      const deltaMins = Math.round(deltaX / minutesPerPx / 15) * 15;
+      if (deltaMins === 0) return;
+      const [hh, mm] = resizingShift.originalEndTime.split(":").map(Number);
+      const total = hh*60 + mm + deltaMins;
+      const clamped = Math.max(15, Math.min(24*60-1, total));
+      const newH = String(Math.floor(clamped/60)).padStart(2,"0");
+      const newM = String(clamped%60).padStart(2,"0");
+      const newEnd = `${newH}:${newM}`;
+      if (newEnd !== resizingShift.slot.endTime) {
+        // Live update visual (will be saved on mouseup)
+        setResizingShift(r => r ? { ...r, currentEnd: newEnd } : r);
+      }
+    };
+    const onUp = async () => {
+      if (resizingShift?.currentEnd && resizingShift.currentEnd !== resizingShift.originalEndTime) {
+        await onAdd({ ...resizingShift.slot, endTime: resizingShift.currentEnd, updatedAt: new Date().toISOString() });
+      }
+      setResizingShift(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove);
+    window.addEventListener("touchend", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+  }, [resizingShift, onAdd]);
+
+  // ── Multi-select ───────────────────────────────────────────────────────────
+  const toggleSelect = (id, e) => {
+    e?.stopPropagation();
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelected(new Set());
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      for (const id of selected) await onDelete(id);
+      setSelected(new Set());
+    } finally { setBulkDeleting(false); }
+  };
+
   const pendingAvail = availability.filter(a=>vb.some(b=>b.id===a.brandId)&&a.status==="pending").length;
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-base font-bold text-white">Schedule</h2>
-          <div className="flex items-center gap-3 mt-0.5">
-            {allWeekSlots.length > 0 && (
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
-                {isWeekPublished ? "✓ Published" : "Draft"}
-              </span>
-            )}
-            <span className="text-xs text-slate-500">{totalSlots} shift{totalSlots!==1?"s":""} this week</span>
-            {pendingAvail > 0 && <span className="text-xs text-amber-400">· {pendingAvail} availability pending</span>}
+      {/* ── Top stats / totals strip ──────────────────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled hours</div>
+          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.hours)}</div>
+          <div className="text-xs text-slate-500 mt-0.5">{weekTotals.totalShifts} shifts</div>
+        </div>
+        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled wages</div>
+          <div className="text-xl font-black text-white mt-1">{fmtMoney(weekTotals.cost)}</div>
+          <div className="text-xs text-slate-500 mt-0.5">Forecast</div>
+        </div>
+        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Actual hours</div>
+          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.actualHours)}</div>
+          <div className={`text-xs mt-0.5 font-semibold ${
+            weekTotals.actualHours > weekTotals.hours * 1.05 ? "text-red-400" :
+            weekTotals.actualHours < weekTotals.hours * 0.95 ? "text-amber-400" : "text-emerald-400"
+          }`}>
+            {weekTotals.hours ? `${((weekTotals.actualHours/weekTotals.hours - 1)*100).toFixed(0)}%` : "—"} vs plan
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
-            <button onClick={()=>setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
-            <button onClick={()=>setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
-          </div>
-          {/* Publish / Unpublish */}
+        <button onClick={()=>setSalesModal(true)} className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/50 transition-colors">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">SPLH forecast</div>
+          {weekSalesForecast > 0 ? (
+            <>
+              <div className={`text-xl font-black mt-1 ${
+                splhRating === "green" ? "text-emerald-400" : splhRating === "amber" ? "text-amber-400" : "text-red-400"
+              }`}>£{splh.toFixed(1)}</div>
+              <div className="text-xs text-slate-500 mt-0.5">sales / £1 labour</div>
+            </>
+          ) : (
+            <>
+              <div className="text-base font-bold text-slate-400 mt-1">Set forecast →</div>
+              <div className="text-xs text-slate-500 mt-0.5">tap to enter daily sales</div>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* ── Header / actions ──────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {allWeekSlots.length > 0 && (
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+              {isWeekPublished ? "✓ Published" : "Draft"}
+            </span>
+          )}
+          {editLocked && (
+            <button onClick={()=>setLocked(false)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
+              title="Schedule is locked — click to allow edits">
+              🔒 Locked
+            </button>
+          )}
+          {isWeekPublished && !locked && (
+            <button onClick={()=>setLocked(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors">
+              🔓 Editing — lock again
+            </button>
+          )}
+          {pendingAvail > 0 && <span className="text-xs text-amber-400">· {pendingAvail} availability pending</span>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={()=>setShowCosts(s=>!s)} className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5">
+            {showCosts ? <Eye size={13}/> : <EyeOff size={13}/>} Costs
+          </button>
+          <button onClick={()=>setAutofillModal({})} disabled={editLocked}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 hover:bg-indigo-600/30 text-indigo-300 text-xs font-semibold transition-colors disabled:opacity-40" title="Auto-fill shifts from availability">
+            <Zap size={13}/> Auto-fill
+          </button>
+          {!isMobile && (
+            <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
+              <button onClick={()=>setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
+              <button onClick={()=>setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
+              <button onClick={()=>setViewMode("coverage")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="coverage"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Coverage</button>
+            </div>
+          )}
+          {allWeekSlots.length > 0 && !editLocked && (
+            <button onClick={handleCopyWeek} disabled={copying}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50">
+              {copying ? "…" : <><Plus size={13}/> Copy → next</>}
+            </button>
+          )}
           {allWeekSlots.length > 0 && (
             <button onClick={handlePublish} disabled={publishing}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
-                isWeekPublished
-                  ? "bg-slate-700 hover:bg-slate-600 text-slate-300"
-                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                isWeekPublished ? "bg-slate-700 hover:bg-slate-600 text-slate-300" : "bg-emerald-600 hover:bg-emerald-500 text-white"
               } disabled:opacity-50`}>
               {publishing ? "…" : isWeekPublished ? "Unpublish" : "Publish Week"}
             </button>
@@ -5601,7 +5869,20 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
         </div>
       </div>
 
-      {/* Filters */}
+      {/* ── Bulk action bar ─────────────────────────────────────────────── */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 bg-indigo-950/40 border border-indigo-500/40 rounded-xl px-4 py-2.5">
+          <span className="text-sm font-bold text-white">{selected.size} shift{selected.size!==1?"s":""} selected</span>
+          <div className="flex-1"/>
+          <button onClick={clearSelection} className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors">Clear</button>
+          <button onClick={handleBulkDelete} disabled={bulkDeleting || editLocked}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors disabled:opacity-40">
+            <Trash2 size={13}/> Delete selected
+          </button>
+        </div>
+      )}
+
+      {/* ── Filters ──────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-2">
         {vb.length > 1 && <LocationDropdown brands={vb} value={brandId} onChange={setBrandId} className="w-44"/>}
         {allDepts.length > 0 && <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-36"><option value="all">All Depts</option>{allDepts.map(d=><option key={d}>{d}</option>)}</SelectDropdown>}
@@ -5609,7 +5890,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
         {allShiftNames.length > 0 && <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-36"><option value="all">All Shifts</option>{allShiftNames.map(n=><option key={n}>{n}</option>)}</SelectDropdown>}
       </div>
 
-      {/* Draft banner */}
+      {/* ── Draft banner ────────────────────────────────────────────────── */}
       {isDraft && (
         <div className="flex items-center gap-3 bg-amber-950/30 border border-amber-500/30 rounded-xl px-4 py-3">
           <span className="text-amber-400 text-sm">⚠ This week is in draft — employees cannot see it yet.</span>
@@ -5617,136 +5898,298 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
         </div>
       )}
 
-      {/* Week nav */}
+      {/* ── Week nav ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-        <div className="text-sm font-semibold text-white">
-          {weekDays[0].toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {weekDays[6].toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+        <div className="flex items-center gap-3">
+          <button onClick={()=>setWeekOffset(0)} className="text-sm font-semibold text-white hover:text-indigo-400 transition-colors">
+            {weekDays[0].toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {weekDays[6].toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
+          </button>
+          {weekOffset !== 0 && <button onClick={()=>setWeekOffset(0)} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold">Today →</button>}
         </div>
         <button onClick={()=>setWeekOffset(w=>w+1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronRight size={16}/></button>
       </div>
 
-      {/* ── Week grid ── */}
-      {viewMode==="week" && (
+      {/* ── Mobile day-swipe view ─────────────────────────────────────────── */}
+      {isMobile && (
+        <div className="space-y-3">
+          {/* Day pills */}
+          <div className="flex gap-1 overflow-x-auto pb-1">
+            {weekDays.map((day,idx)=>{
+              const isToday = toLocalDateStr(day)===toLocalDateStr(today);
+              const active = mobileDay === idx;
+              return (
+                <button key={idx} onClick={()=>setMobileDay(idx)}
+                  className={`flex-shrink-0 px-3 py-2 rounded-xl text-center transition-all ${
+                    active ? "bg-indigo-600 text-white" :
+                    isToday ? "bg-indigo-950/40 border border-indigo-500/30 text-indigo-300" :
+                    "bg-slate-900/60 text-slate-400"
+                  }`}>
+                  <div className="text-xs font-semibold">{DAYS_OF_WEEK[idx].slice(0,3)}</div>
+                  <div className="text-base font-bold">{day.getDate()}</div>
+                </button>
+              );
+            })}
+          </div>
+          {/* Day content */}
+          {(() => {
+            const dateStr = weekDayStrs[mobileDay];
+            const dt = dailyTotals[mobileDay];
+            const daySlots = weekSchedules.filter(s=>s.date===dateStr).sort((a,b)=>a.startTime.localeCompare(b.startTime));
+            return (
+              <div className="space-y-3">
+                {/* Day totals */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-slate-900/60 rounded-xl p-3 text-center">
+                    <div className="text-xs text-slate-500">Hours</div>
+                    <div className="text-base font-bold text-white">{fmtHrs(dt.hours)}</div>
+                  </div>
+                  {showCosts && (
+                    <div className="bg-slate-900/60 rounded-xl p-3 text-center">
+                      <div className="text-xs text-slate-500">Wages</div>
+                      <div className="text-base font-bold text-emerald-400">{fmtMoney(dt.cost)}</div>
+                    </div>
+                  )}
+                  <div className="bg-slate-900/60 rounded-xl p-3 text-center">
+                    <div className="text-xs text-slate-500">On shift</div>
+                    <div className="text-base font-bold text-white">{dt.headcount}</div>
+                  </div>
+                </div>
+
+                {/* Add shift */}
+                <button onClick={()=>!editLocked && setShiftModal({date:dateStr})} disabled={editLocked}
+                  className="w-full py-2.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 text-sm font-semibold disabled:opacity-40 hover:bg-indigo-600/30 transition-colors flex items-center justify-center gap-2">
+                  <Plus size={14}/> Add shift
+                </button>
+
+                {/* Shifts list */}
+                {daySlots.length===0
+                  ? <div className="text-center py-8 text-slate-500 text-sm italic">No shifts scheduled</div>
+                  : daySlots.map(s=>{
+                      const member = opsTeam.find(m=>m.id===s.employeeId);
+                      const conflict = getSlotConflict(s, member);
+                      const hrs = calcShiftHours(s.startTime, s.endTime);
+                      return (
+                        <div key={s.id} className={`bg-slate-900/60 rounded-xl p-3 border ${conflict ? "border-red-500/40" : "border-slate-800/60"}`}
+                          onClick={()=>!editLocked && setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName})}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:getPresetColor(s.shift)}}/>
+                            <div className="text-sm font-bold text-white truncate">{s.employeeName}</div>
+                            {!s.published && <span className="text-xs text-amber-400 font-semibold ml-auto">Draft</span>}
+                          </div>
+                          <div className="text-xs text-slate-400">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h</div>
+                          {conflict && <div className="text-xs text-red-400 font-semibold mt-1">⚠ {conflict==="unavailable"?"Employee unavailable":"Outside availability"}</div>}
+                          {showCosts && member?.hourlyRate > 0 && <div className="text-xs text-emerald-400 font-semibold mt-1">{fmtMoney(hrs * member.hourlyRate)}</div>}
+                        </div>
+                      );
+                    })
+                }
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ── Desktop week grid ─────────────────────────────────────────────── */}
+      {!isMobile && viewMode==="week" && (
         <div className="overflow-x-auto">
-          <div className="min-w-[700px]">
-            {/* Day headers */}
-            <div className="grid gap-1 mb-2" style={{gridTemplateColumns:"160px repeat(7, 1fr)"}}>
+          <div className="min-w-[920px]">
+            <div className="grid gap-1 mb-2" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
               <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
               {weekDays.map((day,idx)=>{
                 const isToday = toLocalDateStr(day)===toLocalDateStr(today);
+                const dt = dailyTotals[idx];
                 return (
                   <div key={idx} className={`text-center rounded-xl py-2 ${isToday?"bg-indigo-600/20 border border-indigo-500/30":"bg-slate-900/40"}`}>
                     <div className={`text-xs font-semibold ${isToday?"text-indigo-300":"text-slate-400"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
                     <div className={`text-sm font-bold ${isToday?"text-indigo-200":"text-slate-300"}`}>{day.getDate()}</div>
+                    {dt.headcount > 0 && <div className="text-xs text-slate-500 mt-0.5">{dt.headcount} on shift</div>}
                   </div>
                 );
               })}
+              <div className="text-center rounded-xl py-2 bg-slate-900/40">
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Total</div>
+              </div>
             </div>
 
             {filteredMembers.length===0 && <div className="text-center py-10 text-slate-500 text-sm">No team members match filters</div>}
-            {filteredMembers.map(member=>(
-              <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"160px repeat(7, 1fr)"}}>
-                {/* Name col */}
-                <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900/60 rounded-xl">
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                    style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
-                    {member.firstName[0]}{member.lastName?.[0]||""}
+
+            {filteredMembers.map((member, mIdx)=>{
+              const empTotal = employeeTotals[mIdx];
+              return (
+                <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
+                  <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900/60 rounded-xl">
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                      style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
+                      {member.firstName[0]}{member.lastName?.[0]||""}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-white truncate">{member.nickname||member.firstName} {!member.nickname&&member.lastName}</div>
+                      <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold text-white truncate">{member.nickname||member.firstName} {!member.nickname&&member.lastName}</div>
-                    <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
+
+                  {weekDays.map((day,dIdx)=>{
+                    const dateStr = toLocalDateStr(day);
+                    const slots   = getSlotsFor(member.id, dateStr);
+                    const avails  = getAvailFor(member.id, dateStr);
+                    const isAvail = avails.some(a=>a.available);
+                    const availWindow = avails.find(a=>a.available);
+                    const isToday = toLocalDateStr(day)===toLocalDateStr(today);
+                    return (
+                      <div key={dIdx}
+                        className={`relative rounded-xl min-h-16 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/40 bg-slate-900/30 hover:bg-slate-800/40"}`}
+                        onClick={()=>!editLocked && setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}>
+                        {avails.length>0 && (
+                          <div className={`w-full rounded-md px-1.5 py-0.5 mb-0.5 text-xs font-semibold truncate ${
+                            isAvail ? "bg-emerald-500/25 text-emerald-300 border border-emerald-500/30"
+                                    : "bg-red-500/25 text-red-300 border border-red-500/30"
+                          }`}>
+                            {isAvail ? (availWindow?`✓ ${availWindow.startTime}–${availWindow.endTime}`:"✓ Avail") : "✗ Unavail"}
+                          </div>
+                        )}
+                        <div className="space-y-0.5">
+                          {slots.map(s=>{
+                            const conflict = getSlotConflict(s, member);
+                            const hrs = calcShiftHours(s.startTime, s.endTime);
+                            const isSelected = selected.has(s.id);
+                            const displayEnd = resizingShift?.id === s.id && resizingShift?.currentEnd ? resizingShift.currentEnd : s.endTime;
+                            return (
+                              <div key={s.id}
+                                onClick={e=>{
+                                  e.stopPropagation();
+                                  if (e.shiftKey) toggleSelect(s.id, e);
+                                  else if (!editLocked) setShiftModal({date:dateStr,slot:s,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()});
+                                }}
+                                className={`relative text-xs rounded-md px-1.5 py-0.5 font-bold truncate cursor-pointer transition-all hover:opacity-80 ${conflict?"ring-1 ring-red-500/60":""} ${isSelected?"ring-2 ring-indigo-400":""}`}
+                                style={{background:getPresetColor(s.shift)+"40",color:getPresetColor(s.shift)}}
+                                title={`${s.shift}: ${s.startTime}–${displayEnd} · ${hrs.toFixed(1)}h${s.published?"":" (draft)"} · Shift-click to multi-select${editLocked?"":" · Drag right edge to resize"}`}>
+                                {conflict && <span className="absolute -top-0.5 -left-0.5 w-2 h-2 rounded-full bg-red-500 border border-slate-950"/>}
+                                {s.startTime}–{displayEnd}{!s.published&&" ✎"}
+                                {/* Resize handle */}
+                                {!editLocked && (
+                                  <span
+                                    onMouseDown={e=>handleResizeStart(e,s)}
+                                    onTouchStart={e=>handleResizeStart(e,s)}
+                                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 rounded-r-md"/>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {slots.length===0&&<div className="hidden group-hover:flex items-center justify-center h-6 text-slate-600 hover:text-slate-400"><Plus size={12}/></div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex flex-col items-center justify-center px-2 py-1.5 bg-slate-900/40 rounded-xl border border-slate-800/40">
+                    <div className="text-sm font-bold text-white">{fmtHrs(empTotal.hours)}</div>
+                    {showCosts && member.hourlyRate > 0 && (
+                      <div className="text-xs text-emerald-400 font-semibold">{fmtMoney(empTotal.cost)}</div>
+                    )}
                   </div>
                 </div>
+              );
+            })}
 
-                {/* Day cells */}
-                {weekDays.map((day,dIdx)=>{
-                  const dateStr = toLocalDateStr(day);
-                  const slots   = getSlotsFor(member.id, dateStr);
-                  const avails  = getAvailFor(member.id, dateStr);
-                  const isAvail = avails.some(a=>a.available);
-                  const isUnavail = avails.some(a=>!a.available);
-                  const availWindow = avails.find(a=>a.available);
-                  const isToday = toLocalDateStr(day)===toLocalDateStr(today);
-                  return (
-                    <div key={dIdx}
-                      className={`relative rounded-xl min-h-14 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/40 bg-slate-900/30 hover:bg-slate-800/40"}`}
-                      onClick={()=>setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}>
-                      {/* Availability bar */}
-                      {avails.length>0 && (
-                        <div className={`w-full rounded-md px-1.5 py-0.5 mb-0.5 text-xs font-semibold truncate ${
-                          isAvail ? "bg-emerald-500/25 text-emerald-300 border border-emerald-500/30"
-                                  : "bg-red-500/25 text-red-300 border border-red-500/30"
-                        }`}>
-                          {isAvail ? (availWindow?`✓ ${availWindow.startTime}–${availWindow.endTime}`:"✓ Avail") : "✗ Unavail"}
-                        </div>
-                      )}
-                      {/* Shift chips */}
-                      <div className="space-y-0.5">
-                        {slots.map(s=>(
-                          <div key={s.id}
-                            onClick={e=>{e.stopPropagation();setShiftModal({date:dateStr,slot:s,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()});}}
-                            className={`text-xs rounded-md px-1.5 py-0.5 font-bold truncate cursor-pointer transition-all hover:opacity-80 ${s.status==="cancelled"?"opacity-40 line-through":""}`}
-                            style={{background:getPresetColor(s.shift)+"40",color:getPresetColor(s.shift)}}
-                            title={`${s.shift}: ${s.startTime}–${s.endTime}${s.published?"":" (draft)"}`}>
-                            {s.startTime}–{s.endTime}{!s.published&&" ✎"}
-                          </div>
-                        ))}
-                        {slots.length===0&&<div className="hidden group-hover:flex items-center justify-center h-6 text-slate-600 hover:text-slate-400"><Plus size={12}/></div>}
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="grid gap-1 mt-3 pt-3 border-t border-slate-800/60" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
+              <div className="flex flex-col justify-center px-2">
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Daily</div>
+                <div className="text-xs text-slate-600">hours / wages / sales</div>
               </div>
-            ))}
+              {dailyTotals.map((dt, idx) => (
+                <div key={idx} className="rounded-xl py-2 px-1 bg-slate-900/60 border border-slate-800/40 text-center">
+                  <div className="text-sm font-bold text-white">{fmtHrs(dt.hours)}</div>
+                  {showCosts && <div className="text-xs text-emerald-400 font-semibold">{fmtMoney(dt.cost)}</div>}
+                  {dailySales[idx] > 0 && <div className="text-xs text-indigo-400 mt-0.5">{fmtMoney(dailySales[idx])}</div>}
+                  {dt.actualHours > 0 && <div className="text-xs text-slate-500 mt-0.5">act {fmtHrs(dt.actualHours)}</div>}
+                </div>
+              ))}
+              <div className="rounded-xl py-2 px-1 bg-indigo-950/40 border border-indigo-500/30 text-center">
+                <div className="text-sm font-black text-white">{fmtHrs(weekTotals.hours)}</div>
+                {showCosts && <div className="text-xs text-emerald-300 font-bold">{fmtMoney(weekTotals.cost)}</div>}
+              </div>
+            </div>
 
-            {/* Legend */}
             <div className="flex items-center gap-4 mt-4 text-xs text-slate-500 flex-wrap">
               <div className="flex items-center gap-1.5"><div className="w-8 h-3 rounded bg-emerald-500/25 border border-emerald-500/30"/> Available</div>
               <div className="flex items-center gap-1.5"><div className="w-8 h-3 rounded bg-red-500/25 border border-red-500/30"/> Unavailable</div>
-              <div className="flex items-center gap-1.5"><span className="text-slate-400">✎</span> Draft (not yet visible to employees)</div>
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"/> Conflict</div>
+              <div className="flex items-center gap-1.5"><span className="text-slate-400">✎</span> Draft</div>
+              <div className="flex items-center gap-1.5"><span className="text-slate-400">⇨</span> Drag right edge of shift to resize</div>
+              <div className="flex items-center gap-1.5"><span className="text-slate-400">⇧</span>+click for multi-select</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── List view ── */}
-      {viewMode==="list" && (
+      {/* ── Desktop list view ─────────────────────────────────────────────── */}
+      {!isMobile && viewMode==="list" && (
         <div className="space-y-3">
-          {weekDays.map(day=>{
+          {weekDays.map((day, dIdx)=>{
             const dateStr = toLocalDateStr(day);
             const daySlots = weekSchedules.filter(s=>s.date===dateStr).sort((a,b)=>a.startTime.localeCompare(b.startTime));
             const isToday = toLocalDateStr(day)===toLocalDateStr(today);
+            const dt = dailyTotals[dIdx];
             return (
               <div key={dateStr} className={`rounded-2xl border overflow-hidden ${isToday?"border-indigo-500/30":"border-slate-800/60"}`}>
                 <div className={`flex items-center justify-between px-4 py-2.5 ${isToday?"bg-indigo-950/30":"bg-slate-900/60"}`}>
-                  <div className={`text-sm font-bold ${isToday?"text-indigo-300":"text-slate-300"}`}>
-                    {day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className={`text-sm font-bold ${isToday?"text-indigo-300":"text-slate-300"}`}>
+                      {day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
+                    </div>
+                    {dt.hours > 0 && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">{fmtHrs(dt.hours)}</span>
+                        {showCosts && <span className="text-emerald-400 font-semibold">{fmtMoney(dt.cost)}</span>}
+                        {dailySales[dIdx] > 0 && <span className="text-indigo-400">forecast {fmtMoney(dailySales[dIdx])}</span>}
+                        <span className="text-slate-600">·</span>
+                        <span className="text-slate-500">{dt.headcount} on shift</span>
+                      </div>
+                    )}
                   </div>
-                  <button onClick={()=>setShiftModal({date:dateStr})} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
-                    <Plus size={12}/> Add shift
-                  </button>
+                  {!editLocked && (
+                    <button onClick={()=>setShiftModal({date:dateStr})} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
+                      <Plus size={12}/> Add shift
+                    </button>
+                  )}
                 </div>
                 {daySlots.length===0
                   ? <div className="px-4 py-3 text-xs text-slate-600 italic">No shifts scheduled</div>
                   : <div className="divide-y divide-slate-800/40">
-                      {daySlots.map(s=>(
-                        <div key={s.id} className={`flex items-center gap-3 px-4 py-3 ${s.status==="cancelled"?"opacity-50":""}`}>
-                          <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:getPresetColor(s.shift)}}/>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <div className="text-sm font-semibold text-white">{s.employeeName}</div>
-                              {!s.published&&<span className="text-xs text-amber-400 font-semibold">Draft</span>}
+                      {daySlots.map(s=>{
+                        const member = opsTeam.find(m=>m.id===s.employeeId);
+                        const conflict = getSlotConflict(s, member);
+                        const hrs = calcShiftHours(s.startTime, s.endTime);
+                        const isSelected = selected.has(s.id);
+                        return (
+                          <div key={s.id}
+                            onClick={e=>{ if (e.shiftKey) toggleSelect(s.id, e); }}
+                            className={`flex items-center gap-3 px-4 py-3 ${s.status==="cancelled"?"opacity-50":""} ${isSelected?"bg-indigo-950/20":""}`}>
+                            <input type="checkbox" checked={isSelected} onChange={e=>{e.stopPropagation();toggleSelect(s.id,e);}}
+                              className="rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500"/>
+                            <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:getPresetColor(s.shift)}}/>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-semibold text-white">{s.employeeName}</div>
+                                {!s.published&&<span className="text-xs text-amber-400 font-semibold">Draft</span>}
+                                {conflict && <span className="text-xs text-red-400 font-semibold">⚠ {conflict==="unavailable"?"Unavailable":"Outside availability"}</span>}
+                              </div>
+                              <div className="text-xs text-slate-400">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h{s.role?` · ${s.role}`:""}</div>
+                              {s.notes&&<div className="text-xs text-slate-500 italic mt-0.5">{s.notes}</div>}
                             </div>
-                            <div className="text-xs text-slate-400">{s.shift} · {s.startTime}–{s.endTime}{s.role?` · ${s.role}`:""}</div>
-                            {s.notes&&<div className="text-xs text-slate-500 italic mt-0.5">{s.notes}</div>}
+                            {showCosts && member?.hourlyRate > 0 && (
+                              <div className="text-xs text-emerald-400 font-semibold flex-shrink-0">{fmtMoney(hrs * member.hourlyRate)}</div>
+                            )}
+                            {!editLocked && (
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <button onClick={e=>{e.stopPropagation();setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName});}} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
+                                <button onClick={e=>{e.stopPropagation();setDeleteId(s.id);}} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={13}/></button>
+                              </div>
+                            )}
                           </div>
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
-                            <button onClick={()=>setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName})} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
-                            <button onClick={()=>setDeleteId(s.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={13}/></button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                 }
               </div>
@@ -5755,22 +6198,289 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
         </div>
       )}
 
-      {shiftModal && (
+      {/* ── Coverage view ─────────────────────────────────────────────────── */}
+      {!isMobile && viewMode==="coverage" && (
+        <div className="space-y-3">
+          <div className="text-xs text-slate-500">Hour-by-hour staffing heatmap. Darker = more people on shift.</div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[900px]">
+              <div className="grid gap-1 mb-2" style={{gridTemplateColumns:"100px repeat(24, 1fr)"}}>
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-1.5">Day</div>
+                {Array.from({length:24},(_,h)=>(
+                  <div key={h} className="text-center text-xs text-slate-500 font-mono py-1">{String(h).padStart(2,"0")}</div>
+                ))}
+              </div>
+              {coverageMatrix.map((row, idx) => {
+                const day = weekDays[idx];
+                const isToday = toLocalDateStr(day)===toLocalDateStr(today);
+                const maxCount = Math.max(...row.counts, 1);
+                return (
+                  <div key={row.date} className="grid gap-1 mb-1" style={{gridTemplateColumns:"100px repeat(24, 1fr)"}}>
+                    <div className={`flex items-center px-2 py-1.5 rounded-xl text-xs font-semibold ${isToday?"bg-indigo-950/30 text-indigo-300":"bg-slate-900/60 text-slate-300"}`}>
+                      {day.toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}
+                    </div>
+                    {row.counts.map((c, h) => {
+                      const intensity = c / maxCount;
+                      return (
+                        <div key={h}
+                          className="rounded text-center text-xs font-bold py-1.5 transition-all"
+                          style={{
+                            background: c === 0 ? "rgb(15,23,42)" : `rgba(99,102,241,${0.15 + intensity*0.6})`,
+                            color: c === 0 ? "#475569" : intensity > 0.5 ? "white" : "#a5b4fc",
+                          }}
+                          title={`${c} ${c===1?"person":"people"} working at ${String(h).padStart(2,"0")}:00`}>
+                          {c || ""}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modals ────────────────────────────────────────────────────────── */}
+      {shiftModal && !editLocked && (
         <ShiftFormModal
-          date={shiftModal.date} slot={shiftModal.slot||null}
-          brandId={brandId}
+          date={shiftModal.date} slot={shiftModal.slot||null} brandId={brandId}
           memberId={shiftModal.memberId||null} memberName={shiftModal.memberName||""}
-          filterRole={filterRole!=="all"?filterRole:""}
-          filterDept={filterDept!=="all"?filterDept:""}
-          opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets}
-          currentUser={currentUser}
+          filterRole={filterRole!=="all"?filterRole:""} filterDept={filterDept!=="all"?filterDept:""}
+          opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets} currentUser={currentUser}
           onSave={s=>{onAdd(s);setShiftModal(null);}}
           onDelete={id=>{onDelete(id);setShiftModal(null);}}
           onClose={()=>setShiftModal(null)}
         />
       )}
-      {deleteId&&<OpsConfirmModal message="Delete this shift?" onConfirm={()=>{onDelete(deleteId);setDeleteId(null);}} onClose={()=>setDeleteId(null)}/>}
+      {deleteId && <OpsConfirmModal message="Delete this shift?" onConfirm={()=>{onDelete(deleteId);setDeleteId(null);}} onClose={()=>setDeleteId(null)}/>}
+      {autofillModal && (
+        <AutofillShiftsModal
+          weekDays={weekDays} weekDayStrs={weekDayStrs} brandId={brandId}
+          opsTeam={filteredMembers} availability={availability} shiftPresets={brandPresets}
+          existingSchedules={weekSchedules}
+          currentUser={currentUser}
+          onApply={async (shifts) => {
+            for (const s of shifts) await onAdd(s);
+            setAutofillModal(null);
+          }}
+          onClose={()=>setAutofillModal(null)}
+        />
+      )}
+      {salesModal && (
+        <SalesForecastModal
+          brand={brand} weekDays={weekDays} weekDayStrs={weekDayStrs}
+          onSave={async (forecasts) => {
+            if (!onUpdateBrand) return;
+            const newKpi = { ...(brand.kpiTargets || {}), salesForecasts: { ...(brand.kpiTargets?.salesForecasts || {}), ...forecasts } };
+            await onUpdateBrand({ ...brand, kpiTargets: newKpi });
+            setSalesModal(false);
+          }}
+          onClose={()=>setSalesModal(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// ── Autofill Shifts Modal — proposes shifts based on availability ─────────────
+function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availability, shiftPresets, existingSchedules, currentUser, onApply, onClose }) {
+  const [presetId,    setPresetId]    = useState(shiftPresets[0]?.id || "");
+  const [selectedDays, setSelectedDays] = useState(new Set(weekDayStrs));
+  const [skipIfHasShift, setSkipIfHasShift] = useState(true);
+  const [respectAvailWindow, setRespectAvailWindow] = useState(true);
+
+  const preset = shiftPresets.find(p => p.id === presetId);
+
+  // Build proposals
+  const proposals = useMemo(() => {
+    if (!preset) return [];
+    const out = [];
+    weekDayStrs.forEach(dateStr => {
+      if (!selectedDays.has(dateStr)) return;
+      const dayName = DAYS_OF_WEEK[new Date(dateStr+"T00:00:00").getDay()===0?6:new Date(dateStr+"T00:00:00").getDay()-1];
+      opsTeam.forEach(m => {
+        // Already scheduled this day?
+        const hasShift = existingSchedules.some(s => s.employeeId === m.id && s.date === dateStr && s.status !== "cancelled");
+        if (skipIfHasShift && hasShift) return;
+        // Available?
+        const avails = availability.filter(a => {
+          if (a.employeeId !== m.id || a.status === "rejected") return false;
+          if (a.type === "one_off") return a.date === dateStr;
+          if (a.type === "weekly") return (a.amendedDayOfWeek||a.dayOfWeek) === dayName;
+          if (a.type === "recurring") return a.startDate <= dateStr && a.endDate >= dateStr;
+          return false;
+        });
+        if (avails.some(a => !a.available)) return; // explicitly unavailable
+        const availWin = avails.find(a => a.available);
+        if (avails.length > 0 && !availWin) return; // no positive availability
+        if (respectAvailWindow && availWin && availWin.startTime && availWin.endTime) {
+          if (preset.startTime < availWin.startTime || preset.endTime > availWin.endTime) return;
+        }
+        if (avails.length === 0) return; // no availability submitted - skip
+        out.push({ memberId: m.id, memberName: `${m.firstName} ${m.lastName}`.trim(), date: dateStr, preset });
+      });
+    });
+    return out;
+  }, [preset?.id, JSON.stringify([...selectedDays]), skipIfHasShift, respectAvailWindow, JSON.stringify(opsTeam.map(m=>m.id))]);
+
+  const [excluded, setExcluded] = useState(new Set());
+  const toggleExclude = (key) => setExcluded(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+
+  const proposalsActive = proposals.filter(p => !excluded.has(`${p.memberId}-${p.date}`));
+
+  const handleApply = () => {
+    const ws = new Date(weekDays[0]); ws.setHours(0,0,0,0);
+    const wsStr = [ws.getFullYear(),String(ws.getMonth()+1).padStart(2,"0"),String(ws.getDate()).padStart(2,"0")].join("-");
+    const shifts = proposalsActive.map(p => {
+      const member = opsTeam.find(m => m.id === p.memberId);
+      return {
+        id: `sch-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+        brandId, date: p.date, employeeId: p.memberId, employeeName: p.memberName,
+        shift: p.preset.name, startTime: p.preset.startTime, endTime: p.preset.endTime,
+        role: member?.role || "", department: member?.department || "",
+        notes: "", status: "scheduled", published: false,
+        weekStart: wsStr, createdBy: currentUser.name,
+      };
+    });
+    onApply(shifts);
+  };
+
+  return (
+    <Modal title="Auto-fill shifts from availability" onClose={onClose} maxW="max-w-2xl"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleApply} disabled={proposalsActive.length === 0}
+          className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+          Create {proposalsActive.length} shift{proposalsActive.length!==1?"s":""}
+        </button>
+      </>}>
+      <div className="space-y-4">
+        <div className="bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-3">
+          <div className="text-xs text-indigo-300">
+            For each day & employee selected, propose a shift if they've marked themselves available and aren't already scheduled.
+          </div>
+        </div>
+
+        {/* Preset picker */}
+        <div>
+          <label className={labelCls}>Shift template</label>
+          <div className="flex flex-wrap gap-2">
+            {shiftPresets.map(p => (
+              <button key={p.id} onClick={()=>setPresetId(p.id)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all border ${
+                  presetId === p.id ? "border-transparent text-white" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"
+                }`}
+                style={presetId === p.id ? { background: p.color } : {}}>
+                {p.name} · {p.startTime}–{p.endTime}
+              </button>
+            ))}
+            {shiftPresets.length === 0 && <div className="text-xs text-slate-500 italic">No shift presets — create some in Ops Setup first.</div>}
+          </div>
+        </div>
+
+        {/* Days */}
+        <div>
+          <label className={labelCls}>Days</label>
+          <div className="flex flex-wrap gap-2">
+            {weekDays.map((d, idx) => {
+              const dStr = weekDayStrs[idx];
+              const active = selectedDays.has(dStr);
+              return (
+                <button key={dStr} onClick={()=>setSelectedDays(prev=>{const n=new Set(prev);if(n.has(dStr))n.delete(dStr);else n.add(dStr);return n;})}
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold ${active?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
+                  {DAYS_OF_WEEK[idx].slice(0,3)} {d.getDate()}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Options */}
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={skipIfHasShift} onChange={e=>setSkipIfHasShift(e.target.checked)}
+              className="rounded border-slate-600 bg-slate-800 text-indigo-500"/>
+            Skip employees who already have a shift on that day
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={respectAvailWindow} onChange={e=>setRespectAvailWindow(e.target.checked)}
+              className="rounded border-slate-600 bg-slate-800 text-indigo-500"/>
+            Only propose if shift fits within their availability window
+          </label>
+        </div>
+
+        {/* Preview */}
+        <div>
+          <div className={labelCls}>Preview ({proposalsActive.length} of {proposals.length} active)</div>
+          {proposals.length === 0 ? (
+            <div className="text-xs text-slate-500 italic py-4 text-center">No proposals — no eligible employees or no availability submitted. Try toggling the options above.</div>
+          ) : (
+            <div className="max-h-64 overflow-y-auto space-y-1 bg-slate-900/40 rounded-xl p-2">
+              {proposals.map(p => {
+                const key = `${p.memberId}-${p.date}`;
+                const isExcl = excluded.has(key);
+                return (
+                  <button key={key} onClick={()=>toggleExclude(key)}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all ${isExcl?"bg-slate-800/40 opacity-50":"bg-slate-800/80 hover:bg-slate-700"}`}>
+                    <input type="checkbox" checked={!isExcl} readOnly className="rounded border-slate-600 bg-slate-800 text-indigo-500 pointer-events-none"/>
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background: p.preset.color}}/>
+                    <div className="flex-1 text-left text-slate-200 font-semibold">{p.memberName}</div>
+                    <div className="text-slate-400">{new Date(p.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}</div>
+                    <div className="text-slate-400 font-mono">{p.preset.startTime}–{p.preset.endTime}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Sales Forecast Modal ──────────────────────────────────────────────────────
+function SalesForecastModal({ brand, weekDays, weekDayStrs, onSave, onClose }) {
+  const existing = brand?.kpiTargets?.salesForecasts || {};
+  const [forecasts, setForecasts] = useState(() => {
+    const out = {};
+    weekDayStrs.forEach(d => { out[d] = existing[d] ? String(existing[d]) : ""; });
+    return out;
+  });
+  const total = Object.values(forecasts).reduce((a,v) => a + (parseFloat(v)||0), 0);
+
+  return (
+    <Modal title="Sales forecast for this week" onClose={onClose} maxW="max-w-md"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={()=>onSave(forecasts)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Save Forecast</button>
+      </>}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-400">
+          Enter forecasted sales for each day. We'll calculate Sales Per Labour Hour (SPLH) — target £8+ per £1 spent on wages.
+        </div>
+        {weekDays.map((d, idx) => {
+          const dStr = weekDayStrs[idx];
+          return (
+            <div key={dStr} className="flex items-center gap-3">
+              <div className="text-xs text-slate-400 w-32">
+                {d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
+              </div>
+              <div className="flex-1 flex items-center gap-2">
+                <span className="text-slate-500 text-sm">£</span>
+                <input type="number" step="0.01" value={forecasts[dStr]}
+                  onChange={e=>setForecasts(f=>({...f,[dStr]:e.target.value}))}
+                  placeholder="0.00" className={inputCls}/>
+              </div>
+            </div>
+          );
+        })}
+        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+          <span className="text-sm font-semibold text-slate-300">Week total</span>
+          <span className="text-lg font-black text-emerald-400">£{total.toFixed(2)}</span>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -7664,6 +8374,7 @@ export default function App() {
               availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
               schedules={schedules} shiftPresets={shiftPresets} onAddSchedule={addSchedule} onDeleteSchedule={deleteSchedule} onPublishWeek={handlePublishWeek}
               punchRecords={punchRecords} onUpdatePunchRecord={handleAmendPunch}
+              onUpdateBrand={updateBrand}
               isEmployee={false}
             />}
           </main>
