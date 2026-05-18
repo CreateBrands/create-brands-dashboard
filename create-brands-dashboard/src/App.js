@@ -19,6 +19,7 @@ import {
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
+  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, runFlipdishSync,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -1563,6 +1564,675 @@ function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
 }
 
 // ─── Dashboard View ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHAIN PERFORMANCE VIEW — Chocoberry HQ rollup dashboard
+// ═══════════════════════════════════════════════════════════════════════════════
+function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, flipdishSyncLog, entries, currentUser, onRefreshSync }) {
+  const [period,        setPeriod]        = useState("today");  // today | week | month | custom
+  const [customFrom,    setCustomFrom]    = useState("");
+  const [customTo,      setCustomTo]      = useState("");
+  const [ownerFilter,   setOwnerFilter]   = useState("all");    // all | owned | joint_venture | franchise
+  const [statusFilter,  setStatusFilter]  = useState("operational");
+  const [storeDetailId, setStoreDetailId] = useState(null);
+  const [sortBy,        setSortBy]        = useState("revenue"); // revenue | orders | atv | delta
+  const [syncing,       setSyncing]       = useState(false);
+  const [search,        setSearch]        = useState("");
+
+  // ── Period range ─────────────────────────────────────────────────────────
+  const now = new Date();
+  const today = new Date(now); today.setHours(0,0,0,0);
+  const toLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtPct = (n) => (n >= 0 ? "+" : "") + n.toFixed(0) + "%";
+
+  const { fromDate, toDate, prevFromDate, prevToDate, periodLabel } = useMemo(() => {
+    let from, to, prevFrom, prevTo, label;
+    const endOfToday = new Date(today); endOfToday.setHours(23,59,59,999);
+    if (period === "today") {
+      from = new Date(today); to = endOfToday; label = "today";
+      prevFrom = new Date(today); prevFrom.setDate(prevFrom.getDate() - 7);
+      prevTo = new Date(prevFrom); prevTo.setHours(23,59,59,999);
+    } else if (period === "week") {
+      from = new Date(today); from.setDate(from.getDate() - 6); to = endOfToday;
+      label = "last 7 days";
+      prevTo = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo); prevFrom.setDate(prevFrom.getDate() - 6); prevFrom.setHours(0,0,0,0);
+    } else if (period === "month") {
+      from = new Date(today); from.setDate(from.getDate() - 29); to = endOfToday;
+      label = "last 30 days";
+      prevTo = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo); prevFrom.setDate(prevFrom.getDate() - 29); prevFrom.setHours(0,0,0,0);
+    } else {
+      from = customFrom ? new Date(customFrom + "T00:00:00") : new Date(today);
+      to   = customTo   ? new Date(customTo   + "T23:59:59") : endOfToday;
+      label = `${customFrom} – ${customTo}`;
+      const span = to - from;
+      prevTo = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo.getTime() - span);
+    }
+    return { fromDate: from, toDate: to, prevFromDate: prevFrom, prevToDate: prevTo, periodLabel: label };
+  }, [period, customFrom, customTo, today.getTime()]);
+
+  // ── Filter orders to this period ─────────────────────────────────────────
+  const periodOrders = useMemo(() => flipdishOrders.filter(o => {
+    if (!o.orderPlacedTime) return false;
+    const t = new Date(o.orderPlacedTime);
+    return t >= fromDate && t <= toDate;
+  }), [flipdishOrders, fromDate.getTime(), toDate.getTime()]);
+
+  const prevOrders = useMemo(() => flipdishOrders.filter(o => {
+    if (!o.orderPlacedTime) return false;
+    const t = new Date(o.orderPlacedTime);
+    return t >= prevFromDate && t <= prevToDate;
+  }), [flipdishOrders, prevFromDate.getTime(), prevToDate.getTime()]);
+
+  // ── Map flipdish_store_id → physical store ───────────────────────────────
+  const fsToStore = useMemo(() => {
+    const map = {};
+    flipdishStores.forEach(fs => { map[fs.id] = { storeId: fs.storeId, channel: fs.channel }; });
+    return map;
+  }, [flipdishStores]);
+
+  // ── Filter visible stores by ownership + status ──────────────────────────
+  const visibleStores = useMemo(() => stores.filter(s => {
+    if (s.brandId !== "chocoberry") return false;
+    if (ownerFilter !== "all" && s.ownershipModel !== ownerFilter) return false;
+    if (statusFilter !== "all" && s.status !== statusFilter) return false;
+    if (search && !s.shortName?.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }), [stores, ownerFilter, statusFilter, search]);
+
+  // ── Per-store rollup ─────────────────────────────────────────────────────
+  const storeMetrics = useMemo(() => {
+    const init = (id) => ({ storeId: id, revenue: 0, orders: 0, items: 0, online: 0, pos: 0, extra: 0, prevRevenue: 0, prevOrders: 0 });
+    const m = {};
+    visibleStores.forEach(s => { m[s.id] = init(s.id); });
+
+    periodOrders.forEach(o => {
+      const link = fsToStore[o.flipdishStoreId];
+      if (!link?.storeId || !m[link.storeId]) return;
+      m[link.storeId].revenue += o.amountTotal || 0;
+      m[link.storeId].orders += 1;
+      m[link.storeId].items += o.itemCount || 0;
+      const ch = link.channel || "extra";
+      if (ch === "online") m[link.storeId].online += o.amountTotal || 0;
+      else if (ch === "pos") m[link.storeId].pos += o.amountTotal || 0;
+      else m[link.storeId].extra += o.amountTotal || 0;
+    });
+    prevOrders.forEach(o => {
+      const link = fsToStore[o.flipdishStoreId];
+      if (!link?.storeId || !m[link.storeId]) return;
+      m[link.storeId].prevRevenue += o.amountTotal || 0;
+      m[link.storeId].prevOrders += 1;
+    });
+    return m;
+  }, [visibleStores, periodOrders, prevOrders, fsToStore]);
+
+  // Sortable rows for the leaderboard
+  const leaderboard = useMemo(() => {
+    const rows = visibleStores.map(s => {
+      const m = storeMetrics[s.id] || { revenue: 0, orders: 0, items: 0, prevRevenue: 0, prevOrders: 0, online: 0, pos: 0, extra: 0 };
+      const atv = m.orders > 0 ? m.revenue / m.orders : 0;
+      const deltaPct = m.prevRevenue > 0 ? ((m.revenue - m.prevRevenue) / m.prevRevenue) * 100 : (m.revenue > 0 ? 100 : 0);
+      return { store: s, ...m, atv, deltaPct };
+    });
+    rows.sort((a, b) => {
+      if (sortBy === "revenue") return b.revenue - a.revenue;
+      if (sortBy === "orders")  return b.orders  - a.orders;
+      if (sortBy === "atv")     return b.atv     - a.atv;
+      if (sortBy === "delta")   return b.deltaPct - a.deltaPct;
+      return 0;
+    });
+    return rows;
+  }, [visibleStores, storeMetrics, sortBy]);
+
+  // ── Chain-level totals ───────────────────────────────────────────────────
+  const totals = useMemo(() => {
+    let revenue = 0, orders = 0, items = 0, online = 0, pos = 0, extra = 0;
+    let prevRevenue = 0, prevOrders = 0;
+    leaderboard.forEach(r => {
+      revenue += r.revenue; orders += r.orders; items += r.items;
+      online += r.online; pos += r.pos; extra += r.extra;
+      prevRevenue += r.prevRevenue; prevOrders += r.prevOrders;
+    });
+    const atv = orders > 0 ? revenue / orders : 0;
+    const prevAtv = prevOrders > 0 ? prevRevenue / prevOrders : 0;
+    const revDelta = prevRevenue > 0 ? ((revenue - prevRevenue) / prevRevenue) * 100 : (revenue > 0 ? 100 : 0);
+    const orderDelta = prevOrders > 0 ? ((orders - prevOrders) / prevOrders) * 100 : (orders > 0 ? 100 : 0);
+    const atvDelta = prevAtv > 0 ? ((atv - prevAtv) / prevAtv) * 100 : 0;
+    const activeStores = leaderboard.filter(r => r.orders > 0).length;
+    return { revenue, orders, items, atv, online, pos, extra, revDelta, orderDelta, atvDelta, activeStores };
+  }, [leaderboard]);
+
+  // ── Hour-of-day heatmap ──────────────────────────────────────────────────
+  const hourHeatmap = useMemo(() => {
+    const grid = Array.from({ length: 7 }, () => Array(24).fill(0));  // [dayOfWeek][hour] = order count
+    periodOrders.forEach(o => {
+      if (!o.orderPlacedTime) return;
+      const t = new Date(o.orderPlacedTime);
+      const dow = (t.getDay() + 6) % 7;  // Monday=0
+      grid[dow][t.getHours()] += 1;
+    });
+    return grid;
+  }, [periodOrders]);
+  const maxHourCount = useMemo(() => Math.max(1, ...hourHeatmap.flat()), [hourHeatmap]);
+
+  // ── Top items chain-wide ─────────────────────────────────────────────────
+  const topItems = useMemo(() => {
+    const tally = {};
+    periodOrders.forEach(o => {
+      (o.items || []).forEach(it => {
+        const name = it.Name || it.name || "Unknown";
+        const qty  = it.Quantity || it.quantity || 1;
+        const price = (it.Price || it.price || 0) * qty;
+        if (!tally[name]) tally[name] = { name, qty: 0, revenue: 0 };
+        tally[name].qty += qty;
+        tally[name].revenue += price;
+      });
+    });
+    return Object.values(tally).sort((a, b) => b.qty - a.qty).slice(0, 10);
+  }, [periodOrders]);
+
+  // ── EOD reconciliation: compare flipdish revenue vs eod_entries.net_sales ──
+  const reconciliation = useMemo(() => {
+    const fromStr = toLocalDate(fromDate);
+    const toStr   = toLocalDate(toDate);
+    const periodEod = entries.filter(e => e.date >= fromStr && e.date <= toStr);
+    const eodRevenue = periodEod.reduce((a, e) => a + (e.netSales || 0), 0);
+    const diff = totals.revenue - eodRevenue;
+    const diffPct = eodRevenue > 0 ? (diff / eodRevenue) * 100 : 0;
+    const ok = Math.abs(diffPct) <= 5;
+    return { eodRevenue, flipdishRevenue: totals.revenue, diff, diffPct, ok, eodCount: periodEod.length };
+  }, [entries, fromDate, toDate, totals.revenue]);
+
+  // ── Last sync indicator ──────────────────────────────────────────────────
+  const lastSync = flipdishSyncLog[0];
+  const lastSyncDate = lastSync?.finished_at ? new Date(lastSync.finished_at) : null;
+  const minsSinceSync = lastSyncDate ? Math.floor((Date.now() - lastSyncDate.getTime()) / 60000) : null;
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try { await onRefreshSync(); }
+    finally { setSyncing(false); }
+  };
+
+  // ── Open store detail modal ──────────────────────────────────────────────
+  const detailStore = storeDetailId ? stores.find(s => s.id === storeDetailId) : null;
+
+  return (
+    <div className="space-y-6">
+      {/* ── Header + filters ─────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white">Chain Performance</h2>
+          <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+            <span>Chocoberry · {visibleStores.length} {visibleStores.length === 1 ? "store" : "stores"}</span>
+            <span className="text-slate-700">·</span>
+            <span>{periodLabel}</span>
+            {minsSinceSync !== null && (
+              <>
+                <span className="text-slate-700">·</span>
+                <span className={minsSinceSync > 20 ? "text-amber-400" : "text-emerald-400"}>
+                  Synced {minsSinceSync}m ago
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={handleSync} disabled={syncing}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50">
+            {syncing ? "Syncing…" : <><RefreshCw size={13}/> Sync now</>}
+          </button>
+          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
+            <button onClick={()=>setPeriod("today")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${period==="today"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Today</button>
+            <button onClick={()=>setPeriod("week")}  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${period==="week" ?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>7d</button>
+            <button onClick={()=>setPeriod("month")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${period==="month"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>30d</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Top stat cards ───────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          label="Revenue"
+          value={fmtMoney(totals.revenue)}
+          sub={`${fmtPct(totals.revDelta)} vs prior · ${totals.orders} orders`}
+          icon={PoundSterling}
+          accent={totals.revDelta >= 0 ? "emerald" : "amber"}
+        />
+        <StatCard
+          label="Orders"
+          value={totals.orders.toLocaleString("en-GB")}
+          sub={`${fmtPct(totals.orderDelta)} vs prior`}
+          icon={ListChecks}
+          accent={totals.orderDelta >= 0 ? "emerald" : "amber"}
+        />
+        <StatCard
+          label="Avg Ticket"
+          value={fmtMoneyDec(totals.atv)}
+          sub={`${fmtPct(totals.atvDelta)} vs prior · ${totals.items} items`}
+          icon={ChefHat}
+          accent="sky"
+        />
+        <StatCard
+          label="Active stores"
+          value={`${totals.activeStores} / ${visibleStores.length}`}
+          sub={`${visibleStores.length - totals.activeStores} no orders this period`}
+          icon={Globe}
+          accent="indigo"
+        />
+      </div>
+
+      {/* ── Reconciliation banner: Flipdish vs EOD ───────────────────────── */}
+      {reconciliation.eodCount > 0 && (
+        <div className={`rounded-2xl border p-3 flex items-center gap-3 flex-wrap ${
+          reconciliation.ok
+            ? "bg-emerald-950/20 border-emerald-500/30"
+            : "bg-amber-950/30 border-amber-500/40"
+        }`}>
+          <div className={reconciliation.ok ? "text-emerald-400" : "text-amber-400"}>
+            {reconciliation.ok ? <CheckCircle size={18}/> : <AlertTriangle size={18}/>}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className={`text-sm font-bold ${reconciliation.ok ? "text-emerald-300" : "text-amber-300"}`}>
+              {reconciliation.ok
+                ? "Flipdish ↔ EOD reconciled"
+                : `Mismatch: Flipdish ${fmtPct(reconciliation.diffPct)} vs EOD reports`}
+            </div>
+            <div className="text-xs text-slate-400 mt-0.5">
+              Flipdish: {fmtMoney(reconciliation.flipdishRevenue)} · EOD: {fmtMoney(reconciliation.eodRevenue)} ({reconciliation.eodCount} reports) · Diff: {fmtMoneyDec(reconciliation.diff)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Filters bar ──────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SelectDropdown value={ownerFilter} onChange={setOwnerFilter} className="w-44">
+          <option value="all">All ownership</option>
+          <option value="owned">Owned only</option>
+          <option value="joint_venture">Joint venture</option>
+          <option value="franchise">Franchise</option>
+        </SelectDropdown>
+        <SelectDropdown value={statusFilter} onChange={setStatusFilter} className="w-40">
+          <option value="operational">Operational</option>
+          <option value="all">All statuses</option>
+          <option value="closed">Closed</option>
+          <option value="pre_opening">Pre-opening</option>
+          <option value="test">Test/System</option>
+        </SelectDropdown>
+        <input
+          type="search"
+          placeholder="Search store…"
+          value={search}
+          onChange={e=>setSearch(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-700 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none w-40"
+        />
+      </div>
+
+      {/* ── Store leaderboard table ──────────────────────────────────────── */}
+      <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-800/60 flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-sm font-bold text-white">Store leaderboard</h3>
+          <div className="text-xs text-slate-500">Click a row for details</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-900/60 border-b border-slate-800/40">
+              <tr>
+                <th className="text-left px-4 py-2 text-slate-500 font-semibold uppercase tracking-widest">Store</th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest cursor-pointer hover:text-white"
+                    onClick={()=>setSortBy("revenue")}>
+                  Revenue {sortBy==="revenue" && "↓"}
+                </th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest cursor-pointer hover:text-white"
+                    onClick={()=>setSortBy("orders")}>
+                  Orders {sortBy==="orders" && "↓"}
+                </th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest cursor-pointer hover:text-white"
+                    onClick={()=>setSortBy("atv")}>
+                  ATV {sortBy==="atv" && "↓"}
+                </th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest cursor-pointer hover:text-white"
+                    onClick={()=>setSortBy("delta")}>
+                  Δ {sortBy==="delta" && "↓"}
+                </th>
+                <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Channels</th>
+                <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Type</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leaderboard.length === 0 && (
+                <tr><td colSpan="7" className="text-center py-10 text-slate-500">No stores match the filters</td></tr>
+              )}
+              {leaderboard.map(r => {
+                const channelTotal = r.online + r.pos + r.extra;
+                const onlinePct = channelTotal > 0 ? (r.online / channelTotal) * 100 : 0;
+                const posPct    = channelTotal > 0 ? (r.pos / channelTotal) * 100 : 0;
+                const extraPct  = channelTotal > 0 ? (r.extra / channelTotal) * 100 : 0;
+                return (
+                  <tr key={r.store.id}
+                    onClick={()=>setStoreDetailId(r.store.id)}
+                    className="border-b border-slate-800/30 hover:bg-slate-800/40 cursor-pointer transition-colors">
+                    <td className="px-4 py-2.5">
+                      <div className="font-bold text-white">{r.store.shortName || r.store.name}</div>
+                      <div className="text-xs text-slate-500">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${
+                          r.store.status === "operational" ? "bg-emerald-500" :
+                          r.store.status === "closed" ? "bg-red-500" :
+                          r.store.status === "pre_opening" ? "bg-amber-500" :
+                          "bg-slate-600"
+                        }`}/>
+                        {r.store.status}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-white font-bold tabular-nums">{fmtMoney(r.revenue)}</td>
+                    <td className="px-3 py-2.5 text-right text-slate-300 tabular-nums">{r.orders.toLocaleString("en-GB")}</td>
+                    <td className="px-3 py-2.5 text-right text-slate-300 tabular-nums">{r.orders > 0 ? fmtMoneyDec(r.atv) : "—"}</td>
+                    <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${
+                      r.orders === 0 ? "text-slate-600" :
+                      r.deltaPct >= 5 ? "text-emerald-400" :
+                      r.deltaPct <= -5 ? "text-red-400" :
+                      "text-slate-400"
+                    }`}>{r.orders === 0 ? "—" : fmtPct(r.deltaPct)}</td>
+                    <td className="px-3 py-2.5">
+                      {channelTotal === 0 ? (
+                        <span className="text-slate-600">—</span>
+                      ) : (
+                        <div className="flex items-center gap-1 w-24">
+                          {onlinePct > 0 && <div className="h-2 rounded-sm bg-indigo-500" style={{ width: `${onlinePct}%` }} title={`Online ${onlinePct.toFixed(0)}%`}/>}
+                          {posPct > 0    && <div className="h-2 rounded-sm bg-emerald-500" style={{ width: `${posPct}%` }} title={`POS ${posPct.toFixed(0)}%`}/>}
+                          {extraPct > 0  && <div className="h-2 rounded-sm bg-slate-400" style={{ width: `${extraPct}%` }} title={`Extra ${extraPct.toFixed(0)}%`}/>}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                        r.store.ownershipModel === "owned" ? "bg-indigo-950/30 text-indigo-400" :
+                        r.store.ownershipModel === "joint_venture" ? "bg-sky-950/30 text-sky-400" :
+                        "bg-amber-950/30 text-amber-400"
+                      }`}>
+                        {r.store.ownershipModel === "joint_venture" ? "JV" : r.store.ownershipModel}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            {leaderboard.length > 0 && (
+              <tfoot className="bg-indigo-950/30 border-t border-indigo-500/30">
+                <tr>
+                  <td className="px-4 py-3 font-bold text-white">Chain total</td>
+                  <td className="px-3 py-3 text-right text-white font-black tabular-nums">{fmtMoney(totals.revenue)}</td>
+                  <td className="px-3 py-3 text-right text-white font-bold tabular-nums">{totals.orders.toLocaleString("en-GB")}</td>
+                  <td className="px-3 py-3 text-right text-white font-bold tabular-nums">{totals.orders > 0 ? fmtMoneyDec(totals.atv) : "—"}</td>
+                  <td className={`px-3 py-3 text-right font-bold tabular-nums ${totals.revDelta >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmtPct(totals.revDelta)}</td>
+                  <td colSpan="2"></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      {/* ── Two-column: heatmap + channel breakdown + top items ──────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        {/* Heatmap */}
+        <div className="lg:col-span-2 rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
+          <h3 className="text-sm font-bold text-white mb-3">When orders come in</h3>
+          <div className="text-xs text-slate-500 mb-3">Hourly order density across the chain · darker = busier</div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[500px]">
+              {/* Header */}
+              <div className="grid gap-0.5 mb-1" style={{ gridTemplateColumns: "32px repeat(24, 1fr)" }}>
+                <div></div>
+                {Array.from({length: 24}, (_, h) => (
+                  <div key={h} className="text-center text-xs text-slate-600 font-mono py-0.5">{h % 3 === 0 ? String(h).padStart(2,"0") : ""}</div>
+                ))}
+              </div>
+              {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((dow, i) => (
+                <div key={dow} className="grid gap-0.5 mb-0.5" style={{ gridTemplateColumns: "32px repeat(24, 1fr)" }}>
+                  <div className="text-xs text-slate-500 font-semibold pr-2 text-right py-1">{dow}</div>
+                  {hourHeatmap[i].map((count, h) => {
+                    const intensity = count / maxHourCount;
+                    return (
+                      <div key={h} className="rounded-sm h-5"
+                        style={{
+                          background: count === 0 ? "rgba(15,23,42,0.5)" : `rgba(99,102,241,${0.15 + intensity * 0.7})`,
+                        }}
+                        title={`${dow} ${String(h).padStart(2,"0")}:00 — ${count} orders`}/>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Channel split */}
+        <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Channel split</h3>
+          <div className="text-xs text-slate-500 mb-4">{periodLabel} revenue by source</div>
+          {totals.revenue === 0 ? (
+            <div className="text-sm text-slate-500 italic">No orders this period</div>
+          ) : (
+            <div className="space-y-3">
+              <ChannelRow label="Online" value={totals.online} total={totals.revenue} color="bg-indigo-500" textColor="text-indigo-400"/>
+              <ChannelRow label="In-store POS" value={totals.pos} total={totals.revenue} color="bg-emerald-500" textColor="text-emerald-400"/>
+              {totals.extra > 0 && <ChannelRow label="Other" value={totals.extra} total={totals.revenue} color="bg-slate-400" textColor="text-slate-300"/>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Top items table ──────────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-800/60">
+          <h3 className="text-sm font-bold text-white">Top items chain-wide</h3>
+          <div className="text-xs text-slate-500 mt-0.5">Bestsellers across all visible stores · {periodLabel}</div>
+        </div>
+        {topItems.length === 0 ? (
+          <div className="text-center py-8 text-slate-500 text-sm">No item data this period</div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="bg-slate-900/60 border-b border-slate-800/40">
+              <tr>
+                <th className="text-left px-4 py-2 text-slate-500 font-semibold uppercase tracking-widest w-8">#</th>
+                <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Item</th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Sold</th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Revenue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topItems.map((it, idx) => (
+                <tr key={it.name} className="border-b border-slate-800/30">
+                  <td className="px-4 py-2 text-slate-500 font-bold">{idx + 1}</td>
+                  <td className="px-3 py-2 text-white">{it.name}</td>
+                  <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{it.qty}</td>
+                  <td className="px-3 py-2 text-right text-emerald-400 font-semibold tabular-nums">{fmtMoney(it.revenue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Store detail modal ───────────────────────────────────────────── */}
+      {detailStore && (
+        <StoreDetailModal
+          store={detailStore}
+          flipdishStores={flipdishStores}
+          flipdishOrders={flipdishOrders}
+          fromDate={fromDate}
+          toDate={toDate}
+          periodLabel={periodLabel}
+          onClose={()=>setStoreDetailId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Channel breakdown row ─────────────────────────────────────────────────────
+function ChannelRow({ label, value, total, color, textColor }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-slate-400 font-semibold">{label}</span>
+        <span className={`${textColor} font-bold tabular-nums`}>£{value.toLocaleString("en-GB", { maximumFractionDigits: 0 })} <span className="text-slate-500 font-normal">{pct.toFixed(0)}%</span></span>
+      </div>
+      <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+        <div className={`h-full ${color}`} style={{ width: `${pct}%` }}/>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Per-store drill-down modal
+// ═══════════════════════════════════════════════════════════════════════════════
+function StoreDetailModal({ store, flipdishStores, flipdishOrders, fromDate, toDate, periodLabel, onClose }) {
+  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Flipdish stores for THIS physical store
+  const myFsIds = useMemo(() =>
+    flipdishStores.filter(fs => fs.storeId === store.id).map(fs => fs.id),
+  [flipdishStores, store.id]);
+
+  // Orders for THIS store in the period
+  const orders = useMemo(() => flipdishOrders.filter(o => {
+    if (!myFsIds.includes(o.flipdishStoreId)) return false;
+    const t = new Date(o.orderPlacedTime);
+    return t >= fromDate && t <= toDate;
+  }), [flipdishOrders, myFsIds, fromDate.getTime(), toDate.getTime()]);
+
+  const revenue = orders.reduce((a, o) => a + (o.amountTotal || 0), 0);
+  const atv = orders.length > 0 ? revenue / orders.length : 0;
+
+  // Daily revenue series
+  const daily = useMemo(() => {
+    const m = {};
+    orders.forEach(o => {
+      if (!o.orderPlacedTime) return;
+      const d = o.orderPlacedTime.slice(0, 10);
+      if (!m[d]) m[d] = { date: d, revenue: 0, orders: 0 };
+      m[d].revenue += o.amountTotal || 0;
+      m[d].orders += 1;
+    });
+    return Object.values(m).sort((a, b) => a.date.localeCompare(b.date));
+  }, [orders]);
+
+  // Top items at this store
+  const topItems = useMemo(() => {
+    const tally = {};
+    orders.forEach(o => {
+      (o.items || []).forEach(it => {
+        const name = it.Name || it.name || "Unknown";
+        const qty = it.Quantity || it.quantity || 1;
+        if (!tally[name]) tally[name] = { name, qty: 0 };
+        tally[name].qty += qty;
+      });
+    });
+    return Object.values(tally).sort((a, b) => b.qty - a.qty).slice(0, 8);
+  }, [orders]);
+
+  // Channel breakdown for this store
+  const channels = useMemo(() => {
+    const m = { online: 0, pos: 0, extra: 0 };
+    orders.forEach(o => {
+      const fs = flipdishStores.find(f => f.id === o.flipdishStoreId);
+      const ch = fs?.channel || "extra";
+      if (ch === "online") m.online += o.amountTotal || 0;
+      else if (ch === "pos") m.pos += o.amountTotal || 0;
+      else m.extra += o.amountTotal || 0;
+    });
+    return m;
+  }, [orders, flipdishStores]);
+
+  return (
+    <Modal title={store.shortName || store.name} onClose={onClose} maxW="max-w-3xl"
+      footer={<button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Close</button>}>
+      <div className="space-y-4">
+        <div className="text-xs text-slate-400">{periodLabel} · {store.status} · {store.ownershipModel}</div>
+
+        {/* Top metrics */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-slate-800/60 rounded-xl p-3">
+            <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Revenue</div>
+            <div className="text-xl font-black text-white tabular-nums mt-1">{fmtMoney(revenue)}</div>
+          </div>
+          <div className="bg-slate-800/60 rounded-xl p-3">
+            <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Orders</div>
+            <div className="text-xl font-black text-white tabular-nums mt-1">{orders.length}</div>
+          </div>
+          <div className="bg-slate-800/60 rounded-xl p-3">
+            <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Avg ticket</div>
+            <div className="text-xl font-black text-white tabular-nums mt-1">{orders.length > 0 ? fmtMoneyDec(atv) : "—"}</div>
+          </div>
+        </div>
+
+        {/* Daily revenue mini-chart (sparkline-style bars) */}
+        {daily.length > 0 && (
+          <div>
+            <div className="text-xs text-slate-400 font-semibold mb-2">Daily revenue</div>
+            <div className="flex items-end gap-1 h-24 bg-slate-800/40 rounded-xl p-3">
+              {daily.map(d => {
+                const maxRev = Math.max(...daily.map(x => x.revenue), 1);
+                const h = (d.revenue / maxRev) * 100;
+                return (
+                  <div key={d.date} className="flex-1 flex flex-col items-center gap-1" title={`${d.date}: ${fmtMoney(d.revenue)} (${d.orders} orders)`}>
+                    <div className="w-full bg-indigo-500 rounded-t" style={{ height: `${h}%`, minHeight: "2px" }}/>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between text-xs text-slate-600 mt-1">
+              <span>{daily[0]?.date}</span>
+              <span>{daily[daily.length - 1]?.date}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Channels */}
+        <div>
+          <div className="text-xs text-slate-400 font-semibold mb-2">Channel split</div>
+          <div className="space-y-2">
+            {channels.online > 0 && <ChannelRow label="Online" value={channels.online} total={revenue} color="bg-indigo-500" textColor="text-indigo-400"/>}
+            {channels.pos    > 0 && <ChannelRow label="In-store POS" value={channels.pos} total={revenue} color="bg-emerald-500" textColor="text-emerald-400"/>}
+            {channels.extra  > 0 && <ChannelRow label="Other" value={channels.extra} total={revenue} color="bg-slate-400" textColor="text-slate-300"/>}
+          </div>
+        </div>
+
+        {/* Top items */}
+        {topItems.length > 0 && (
+          <div>
+            <div className="text-xs text-slate-400 font-semibold mb-2">Top items</div>
+            <div className="space-y-1">
+              {topItems.map((it, idx) => (
+                <div key={it.name} className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-slate-800/40">
+                  <span className="text-xs text-slate-500 font-bold w-5">{idx + 1}</span>
+                  <span className="text-sm text-white flex-1 truncate">{it.name}</span>
+                  <span className="text-sm font-bold text-emerald-400 tabular-nums">×{it.qty}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Linked Flipdish IDs */}
+        <div className="text-xs text-slate-500">
+          Linked Flipdish stores: {myFsIds.length === 0 ? "none" : myFsIds.join(", ")}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+
 function DashboardView({ brands, entries, issues }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
@@ -8317,6 +8987,10 @@ export default function App() {
   const [schedules,       setSchedules]      = useState([]);
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
+  const [stores,            setStores]            = useState([]);
+  const [flipdishStores,    setFlipdishStores]    = useState([]);
+  const [flipdishOrders,    setFlipdishOrders]    = useState([]);
+  const [flipdishSyncLog,   setFlipdishSyncLog]   = useState([]);
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
   const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
@@ -8339,13 +9013,15 @@ export default function App() {
       fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(),
       fetchAuditTrail(), fetchHelpdeskTickets(), fetchInboxMessages(),
       fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches]) => {
+      fetchStores(), fetchFlipdishStores(), fetchFlipdishOrders(), fetchFlipdishSyncLog(),
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fo, fsl]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
       setChecklistStates(cs || {});
       setAuditTrail(at); setHdTickets(hd); setMessages(msgs); setAvailability(avail);
       setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
+      setStores(st); setFlipdishStores(fs); setFlipdishOrders(fo); setFlipdishSyncLog(fsl);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -8510,6 +9186,19 @@ export default function App() {
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
   const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
   const handleAmendPunch = useCallback(async record=>{try{const saved=await upsertPunchRecord(record);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
+
+  const handleFlipdishSync = useCallback(async () => {
+    try {
+      showToast("Starting Flipdish sync…");
+      await runFlipdishSync({});  // default: last 7 days
+      // refresh local state with new data
+      const [fo, fsl] = await Promise.all([fetchFlipdishOrders(), fetchFlipdishSyncLog()]);
+      setFlipdishOrders(fo); setFlipdishSyncLog(fsl);
+      showToast("Sync complete");
+    } catch (err) {
+      showToast("Sync failed: " + err.message, "error");
+    }
+  }, [showToast]);
   const handleAddPunchComment = useCallback(async (recordId, comment) => {
     try {
       const saved = await addPunchOvertimeComment(recordId, comment);
@@ -8589,8 +9278,9 @@ export default function App() {
   const NAV_GROUPS = [
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
+      { key: "chain",       label: "Chain Performance", icon: Globe },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
-      { key: "ops-network", label: "Ops Overview",  icon: Globe },
+      { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
     { group: "TODAY", items: [
       { key: "ops-tasks",      label: "Today's Tasks",   icon: CheckSquare },
@@ -8616,7 +9306,7 @@ export default function App() {
     ]},
   ];
 
-  const titles = { dashboard:"Executive Dashboard", tactical:"Performance", eod:"EOD Report",
+  const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
     "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
@@ -8664,6 +9354,7 @@ export default function App() {
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
             {activeView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
+            {activeView === "chain"           && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishOrders={flipdishOrders} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {activeView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
             {activeView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}

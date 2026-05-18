@@ -731,3 +731,120 @@ export async function addPunchOvertimeComment(recordId, comment) {
   if (error) throw error;
   return dbPunchToApp(data);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// STORES + FLIPDISH HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+
+function dbStoreToApp(s) {
+  return {
+    id:               s.id,
+    brandId:          s.brand_id,
+    flipdishStoreId:  s.flipdish_store_id,
+    name:             s.name,
+    shortName:        s.short_name,
+    ownershipModel:   s.ownership_model,
+    franchiseeName:   s.franchisee_name,
+    status:           s.status,
+    address:          s.address,
+    city:             s.city,
+    postcode:         s.postcode,
+    country:          s.country,
+    latitude:         s.latitude,
+    longitude:        s.longitude,
+    openedDate:       s.opened_date,
+    phone:            s.phone,
+    email:            s.email,
+    notes:            s.notes,
+    metadata:         s.metadata,
+    createdAt:        s.created_at,
+    updatedAt:        s.updated_at,
+  };
+}
+
+function dbFlipdishOrderToApp(o) {
+  return {
+    id:                 o.id,
+    flipdishStoreId:    o.store_id,
+    brandId:            o.brand_id,
+    state:              o.state,
+    paymentAccountType: o.payment_account_type,
+    orderPlacedTime:    o.order_placed_time,
+    requestedForTime:   o.requested_for_time,
+    acceptedTime:       o.accepted_time,
+    channel:            o.channel,            // online | pos | extra (from flipdish_stores)
+    customerName:       o.customer_name,
+    customerId:         o.customer_id,
+    customerPhone:      o.customer_phone,
+    orderType:          o.order_type,
+    amountTotal:        o.amount_total ? parseFloat(o.amount_total) : 0,
+    amountSubtotal:     o.amount_subtotal ? parseFloat(o.amount_subtotal) : 0,
+    amountTax:          o.amount_tax ? parseFloat(o.amount_tax) : 0,
+    amountTip:          o.amount_tip ? parseFloat(o.amount_tip) : 0,
+    amountDelivery:     o.amount_delivery ? parseFloat(o.amount_delivery) : 0,
+    amountVoucher:      o.amount_voucher ? parseFloat(o.amount_voucher) : 0,
+    amountServiceFee:   o.amount_service_fee ? parseFloat(o.amount_service_fee) : 0,
+    itemCount:          o.item_count || 0,
+    uniqueItemCount:    o.unique_item_count || 0,
+    items:              o.items || [],
+    voucher:            o.voucher,
+    deliveryLocation:   o.delivery_location,
+  };
+}
+
+function dbFlipdishStoreToApp(s) {
+  return {
+    id:        s.id,
+    storeId:   s.store_id,
+    brandId:   s.brand_id,
+    name:      s.name,
+    channel:   s.channel,
+    currency:  s.currency,
+    isActive:  s.is_active,
+    menuId:    s.menu_id,
+  };
+}
+
+export async function fetchStores() {
+  const { data, error } = await supabase.from("stores").select("*").order("short_name");
+  if (error) throw error;
+  return (data || []).map(dbStoreToApp);
+}
+
+export async function fetchFlipdishStores() {
+  const { data, error } = await supabase.from("flipdish_stores").select("*");
+  if (error) throw error;
+  return (data || []).map(dbFlipdishStoreToApp);
+}
+
+// Pull flipdish orders for a date window — defaults to last 30 days
+export async function fetchFlipdishOrders({ from, to, limit = 5000 } = {}) {
+  const fromDate = from || new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const toDate   = to   || new Date().toISOString();
+  const { data, error } = await supabase
+    .from("flipdish_orders")
+    .select("*")
+    .gte("order_placed_time", fromDate)
+    .lte("order_placed_time", toDate)
+    .order("order_placed_time", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data || []).map(dbFlipdishOrderToApp);
+}
+
+export async function fetchFlipdishSyncLog(limit = 10) {
+  const { data, error } = await supabase
+    .from("flipdish_sync_log")
+    .select("*")
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+// Trigger a manual flipdish sync from the UI
+export async function runFlipdishSync(body = {}) {
+  const { data, error } = await supabase.functions.invoke("flipdish-sync", { body });
+  if (error) throw error;
+  return data;
+}
