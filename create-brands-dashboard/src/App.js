@@ -7263,6 +7263,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
   const [rejectOTModal,  setRejectOTModal]  = useState(null);
   const [addManualModal, setAddManualModal] = useState(false);
   const [photoModal,     setPhotoModal]     = useState(null);
+  const [expanded,       setExpanded]       = useState(new Set());  // record ids that are expanded
+  const toggleExpanded = (id) => setExpanded(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const { from, to } = getWeekBounds(weekOffset);
 
@@ -7408,7 +7410,41 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
             const member = opsTeam.find(m => m.id === r.employeeId);
             const hasOT  = r.overtimeHrs > 0;
             const needsApproval = r.status === "closed" && !r.approved;
-            const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved;
+            const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
+            const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
+            // A record is "settled" when there's nothing left to action:
+            //   - punch is approved AND
+            //   - either no overtime OR overtime has been approved/rejected
+            const isSettled = r.approved && (!hasOT || r.overtimeApproved || isRejected) && r.status !== "open";
+            const isExpanded = expanded.has(r.id);
+
+            // ── Collapsed view for settled records ──
+            if (isSettled && !isExpanded) {
+              return (
+                <div key={r.id}
+                  onClick={()=>toggleExpanded(r.id)}
+                  className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900/40 border border-slate-800/40 hover:bg-slate-900/60 cursor-pointer transition-colors">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-600/30 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">
+                    {(member?.firstName?.[0]||"?")}{member?.lastName?.[0]||""}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-white truncate">{r.employeeName}</div>
+                    <div className="text-xs text-slate-500">
+                      {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
+                      {brand && <> · <span style={{color:brand.color}}>{brand.name}</span></>}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                    {r.grossPay && <div className="text-xs text-emerald-400 tabular-nums">£{r.grossPay.toFixed(2)}</div>}
+                  </div>
+                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">OT ✓</span>}
+                  {isRejected && <span className="text-xs text-red-400 font-semibold flex-shrink-0">OT ✗</span>}
+                  {!hasOT && r.approved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">✓</span>}
+                  <ChevronDown size={14} className="text-slate-600 flex-shrink-0"/>
+                </div>
+              );
+            }
             return (
               <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
                 needsApproval || needsOTApproval ? "bg-amber-950/20 border-amber-500/30" :
@@ -7446,6 +7482,9 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                       <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve</button>
                     )}
                     <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
+                    {isSettled && (
+                      <button onClick={()=>toggleExpanded(r.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Collapse"><ChevronUp size={13}/></button>
+                    )}
                   </div>
                 </div>
 
@@ -7901,6 +7940,8 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
 
   const [weekOffset,    setWeekOffset]   = useState(0);
   const [reasonInputs,  setReasonInputs] = useState({});
+  const [expanded,      setExpanded]     = useState(new Set());
+  const toggleExpanded  = (id) => setExpanded(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const { from, to } = getWeekBounds(weekOffset);
 
@@ -7983,25 +8024,41 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
         {enriched.map(r => {
           const hasOT       = r.overtimeHrs > 0;
           const needsReason = (hasOT || r.isUnscheduled) && !r.overtimeReason;
-          const awaitingApproval = (hasOT || r.isUnscheduled) && r.overtimeReason && !r.overtimeApproved;
-          const rejected    = r.overtimeApproved === false && r.overtimeReason && r.overtimeRejectedReason;
-          const needsAttention = needsReason || awaitingApproval || rejected || hasOT || r.isUnscheduled || r.status === "open";
-          // ── Compact mode: single-line summary when nothing needs attention ──
-          if (!needsAttention) {
+          const awaitingApproval = (hasOT || r.isUnscheduled) && r.overtimeReason && !r.overtimeApproved && !r.overtimeRejectedReason;
+          const rejected    = r.overtimeApproved === false && !!r.overtimeRejectedReason;
+          // Needs attention from employee:
+          //   - needsReason (haven't given one yet)
+          //   - awaitingApproval (in active conversation — they may want to add a follow-up)
+          //   - currently clocked in
+          // Settled (collapsible):
+          //   - rejected (decided, employee can't change it)
+          //   - approved OT (decided positively)
+          //   - normal record with no OT
+          const needsAttention = needsReason || awaitingApproval || r.status === "open";
+          const isExpanded = expanded.has(r.id);
+
+          // ── Collapsed view ──
+          if (!needsAttention && !isExpanded) {
             return (
-              <div key={r.id} className="flex items-center justify-between gap-3 bg-slate-900/40 border border-slate-800/40 rounded-xl px-4 py-2.5">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="text-xs font-semibold text-slate-400 w-16 flex-shrink-0">
-                    {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}
+              <div key={r.id}
+                onClick={()=>toggleExpanded(r.id)}
+                className="flex items-center justify-between gap-3 bg-slate-900/40 border border-slate-800/40 rounded-xl px-4 py-2.5 hover:bg-slate-900/60 cursor-pointer transition-colors">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-slate-400 w-20 flex-shrink-0">
+                    {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                   </div>
-                  <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                  <div className="text-sm font-bold text-white tabular-nums flex-shrink-0">{fmtDur(r.hoursWorked)}</div>
+                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold">+ OT approved</span>}
+                  {rejected && <span className="text-xs text-slate-500 font-semibold">OT not approved</span>}
                 </div>
-                {r.approved && <span className="text-xs text-emerald-400 font-semibold">✓ Approved</span>}
-                {!r.approved && <span className="text-xs text-amber-400 font-semibold">Pending</span>}
+                {r.approved && !rejected && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">✓</span>}
+                {!r.approved && <span className="text-xs text-amber-400 font-semibold flex-shrink-0">Pending</span>}
+                <ChevronDown size={14} className="text-slate-600 flex-shrink-0"/>
               </div>
             );
           }
-          // ── Expanded mode: full card when there's something to act on ──
+
+          // ── Expanded mode ──
           return (
             <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
               needsReason   ? "bg-red-950/20 border-red-500/30" :
@@ -8018,6 +8075,9 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   {r.approved && !hasOT && <Badge label="✓ Approved" color="emerald"/>}
                   {!r.approved && r.status === "closed" && !hasOT && <Badge label="Pending approval" color="amber"/>}
                   {r.status === "open" && <Badge label="Clocked in" color="amber"/>}
+                  {!needsAttention && isExpanded && (
+                    <button onClick={()=>toggleExpanded(r.id)} className="p-1 rounded-lg bg-slate-800/60 text-slate-400 hover:text-white transition-colors" title="Collapse"><ChevronUp size={13}/></button>
+                  )}
                 </div>
               </div>
 
