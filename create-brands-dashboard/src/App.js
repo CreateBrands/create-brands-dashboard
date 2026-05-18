@@ -35,8 +35,32 @@ import {
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
-  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign
+  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign,
+  Globe, FileText, ChefHat, PoundSterling
 } from "lucide-react";
+
+// ─── Global font + style injection ────────────────────────────────────────────
+// Runs once per page load. Adds Inter from Google Fonts + a few base style overrides.
+if (typeof document !== "undefined" && !document.getElementById("cb-global-style")) {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap";
+  document.head.appendChild(link);
+  const style = document.createElement("style");
+  style.id = "cb-global-style";
+  style.textContent = `
+    html, body, #root { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-feature-settings: "cv11", "ss01", "ss03"; }
+    /* Tabular numerals globally on times, money, hours, percentages */
+    .tabular-nums, [class*="font-mono"] { font-variant-numeric: tabular-nums; }
+    /* Tighter heading rendering */
+    h1, h2, h3, h4 { letter-spacing: -0.01em; }
+    /* Smoother scrollbars in chrome panels */
+    *::-webkit-scrollbar { width: 8px; height: 8px; }
+    *::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 4px; }
+    *::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.4); }
+  `;
+  document.head.appendChild(style);
+}
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
 const AuthContext = createContext(null);
@@ -174,15 +198,37 @@ function RoleBadge({ role }) {
   return role === "owner" ? <Badge label="Owner" color="violet" /> : <Badge label="Manager" color="indigo" />;
 }
 
+// ─── Reusable Empty State ─────────────────────────────────────────────────────
+function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate" }) {
+  const accents = {
+    slate: "text-slate-500",
+    indigo: "text-indigo-400",
+    emerald: "text-emerald-400",
+    amber: "text-amber-400",
+    sky: "text-sky-400",
+  };
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-12 px-6">
+      <div className={`w-14 h-14 rounded-2xl bg-slate-900/60 border border-slate-800/60 flex items-center justify-center mb-4 ${accents[accent]}`}>
+        <Icon size={24}/>
+      </div>
+      <div className="text-base font-bold text-white mb-1">{title}</div>
+      {message && <div className="text-sm text-slate-400 max-w-sm">{message}</div>}
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, icon: Icon, accent = "indigo", alert = false }) {
   const accents = {
     indigo: "from-indigo-600/20 to-indigo-600/5 border-indigo-500/30",
     emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-500/30",
     amber: "from-amber-600/20 to-amber-600/5 border-amber-500/30",
     red: "from-red-600/20 to-red-600/5 border-red-500/30",
+    sky: "from-sky-600/20 to-sky-600/5 border-sky-500/30",
     slate: "from-slate-700/40 to-slate-700/10 border-slate-600/30",
   };
-  const iconColors = { indigo: "text-indigo-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-red-400", slate: "text-slate-400" };
+  const iconColors = { indigo: "text-indigo-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-red-400", sky: "text-sky-400", slate: "text-slate-400" };
   const eff = alert ? "red" : accent;
   return (
     <div className={`rounded-2xl bg-gradient-to-br ${accents[eff]} border p-5 flex flex-col gap-2`}>
@@ -190,7 +236,7 @@ function StatCard({ label, value, sub, icon: Icon, accent = "indigo", alert = fa
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
         {Icon && <Icon size={16} className={iconColors[eff]} />}
       </div>
-      <div className="text-2xl font-bold text-white">{value}</div>
+      <div className="text-2xl font-bold text-white tabular-nums">{value}</div>
       {sub && <div className="text-xs text-slate-400">{sub}</div>}
     </div>
   );
@@ -1554,10 +1600,17 @@ function DashboardView({ brands, entries, issues }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Revenue" value={todayAgg ? fmtCurrency(todayAgg.netSales) : "No Data"} sub={`${todayEntries.length} reports`} icon={DollarSign} accent="indigo" />
-        <StatCard label="Prime Cost %" value={useLatest ? fmtPct(useLatest.primeCost) : "—"} sub="Labour + COGS" icon={Activity} accent={useLatest && useLatest.primeCost > 60 ? "red" : "emerald"} alert={useLatest && useLatest.primeCost > 60} />
+        <StatCard label="Today's Revenue" value={todayAgg ? fmtCurrency(todayAgg.netSales) : "No Data"} sub={`${todayEntries.length} reports`} icon={PoundSterling} accent="indigo" />
+        <StatCard label="Wage Cost %" value={useLatest ? fmtPct(useLatest.laborPct) : "—"} sub={useLatest && useLatest.laborPct > 35 ? "Above target (35%)" : "On target (≤35%)"} icon={Users} accent={useLatest && useLatest.laborPct > 35 ? "amber" : "emerald"} alert={useLatest && useLatest.laborPct > 40} />
+        <StatCard label="Prime Cost %" value={useLatest ? fmtPct(useLatest.primeCost) : "—"} sub="Labour + COGS" icon={Activity} accent={useLatest && useLatest.primeCost > 60 ? "red" : "emerald"} alert={useLatest && useLatest.primeCost > 65} />
+        <StatCard label="Avg Spend / Cover" value={useLatest && useLatest.atv > 0 ? fmtCurrency(useLatest.atv) : "—"} sub={useLatest ? `${fmtNum(useLatest.totalOrders)} covers` : "Average ticket"} icon={ChefHat} accent="sky" />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="SPLH" value={useLatest ? fmtSPLH(useLatest.splh) : "—"} sub="Sales per labour hr · target ≥£8" icon={Zap} accent={useLatest && useLatest.splh >= 8 ? "emerald" : useLatest && useLatest.splh >= 5 ? "amber" : "red"} />
+        <StatCard label="Net Margin" value={useLatest ? fmtPct(useLatest.netMargin) : "—"} sub="After labour + COGS" icon={TrendingUp} accent={useLatest && useLatest.netMargin >= 15 ? "emerald" : "amber"} />
+        <StatCard label="Labour Hours" value={useLatest ? `${useLatest.totalHours.toFixed(0)}h` : "—"} sub="This week" icon={Clock} accent="indigo" />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
-        <StatCard label="SPLH" value={useLatest ? fmtSPLH(useLatest.splh) : "—"} sub="Sales per labour hr" icon={Zap} accent="amber" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -7262,16 +7315,35 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
   return (
     <div className="space-y-5">
+      {/* Top stats strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Hours worked</div>
+          <div className="text-xl font-black text-white mt-1 tabular-nums">{totalHours.toFixed(1)}<span className="text-base text-slate-500 font-bold ml-1">h</span></div>
+          <div className="text-xs text-slate-500 mt-0.5">this week</div>
+        </div>
+        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Total pay</div>
+          <div className="text-xl font-black text-emerald-400 mt-1 tabular-nums">£{totalPay.toFixed(2)}</div>
+          <div className="text-xs text-slate-500 mt-0.5">incl. approved OT</div>
+        </div>
+        <div className={`bg-slate-900/60 border rounded-2xl p-3 ${pendingApproval > 0 ? "border-amber-500/30" : "border-slate-800/60"}`}>
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Pending approval</div>
+          <div className={`text-xl font-black mt-1 tabular-nums ${pendingApproval > 0 ? "text-amber-400" : "text-white"}`}>{pendingApproval}</div>
+          <div className="text-xs text-slate-500 mt-0.5">{pendingApproval === 1 ? "record" : "records"}</div>
+        </div>
+        <div className={`bg-slate-900/60 border rounded-2xl p-3 ${pendingOT > 0 ? "border-red-500/30" : "border-slate-800/60"}`}>
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Overtime to review</div>
+          <div className={`text-xl font-black mt-1 tabular-nums ${pendingOT > 0 ? "text-red-400" : "text-white"}`}>{pendingOT}</div>
+          <div className="text-xs text-slate-500 mt-0.5">awaiting decision</div>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-base font-bold text-white">Time & Attendance</h2>
-          <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5 flex-wrap">
-            <span>{totalHours.toFixed(1)} hrs</span>
-            <span className="text-emerald-400">£{totalPay.toFixed(2)} pay</span>
-            {pendingApproval > 0 && <span className="text-amber-400 font-semibold">⚠ {pendingApproval} pending approval</span>}
-            {pendingOT > 0 && <span className="text-red-400 font-semibold">⏱ {pendingOT} overtime pending</span>}
-          </div>
+          <div className="text-xs text-slate-500 mt-0.5">Approve hours, review overtime, and amend records</div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={()=>setAddManualModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"><Plus size={13}/> Manual Entry</button>
@@ -7305,10 +7377,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
       {tab === "records" && (
         <div className="space-y-3">
           {enriched.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-              <Clock size={32} className="mb-3 text-slate-700"/>
-              <div className="text-sm font-semibold">No records this week</div>
-            </div>
+            <EmptyState icon={Clock} title="No clock-in records this week"
+              message="Once your team starts clocking in at the kiosk, records will appear here for you to approve. You can also add hours manually using the button above."/>
           )}
           {enriched.map(r => {
             const brand  = brands.find(b => b.id === r.brandId);
@@ -7870,10 +7940,8 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
       </div>
 
       {enriched.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12 text-slate-500">
-          <Clock size={28} className="mb-2 text-slate-700"/>
-          <div className="text-sm font-semibold">No records this week</div>
-        </div>
+        <EmptyState icon={Clock} title="No hours this week"
+          message="Once you clock in at the kiosk, your shifts will appear here. You'll also be prompted to give a reason for any overtime or unscheduled shifts."/>
       )}
 
       <div className="space-y-3">
@@ -7882,6 +7950,23 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
           const needsReason = (hasOT || r.isUnscheduled) && !r.overtimeReason;
           const awaitingApproval = (hasOT || r.isUnscheduled) && r.overtimeReason && !r.overtimeApproved;
           const rejected    = r.overtimeApproved === false && r.overtimeReason && r.overtimeRejectedReason;
+          const needsAttention = needsReason || awaitingApproval || rejected || hasOT || r.isUnscheduled || r.status === "open";
+          // ── Compact mode: single-line summary when nothing needs attention ──
+          if (!needsAttention) {
+            return (
+              <div key={r.id} className="flex items-center justify-between gap-3 bg-slate-900/40 border border-slate-800/40 rounded-xl px-4 py-2.5">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="text-xs font-semibold text-slate-400 w-16 flex-shrink-0">
+                    {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}
+                  </div>
+                  <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                </div>
+                {r.approved && <span className="text-xs text-emerald-400 font-semibold">✓ Approved</span>}
+                {!r.approved && <span className="text-xs text-amber-400 font-semibold">Pending</span>}
+              </div>
+            );
+          }
+          // ── Expanded mode: full card when there's something to act on ──
           return (
             <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
               needsReason   ? "bg-red-950/20 border-red-500/30" :
@@ -7905,7 +7990,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
               <div className="bg-slate-800/60 rounded-xl p-3">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-semibold text-slate-400">Hours worked</div>
-                  <div className="text-lg font-black text-white">{fmtDur(r.hoursWorked)}</div>
+                  <div className="text-lg font-black text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
                 </div>
               </div>
 
@@ -8139,6 +8224,13 @@ export default function App() {
 
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type }); setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  // Live clock for topbar (ticks every 30s, no need for second precision in topbar)
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -8397,26 +8489,30 @@ export default function App() {
 
   const NAV_GROUPS = [
     { group: "OVERVIEW", items: [
-      { key: "dashboard",  label: "Dashboard",   icon: BarChart2 },
-      { key: "tactical",   label: "Performance", icon: TrendingUp },
+      { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
+      { key: "tactical",    label: "Performance",   icon: TrendingUp },
+      { key: "ops-network", label: "Ops Overview",  icon: Globe },
     ]},
-    { group: "DAILY OPS", items: [
-      { key: "ops-tasks",      label: "Today's Tasks",  icon: CheckSquare },
-      { key: "eod",            label: "EOD Report",      icon: ScrollText },
+    { group: "TODAY", items: [
+      { key: "ops-tasks",      label: "Today's Tasks",   icon: CheckSquare },
       { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
       { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
-      { key: "ops-network",    label: "Ops Overview",    icon: Building2 },
-      { key: "ops-compliance", label: "Compliance",      icon: Shield },
+      { key: "eod",            label: "EOD Report",      icon: FileText },
     ]},
-    { group: "TEAM", items: [
-      { key: "comms",   label: "Communication", icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
-      { key: "issues",  label: "Issues",         icon: AlertTriangle,  badge: openIssueCount > 0 ? openIssueCount.toString() : null },
-    ]},
-    { group: "SETTINGS", items: [
+    { group: "PEOPLE", items: [
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
-      { key: "ops-assigns",  label: "Assignments",        icon: Clipboard },
-      { key: "ops-settings", label: "Ops Setup",          icon: Settings },
-      { key: "ops-audit",    label: "Audit Trail",        icon: ScrollText },
+      { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
+      { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
+    ]},
+    { group: "MAINTENANCE", items: [
+      { key: "issues",  label: "Issues",  icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+    ]},
+    { group: "COMPLIANCE", items: [
+      { key: "ops-compliance", label: "Compliance",  icon: Shield },
+      { key: "ops-audit",      label: "Audit Trail", icon: ScrollText },
+    ]},
+    { group: "SETUP", items: [
+      { key: "ops-settings", label: "Ops Setup", icon: Settings },
       ...(currentUser.role === "owner" ? [{ key: "admin", label: "Admin", icon: Users }] : []),
     ]},
   ];
@@ -8444,11 +8540,24 @@ export default function App() {
           <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
             <div>
               <h1 className="text-sm font-bold text-white">{titles[activeView] || activeView}</h1>
-              <div className="text-xs text-slate-500 mt-0.5">
-                {new Date().toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"long",year:"numeric"})}
+              <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
+                <span>{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</span>
+                <span className="text-slate-700">·</span>
+                <span className="tabular-nums font-semibold text-slate-400">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</span>
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {(() => {
+                // Show how many staff are currently clocked in across visible brands
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+                const onShift = punchRecords.filter(p => visibleBrands.some(b=>b.id===p.brandId) && p.date === todayStr && p.status === "open").length;
+                return onShift > 0 ? (
+                  <div className="flex items-center gap-1.5 text-xs text-indigo-300 font-semibold bg-indigo-950/40 border border-indigo-500/30 rounded-full px-2.5 py-0.5">
+                    <UserCheck size={12}/>
+                    <span className="tabular-nums">{onShift}</span> on shift
+                  </div>
+                ) : null;
+              })()}
               <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
               {inboxUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{inboxUnread} unread</div>}
             </div>
