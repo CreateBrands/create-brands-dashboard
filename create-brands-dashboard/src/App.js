@@ -5339,7 +5339,7 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
 }
 
 // ── Shift Form Modal (uses custom presets) ────────────────────────────────────
-function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, currentUser, onSave, onDelete, onClose }) {
+function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, schedules = [], currentUser, onSave, onDelete, onClose }) {
   const isEdit = !!slot;
   const brandPresets = shiftPresets.filter(p => p.brandId === brandId);
 
@@ -5348,6 +5348,7 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
   const [startTime,  setStartTime]  = useState(slot?.startTime || brandPresets[0]?.startTime || "08:00");
   const [endTime,    setEndTime]    = useState(slot?.endTime   || brandPresets[0]?.endTime   || "16:00");
   const [notes,      setNotes]      = useState(slot?.notes || "");
+  const [copyDays,   setCopyDays]   = useState(new Set());  // YYYY-MM-DD strings of additional days to clone to
 
   const brandMembers = opsTeam.filter(m => {
     if (m.brandId !== brandId) return false;
@@ -5375,16 +5376,36 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
   const isUnavailable = memberAvail.some(a => !a.available);
   const availWindow   = memberAvail.find(a => a.available);
 
+  // ── Conflict detection: existing shifts for this employee on any target day ──
+  const hasShiftOnDate = (empId, dStr) =>
+    schedules.some(s =>
+      s.employeeId === empId && s.date === dStr &&
+      s.brandId === brandId && s.status !== "cancelled" &&
+      (!slot || s.id !== slot.id) // when editing, ignore the slot itself
+    );
+  const primaryConflict   = employeeId && hasShiftOnDate(employeeId, date);
+  const copyDayConflicts  = employeeId
+    ? [...copyDays].filter(d => d !== date && hasShiftOnDate(employeeId, d))
+    : [];
+  const anyConflict       = primaryConflict || copyDayConflicts.length > 0;
+  const conflictMsg = primaryConflict
+    ? `${memberName || "This employee"} already has a shift on ${new Date(date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}`
+    : copyDayConflicts.length > 0
+      ? `${memberName || "This employee"} already has a shift on ${copyDayConflicts.length === 1
+          ? new Date(copyDayConflicts[0]+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric"})
+          : copyDayConflicts.length + " of the selected days"}`
+      : "";
+
   const handleSave = () => {
     if (!employeeId) return;
+    if (anyConflict) return; // belt + braces — also disabled via Save button
     const member = opsTeam.find(m => m.id === employeeId);
     const ws = new Date(date+"T00:00:00");
     ws.setDate(ws.getDate() - (ws.getDay()===0?6:ws.getDay()-1));
     const wsStr = [ws.getFullYear(),String(ws.getMonth()+1).padStart(2,"0"),String(ws.getDate()).padStart(2,"0")].join("-");
-    onSave({
-      id: slot?.id || `sch-${Date.now()}`,
-      brandId, date, employeeId,
-      employeeName: member ? `${member.firstName} ${member.lastName}`.trim() : memberName||"",
+    const baseName = member ? `${member.firstName} ${member.lastName}`.trim() : memberName||"";
+    const baseSlot = {
+      brandId, employeeId, employeeName: baseName,
       shift, startTime, endTime,
       role: member?.role || filterRole || "",
       department: member?.department || filterDept || "",
@@ -5392,6 +5413,18 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
       published: slot?.published ?? false,
       weekStart: wsStr,
       createdBy: currentUser.name,
+    };
+    // Save primary
+    onSave({ ...baseSlot, id: slot?.id || `sch-${Date.now()}`, date });
+    // Save copies for additional days
+    [...copyDays].forEach((d, idx) => {
+      if (d === date) return;
+      onSave({
+        ...baseSlot,
+        id: `sch-${Date.now()}-${idx}-${Math.random().toString(36).slice(2,6)}`,
+        date: d,
+        published: false,
+      });
     });
   };
 
@@ -5409,7 +5442,7 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
           </button>
         )}
         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-        <button onClick={handleSave} disabled={!employeeId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
+        <button onClick={handleSave} disabled={!employeeId || anyConflict} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
           {isEdit ? "Save changes" : "Add Shift"}
         </button>
       </>}>
@@ -5459,6 +5492,23 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
           </div>
         )}
 
+        {/* Conflict warning: employee already has a shift on this day or any copy day */}
+        {anyConflict && (
+          <div className="flex items-start gap-2 bg-red-950/40 border border-red-500/40 rounded-xl px-3 py-2.5 text-xs">
+            <span className="text-base flex-shrink-0">🚫</span>
+            <div className="flex-1">
+              <div className="text-red-400 font-bold">Conflict — can't save</div>
+              <div className="text-red-300 mt-0.5">{conflictMsg}.</div>
+              {copyDayConflicts.length > 0 && copyDayConflicts.length > 1 && (
+                <div className="text-red-300/80 mt-1">
+                  Conflicting days: {copyDayConflicts.map(d => new Date(d+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})).join(", ")}
+                </div>
+              )}
+              <div className="text-slate-400 mt-1">Edit the existing shift instead, or remove the conflicting day from "Also create on…" below.</div>
+            </div>
+          </div>
+        )}
+
         {/* Shift presets */}
         <div>
           <label className={labelCls}>Shift{brandPresets.length === 0 ? " — add presets in Ops Setup" : ""}</label>
@@ -5493,6 +5543,47 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
           <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2}
             placeholder="Any shift notes…" className={`${inputCls} resize-none`}/>
         </div>
+
+        {/* Copy to other days (only on new shifts) */}
+        {!isEdit && (() => {
+          // Build the 7 days of the same week
+          const baseDate = new Date(date+"T00:00:00");
+          const dow = baseDate.getDay()===0?6:baseDate.getDay()-1;
+          const monday = new Date(baseDate); monday.setDate(baseDate.getDate() - dow);
+          const days = Array.from({length:7},(_,i)=>{ const d=new Date(monday); d.setDate(monday.getDate()+i); return d; });
+          const toStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+          return (
+            <div>
+              <label className={labelCls}>Also create this shift on…</label>
+              <div className="flex flex-wrap gap-1.5">
+                {days.map((d, idx) => {
+                  const dStr = toStr(d);
+                  const isBase = dStr === date;
+                  const active = copyDays.has(dStr);
+                  return (
+                    <button key={dStr} type="button"
+                      onClick={()=>{
+                        if (isBase) return;
+                        setCopyDays(prev => { const n = new Set(prev); if (n.has(dStr)) n.delete(dStr); else n.add(dStr); return n; });
+                      }}
+                      className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                        isBase ? "bg-indigo-600 text-white cursor-default" :
+                        active ? "bg-indigo-500/30 border border-indigo-400 text-indigo-200" :
+                        "bg-slate-800 border border-slate-700 text-slate-400 hover:bg-slate-700"
+                      }`}>
+                      {DAYS_OF_WEEK[idx].slice(0,3)} {d.getDate()}{isBase && " ★"}
+                    </button>
+                  );
+                })}
+              </div>
+              {copyDays.size > 0 && (
+                <div className="text-xs text-indigo-400 mt-2">
+                  Will create {copyDays.size + 1} shifts total
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </Modal>
   );
@@ -6040,13 +6131,14 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                       <div key={dIdx}
                         className={`relative rounded-xl min-h-16 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/40 bg-slate-900/30 hover:bg-slate-800/40"}`}
                         onClick={()=>!editLocked && setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}>
+                        {/* Availability strip — thin bar, hover for details */}
                         {avails.length>0 && (
-                          <div className={`w-full rounded-md px-1.5 py-0.5 mb-0.5 text-xs font-semibold truncate ${
-                            isAvail ? "bg-emerald-500/25 text-emerald-300 border border-emerald-500/30"
-                                    : "bg-red-500/25 text-red-300 border border-red-500/30"
-                          }`}>
-                            {isAvail ? (availWindow?`✓ ${availWindow.startTime}–${availWindow.endTime}`:"✓ Avail") : "✗ Unavail"}
-                          </div>
+                          <div className={`w-full rounded-full h-1 mb-1 ${
+                            isAvail ? "bg-emerald-500" : "bg-red-500"
+                          }`}
+                          title={isAvail
+                            ? (availWindow?`Available ${availWindow.startTime}–${availWindow.endTime}`:"Available")
+                            : "Marked unavailable"}/>
                         )}
                         <div className="space-y-0.5">
                           {slots.map(s=>{
@@ -6112,8 +6204,8 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
             </div>
 
             <div className="flex items-center gap-4 mt-4 text-xs text-slate-500 flex-wrap">
-              <div className="flex items-center gap-1.5"><div className="w-8 h-3 rounded bg-emerald-500/25 border border-emerald-500/30"/> Available</div>
-              <div className="flex items-center gap-1.5"><div className="w-8 h-3 rounded bg-red-500/25 border border-red-500/30"/> Unavailable</div>
+              <div className="flex items-center gap-1.5"><div className="w-8 h-1 rounded-full bg-emerald-500"/> Available</div>
+              <div className="flex items-center gap-1.5"><div className="w-8 h-1 rounded-full bg-red-500"/> Unavailable</div>
               <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"/> Conflict</div>
               <div className="flex items-center gap-1.5"><span className="text-slate-400">✎</span> Draft</div>
               <div className="flex items-center gap-1.5"><span className="text-slate-400">⇨</span> Drag right edge of shift to resize</div>
@@ -6247,7 +6339,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
           date={shiftModal.date} slot={shiftModal.slot||null} brandId={brandId}
           memberId={shiftModal.memberId||null} memberName={shiftModal.memberName||""}
           filterRole={filterRole!=="all"?filterRole:""} filterDept={filterDept!=="all"?filterDept:""}
-          opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets} currentUser={currentUser}
+          opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets} schedules={schedules} currentUser={currentUser}
           onSave={s=>{onAdd(s);setShiftModal(null);}}
           onDelete={id=>{onDelete(id);setShiftModal(null);}}
           onClose={()=>setShiftModal(null)}
@@ -6706,6 +6798,22 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
     };
   }, []);
 
+  // Watchdog: every 1 second, if the video element lost its stream (e.g., paused after overlay flipped),
+  // re-attach and play. Keeps the live preview working forever without page refresh.
+  useEffect(() => {
+    const watchdog = setInterval(() => {
+      if (!streamRef.current || !videoRef.current) return;
+      const v = videoRef.current;
+      if (v.srcObject !== streamRef.current) {
+        v.srcObject = streamRef.current;
+      }
+      if (v.paused || v.readyState < 2) {
+        v.play().catch(()=>{});
+      }
+    }, 1000);
+    return () => clearInterval(watchdog);
+  }, []);
+
   // Capture a still frame as JPEG blob (returns null on failure)
   const capturePhoto = () => new Promise((resolve) => {
     try {
@@ -6839,48 +6947,12 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
   const fmtDate = (d) => d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
   // Success screen
-  if (lastAction) {
-    const isIn = lastAction.type === "in";
-    const hasOT = lastAction.overtimeHrs > 0;
-    const isUnscheduled = lastAction.isUnscheduled;
-    return (
-      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isIn ? "bg-emerald-950" : hasOT || isUnscheduled ? "bg-red-950" : "bg-slate-950"}`}>
-        <div className="text-center space-y-6 max-w-sm w-full">
-          <div className={`text-5xl font-black mb-2 ${isIn ? "text-emerald-300" : "text-white"}`}>
-            {isIn ? "Clocked In ✓" : "Clocked Out ✓"}
-          </div>
-          <div className="text-3xl font-bold text-white">{lastAction.name}</div>
-          <div className="text-xl text-slate-400">{fmtTime(lastAction.time)}</div>
-
-          {!isIn && (
-            <div className="bg-black/30 rounded-2xl p-5 space-y-3 text-left">
-              {lastAction.hours && (
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 text-sm">Hours worked</span>
-                  <span className="text-white text-lg font-bold">
-                    {Math.floor(lastAction.hours)}h {String(Math.round((lastAction.hours % 1)*60)).padStart(2,"0")}m
-                  </span>
-                </div>
-              )}
-              {(hasOT || isUnscheduled) && (
-                <div className="pt-3 border-t border-white/10">
-                  <div className="text-red-300 font-bold text-sm mb-1">
-                    ⚠ {isUnscheduled ? "Unscheduled shift" : `${lastAction.overtimeHrs.toFixed(2)}h extra time`}
-                  </div>
-                  <div className="text-slate-300 text-xs">
-                    {isUnscheduled
-                      ? "This shift wasn't scheduled. Open the app → My Hours to submit a reason for your manager to approve."
-                      : "You worked beyond your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          <div className="text-slate-600 text-sm">Returning to kiosk in a moment…</div>
-        </div>
-      </div>
-    );
-  }
+  // Success overlay state — instead of returning early (which unmounts the camera),
+  // we render the kiosk normally and place the success screen as an absolute overlay.
+  const showSuccessOverlay = !!lastAction;
+  const successIsIn   = lastAction?.type === "in";
+  const successHasOT  = (lastAction?.overtimeHrs || 0) > 0;
+  const successUnsched = !!lastAction?.isUnscheduled;
 
   // Check if matched employee is currently clocked in
   const toLocalDate = () => {
@@ -6894,7 +6966,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
   const isClockedIn = !!openRecord;
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none">
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none relative">
       {/* Hidden capture canvas */}
       <canvas ref={canvasRef} className="hidden"/>
 
@@ -7014,6 +7086,47 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
           )}
         </div>
       </div>
+
+      {/* Success overlay — kept on top so video element underneath stays mounted */}
+      {showSuccessOverlay && (
+        <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 z-50 ${
+          successIsIn ? "bg-emerald-950" : successHasOT || successUnsched ? "bg-red-950" : "bg-slate-950"
+        }`}>
+          <div className="text-center space-y-6 max-w-sm w-full">
+            <div className={`text-5xl font-black mb-2 ${successIsIn ? "text-emerald-300" : "text-white"}`}>
+              {successIsIn ? "Clocked In ✓" : "Clocked Out ✓"}
+            </div>
+            <div className="text-3xl font-bold text-white">{lastAction.name}</div>
+            <div className="text-xl text-slate-400">{fmtTime(lastAction.time)}</div>
+
+            {!successIsIn && (
+              <div className="bg-black/30 rounded-2xl p-5 space-y-3 text-left">
+                {lastAction.hours != null && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400 text-sm">Hours worked</span>
+                    <span className="text-white text-lg font-bold">
+                      {Math.floor(lastAction.hours)}h {String(Math.round((lastAction.hours % 1)*60)).padStart(2,"0")}m
+                    </span>
+                  </div>
+                )}
+                {(successHasOT || successUnsched) && (
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-red-300 font-bold text-sm mb-1">
+                      ⚠ {successUnsched ? "Unscheduled shift" : `${lastAction.overtimeHrs.toFixed(2)}h extra time`}
+                    </div>
+                    <div className="text-slate-300 text-xs">
+                      {successUnsched
+                        ? "This shift wasn't scheduled. Open the app → My Hours to submit a reason for your manager to approve."
+                        : "You worked beyond your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="text-slate-600 text-sm">Returning to kiosk in a moment…</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -7903,7 +8016,14 @@ function KioskShell() {
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
       }).subscribe();
-    return () => supabase.removeChannel(ch);
+    // Belt + braces: poll every 15s in case realtime drops
+    const interval = setInterval(() => {
+      fetchPunchRecords().then(setPunchRecords).catch(()=>{});
+    }, 15000);
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(ch);
+    };
   }, []);
 
   const handlePunchIn  = async (record) => {
@@ -8116,6 +8236,7 @@ export default function App() {
     const interval = setInterval(() => {
       fetchHelpdeskTickets().then(setHdTickets).catch(()=>{});
       fetchAvailability().then(setAvailability).catch(()=>{});
+      fetchPunchRecords().then(setPunchRecords).catch(()=>{});  // belt + braces: catch any missed realtime updates
     }, 30000);
     return () => {
       clearInterval(interval);
