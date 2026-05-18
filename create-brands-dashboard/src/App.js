@@ -6957,7 +6957,17 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
         const ss = new Date(openRecord.date+"T"+scheduledStart+":00");
         const se = new Date(openRecord.date+"T"+scheduledEnd  +":00");
         const schedHours = se <= ss ? (se-ss+86400000)/3600000 : (se-ss)/3600000;
-        overtimeHrs = Math.max(0, Math.round((hoursWorked - schedHours)*100)/100);
+        const overByTotal = Math.max(0, hoursWorked - schedHours);
+        // Out-of-window check
+        const pIn = punchInTime.getTime();
+        const pOut = Date.now();
+        let ssMs = ss.getTime(), seMs = se.getTime();
+        if (seMs <= ssMs) seMs += 86400000;
+        const overlapStart = Math.max(pIn, ssMs);
+        const overlapEnd   = Math.min(pOut, seMs);
+        const overlapMs    = Math.max(0, overlapEnd - overlapStart);
+        const outOfWindow = Math.max(0, (pOut - pIn - overlapMs) / 3600000);
+        overtimeHrs = Math.round(Math.max(overByTotal, outOfWindow) * 100) / 100;
       }
       setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs, isUnscheduled });
       onPunchOut(openRecord.id, now, hoursWorked, grossPay)
@@ -7170,7 +7180,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
                     <div className="text-slate-300 text-xs">
                       {successUnsched
                         ? "This shift wasn't scheduled. Open the app → My Hours to submit a reason for your manager to approve."
-                        : "You worked beyond your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
+                        : "You worked outside your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
                     </div>
                   </div>
                 )}
@@ -7215,17 +7225,30 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
     return `${h}h ${String(m).padStart(2,"0")}m`;
   };
   const calcOvertimeHours = (r) => {
-    if (!r.punchIn || !r.punchOut || !r.scheduledStart || !r.scheduledEnd) return 0;
-    // Compare HOURS WORKED vs SCHEDULED HOURS — not wall-clock times
-    const actualHours = (new Date(r.punchOut) - new Date(r.punchIn)) / 3600000;
-    const schedStart  = new Date(r.date + "T" + r.scheduledStart + ":00");
-    const schedEnd    = new Date(r.date + "T" + r.scheduledEnd   + ":00");
-    // Handle overnight shifts (end < start)
-    const schedHours  = schedEnd <= schedStart
+    if (!r.punchIn || !r.punchOut) return 0;
+    if (!r.scheduledStart || !r.scheduledEnd) return 0;
+    const actualMs = new Date(r.punchOut) - new Date(r.punchIn);
+    const actualHours = actualMs / 3600000;
+    const schedStart = new Date(r.date + "T" + r.scheduledStart + ":00");
+    const schedEnd   = new Date(r.date + "T" + r.scheduledEnd   + ":00");
+    const schedHours = schedEnd <= schedStart
       ? (schedEnd - schedStart + 86400000) / 3600000
       : (schedEnd - schedStart) / 3600000;
-    const diff = actualHours - schedHours;
-    return diff > 0 ? Math.round(diff * 100) / 100 : 0;
+    // Component 1: total hours worked > scheduled hours
+    const overByTotal = Math.max(0, actualHours - schedHours);
+    // Component 2: hours worked OUTSIDE the scheduled window (early start or late end)
+    // This catches "clocked in 5h before scheduled time" type cases
+    const pIn  = new Date(r.punchIn).getTime();
+    const pOut = new Date(r.punchOut).getTime();
+    let ssMs = schedStart.getTime(), seMs = schedEnd.getTime();
+    if (seMs <= ssMs) seMs += 86400000; // overnight
+    // Overlap between punch window and schedule window
+    const overlapStart = Math.max(pIn, ssMs);
+    const overlapEnd   = Math.min(pOut, seMs);
+    const overlapMs    = Math.max(0, overlapEnd - overlapStart);
+    const outOfWindowHours = Math.max(0, (actualMs - overlapMs) / 3600000);
+    // Report whichever is larger — covers both "worked extra" and "worked at wrong time"
+    return Math.round(Math.max(overByTotal, outOfWindowHours) * 100) / 100;
   };
   const calcUnscheduled = (r) => {
     if (!r.scheduledStart && !r.scheduledEnd) return true; // no schedule at all
@@ -7892,14 +7915,26 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     );
     const scheduledStart = r.scheduledStart || sched?.startTime || null;
     const scheduledEnd   = r.scheduledEnd   || sched?.endTime   || null;
-    // Overtime = actual hours worked minus scheduled hours
+    // Overtime = max of (actual hours - scheduled hours) OR (hours worked outside scheduled window)
+    // This catches both "stayed late" AND "came in completely outside scheduled time"
     let overtimeHrs = 0;
     if (r.punchIn && r.punchOut && scheduledStart && scheduledEnd) {
-      const actualHours = (new Date(r.punchOut) - new Date(r.punchIn)) / 3600000;
+      const actualMs = new Date(r.punchOut) - new Date(r.punchIn);
+      const actualHours = actualMs / 3600000;
       const ss = new Date(r.date+"T"+scheduledStart+":00");
       const se = new Date(r.date+"T"+scheduledEnd  +":00");
       const schedHours = se <= ss ? (se-ss+86400000)/3600000 : (se-ss)/3600000;
-      overtimeHrs = Math.max(0, Math.round((actualHours - schedHours)*100)/100);
+      const overByTotal = Math.max(0, actualHours - schedHours);
+      // Out-of-window: time worked outside the scheduled window
+      const pIn = new Date(r.punchIn).getTime();
+      const pOut = new Date(r.punchOut).getTime();
+      let ssMs = ss.getTime(), seMs = se.getTime();
+      if (seMs <= ssMs) seMs += 86400000;
+      const overlapStart = Math.max(pIn, ssMs);
+      const overlapEnd   = Math.min(pOut, seMs);
+      const overlapMs    = Math.max(0, overlapEnd - overlapStart);
+      const outOfWindow = Math.max(0, (actualMs - overlapMs) / 3600000);
+      overtimeHrs = Math.round(Math.max(overByTotal, outOfWindow) * 100) / 100;
     }
     const isUnscheduled = !sched && !r.scheduledStart;
     return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, isUnscheduled };
@@ -8032,7 +8067,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                       <div className="text-xs text-red-300 font-semibold">
                         {r.isUnscheduled
                           ? "This shift wasn't in your schedule. Please provide a reason so your manager can approve it."
-                          : "You stayed beyond your scheduled hours. Please explain why so your manager can approve the extra time."}
+                          : "You worked outside your scheduled hours. Please explain why so your manager can approve the extra time."}
                       </div>
                       <textarea
                         value={reasonInputs[r.id] || ""}
