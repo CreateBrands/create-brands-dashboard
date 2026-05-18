@@ -49,15 +49,16 @@ if (typeof document !== "undefined" && !document.getElementById("cb-global-style
   const style = document.createElement("style");
   style.id = "cb-global-style";
   style.textContent = `
-    html, body, #root { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-feature-settings: "cv11", "ss01", "ss03"; }
+    html, body, #root { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-feature-settings: "cv11", "ss01", "ss03"; background: #f8fafc; color: #0f172a; }
     /* Tabular numerals globally on times, money, hours, percentages */
     .tabular-nums, [class*="font-mono"] { font-variant-numeric: tabular-nums; }
     /* Tighter heading rendering */
     h1, h2, h3, h4 { letter-spacing: -0.01em; }
-    /* Smoother scrollbars in chrome panels */
+    /* Light-mode scrollbars */
     *::-webkit-scrollbar { width: 8px; height: 8px; }
-    *::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 4px; }
-    *::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.4); }
+    *::-webkit-scrollbar-thumb { background: rgba(100,116,139,0.25); border-radius: 4px; }
+    *::-webkit-scrollbar-thumb:hover { background: rgba(100,116,139,0.5); }
+    *::-webkit-scrollbar-track { background: transparent; }
   `;
   document.head.appendChild(style);
 }
@@ -183,13 +184,13 @@ function formatKPI(v, format) {
 // ─── Shared Components ────────────────────────────────────────────────────────
 function Badge({ label, color = "slate" }) {
   const colors = {
-    green: "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30",
-    red: "bg-red-500/20 text-red-400 border border-red-500/30",
-    amber: "bg-amber-500/20 text-amber-400 border border-amber-500/30",
-    slate: "bg-slate-700 text-slate-300 border border-slate-600",
-    indigo: "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30",
+    green: "bg-emerald-100 text-emerald-700 border border-emerald-300",
+    red: "bg-red-100 text-red-700 border border-red-300",
+    amber: "bg-amber-100 text-amber-700 border border-amber-300",
+    slate: "bg-slate-200 text-slate-300 border border-slate-400",
+    indigo: "bg-indigo-50 text-indigo-600 border border-indigo-200",
     violet: "bg-violet-500/20 text-violet-400 border border-violet-500/30",
-    emerald: "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30",
+    emerald: "bg-emerald-100 text-emerald-700 border border-emerald-300",
   };
   return <span className={`inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold ${colors[color] || colors.slate}`}>{label}</span>;
 }
@@ -202,17 +203,17 @@ function RoleBadge({ role }) {
 function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate" }) {
   const accents = {
     slate: "text-slate-500",
-    indigo: "text-indigo-400",
-    emerald: "text-emerald-400",
-    amber: "text-amber-400",
-    sky: "text-sky-400",
+    indigo: "text-indigo-600",
+    emerald: "text-emerald-700",
+    amber: "text-amber-700",
+    sky: "text-sky-700",
   };
   return (
     <div className="flex flex-col items-center justify-center text-center py-12 px-6">
-      <div className={`w-14 h-14 rounded-2xl bg-slate-900/60 border border-slate-800/60 flex items-center justify-center mb-4 ${accents[accent]}`}>
+      <div className={`w-14 h-14 rounded-2xl bg-white border border-slate-200 flex items-center justify-center mb-4 ${accents[accent]}`}>
         <Icon size={24}/>
       </div>
-      <div className="text-base font-bold text-white mb-1">{title}</div>
+      <div className="text-base font-bold text-slate-900 mb-1">{title}</div>
       {message && <div className="text-sm text-slate-400 max-w-sm">{message}</div>}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -221,14 +222,14 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
 
 function StatCard({ label, value, sub, icon: Icon, accent = "indigo", alert = false }) {
   const accents = {
-    indigo: "from-indigo-600/20 to-indigo-600/5 border-indigo-500/30",
-    emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-500/30",
-    amber: "from-amber-600/20 to-amber-600/5 border-amber-500/30",
-    red: "from-red-600/20 to-red-600/5 border-red-500/30",
-    sky: "from-sky-600/20 to-sky-600/5 border-sky-500/30",
-    slate: "from-slate-700/40 to-slate-700/10 border-slate-600/30",
+    indigo: "from-indigo-600/20 to-indigo-600/5 border-indigo-200",
+    emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-300",
+    amber: "from-amber-600/20 to-amber-600/5 border-amber-300",
+    red: "from-red-600/20 to-red-600/5 border-red-300",
+    sky: "from-sky-600/20 to-sky-600/5 border-sky-200",
+    slate: "from-slate-700/40 to-slate-700/10 border-slate-300",
   };
-  const iconColors = { indigo: "text-indigo-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-red-400", sky: "text-sky-400", slate: "text-slate-400" };
+  const iconColors = { indigo: "text-indigo-600", emerald: "text-emerald-700", amber: "text-amber-700", red: "text-red-700", sky: "text-sky-700", slate: "text-slate-400" };
   const eff = alert ? "red" : accent;
   return (
     <div className={`rounded-2xl bg-gradient-to-br ${accents[eff]} border p-5 flex flex-col gap-2`}>
@@ -236,7 +237,7 @@ function StatCard({ label, value, sub, icon: Icon, accent = "indigo", alert = fa
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
         {Icon && <Icon size={16} className={iconColors[eff]} />}
       </div>
-      <div className="text-2xl font-bold text-white tabular-nums">{value}</div>
+      <div className="text-2xl font-bold text-slate-900 tabular-nums">{value}</div>
       {sub && <div className="text-xs text-slate-400">{sub}</div>}
     </div>
   );
@@ -244,8 +245,8 @@ function StatCard({ label, value, sub, icon: Icon, accent = "indigo", alert = fa
 
 function AnalysisBlock({ title, children, className = "", action }) {
   return (
-    <div className={`rounded-2xl bg-slate-900/60 border border-slate-700/60 overflow-hidden ${className}`}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/60">
+    <div className={`rounded-2xl bg-white border border-slate-300 overflow-hidden ${className}`}>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300">
         <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
         {action}
       </div>
@@ -263,22 +264,22 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     const isPositive = invertDelta ? delta < 0 : delta > 0;
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
+      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
         {isPositive ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {sign}{delta.toFixed(1)}% vs {prevLabel}
       </span>
     );
   }
   return (
-    <div className={`rounded-2xl border p-4 flex flex-col gap-2 ${alert ? "bg-red-950/30 border-red-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+    <div className={`rounded-2xl border p-4 flex flex-col gap-2 ${alert ? "bg-red-50 border-red-300" : "bg-white border-slate-300"}`}>
       <div className="flex items-center gap-2">
         {Icon && <Icon size={13} className="text-slate-400" />}
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
       </div>
-      <div className={`text-xl font-bold ${alert ? "text-red-400" : "text-white"}`}>{currentVal}</div>
+      <div className={`text-xl font-bold ${alert ? "text-red-700" : "text-slate-900"}`}>{currentVal}</div>
       {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
       {deltaEl}
       {previousVal && (
-        <div className="border-t border-slate-700/60 pt-2 mt-1 text-xs text-slate-500">
+        <div className="border-t border-slate-300 pt-2 mt-1 text-xs text-slate-500">
           Prior: <span className="text-slate-400 font-medium">{previousVal}</span>
         </div>
       )}
@@ -289,13 +290,13 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs shadow-xl">
-      <div className="text-slate-400 mb-1 font-medium">{label}</div>
+    <div className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs shadow-xl">
+      <div className="text-slate-500 mb-1 font-medium">{label}</div>
       {payload.map((p, i) => (
         <div key={i} className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-          <span className="text-slate-300">{p.name}:</span>
-          <span className="text-white font-semibold">{typeof p.value === "number" ? (p.name?.includes("£") || p.name?.includes("Revenue") || p.name?.includes("Sales") ? `£${Math.round(p.value).toLocaleString()}` : p.value.toFixed(1)) : p.value}</span>
+          <span className="text-slate-600">{p.name}:</span>
+          <span className="text-slate-900 font-semibold">{typeof p.value === "number" ? (p.name?.includes("£") || p.name?.includes("Revenue") || p.name?.includes("Sales") ? `£${Math.round(p.value).toLocaleString()}` : p.value.toFixed(1)) : p.value}</span>
         </div>
       ))}
     </div>
@@ -311,7 +312,7 @@ function SelectDropdown({ value, onChange, children, className = "" }) {
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="appearance-none w-full bg-slate-900 border border-slate-700 rounded-xl pl-3.5 pr-8 py-2 text-sm text-white font-medium focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 cursor-pointer transition-colors hover:border-slate-600"
+        className="appearance-none w-full bg-white border border-slate-300 rounded-xl pl-3.5 pr-8 py-2 text-sm text-slate-900 font-medium focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 cursor-pointer transition-colors hover:border-slate-400"
       >
         {children}
       </select>
@@ -348,10 +349,10 @@ function PeriodFilterBar({ preset, onPreset, customFrom, customTo, onCustomFrom,
       {preset === "custom" && (
         <div className="flex items-center gap-2">
           <input type="date" value={customFrom} onChange={e => onCustomFrom(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none" />
+            className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none" />
           <span className="text-slate-500 text-xs">→</span>
           <input type="date" value={customTo} min={customFrom} onChange={e => onCustomTo(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none" />
+            className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none" />
         </div>
       )}
     </div>
@@ -541,29 +542,29 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-300 rounded-2xl w-full max-w-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300">
           <div className="flex items-center gap-2">
-            <FileSpreadsheet size={18} className="text-emerald-400"/>
-            <h3 className="font-bold text-white">EOD Data — Excel Import / Export</h3>
+            <FileSpreadsheet size={18} className="text-emerald-700"/>
+            <h3 className="font-bold text-slate-900">EOD Data — Excel Import / Export</h3>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18}/></button>
         </div>
 
         <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
           {step === "upload" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <button onClick={exportEOD} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 text-sm font-semibold hover:bg-emerald-600/30 transition-colors">
+                <button onClick={exportEOD} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600/20 border border-emerald-300 text-emerald-700 text-sm font-semibold hover:bg-emerald-600/30 transition-colors">
                   <Download size={15}/> Export EOD Data (.xlsx)
                 </button>
-                <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">
+                <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-100 border border-slate-300 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">
                   <FileSpreadsheet size={15}/> Download Blank Template
                 </button>
               </div>
-              <div className="bg-indigo-950/30 border border-indigo-500/20 rounded-xl p-4 space-y-2">
-                <div className="font-semibold text-indigo-300 text-sm flex items-center gap-2"><Info size={13}/>How to import historical data</div>
+              <div className="bg-indigo-50 border border-indigo-500/20 rounded-xl p-4 space-y-2">
+                <div className="font-semibold text-indigo-500 text-sm flex items-center gap-2"><Info size={13}/>How to import historical data</div>
                 <ul className="text-xs text-slate-400 space-y-1 list-disc ml-4">
                   <li>Download the blank template and fill in one EOD entry per row</li>
                   <li>Accepts <strong className="text-slate-300">.xlsx</strong> or <strong className="text-slate-300">.csv</strong></li>
@@ -573,42 +574,42 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
                 </ul>
               </div>
               <div onClick={() => fileRef.current?.click()}
-                className="border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-2xl p-10 text-center cursor-pointer transition-colors group">
-                <Upload size={28} className="mx-auto text-slate-600 group-hover:text-indigo-400 mb-3 transition-colors"/>
+                className="border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-2xl p-10 text-center cursor-pointer transition-colors group">
+                <Upload size={28} className="mx-auto text-slate-400 group-hover:text-indigo-600 mb-3 transition-colors"/>
                 <div className="text-sm text-slate-400 group-hover:text-slate-300">{loading ? "Reading file…" : "Click to upload .xlsx or .csv"}</div>
-                <div className="text-xs text-slate-600 mt-1">One EOD entry per row</div>
+                <div className="text-xs text-slate-400 mt-1">One EOD entry per row</div>
                 <input ref={fileRef} type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   className="hidden" onChange={e => e.target.files[0] && handleFile(e.target.files[0])}/>
               </div>
-              {!XLSX && <div className="text-xs text-amber-400 text-center flex items-center justify-center gap-1"><RefreshCw size={11} className="animate-spin"/>Loading Excel library…</div>}
+              {!XLSX && <div className="text-xs text-amber-700 text-center flex items-center justify-center gap-1"><RefreshCw size={11} className="animate-spin"/>Loading Excel library…</div>}
             </>
           )}
 
           {step === "preview" && (
             <>
               {errors.length > 0 && (
-                <div className="bg-red-950/30 border border-red-500/30 rounded-xl p-4 space-y-1">
-                  <div className="text-sm font-semibold text-red-400 flex items-center gap-2"><AlertTriangle size={14}/>Errors ({errors.length})</div>
+                <div className="bg-red-50 border border-red-300 rounded-xl p-4 space-y-1">
+                  <div className="text-sm font-semibold text-red-700 flex items-center gap-2"><AlertTriangle size={14}/>Errors ({errors.length})</div>
                   <div className="max-h-32 overflow-y-auto space-y-0.5">
-                    {errors.map((e, i) => <div key={i} className="text-xs text-red-400">{e}</div>)}
+                    {errors.map((e, i) => <div key={i} className="text-xs text-red-700">{e}</div>)}
                   </div>
                 </div>
               )}
               {preview.length > 0 && (
                 <>
                   <div className="flex items-center gap-2">
-                    <CheckCircle size={16} className="text-emerald-400"/>
+                    <CheckCircle size={16} className="text-emerald-700"/>
                     <span className="text-sm text-slate-300 font-semibold">{preview.length} valid rows ready to import</span>
                   </div>
-                  <div className="overflow-x-auto rounded-xl border border-slate-700">
+                  <div className="overflow-x-auto rounded-xl border border-slate-300">
                     <table className="w-full text-xs">
-                      <thead><tr className="bg-slate-800/80">
+                      <thead><tr className="bg-slate-100">
                         {["Date","Brand","Net Sales","Labour","COGS","Hours","Orders","ATV","5★","2-4★","1★"].map(h =>
                           <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold whitespace-nowrap">{h}</th>)}
                       </tr></thead>
                       <tbody>
                         {preview.slice(0, 10).map((r, i) => (
-                          <tr key={i} className="border-t border-slate-800 hover:bg-slate-800/40">
+                          <tr key={i} className="border-t border-slate-200 hover:bg-slate-100/50">
                             <td className="px-3 py-2 text-slate-300 whitespace-nowrap">{r.date}</td>
                             <td className="px-3 py-2 text-slate-300 whitespace-nowrap">{r.brandName || r.brandId}</td>
                             <td className="px-3 py-2 text-slate-300">{fmtCurrency(r.netSales)}</td>
@@ -617,9 +618,9 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
                             <td className="px-3 py-2 text-slate-300">{r.totalHours}</td>
                             <td className="px-3 py-2 text-slate-300">{r.totalOrders}</td>
                             <td className="px-3 py-2 text-slate-300">{fmtCurrency(r.atv)}</td>
-                            <td className="px-3 py-2 text-emerald-400">{r.fiveStarReviews}</td>
-                            <td className="px-3 py-2 text-amber-400">{r.midStarReviews}</td>
-                            <td className="px-3 py-2 text-red-400">{r.oneStarReviews}</td>
+                            <td className="px-3 py-2 text-emerald-700">{r.fiveStarReviews}</td>
+                            <td className="px-3 py-2 text-amber-700">{r.midStarReviews}</td>
+                            <td className="px-3 py-2 text-red-700">{r.oneStarReviews}</td>
                           </tr>
                         ))}
                         {preview.length > 10 && (
@@ -636,21 +637,21 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
 
           {step === "done" && (
             <div className="flex flex-col items-center justify-center py-10 gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
-                <CheckCircle size={28} className="text-emerald-400"/>
+              <div className="w-14 h-14 rounded-2xl bg-emerald-100 border border-emerald-300 flex items-center justify-center">
+                <CheckCircle size={28} className="text-emerald-700"/>
               </div>
-              <div className="text-base font-bold text-white">Import Complete</div>
+              <div className="text-base font-bold text-slate-900">Import Complete</div>
               <div className="text-sm text-slate-400">{preview.length} EOD entries imported successfully.</div>
             </div>
           )}
         </div>
 
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          {step === "upload" && <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Close</button>}
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-300">
+          {step === "upload" && <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Close</button>}
           {step === "preview" && (
             <>
               <button onClick={() => { setStep("upload"); setPreview([]); setErrors([]); }}
-                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Re-upload</button>
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Re-upload</button>
               {preview.length > 0 && (
                 <button onClick={handleImport} disabled={loading} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 transition-colors">
                   {loading ? "Saving to database…" : `Import ${preview.length} Rows`}
@@ -679,7 +680,7 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
     assignedTo: issue?.assignedTo || "",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
+  const inputCls = "w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none";
   const selCls = `${inputCls}`;
 
   const handleSave = () => {
@@ -699,11 +700,11 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">{isEdit ? `Edit ${form.type}` : `Report New ${form.type}`}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-300 rounded-2xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300">
+          <h3 className="font-bold text-slate-900">{isEdit ? `Edit ${form.type}` : `Report New ${form.type}`}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
           {!isEdit && (
@@ -712,7 +713,7 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
               <div className="flex flex-wrap gap-2">
                 {visibleBrands.map(b => (
                   <button key={b.id} onClick={() => set("brandId", b.id)}
-                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId === b.id ? "text-slate-900 border-transparent" : "bg-slate-100 text-slate-400 border-slate-300 hover:bg-slate-200"}`}
                     style={form.brandId === b.id ? { background: b.color } : {}}>
                     {b.name}
                   </button>
@@ -725,7 +726,7 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
             <div className="flex gap-2">
               {ISSUE_TYPES.map(t => (
                 <button key={t} onClick={() => set("type", t)}
-                  className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                  className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
                   {t === "Issue" ? "🔴 Issue" : "🔧 Maintenance"}
                 </button>
               ))}
@@ -773,8 +774,8 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
             </>
           )}
         </div>
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-300">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!form.title.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">
             {isEdit ? "Save Changes" : `Report ${form.type}`}
           </button>
@@ -820,19 +821,19 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
   const pc = PRIORITY_CONFIG[issue.priority];
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: "85vh" }}>
-        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-700 flex-shrink-0">
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-300 rounded-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: "85vh" }}>
+        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-300 flex-shrink-0">
           <div className="flex-1 min-w-0 pr-4">
             <div className="flex items-center gap-2 mb-1 flex-wrap">
               <Badge label={issue.priority} color={pc.color} />
               <Badge label={issue.category} color="slate" />
               {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><MapPin size={10}/>{brand.name}</span>}
             </div>
-            <h3 className="font-bold text-white text-base">{issue.title}</h3>
+            <h3 className="font-bold text-slate-900 text-base">{issue.title}</h3>
             <div className="text-xs text-slate-500 mt-1">Reported by {issue.reportedBy} · {new Date(issue.createdAt).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" })}</div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white flex-shrink-0"><X size={18}/></button>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900 flex-shrink-0"><X size={18}/></button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -840,7 +841,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
           {issue.description && (
             <div>
               <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-widest">Description</div>
-              <div className="text-sm text-slate-300 bg-slate-800/40 rounded-xl p-3 border border-slate-700/40">{issue.description}</div>
+              <div className="text-sm text-slate-300 bg-slate-100/50 rounded-xl p-3 border border-slate-200">{issue.description}</div>
             </div>
           )}
 
@@ -853,7 +854,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
                 const SIcon = cfg.icon;
                 return (
                   <button key={s} onClick={() => handleStatusChange(s)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${status === s ? `bg-${cfg.color}-600 border-${cfg.color}-500 text-white` : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${status === s ? `bg-${cfg.color}-600 border-${cfg.color}-500 text-white` : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}
                     style={status === s ? { background: { red:"#dc2626", amber:"#d97706", indigo:"#4f46e5", emerald:"#059669", slate:"#475569" }[cfg.color], borderColor: "transparent" } : {}}>
                     <SIcon size={11}/>{s}
                   </button>
@@ -867,7 +868,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
             <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-widest">Assigned To</div>
             <div className="flex gap-2">
               <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)}
-                className="flex-1 bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+                className="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none">
                 <option value="">— Unassigned —</option>
                 {(users || []).map(u => (
                   <option key={u.id} value={u.name}>{u.name} ({u.role})</option>
@@ -875,19 +876,19 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
               </select>
               <button onClick={handleAssignSave} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition-colors">Assign</button>
             </div>
-            {localIssue.assignedTo && <div className="text-xs text-slate-500 mt-1">Assigned to: <span className="text-indigo-400 font-semibold">{localIssue.assignedTo}</span></div>}
+            {localIssue.assignedTo && <div className="text-xs text-slate-500 mt-1">Assigned to: <span className="text-indigo-600 font-semibold">{localIssue.assignedTo}</span></div>}
           </div>
 
           {/* Comments */}
           <div>
             <div className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-widest">Comments & Updates ({localIssue.comments?.length || 0})</div>
             <div className="space-y-2 mb-3">
-              {(localIssue.comments || []).length === 0 && <div className="text-xs text-slate-600 py-2">No comments yet</div>}
+              {(localIssue.comments || []).length === 0 && <div className="text-xs text-slate-400 py-2">No comments yet</div>}
               {(localIssue.comments || []).map(c => (
-                <div key={c.id} className="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3">
+                <div key={c.id} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs font-semibold text-slate-300">{c.author}</span>
-                    <span className="text-xs text-slate-600">{new Date(c.createdAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}</span>
+                    <span className="text-xs text-slate-400">{new Date(c.createdAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}</span>
                   </div>
                   <div className="text-xs text-slate-400">{c.text}</div>
                 </div>
@@ -895,7 +896,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
             </div>
             <div className="flex gap-2">
               <input value={comment} onChange={e => setComment(e.target.value)} placeholder="Add a comment or update…" onKeyDown={e => e.key === "Enter" && handleAddComment()}
-                className="flex-1 bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none" />
+                className="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none" />
               <button onClick={handleAddComment} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition-colors flex items-center gap-1">
                 <MessageSquare size={12}/> Post
               </button>
@@ -903,7 +904,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
           </div>
 
           {/* Last Updated */}
-          <div className="text-xs text-slate-600 flex items-center gap-1">
+          <div className="text-xs text-slate-400 flex items-center gap-1">
             <Clock size={10}/> Last updated: {new Date(localIssue.updatedAt).toLocaleString("en-GB", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}
           </div>
         </div>
@@ -941,7 +942,7 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
 
   const statusCounts = ISSUE_STATUSES.reduce((acc, s) => { acc[s] = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && i.status === s).length; return acc; }, {});
 
-  const filterBtnCls = (active) => `px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`;
+  const filterBtnCls = (active) => `px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200"}`;
 
   return (
     <div className="space-y-6">
@@ -950,13 +951,13 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
         {ISSUE_STATUSES.map(s => {
           const cfg = STATUS_CONFIG[s];
           const SIcon = cfg.icon;
-          const colorMap = { red: "from-red-600/20 to-red-600/5 border-red-500/30 text-red-400", amber: "from-amber-600/20 to-amber-600/5 border-amber-500/30 text-amber-400", indigo: "from-indigo-600/20 to-indigo-600/5 border-indigo-500/30 text-indigo-400", emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-500/30 text-emerald-400", slate: "from-slate-700/40 to-slate-700/10 border-slate-600/30 text-slate-400" };
+          const colorMap = { red: "from-red-600/20 to-red-600/5 border-red-300 text-red-700", amber: "from-amber-600/20 to-amber-600/5 border-amber-300 text-amber-700", indigo: "from-indigo-600/20 to-indigo-600/5 border-indigo-200 text-indigo-600", emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-300 text-emerald-700", slate: "from-slate-700/40 to-slate-700/10 border-slate-300 text-slate-400" };
           return (
             <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "All" : s)}
               className={`rounded-2xl bg-gradient-to-br border p-4 text-left transition-all ${colorMap[cfg.color]} ${filterStatus === s ? "ring-2 ring-white/20" : ""}`}>
               <div className="flex items-center justify-between mb-2">
                 <SIcon size={14} />
-                <span className="text-2xl font-bold text-white">{statusCounts[s]}</span>
+                <span className="text-2xl font-bold text-slate-900">{statusCounts[s]}</span>
               </div>
               <div className="text-xs font-semibold text-slate-400">{s}</div>
             </button>
@@ -969,8 +970,8 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap gap-1.5">
             <button onClick={() => setFilterType("All")} className={filterBtnCls(filterType === "All")}>All Types</button>
-            <button onClick={() => setFilterType("Issue")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterType === "Issue" ? "bg-red-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>🔴 Issues</button>
-            <button onClick={() => setFilterType("Maintenance")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterType === "Maintenance" ? "bg-amber-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>🔧 Maintenance</button>
+            <button onClick={() => setFilterType("Issue")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterType === "Issue" ? "bg-red-600 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200"}`}>🔴 Issues</button>
+            <button onClick={() => setFilterType("Maintenance")} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterType === "Maintenance" ? "bg-amber-600 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200"}`}>🔧 Maintenance</button>
           </div>
           <div className="flex flex-wrap gap-1.5 ml-auto">
             <button onClick={() => { setNewIssueType("Issue"); setShowForm(true); }} className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white rounded-xl px-3 py-2 text-xs font-semibold transition-colors">
@@ -993,7 +994,7 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
       {/* Issues List */}
       {visibleIssues.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-          <CheckSquare size={32} className="mb-3 text-slate-700" />
+          <CheckSquare size={32} className="mb-3 text-slate-300" />
           <div className="text-sm font-semibold">No issues match your filters</div>
           <div className="text-xs mt-1">Try adjusting the filters above or report a new issue</div>
         </div>
@@ -1007,7 +1008,7 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
           const statusColors = { red: "#dc2626", amber: "#d97706", indigo: "#4f46e5", emerald: "#059669", slate: "#475569" };
 
           return (
-            <div key={issue.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4 hover:border-slate-600 transition-all">
+            <div key={issue.id} className="bg-white border border-slate-300 rounded-2xl p-4 hover:border-slate-400 transition-all">
               <div className="flex items-start gap-4">
                 <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: (statusColors[sc?.color] || "#475569") + "25" }}>
                   <SIcon size={18} style={{ color: statusColors[sc?.color] || "#94a3b8" }} />
@@ -1026,20 +1027,20 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
                           </span>
                         )}
                       </div>
-                      <div className="text-sm font-semibold text-white">{issue.title}</div>
+                      <div className="text-sm font-semibold text-slate-900">{issue.title}</div>
                       {issue.description && <div className="text-xs text-slate-400 mt-0.5 line-clamp-1">{issue.description}</div>}
                       <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-500 flex-wrap">
                         <span>by {issue.reportedBy}</span>
                         <span>{new Date(issue.createdAt).toLocaleDateString("en-GB", { day:"numeric", month:"short" })}</span>
-                        {issue.assignedTo && <span className="text-indigo-400">→ {issue.assignedTo}</span>}
+                        {issue.assignedTo && <span className="text-indigo-600">→ {issue.assignedTo}</span>}
                         {(issue.comments?.length || 0) > 0 && <span className="flex items-center gap-1"><MessageSquare size={10}/>{issue.comments.length}</span>}
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">View</button>
-                      <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
+                      <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-300 hover:bg-slate-200 transition-colors">View</button>
+                      <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors"><Edit size={13}/></button>
                       {user.role === "owner" && (
-                        <button onClick={() => setDeleteId(issue.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={13}/></button>
+                        <button onClick={() => setDeleteId(issue.id)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"><Trash2 size={13}/></button>
                       )}
                     </div>
                   </div>
@@ -1055,14 +1056,14 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
       {editIssue && <IssueFormModal issue={editIssue} brands={brands} users={users} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
       {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} users={users} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
       {deleteId && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-red-300 rounded-2xl w-full max-w-sm p-6 space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
+              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-700"/></div>
               <div className="text-sm text-slate-300">Delete this issue? This cannot be undone.</div>
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+              <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Cancel</button>
               <button onClick={() => { onDeleteIssue(deleteId); setDeleteId(null); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button>
             </div>
           </div>
@@ -1121,15 +1122,15 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
   })).filter(g => g.members.length > 0);
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
         {/* Header */}
         <div className="text-center">
-          <div className="inline-flex items-center gap-2 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl px-4 py-2 mb-4">
-            <BarChart2 size={18} className="text-indigo-400"/>
-            <span className="text-indigo-300 font-bold text-sm tracking-wide">CREATE BRANDS</span>
+          <div className="inline-flex items-center gap-2 bg-indigo-100 border border-indigo-200 rounded-2xl px-4 py-2 mb-4">
+            <BarChart2 size={18} className="text-indigo-600"/>
+            <span className="text-indigo-500 font-bold text-sm tracking-wide">CREATE BRANDS</span>
           </div>
-          <h1 className="text-2xl font-bold text-white">Team Sign In</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Team Sign In</h1>
           <p className="text-slate-400 text-sm mt-1">Select your name and enter your PIN</p>
         </div>
 
@@ -1145,13 +1146,13 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
                 <div className="grid grid-cols-2 gap-3">
                   {members.map(m => (
                     <button key={m.id} onClick={() => { setSelectedMember(m); setPin(""); setError(""); }}
-                      className="flex items-center gap-3 bg-slate-900/80 border border-slate-700/60 hover:border-indigo-500/50 hover:bg-slate-800/80 rounded-2xl p-4 transition-all text-left group">
+                      className="flex items-center gap-3 bg-white border border-slate-300 hover:border-indigo-300 hover:bg-slate-100 rounded-2xl p-4 transition-all text-left group">
                       <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0 transition-all"
                         style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>
                         {m.firstName[0]}{m.lastName?.[0] || ""}
                       </div>
                       <div className="min-w-0">
-                        <div className="text-sm font-bold text-white truncate">{m.firstName} {m.lastName}</div>
+                        <div className="text-sm font-bold text-slate-900 truncate">{m.firstName} {m.lastName}</div>
                         <div className="text-xs text-slate-500 truncate">{m.role}</div>
                       </div>
                     </button>
@@ -1169,13 +1170,13 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
           /* ── Step 2: Enter PIN ── */
           <div className="space-y-5">
             {/* Selected user */}
-            <div className="flex items-center gap-3 bg-slate-900/80 border border-slate-700/60 rounded-2xl p-4">
+            <div className="flex items-center gap-3 bg-white border border-slate-300 rounded-2xl p-4">
               <div className="w-12 h-12 rounded-xl flex items-center justify-center text-base font-bold flex-shrink-0"
                 style={{ background: (selectedMember.color || "#6366f1") + "30", color: selectedMember.color || "#6366f1" }}>
                 {selectedMember.firstName[0]}{selectedMember.lastName?.[0] || ""}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-base font-bold text-white">{selectedMember.firstName} {selectedMember.lastName}</div>
+                <div className="text-base font-bold text-slate-900">{selectedMember.firstName} {selectedMember.lastName}</div>
                 <div className="text-xs text-slate-400">{selectedMember.role} · {brand?.name}</div>
               </div>
               <button onClick={handleClear} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
@@ -1189,13 +1190,13 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
                 <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${
                   i < pin.length
                     ? "bg-indigo-500 border-indigo-500"
-                    : "bg-transparent border-slate-600"
+                    : "bg-transparent border-slate-400"
                 } ${shake ? "animate-bounce" : ""}`}/>
               ))}
             </div>
 
             {error && (
-              <div className="flex items-center justify-center gap-2 text-red-400 text-sm font-semibold">
+              <div className="flex items-center justify-center gap-2 text-red-700 text-sm font-semibold">
                 <AlertTriangle size={13}/> {error}
               </div>
             )}
@@ -1208,8 +1209,8 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
                   <button key={key} onClick={() => key === "⌫" ? handleBackspace() : handlePinDigit(key)}
                     className={`h-16 rounded-2xl text-xl font-bold transition-all active:scale-95 ${
                       key === "⌫"
-                        ? "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white"
-                        : "bg-slate-800 text-white hover:bg-slate-700"
+                        ? "bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-900"
+                        : "bg-slate-100 text-slate-900 hover:bg-slate-200"
                     }`}>
                     {key}
                   </button>
@@ -1227,7 +1228,7 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
 
         {/* Switch to manager login */}
         <div className="text-center">
-          <button onClick={onSwitchToManager} className="text-xs text-slate-600 hover:text-slate-400 transition-colors">
+          <button onClick={onSwitchToManager} className="text-xs text-slate-400 hover:text-slate-400 transition-colors">
             Manager / Owner sign in →
           </button>
         </div>
@@ -1284,12 +1285,12 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
   };
 
   const NavBar = () => (
-    <nav className="flex items-center gap-1 overflow-x-auto px-3 py-2 bg-slate-900/80 border-b border-slate-800">
+    <nav className="flex items-center gap-1 overflow-x-auto px-3 py-2 bg-white border-b border-slate-200">
       {NAV.map(n => {
         const NIcon = n.icon; const active = activeView === n.key;
         return (
           <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-100 hover:text-slate-900"}`}>
             <NIcon size={13}/>{n.label}
             {n.badge && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
           </button>
@@ -1304,19 +1305,19 @@ function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, 
 
   return (
     <AuthContext.Provider value={{ user: currentUser }}>
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
         {/* Header */}
-        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/80 sticky top-0 z-10">
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-white sticky top-0 z-10">
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
-            <BarChart2 size={15} className="text-white"/>
+            <BarChart2 size={15} className="text-slate-900"/>
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
+            <div className="text-sm font-bold text-slate-900 truncate">{currentUser.name}</div>
             <div className="text-xs text-slate-500">{currentUser.employeeRole} · {brand?.name || "—"}</div>
           </div>
           <div className="flex items-center gap-2">
-            {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
-            <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 text-xs font-semibold transition-all">
+            {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
+            <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50 text-xs font-semibold transition-all">
               <LogOut size={13}/> Sign out
             </button>
           </div>
@@ -1417,7 +1418,7 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
     <div className="space-y-5 max-w-xl">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-bold text-white">Report an Issue</h2>
+          <h2 className="text-base font-bold text-slate-900">Report an Issue</h2>
           <p className="text-xs text-slate-400 mt-0.5">Let your manager know about anything that needs attention</p>
         </div>
         <button onClick={() => setShowForm(s => !s)}
@@ -1427,11 +1428,11 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
       </div>
 
       {showForm && (
-        <div className="bg-slate-900/80 border border-slate-700/60 rounded-2xl p-5 space-y-4">
-          <h3 className="text-sm font-bold text-white">New Issue Report</h3>
+        <div className="bg-white border border-slate-300 rounded-2xl p-5 space-y-4">
+          <h3 className="text-sm font-bold text-slate-900">New Issue Report</h3>
           {brands.length > 1 && (
             <div><label className={labelCls}>Location</label>
-              <div className="flex flex-wrap gap-2">{brands.map(b => <button key={b.id} onClick={() => set("brandId", b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId === b.id ? "text-white border-transparent" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`} style={form.brandId === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
+              <div className="flex flex-wrap gap-2">{brands.map(b => <button key={b.id} onClick={() => set("brandId", b.id)} className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId === b.id ? "text-slate-900 border-transparent" : "bg-slate-100 text-slate-400 border-slate-300 hover:bg-slate-200"}`} style={form.brandId === b.id ? { background: b.color } : {}}>{b.name}</button>)}</div>
             </div>
           )}
           <div><label className={labelCls}>What's the issue? *</label>
@@ -1465,10 +1466,10 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
           <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Your Recent Reports</div>
           <div className="space-y-3">
             {myIssues.slice(0, 10).map(issue => (
-              <div key={issue.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
+              <div key={issue.id} className="bg-white border border-slate-300 rounded-2xl p-4">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-white">{issue.title}</div>
+                    <div className="text-sm font-semibold text-slate-900">{issue.title}</div>
                     <div className="text-xs text-slate-500 mt-0.5">{new Date(issue.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
                   </div>
                   <div className="flex gap-2 flex-shrink-0">
@@ -1477,7 +1478,7 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
                   </div>
                 </div>
                 {issue.description && <div className="text-xs text-slate-400 mt-2 line-clamp-2">{issue.description}</div>}
-                {issue.assignedTo && <div className="text-xs text-indigo-400 mt-1.5">→ Assigned to {issue.assignedTo}</div>}
+                {issue.assignedTo && <div className="text-xs text-indigo-600 mt-1.5">→ Assigned to {issue.assignedTo}</div>}
               </div>
             ))}
           </div>
@@ -1486,7 +1487,7 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
 
       {myIssues.length === 0 && !showForm && (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-          <Wrench size={32} className="mb-3 text-slate-700"/>
+          <Wrench size={32} className="mb-3 text-slate-300"/>
           <div className="text-sm font-semibold">No reports yet</div>
           <div className="text-xs mt-1">Use the button above to report an issue</div>
         </div>
@@ -1512,34 +1513,34 @@ function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center">
-          <div className="inline-flex items-center gap-2 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl px-4 py-2 mb-4">
-            <BarChart2 size={18} className="text-indigo-400"/>
-            <span className="text-indigo-300 font-bold text-sm tracking-wide">CREATE BRANDS</span>
+          <div className="inline-flex items-center gap-2 bg-indigo-100 border border-indigo-200 rounded-2xl px-4 py-2 mb-4">
+            <BarChart2 size={18} className="text-indigo-600"/>
+            <span className="text-indigo-500 font-bold text-sm tracking-wide">CREATE BRANDS</span>
           </div>
-          <h1 className="text-2xl font-bold text-white">Sign In</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Sign In</h1>
           <p className="text-slate-400 text-sm mt-1">Portfolio Dashboard</p>
         </div>
-        <div className="bg-slate-900/80 border border-slate-700/60 rounded-2xl p-6 space-y-4">
+        <div className="bg-white border border-slate-300 rounded-2xl p-6 space-y-4">
           {error && (
-            <div className="flex items-center gap-2 bg-red-950/50 border border-red-500/30 rounded-xl px-3 py-2 text-red-400 text-sm">
+            <div className="flex items-center gap-2 bg-red-50/50 border border-red-300 rounded-xl px-3 py-2 text-red-700 text-sm">
               <AlertTriangle size={14}/> {error}
             </div>
           )}
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Email</label>
             <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="you@createbrands.co.uk"
-              className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors" />
+              className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none transition-colors" />
           </div>
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Password</label>
             <div className="relative">
               <input value={password} onChange={e => setPassword(e.target.value)} type={showPass ? "text" : "password"} placeholder="••••••••"
                 onKeyDown={e => e.key === "Enter" && handleSubmit()}
-                className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors pr-10" />
-              <button onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200">
+                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none transition-colors pr-10" />
+              <button onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-900">
                 {showPass ? <EyeOff size={14}/> : <Eye size={14}/>}
               </button>
             </div>
@@ -1551,7 +1552,7 @@ function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
         </div>
         {onSwitchToEmployee && (
           <div className="text-center">
-            <button onClick={onSwitchToEmployee} className="text-xs text-slate-600 hover:text-slate-400 transition-colors">
+            <button onClick={onSwitchToEmployee} className="text-xs text-slate-400 hover:text-slate-400 transition-colors">
               ← Back to team sign in
             </button>
           </div>
@@ -1617,7 +1618,7 @@ function DashboardView({ brands, entries, issues }) {
         <AnalysisBlock title="14-Day Revenue & Cost Trend" className="xl:col-span-2">
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
               <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} />
               <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `£${(v/1000).toFixed(0)}k`} />
               <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />
@@ -1658,7 +1659,7 @@ function DashboardView({ brands, entries, issues }) {
               const pc = PRIORITY_CONFIG[issue.priority];
               const brand = brands.find(b => b.id === issue.brandId);
               return (
-                <div key={issue.id} className="flex items-center gap-3 py-2 border-b border-slate-700/40 last:border-0">
+                <div key={issue.id} className="flex items-center gap-3 py-2 border-b border-slate-200 last:border-0">
                   <Badge label={issue.priority} color={pc.color} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-slate-200 truncate">{issue.title}</div>
@@ -1765,8 +1766,8 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
       </div>
 
       {selectedBrand && (
-        <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl px-5 py-3 flex flex-wrap items-center gap-4">
-          <span className="text-sm font-bold text-white">{period.label}</span>
+        <div className="bg-slate-50 border border-slate-300 rounded-2xl px-5 py-3 flex flex-wrap items-center gap-4">
+          <span className="text-sm font-bold text-slate-900">{period.label}</span>
           <span className="text-xs text-slate-500">{period.from} → {period.to}</span>
           <span className="text-xs text-slate-400">{dayCount} reports</span>
           {target && <span className="text-xs text-slate-400">Daily target: {fmtCurrency(target.dailyRevenue)}</span>}
@@ -1795,14 +1796,14 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
               return (
                 <div key={k} className="flex-1">
                   <div className="text-xs text-slate-400 mb-1">{i===0?period.label:prevPeriod?.label||"Prior"}: {fmtCurrency(total)}</div>
-                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden"><div className="h-full rounded-full transition-all" style={{width:`${pct}%`,background:col}}/></div>
+                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full rounded-full transition-all" style={{width:`${pct}%`,background:col}}/></div>
                 </div>
               );
             })}
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <ComposedChart data={chartData} margin={{top:5,right:20,left:0,bottom:0}}>
-              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3"/>
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3"/>
               <XAxis dataKey="idx" tick={{fill:"#64748b",fontSize:10}}/>
               <YAxis yAxisId="left" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`£${(v/1000).toFixed(0)}k`}/>
               <YAxis yAxisId="right" orientation="right" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`£${v.toFixed(0)}`}/>
@@ -1821,7 +1822,7 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
         <AnalysisBlock title="Daily Prime Cost % Trend">
           <ResponsiveContainer width="100%" height={180}>
             <ComposedChart data={primeCostDays} margin={{top:5,right:20,left:0,bottom:0}}>
-              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3"/>
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3"/>
               <XAxis dataKey="date" tick={{fill:"#64748b",fontSize:10}}/>
               <YAxis tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`${v.toFixed(0)}%`}/>
               <Tooltip content={<ChartTooltip/>}/>
@@ -1836,8 +1837,8 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
 
       <AnalysisBlock title="Maintenance Ticketing Desk" action={<Badge label={selectedBrand?.name||""} color="slate"/>}>
         <div className="flex gap-2 mb-4 flex-wrap">
-          <input value={ticketText} onChange={e=>setTicketText(e.target.value)} placeholder="Describe the issue…" className="flex-1 min-w-48 bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
-          <select value={ticketPriority} onChange={e=>setTicketPriority(e.target.value)} className="bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+          <input value={ticketText} onChange={e=>setTicketText(e.target.value)} placeholder="Describe the issue…" className="flex-1 min-w-48 bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"/>
+          <select value={ticketPriority} onChange={e=>setTicketPriority(e.target.value)} className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none">
             <option>High</option><option>Medium</option><option>Low</option>
           </select>
           <button onClick={()=>{if(ticketText.trim()){addTicket(ticketText.trim(),ticketPriority);setTicketText("");}}} className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"><Plus size={14}/>Add</button>
@@ -1845,15 +1846,15 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
         {brandTickets.length===0&&<div className="text-slate-500 text-sm text-center py-4">No tickets raised</div>}
         <div className="space-y-2">
           {brandTickets.map(tk=>(
-            <div key={tk.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-all ${tk.done?"bg-slate-900/20 border-slate-700/30 opacity-50":"bg-slate-900/60 border-slate-700/60"}`}>
-              <button onClick={()=>toggleTicket(tk.id)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border transition-colors ${tk.done?"bg-emerald-600 border-emerald-500":"border-slate-600 hover:border-emerald-500"}`}>{tk.done&&<Check size={12} className="text-white"/>}</button>
+            <div key={tk.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-all ${tk.done?"bg-white/20 border-slate-300/30 opacity-50":"bg-white border-slate-300"}`}>
+              <button onClick={()=>toggleTicket(tk.id)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border transition-colors ${tk.done?"bg-emerald-600 border-emerald-500":"border-slate-400 hover:border-emerald-500"}`}>{tk.done&&<Check size={12} className="text-slate-900"/>}</button>
               <span className={`flex-1 text-sm ${tk.done?"line-through text-slate-500":"text-slate-300"}`}>{tk.text}</span>
-              {tk._issueRef?.assignedTo && <span className="text-xs text-indigo-400 hidden sm:block">→ {tk._issueRef.assignedTo}</span>}
+              {tk._issueRef?.assignedTo && <span className="text-xs text-indigo-600 hidden sm:block">→ {tk._issueRef.assignedTo}</span>}
               <Badge label={tk.priority} color={tk.priority==="Critical"?"red":tk.priority==="High"?"amber":tk.priority==="Medium"?"indigo":"slate"}/>
               <div className="flex items-center gap-1 flex-shrink-0">
-                <button onClick={()=>setDetailTicket(tk._issueRef)} className="px-2 py-1 rounded-lg bg-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-600 transition-colors">View</button>
-                <button onClick={()=>setEditTicket(tk._issueRef)} className="p-1.5 rounded-lg bg-slate-700 text-slate-400 hover:text-white hover:bg-slate-600 transition-colors"><Edit size={12}/></button>
-                <button onClick={()=>deleteTicket(tk.id)} className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-950/30 rounded-lg transition-colors"><Trash2 size={12}/></button>
+                <button onClick={()=>setDetailTicket(tk._issueRef)} className="px-2 py-1 rounded-lg bg-slate-200 text-slate-300 text-xs font-semibold hover:bg-slate-300 transition-colors">View</button>
+                <button onClick={()=>setEditTicket(tk._issueRef)} className="p-1.5 rounded-lg bg-slate-200 text-slate-400 hover:text-slate-900 hover:bg-slate-300 transition-colors"><Edit size={12}/></button>
+                <button onClick={()=>deleteTicket(tk.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={12}/></button>
               </div>
             </div>
           ))}
@@ -1938,13 +1939,13 @@ function EODFormView({ brands, onAddEntry }) {
 
   if (success) return (
     <div className="flex flex-col items-center justify-center py-24 gap-4">
-      <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center"><CheckCircle size={32} className="text-emerald-400"/></div>
-      <div className="text-xl font-bold text-white">Report Submitted</div>
+      <div className="w-16 h-16 rounded-2xl bg-emerald-100 border border-emerald-300 flex items-center justify-center"><CheckCircle size={32} className="text-emerald-700"/></div>
+      <div className="text-xl font-bold text-slate-900">Report Submitted</div>
       <div className="text-slate-400 text-sm">EOD entry saved. Resetting form…</div>
     </div>
   );
 
-  const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors";
+  const inputCls = "w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none transition-colors";
   const labelCls = "text-xs text-slate-400 font-semibold mb-1.5 block";
 
   return (
@@ -1952,23 +1953,23 @@ function EODFormView({ brands, onAddEntry }) {
       <div className="flex gap-2">
         {zones.map((z,i) => (
           <button key={i} onClick={() => i < zone && setZone(i)}
-            className={`flex-1 rounded-xl py-2 text-xs font-semibold transition-all ${i===zone?"bg-indigo-600 text-white":i<zone?"bg-emerald-600/30 text-emerald-400 cursor-pointer hover:bg-emerald-600/40":"bg-slate-800 text-slate-500"}`}>
+            className={`flex-1 rounded-xl py-2 text-xs font-semibold transition-all ${i===zone?"bg-indigo-600 text-white":i<zone?"bg-emerald-600/30 text-emerald-700 cursor-pointer hover:bg-emerald-600/40":"bg-slate-100 text-slate-500"}`}>
             {i<zone&&<span className="mr-1">✓</span>}{z}
           </button>
         ))}
       </div>
 
-      <div className="bg-slate-900/80 border border-slate-700/60 rounded-2xl p-6 space-y-4">
+      <div className="bg-white border border-slate-300 rounded-2xl p-6 space-y-4">
         {/* Zone 1 */}
         {zone === 0 && (
           <>
-            <h2 className="text-base font-bold text-white mb-2">Zone 1 — Identity</h2>
+            <h2 className="text-base font-bold text-slate-900 mb-2">Zone 1 — Identity</h2>
             <div>
               <div className={labelCls}>Location</div>
               <div className="flex flex-wrap gap-2">
                 {visibleBrands.map(b => (
                   <button key={b.id} onClick={() => set("brandId",b.id)}
-                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId===b.id?"text-white border-transparent":"bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"}`}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId===b.id?"text-slate-900 border-transparent":"bg-slate-100 text-slate-400 border-slate-300 hover:bg-slate-200"}`}
                     style={form.brandId===b.id?{background:b.color}:{}}>
                     {b.name}
                   </button>
@@ -1986,7 +1987,7 @@ function EODFormView({ brands, onAddEntry }) {
         {/* Zone 2 */}
         {zone === 1 && (
           <>
-            <h2 className="text-base font-bold text-white mb-2">Zone 2 — Revenue</h2>
+            <h2 className="text-base font-bold text-slate-900 mb-2">Zone 2 — Revenue</h2>
             <div className="grid grid-cols-2 gap-4">
               <div><label className={labelCls}>Net Sales (£)</label><input type="number" value={form.netSales} onChange={e=>set("netSales",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Card Revenue (£)</label><input type="number" value={form.cardRevenue} onChange={e=>set("cardRevenue",e.target.value)} className={inputCls} placeholder="0.00"/></div>
@@ -1994,13 +1995,13 @@ function EODFormView({ brands, onAddEntry }) {
               <div><label className={labelCls}>Physical Cash (£)</label><input type="number" value={form.physicalCash} onChange={e=>set("physicalCash",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Total Orders</label><input type="number" value={form.totalOrders} onChange={e=>set("totalOrders",e.target.value)} className={inputCls} placeholder="0"/></div>
               <div>
-                <label className={labelCls}>ATV (£) <span className="text-slate-600 font-normal">— auto-calculated</span></label>
-                <input type="number" value={form.atv} onChange={e=>set("atv",e.target.value)} className={`${inputCls} bg-slate-800/40`} placeholder="0.00"/>
+                <label className={labelCls}>ATV (£) <span className="text-slate-400 font-normal">— auto-calculated</span></label>
+                <input type="number" value={form.atv} onChange={e=>set("atv",e.target.value)} className={`${inputCls} bg-slate-100/50`} placeholder="0.00"/>
               </div>
             </div>
             {hasVariance && (
-              <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-amber-400 text-sm font-semibold mb-2">
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
+                <div className="flex items-center gap-2 text-amber-700 text-sm font-semibold mb-2">
                   <AlertTriangle size={14}/> Cash Variance: {variance>=0?"+":""}£{variance.toFixed(2)}
                 </div>
                 <label className={labelCls}>Justification (required)</label>
@@ -2013,18 +2014,18 @@ function EODFormView({ brands, onAddEntry }) {
         {/* Zone 3 */}
         {zone === 2 && (
           <>
-            <h2 className="text-base font-bold text-white mb-2">Zone 3 — Quality</h2>
+            <h2 className="text-base font-bold text-slate-900 mb-2">Zone 3 — Quality</h2>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-emerald-400"/>5-Star Reviews</span></label>
+                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-emerald-700"/>5-Star Reviews</span></label>
                 <input type="number" value={form.fiveStarReviews} onChange={e=>set("fiveStarReviews",e.target.value)} className={inputCls} placeholder="0"/>
               </div>
               <div>
-                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-amber-400"/>2–4 Star Reviews</span></label>
+                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-amber-700"/>2–4 Star Reviews</span></label>
                 <input type="number" value={form.midStarReviews} onChange={e=>set("midStarReviews",e.target.value)} className={inputCls} placeholder="0"/>
               </div>
               <div>
-                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-red-400"/>1-Star Reviews</span></label>
+                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-red-700"/>1-Star Reviews</span></label>
                 <input type="number" value={form.oneStarReviews} onChange={e=>set("oneStarReviews",e.target.value)} className={inputCls} placeholder="0"/>
               </div>
             </div>
@@ -2034,10 +2035,10 @@ function EODFormView({ brands, onAddEntry }) {
               const fivePct = total > 0 ? ((parseInt(form.fiveStarReviews)||0)/total*100).toFixed(0) : 0;
               const onePct = total > 0 ? ((parseInt(form.oneStarReviews)||0)/total*100).toFixed(0) : 0;
               return (
-                <div className="bg-slate-800/60 border border-slate-700/40 rounded-xl p-4">
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                   <div className="flex items-center justify-between text-xs mb-2">
                     <span className="text-slate-400">{total} total reviews</span>
-                    <span className="text-emerald-400 font-semibold">{fivePct}% five-star</span>
+                    <span className="text-emerald-700 font-semibold">{fivePct}% five-star</span>
                   </div>
                   <div className="flex gap-1 h-2">
                     <div className="rounded-full bg-emerald-500 transition-all" style={{width:`${fivePct}%`}}/>
@@ -2045,7 +2046,7 @@ function EODFormView({ brands, onAddEntry }) {
                     <div className="rounded-full bg-red-500 transition-all" style={{width:`${onePct}%`}}/>
                   </div>
                   {parseInt(form.oneStarReviews) > 0 && (
-                    <div className="flex items-center gap-2 mt-2 text-red-400 text-xs"><AlertTriangle size={12}/>{form.oneStarReviews} 1-star review(s) — follow up recommended</div>
+                    <div className="flex items-center gap-2 mt-2 text-red-700 text-xs"><AlertTriangle size={12}/>{form.oneStarReviews} 1-star review(s) — follow up recommended</div>
                   )}
                 </div>
               );
@@ -2056,7 +2057,7 @@ function EODFormView({ brands, onAddEntry }) {
         {/* Zone 4 */}
         {zone === 3 && (
           <>
-            <h2 className="text-base font-bold text-white mb-2">Zone 4 — People & Risk</h2>
+            <h2 className="text-base font-bold text-slate-900 mb-2">Zone 4 — People & Risk</h2>
             <div className="grid grid-cols-3 gap-4">
               <div><label className={labelCls}>Labour Cost (£)</label><input type="number" value={form.laborCost} onChange={e=>set("laborCost",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>COGS (£)</label><input type="number" value={form.cogsCost} onChange={e=>set("cogsCost",e.target.value)} className={inputCls} placeholder="0.00"/></div>
@@ -2064,13 +2065,13 @@ function EODFormView({ brands, onAddEntry }) {
             </div>
             {ns > 0 && lc > 0 && cc > 0 && (
               <div className="grid grid-cols-2 gap-4">
-                <div className={`rounded-xl border p-3 ${primeCostPct>(selectedBrand?.kpiTargets?.primeCostMax||60)?"bg-red-950/30 border-red-500/30":"bg-emerald-950/30 border-emerald-500/30"}`}>
+                <div className={`rounded-xl border p-3 ${primeCostPct>(selectedBrand?.kpiTargets?.primeCostMax||60)?"bg-red-50 border-red-300":"bg-emerald-50 border-emerald-300"}`}>
                   <div className="text-xs text-slate-400 mb-1">Prime Cost %</div>
-                  <div className={`text-lg font-bold ${primeCostPct>(selectedBrand?.kpiTargets?.primeCostMax||60)?"text-red-400":"text-emerald-400"}`}>{primeCostPct.toFixed(1)}%</div>
+                  <div className={`text-lg font-bold ${primeCostPct>(selectedBrand?.kpiTargets?.primeCostMax||60)?"text-red-700":"text-emerald-700"}`}>{primeCostPct.toFixed(1)}%</div>
                 </div>
-                <div className="bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-3">
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
                   <div className="text-xs text-slate-400 mb-1">SPLH</div>
-                  <div className="text-lg font-bold text-indigo-400">{fmtSPLH(splh)}</div>
+                  <div className="text-lg font-bold text-indigo-600">{fmtSPLH(splh)}</div>
                 </div>
               </div>
             )}
@@ -2080,7 +2081,7 @@ function EODFormView({ brands, onAddEntry }) {
       </div>
 
       <div className="flex gap-3">
-        {zone > 0 && <button onClick={()=>setZone(z=>z-1)} className="px-5 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors flex items-center gap-2"><ChevronLeft size={14}/>Back</button>}
+        {zone > 0 && <button onClick={()=>setZone(z=>z-1)} className="px-5 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors flex items-center gap-2"><ChevronLeft size={14}/>Back</button>}
         <button onClick={handleSubmit} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl py-2.5 text-sm transition-colors flex items-center justify-center gap-2">
           {zone < 3 ? <><span>Next</span><ChevronRight size={14}/></> : <><CheckCircle size={14}/> Submit Report</>}
         </button>
@@ -2103,11 +2104,11 @@ function KPITargetModal({ brand, onSave, onClose }) {
     { key:"cashVarianceMax", label:"Cash Variance Max", unit:"£", step:5 },
   ];
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">KPI Targets — {brand.name}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-300 rounded-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300">
+          <h3 className="font-bold text-slate-900">KPI Targets — {brand.name}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-3 max-h-[60vh] overflow-y-auto">
           {fields.map(f => (
@@ -2116,13 +2117,13 @@ function KPITargetModal({ brand, onSave, onClose }) {
               <div className="flex items-center gap-1.5">
                 <span className="text-xs text-slate-500">{f.unit}</span>
                 <input type="number" value={t[f.key]} step={f.step} onChange={e=>setT(p=>({...p,[f.key]:parseFloat(e.target.value)||0}))}
-                  className="w-24 bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-sm text-white text-right focus:border-indigo-500 focus:outline-none"/>
+                  className="w-24 bg-slate-100 border border-slate-300 rounded-xl px-3 py-1.5 text-sm text-slate-900 text-right focus:border-indigo-500 focus:outline-none"/>
               </div>
             </div>
           ))}
         </div>
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-300">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Cancel</button>
           <button onClick={()=>{onSave(brand.id,t);onClose();}} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 transition-colors">Save</button>
         </div>
       </div>
@@ -2146,33 +2147,33 @@ function LocationEditorModal({ brand, onSave, onClose }) {
     onClose();
   };
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">{isCreate?"Add Location":`Edit — ${brand.name}`}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-300 rounded-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300">
+          <h3 className="font-bold text-slate-900">{isCreate?"Add Location":`Edit — ${brand.name}`}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
-          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Name *</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
-          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Address</label><input value={address} onChange={e=>setAddress(e.target.value)} className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
+          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Name *</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"/></div>
+          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Address</label><input value={address} onChange={e=>setAddress(e.target.value)} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"/></div>
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Icon</label>
             <div className="flex gap-2 flex-wrap">
-              {icons.map(ic=>{const Ic=ICON_MAP[ic.key];return(<button key={ic.key} onClick={()=>setIconKey(ic.key)} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${iconKey===ic.key?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}><Ic size={13}/>{ic.label}</button>);})}
+              {icons.map(ic=>{const Ic=ICON_MAP[ic.key];return(<button key={ic.key} onClick={()=>setIconKey(ic.key)} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${iconKey===ic.key?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}><Ic size={13}/>{ic.label}</button>);})}
             </div>
           </div>
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Colour</label>
             <div className="flex gap-2 flex-wrap">{colors.map(c=><button key={c} onClick={()=>setColor(c)} className={`w-8 h-8 rounded-xl border-2 transition-all ${color===c?"border-white scale-110":"border-transparent"}`} style={{background:c}}/>)}</div>
           </div>
-          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Daily Revenue Target (£)</label><input type="number" value={dailyRevenue} onChange={e=>setDailyRevenue(e.target.value)} step={100} className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
-          <div className="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 flex items-center gap-3">
+          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Daily Revenue Target (£)</label><input type="number" value={dailyRevenue} onChange={e=>setDailyRevenue(e.target.value)} step={100} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"/></div>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{background:color+"30"}}><BIcon size={16} style={{color}}/></div>
-            <div><div className="text-sm font-semibold text-white">{name||"Location Name"}</div><div className="text-xs text-slate-400">{address||"Address"}</div></div>
+            <div><div className="text-sm font-semibold text-slate-900">{name||"Location Name"}</div><div className="text-xs text-slate-400">{address||"Address"}</div></div>
           </div>
         </div>
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-300">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!name.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">{isCreate?"Create":"Save"}</button>
         </div>
       </div>
@@ -2196,30 +2197,30 @@ function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
     onClose();
   };
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">{isCreate?"Add Manager":`Edit — ${editUser.name}`}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-300 rounded-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300">
+          <h3 className="font-bold text-slate-900">{isCreate?"Add Manager":`Edit — ${editUser.name}`}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
-          <div className="flex items-center gap-3 bg-slate-800/60 border border-slate-700/40 rounded-xl p-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-600/30 text-indigo-300 flex items-center justify-center text-sm font-bold">{avatar}</div>
-            <div><div className="text-sm font-semibold text-white">{name||"Full Name"}</div><div className="text-xs text-slate-400">{email||"email"}</div></div>
+          <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-500 flex items-center justify-center text-sm font-bold">{avatar}</div>
+            <div><div className="text-sm font-semibold text-slate-900">{name||"Full Name"}</div><div className="text-xs text-slate-400">{email||"email"}</div></div>
           </div>
-          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Full Name *</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
-          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Email *</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
+          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Full Name *</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"/></div>
+          <div><label className="text-xs text-slate-400 font-semibold mb-1.5 block">Email *</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"/></div>
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Password *</label>
             <div className="relative">
-              <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none pr-10"/>
-              <button onClick={()=>setShowPass(p=>!p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200">{showPass?<EyeOff size={14}/>:<Eye size={14}/>}</button>
+              <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none pr-10"/>
+              <button onClick={()=>setShowPass(p=>!p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-900">{showPass?<EyeOff size={14}/>:<Eye size={14}/>}</button>
             </div>
           </div>
           <div>
             <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Role</label>
             <div className="flex gap-2">
-              {["manager","owner"].map(r=><button key={r} onClick={()=>setRole(r)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all capitalize ${role===r?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{r}</button>)}
+              {["manager","owner"].map(r=><button key={r} onClick={()=>setRole(r)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all capitalize ${role===r?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>{r}</button>)}
             </div>
           </div>
           {role==="manager"&&(
@@ -2227,17 +2228,17 @@ function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
               <label className="text-xs text-slate-400 font-semibold mb-1.5 block">Location Access</label>
               <div className="space-y-2">
                 {brands.map(b=>(
-                  <button key={b.id} onClick={()=>toggleBrand(b.id)} className={`w-full flex items-center justify-between rounded-xl border px-3 py-2.5 transition-all ${brandIds.includes(b.id)?"bg-indigo-600/20 border-indigo-500/30":"bg-slate-800/60 border-slate-700/40 hover:bg-slate-700/60"}`}>
+                  <button key={b.id} onClick={()=>toggleBrand(b.id)} className={`w-full flex items-center justify-between rounded-xl border px-3 py-2.5 transition-all ${brandIds.includes(b.id)?"bg-indigo-100 border-indigo-200":"bg-slate-50 border-slate-200 hover:bg-slate-200"}`}>
                     <span className="text-sm text-slate-300">{b.name}</span>
-                    {brandIds.includes(b.id)&&<Check size={14} className="text-indigo-400"/>}
+                    {brandIds.includes(b.id)&&<Check size={14} className="text-indigo-600"/>}
                   </button>
                 ))}
               </div>
             </div>
           )}
         </div>
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-300">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!name.trim()||!email.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">{isCreate?"Create":"Save"}</button>
         </div>
       </div>
@@ -2259,8 +2260,8 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-2 bg-slate-900/60 border border-slate-700/60 rounded-2xl p-1.5">
-          {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>{t.label}</button>)}
+        <div className="flex gap-2 bg-white border border-slate-300 rounded-2xl p-1.5">
+          {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab===t.key?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>{t.label}</button>)}
         </div>
         <button onClick={()=>setShowImport(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
           <FileSpreadsheet size={14}/> Bulk Import
@@ -2274,17 +2275,17 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
             const BIcon=ICON_MAP[b.iconKey]||Building2;
             const managerCount=users.filter(u=>u.role==="manager"&&u.brandIds.includes(b.id)).length;
             return(
-              <div key={b.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
+              <div key={b.id} className="flex items-center gap-4 bg-white border border-slate-300 rounded-2xl px-5 py-4">
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{background:b.color+"25"}}><BIcon size={18} style={{color:b.color}}/></div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold text-white">{b.name}</div>
+                  <div className="text-sm font-bold text-slate-900">{b.name}</div>
                   <div className="text-xs text-slate-400">{b.address}</div>
                   <div className="text-xs text-slate-500 mt-0.5">Target: {fmtCurrency(b.kpiTargets.dailyRevenue)}/day · {managerCount} manager{managerCount!==1?"s":""}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={()=>setKpiModal(b)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors">KPIs</button>
-                  <button onClick={()=>setLocModal(b)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={14}/></button>
-                  <button onClick={()=>setDeleteModal({msg:`Delete "${b.name}"? This cannot be undone.`,fn:()=>onDeleteBrand(b.id)})} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={14}/></button>
+                  <button onClick={()=>setKpiModal(b)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-300 hover:bg-amber-500/30 transition-colors">KPIs</button>
+                  <button onClick={()=>setLocModal(b)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors"><Edit size={14}/></button>
+                  <button onClick={()=>setDeleteModal({msg:`Delete "${b.name}"? This cannot be undone.`,fn:()=>onDeleteBrand(b.id)})} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"><Trash2 size={14}/></button>
                 </div>
               </div>
             );
@@ -2296,18 +2297,18 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
         <div className="space-y-4">
           <div className="flex justify-end"><button onClick={()=>setUserModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/>Add Manager</button></div>
           {users.map(u=>(
-            <div key={u.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
-              <div className="w-9 h-9 rounded-xl bg-indigo-600/30 text-indigo-300 flex items-center justify-center text-sm font-bold flex-shrink-0">{u.avatar}</div>
+            <div key={u.id} className="flex items-center gap-4 bg-white border border-slate-300 rounded-2xl px-5 py-4">
+              <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-500 flex items-center justify-center text-sm font-bold flex-shrink-0">{u.avatar}</div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-bold text-white">{u.name}</span><RoleBadge role={u.role}/></div>
+                <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-bold text-slate-900">{u.name}</span><RoleBadge role={u.role}/></div>
                 <div className="text-xs text-slate-400">{u.email}</div>
                 <div className="flex flex-wrap gap-1 mt-1.5">
                   {u.role==="owner"?<Badge label="All Locations" color="violet"/>:brands.filter(b=>u.brandIds.includes(b.id)).map(b=><Badge key={b.id} label={b.name} color="slate"/>)}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={()=>setUserModal(u)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={14}/></button>
-                {u.role!=="owner"&&<button onClick={()=>setDeleteModal({msg:`Delete user "${u.name}"?`,fn:()=>onDeleteUser(u.id)})} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={14}/></button>}
+                <button onClick={()=>setUserModal(u)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors"><Edit size={14}/></button>
+                {u.role!=="owner"&&<button onClick={()=>setDeleteModal({msg:`Delete user "${u.name}"?`,fn:()=>onDeleteUser(u.id)})} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"><Trash2 size={14}/></button>}
               </div>
             </div>
           ))}
@@ -2316,23 +2317,23 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
 
       {tab==="kpis"&&(
         <div className="space-y-4">
-          <div className="flex items-center gap-2 bg-amber-950/30 border border-amber-500/30 rounded-xl px-4 py-2.5">
-            <AlertTriangle size={14} className="text-amber-400 flex-shrink-0"/>
-            <span className="text-sm text-amber-300">Changes to KPI targets take effect immediately across all dashboards.</span>
+          <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 rounded-xl px-4 py-2.5">
+            <AlertTriangle size={14} className="text-amber-700 flex-shrink-0"/>
+            <span className="text-sm text-amber-600">Changes to KPI targets take effect immediately across all dashboards.</span>
           </div>
           {brands.map(b=>{
             const t=b.kpiTargets;
             return(
-              <div key={b.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-5">
+              <div key={b.id} className="bg-white border border-slate-300 rounded-2xl p-5">
                 <div className="flex items-center justify-between mb-4">
-                  <div className="text-sm font-bold text-white">{b.name}</div>
-                  <button onClick={()=>setKpiModal(b)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors">Edit Targets</button>
+                  <div className="text-sm font-bold text-slate-900">{b.name}</div>
+                  <button onClick={()=>setKpiModal(b)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-300 hover:bg-amber-500/30 transition-colors">Edit Targets</button>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[{label:"Daily Revenue",value:fmtCurrency(t.dailyRevenue)},{label:"Prime Cost Max",value:`${t.primeCostMax}%`},{label:"Labour % Max",value:`${t.laborPctMax}%`},{label:"COGS % Max",value:`${t.cogsPctMax}%`},{label:"Net Margin Min",value:`${t.netMarginMin}%`},{label:"SPLH Min",value:`£${t.splhMin}`},{label:"Avg Star Min",value:`${t.avgStarMin}★`},{label:"Cash Variance Max",value:`£${t.cashVarianceMax}`}].map(item=>(
-                    <div key={item.label} className="bg-slate-800/60 rounded-xl p-3">
+                    <div key={item.label} className="bg-slate-50 rounded-xl p-3">
                       <div className="text-xs text-slate-400 mb-1">{item.label}</div>
-                      <div className="text-sm font-bold text-white">{item.value}</div>
+                      <div className="text-sm font-bold text-slate-900">{item.value}</div>
                     </div>
                   ))}
                 </div>
@@ -2346,10 +2347,10 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
       {userModal&&<UserEditorModal user={userModal==="new"?null:userModal} brands={brands} onSave={userModal==="new"?onAddUser:onUpdateUser} onClose={()=>setUserModal(null)}/>}
       {deleteModal&&(
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
-            <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div><div className="text-sm text-slate-300">{deleteModal.msg}</div></div>
-            <div className="flex gap-3"><button onClick={()=>setDeleteModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button><button onClick={()=>{deleteModal.fn();setDeleteModal(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button></div>
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-red-300 rounded-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-700"/></div><div className="text-sm text-slate-300">{deleteModal.msg}</div></div>
+            <div className="flex gap-3"><button onClick={()=>setDeleteModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200 transition-colors">Cancel</button><button onClick={()=>{deleteModal.fn();setDeleteModal(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button></div>
           </div>
         </div>
       )}
@@ -2362,14 +2363,14 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
 function UserChip({ user, onLogout, compact }) {
   return (
     <div className={`flex items-center ${compact?"gap-2":"gap-3"}`}>
-      <div className="w-8 h-8 rounded-xl bg-indigo-600/30 text-indigo-300 flex items-center justify-center text-sm font-bold flex-shrink-0">{user.avatar}</div>
+      <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-500 flex items-center justify-center text-sm font-bold flex-shrink-0">{user.avatar}</div>
       {!compact&&(
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-white truncate">{user.name}</div>
+          <div className="text-sm font-semibold text-slate-900 truncate">{user.name}</div>
           <RoleBadge role={user.role}/>
         </div>
       )}
-      <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>
+      <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-700 transition-colors rounded-lg hover:bg-red-50"><LogOut size={14}/></button>
     </div>
   );
 }
@@ -2428,19 +2429,19 @@ function checkTemp(u, v) {
 }
 
 // ─── Ops shared helpers ───────────────────────────────────────────────────────
-const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors";
+const inputCls = "w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none transition-colors";
 const labelCls = "text-xs text-slate-400 font-semibold mb-1.5 block";
 
 function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${maxW} flex flex-col`} style={{ maxHeight: "85vh" }}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700 flex-shrink-0">
-          <h3 className="font-bold text-white">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className={`bg-white border border-slate-300 rounded-2xl w-full ${maxW} flex flex-col`} style={{ maxHeight: "85vh" }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-300 flex-shrink-0">
+          <h3 className="font-bold text-slate-900">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-900"><X size={18}/></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">{children}</div>
-        {footer && <div className="flex gap-3 px-5 py-4 border-t border-slate-700 flex-shrink-0">{footer}</div>}
+        {footer && <div className="flex gap-3 px-5 py-4 border-t border-slate-300 flex-shrink-0">{footer}</div>}
       </div>
     </div>
   );
@@ -2448,14 +2449,14 @@ function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
 
 function OpsConfirmModal({ message, onConfirm, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white border border-red-300 rounded-2xl w-full max-w-sm p-6 space-y-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
+          <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-700"/></div>
           <div className="text-sm text-slate-300">{message}</div>
         </div>
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
           <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
         </div>
       </div>
@@ -2480,7 +2481,7 @@ function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checkli
   };
   return (
     <div className="space-y-6">
-      {overdue.length > 0 && <div className="bg-red-950/30 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={18} className="text-red-400 flex-shrink-0 mt-0.5"/><div><div className="text-sm font-bold text-red-400">{overdue.length} overdue assignment{overdue.length > 1 ? "s" : ""} require action</div></div></div>}
+      {overdue.length > 0 && <div className="bg-red-50 border border-red-300 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={18} className="text-red-700 flex-shrink-0 mt-0.5"/><div><div className="text-sm font-bold text-red-700">{overdue.length} overdue assignment{overdue.length > 1 ? "s" : ""} require action</div></div></div>}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Locations" value={vb.length} sub="Active" icon={MapPin} accent="indigo"/>
         <StatCard label="Assignments Today" value={todayA.length} sub="All sites" icon={ClipboardList} accent="indigo"/>
@@ -2490,7 +2491,7 @@ function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checkli
       <AnalysisBlock title="All Locations — Live Status">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
-            <thead><tr className="border-b border-slate-700">{["Location","Scheduled","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead>
+            <thead><tr className="border-b border-slate-300">{["Location","Scheduled","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead>
             <tbody>
               {vb.map(brand => {
                 const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
@@ -2500,12 +2501,12 @@ function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checkli
                 const rag = ragFor(brand);
                 const ragColors = { red: "red", green: "green", amber: "amber" };
                 return (
-                  <tr key={brand.id} className="border-b border-slate-800 hover:bg-slate-800/30">
+                  <tr key={brand.id} className="border-b border-slate-200 hover:bg-slate-100/30">
                     <td className="px-3 py-3"><div className="flex items-center gap-2"><div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: brand.color + "25", color: brand.color }}>{brand.name.slice(0,2)}</div><span className="font-semibold text-slate-200">{brand.name}</span></div></td>
                     <td className="px-3 py-3 text-slate-300 font-semibold">{la.length}</td>
                     <td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ On time" color="green"/>}</td>
                     <td className="px-3 py-3 text-slate-300">{done}</td>
-                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la.length ? rate+"%" : "—"}</span></td>
+                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-700":rate>=50?"text-amber-700":"text-red-700"}`}>{la.length ? rate+"%" : "—"}</span></td>
                     <td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={ragColors[rag]}/></td>
                   </tr>
                 );
@@ -2536,8 +2537,8 @@ function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks
   return (
     <div className="space-y-6">
       <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
-      {overdue.length > 0 && <div className="bg-red-950/30 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
-      {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments for this location today</div></div>}
+      {overdue.length > 0 && <div className="bg-red-50 border border-red-300 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-700 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-700">{overdue.length} overdue — action required</div></div>}
+      {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-300"/><div className="text-sm font-semibold">No assignments for this location today</div></div>}
       <div className="space-y-3">
         {bAssigns.map(a => {
           const od = isOverdue(a); const taskName = getTaskName(a.type, a.taskId);
@@ -2550,32 +2551,32 @@ function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks
           const pct = totalItems ? Math.round((doneItems / totalItems) * 100) : 0;
           const isExp = expandedId === a.id;
           return (
-            <div key={a.id} className={`rounded-2xl border overflow-hidden ${od ? "border-red-500/30 bg-red-950/10" : doneToday ? "border-emerald-500/30 bg-emerald-950/10" : "border-slate-700/60 bg-slate-900/60"}`}>
+            <div key={a.id} className={`rounded-2xl border overflow-hidden ${od ? "border-red-300 bg-red-50/10" : doneToday ? "border-emerald-300 bg-emerald-50/10" : "border-slate-300 bg-white"}`}>
               <div className="p-4">
                 <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-base flex-shrink-0">{typeIcons[a.type] || "📋"}</div>
+                  <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center text-base flex-shrink-0">{typeIcons[a.type] || "📋"}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="text-sm font-bold text-white">{taskName}</div>
+                      <div className="text-sm font-bold text-slate-900">{taskName}</div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         {od && <Badge label="OVERDUE" color="red"/>}
                         {doneToday && <Badge label="✓ Complete" color="emerald"/>}
-                        {cl && <button onClick={() => setExpandedId(isExp ? null : a.id)} className="text-xs text-indigo-400 hover:text-indigo-300">{isExp ? "Collapse" : "Open"}</button>}
+                        {cl && <button onClick={() => setExpandedId(isExp ? null : a.id)} className="text-xs text-indigo-600 hover:text-indigo-500">{isExp ? "Collapse" : "Open"}</button>}
                         {!doneToday && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Sign off</button>}
                       </div>
                     </div>
                     <div className="text-xs text-slate-500 mt-1">Window: {a.winStart}–{a.winEnd}{a.role ? ` · 🎭 ${a.role}` : ""}</div>
-                    {cl && totalItems > 0 && <div className="mt-2"><div className="flex justify-between text-xs text-slate-400 mb-1"><span>{doneItems}/{totalItems} items</span><span>{pct}%</span></div><div className="h-1.5 bg-slate-800 rounded-full"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/></div></div>}
+                    {cl && totalItems > 0 && <div className="mt-2"><div className="flex justify-between text-xs text-slate-400 mb-1"><span>{doneItems}/{totalItems} items</span><span>{pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/></div></div>}
                   </div>
                 </div>
               </div>
               {cl && isExp && (
-                <div className="border-t border-slate-700/60 p-4 space-y-2">
+                <div className="border-t border-slate-300 p-4 space-y-2">
                   {cl.items.map(item => {
                     const checked = !!clState[item.id];
                     return (
-                      <div key={item.id} className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${checked ? "bg-emerald-950/20 border-emerald-500/20" : "bg-slate-800/40 border-slate-700/40"}`}>
-                        <button onClick={() => onChecklistItemToggle(stateKey, item.id, !checked)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border mt-0.5 transition-colors ${checked ? "bg-emerald-600 border-emerald-500" : "border-slate-600 hover:border-emerald-500"}`}>{checked && <Check size={11} className="text-white"/>}</button>
+                      <div key={item.id} className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${checked ? "bg-emerald-50 border-emerald-200" : "bg-slate-100/50 border-slate-200"}`}>
+                        <button onClick={() => onChecklistItemToggle(stateKey, item.id, !checked)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border mt-0.5 transition-colors ${checked ? "bg-emerald-600 border-emerald-500" : "border-slate-400 hover:border-emerald-500"}`}>{checked && <Check size={11} className="text-slate-900"/>}</button>
                         <div className="flex-1 min-w-0"><div className={`text-sm ${checked ? "line-through text-slate-500" : "text-slate-200"}`}>{item.text}</div>{item.guide && <div className="text-xs text-slate-500 mt-0.5">{item.guide}</div>}</div>
                       </div>
                     );
@@ -2612,25 +2613,25 @@ function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
           const latest = getLatest(unit.id);
           const ok = latest ? checkTemp(unit, latest.value) : null;
           return (
-            <div key={unit.id} className={`rounded-2xl border p-4 ${latest && !ok ? "bg-red-950/20 border-red-500/30" : latest && ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+            <div key={unit.id} className={`rounded-2xl border p-4 ${latest && !ok ? "bg-red-50 border-red-300" : latest && ok ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-300"}`}>
               <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2"><span className="text-lg">{TEMP_ICON[unit.type] || "🌡️"}</span><div><div className="text-sm font-bold text-white">{unit.name}</div><div className="text-xs text-slate-500">{tempLimitText(unit)}</div></div></div>
+                <div className="flex items-center gap-2"><span className="text-lg">{TEMP_ICON[unit.type] || "🌡️"}</span><div><div className="text-sm font-bold text-slate-900">{unit.name}</div><div className="text-xs text-slate-500">{tempLimitText(unit)}</div></div></div>
                 {latest && (ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ BREACH" color="red"/>)}
               </div>
-              {latest ? <div className="text-2xl font-bold mb-1" style={{ color: ok ? "#10b981" : "#ef4444" }}>{latest.value}°C</div> : <div className="text-xl font-bold text-slate-600 mb-1">No reading</div>}
+              {latest ? <div className="text-2xl font-bold mb-1" style={{ color: ok ? "#10b981" : "#ef4444" }}>{latest.value}°C</div> : <div className="text-xl font-bold text-slate-400 mb-1">No reading</div>}
               <div className="text-xs text-slate-500">{latest ? `Logged ${latest.time} by ${latest.loggedBy}` : "Not logged today"}</div>
             </div>
           );
         })}
-        {brandUnits.length === 0 && <div className="col-span-3 flex flex-col items-center justify-center py-12 text-slate-500"><Thermometer size={28} className="mb-2 text-slate-700"/><div className="text-sm">No temperature units for this location</div><div className="text-xs mt-1">Add units in Ops Settings</div></div>}
+        {brandUnits.length === 0 && <div className="col-span-3 flex flex-col items-center justify-center py-12 text-slate-500"><Thermometer size={28} className="mb-2 text-slate-300"/><div className="text-sm">No temperature units for this location</div><div className="text-xs mt-1">Add units in Ops Settings</div></div>}
       </div>
-      {todayLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead><tbody>{[...todayLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-800"><td className="px-3 py-2 text-slate-300">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-400 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-400">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
+      {todayLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-300">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead><tbody>{[...todayLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-200"><td className="px-3 py-2 text-slate-300">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-400 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-700" : "text-red-700"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-400">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
       {showForm && (
-        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = brandUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: selBrand, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
+        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = brandUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: selBrand, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
           <div className="space-y-4">
             <div><label className={labelCls}>Unit</label><select value={form.unitId} onChange={e => set("unitId", e.target.value)} className={inputCls}>{brandUnits.map(u => <option key={u.id} value={u.id}>{u.name} ({u.type})</option>)}</select></div>
             <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Temperature (°C)</label><input type="number" step="0.1" value={form.value} onChange={e => set("value", e.target.value)} placeholder="e.g. 4.5" className={inputCls}/></div><div><label className={labelCls}>Time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div></div>
-            {form.unitId && form.value !== "" && (() => { const unit = brandUnits.find(u => u.id === form.unitId); const ok = unit ? checkTemp(unit, form.value) : true; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-950/30 border-emerald-500/30" : "bg-red-950/30 border-red-500/30"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-400" : "text-red-400"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{unit && <div className="text-xs text-slate-400 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
+            {form.unitId && form.value !== "" && (() => { const unit = brandUnits.find(u => u.id === form.unitId); const ok = unit ? checkTemp(unit, form.value) : true; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-50 border-emerald-300" : "bg-red-50 border-red-300"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-700" : "text-red-700"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{unit && <div className="text-xs text-slate-400 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
             <div><label className={labelCls}>Notes</label><input value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Any observations…" className={inputCls}/></div>
           </div>
         </Modal>
@@ -2654,10 +2655,10 @@ function DeliveriesView({ brands, deliveries, onAdd }) {
         <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
         <button onClick={() => { setForm({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Delivery</button>
       </div>
-      {brandDeliveries.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Truck size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No deliveries logged</div></div>}
-      <div className="space-y-3">{brandDeliveries.map(d => <div key={d.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4"><div className="text-sm font-bold text-white">{d.supplier}</div><div className="text-xs text-slate-400 mt-0.5">{d.items}</div><div className="flex gap-2 mt-2 flex-wrap"><Badge label={d.date} color="slate"/><Badge label={d.time} color="slate"/>{d.temp && <Badge label={`${d.temp}°C`} color={d.tempOk === "yes" ? "green" : "red"}/>}<Badge label={d.condition === "good" ? "✓ Good" : `⚠ ${d.condition}`} color={d.condition === "good" ? "green" : "amber"}/><Badge label={`By ${d.loggedBy}`} color="slate"/></div>{d.notes && <div className="text-xs text-slate-500 mt-1.5 italic">{d.notes}</div>}</div>)}</div>
+      {brandDeliveries.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Truck size={32} className="mb-3 text-slate-300"/><div className="text-sm font-semibold">No deliveries logged</div></div>}
+      <div className="space-y-3">{brandDeliveries.map(d => <div key={d.id} className="bg-white border border-slate-300 rounded-2xl p-4"><div className="text-sm font-bold text-slate-900">{d.supplier}</div><div className="text-xs text-slate-400 mt-0.5">{d.items}</div><div className="flex gap-2 mt-2 flex-wrap"><Badge label={d.date} color="slate"/><Badge label={d.time} color="slate"/>{d.temp && <Badge label={`${d.temp}°C`} color={d.tempOk === "yes" ? "green" : "red"}/>}<Badge label={d.condition === "good" ? "✓ Good" : `⚠ ${d.condition}`} color={d.condition === "good" ? "green" : "amber"}/><Badge label={`By ${d.loggedBy}`} color="slate"/></div>{d.notes && <div className="text-xs text-slate-500 mt-1.5 italic">{d.notes}</div>}</div>)}</div>
       {showForm && (
-        <Modal title="Log Delivery" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.supplier) return; onAdd({ id: `del-${Date.now()}`, brandId: selBrand, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
+        <Modal title="Log Delivery" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={() => { if (!form.supplier) return; onAdd({ id: `del-${Date.now()}`, brandId: selBrand, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
           <div className="space-y-4">
             <div><label className={labelCls}>Supplier *</label><input value={form.supplier} onChange={e => set("supplier", e.target.value)} className={inputCls} placeholder="e.g. Fresh Direct"/></div>
             <div><label className={labelCls}>Items delivered</label><textarea value={form.items} onChange={e => set("items", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="List items…"/></div>
@@ -2684,7 +2685,7 @@ function AssignmentFormModal({ brands, checklists, tempUnits, cleaningTasks, ite
   };
   const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
   return (
-    <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl" footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.taskId || !form.role) return; onSave({ id: item?.id || `as-${Date.now()}`, ...form }); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+    <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl" footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={() => { if (!form.taskId || !form.role) return; onSave({ id: item?.id || `as-${Date.now()}`, ...form }); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
       <div className="space-y-4">
         <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Task Type</label><select value={form.type} onChange={e => { set("type", e.target.value); set("taskId", ""); }} className={inputCls}><option value="checklist">Checklist</option><option value="cleaning">Cleaning</option><option value="temp">Temperature</option><option value="delivery">Delivery</option></select></div><div><label className={labelCls}>Task</label><select value={form.taskId} onChange={e => set("taskId", e.target.value)} className={inputCls}><option value="">— Select —</option>{taskOptions().map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
@@ -2692,7 +2693,7 @@ function AssignmentFormModal({ brands, checklists, tempUnits, cleaningTasks, ite
         <div><label className={labelCls}>Frequency</label><select value={form.freq} onChange={e => set("freq", e.target.value)} className={inputCls}><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="weekly">Weekly</option><option value="once">One-off</option><option value="custom">Custom days</option></select></div>
         {form.freq === "weekly" && <div><label className={labelCls}>Day of week</label><select value={form.weekday} onChange={e => set("weekday", e.target.value)} className={inputCls}>{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d => <option key={d}>{d}</option>)}</select></div>}
         {form.freq === "once" && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
-        {form.freq === "custom" && <div><label className={labelCls}>Custom days</label><div className="flex gap-2 flex-wrap">{days.map(d => <button key={d} onClick={() => set("customDays", form.customDays.includes(d) ? form.customDays.filter(x => x !== d) : [...form.customDays, d])} className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${form.customDays.includes(d) ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400"}`}>{d}</button>)}</div></div>}
+        {form.freq === "custom" && <div><label className={labelCls}>Custom days</label><div className="flex gap-2 flex-wrap">{days.map(d => <button key={d} onClick={() => set("customDays", form.customDays.includes(d) ? form.customDays.filter(x => x !== d) : [...form.customDays, d])} className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${form.customDays.includes(d) ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400"}`}>{d}</button>)}</div></div>}
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Window Start</label><input type="time" value={form.winStart} onChange={e => set("winStart", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Window End</label><input type="time" value={form.winEnd} onChange={e => set("winEnd", e.target.value)} className={inputCls}/></div></div>
         <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Any instructions…"/></div>
       </div>
@@ -2729,19 +2730,19 @@ function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningT
         </SelectDropdown>
         {user.role === "owner" && <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>}
       </div>
-      {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm">No assignments found</div></div>}
+      {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-300"/><div className="text-sm">No assignments found</div></div>}
       <div className="space-y-3">{visible.map(a => {
         const brand = brands.find(b => b.id === a.brandId);
         const od = isActiveToday(a) && isOverdue(a);
         const done = auditTrail.some(t => t.date === getTodayStr() && t.brandId === a.brandId && t.detail?.includes(getTaskName(a.type, a.taskId)));
         return (
-          <div key={a.id} className={`rounded-2xl border p-4 ${od ? "bg-red-950/20 border-red-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+          <div key={a.id} className={`rounded-2xl border p-4 ${od ? "bg-red-50 border-red-300" : "bg-white border-slate-300"}`}>
             <div className="flex items-start gap-3">
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 ${od ? "bg-red-500/20" : "bg-slate-800"}`}>{{ checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" }[a.type] || "📋"}</div>
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 ${od ? "bg-red-100" : "bg-slate-100"}`}>{{ checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" }[a.type] || "📋"}</div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
-                  <div><div className="text-sm font-bold text-white">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">Window: {a.winStart}–{a.winEnd}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
-                  {user.role === "owner" && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button></div>}
+                  <div><div className="text-sm font-bold text-slate-900">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">Window: {a.winStart}–{a.winEnd}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
+                  {user.role === "owner" && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50"><Trash2 size={13}/></button></div>}
                 </div>
               </div>
             </div>
@@ -2761,13 +2762,13 @@ function ComplianceView({ brands, assignments, auditTrail }) {
   return (
     <div className="space-y-5">
       <AnalysisBlock title="Compliance Overview — Today">
-        <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Location","Assignments","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead><tbody>{vb.map(brand => {
+        <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-300">{["Location","Assignments","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-400 font-semibold">{h}</th>)}</tr></thead><tbody>{vb.map(brand => {
           const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
           const od = la.filter(isOverdue);
           const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
           const rate = la.length ? Math.round((done / la.length) * 100) : 0;
           const rag = od.length ? "red" : rate >= 80 ? "green" : "amber";
-          return <tr key={brand.id} className="border-b border-slate-800"><td className="px-3 py-3 font-semibold text-slate-200">{brand.name}</td><td className="px-3 py-3 text-slate-300">{la.length}</td><td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ 0" color="green"/>}</td><td className="px-3 py-3 text-slate-300">{done}</td><td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la.length ? rate+"%" : "—"}</span></td><td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={rag}/></td></tr>;
+          return <tr key={brand.id} className="border-b border-slate-200"><td className="px-3 py-3 font-semibold text-slate-200">{brand.name}</td><td className="px-3 py-3 text-slate-300">{la.length}</td><td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ 0" color="green"/>}</td><td className="px-3 py-3 text-slate-300">{done}</td><td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-700":rate>=50?"text-amber-700":"text-red-700"}`}>{la.length ? rate+"%" : "—"}</span></td><td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={rag}/></td></tr>;
         })}</tbody></table></div>
       </AnalysisBlock>
     </div>
@@ -2780,16 +2781,16 @@ function AuditTrailView({ brands, auditTrail, onClear }) {
   const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
   const [filterBrand, setFilterBrand] = useState("all");
   const visible = auditTrail.filter(t => filterBrand === "all" || t.brandId === filterBrand).sort((a,b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
-  const actionColor = action => action.includes("sign-off") || action.includes("completed") ? "text-emerald-400" : action.includes("breach") ? "text-red-400" : action.includes("logged") ? "text-amber-400" : "text-indigo-400";
+  const actionColor = action => action.includes("sign-off") || action.includes("completed") ? "text-emerald-700" : action.includes("breach") ? "text-red-700" : action.includes("logged") ? "text-amber-700" : "text-indigo-600";
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
-        {user.role === "owner" && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
+        {user.role === "owner" && <button onClick={onClear} className="text-xs text-red-700 hover:text-red-600">Clear all entries</button>}
       </div>
-      {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ScrollText size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No audit entries yet</div></div>}
+      {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ScrollText size={32} className="mb-3 text-slate-300"/><div className="text-sm font-semibold">No audit entries yet</div></div>}
       <AnalysisBlock title={`Audit Trail — ${visible.length} entries`}>
-        <div className="space-y-3">{visible.slice(0,100).map(t => { const brand = brands.find(b => b.id === t.brandId); return <div key={t.id} className="flex items-start gap-3 py-2.5 border-b border-slate-700/40 last:border-0"><div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 bg-indigo-400"/><div className="flex-1 min-w-0"><div className={`text-sm font-semibold ${actionColor(t.action)}`}>{t.action}{brand ? ` — ${brand.name}` : ""}</div><div className="text-xs text-slate-400 mt-0.5">{t.detail}</div><div className="text-xs text-slate-600 mt-0.5 font-mono">{t.date} {t.time} · By: {t.by}</div></div></div>; })}</div>
+        <div className="space-y-3">{visible.slice(0,100).map(t => { const brand = brands.find(b => b.id === t.brandId); return <div key={t.id} className="flex items-start gap-3 py-2.5 border-b border-slate-200 last:border-0"><div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 bg-indigo-400"/><div className="flex-1 min-w-0"><div className={`text-sm font-semibold ${actionColor(t.action)}`}>{t.action}{brand ? ` — ${brand.name}` : ""}</div><div className="text-xs text-slate-400 mt-0.5">{t.detail}</div><div className="text-xs text-slate-400 mt-0.5 font-mono">{t.date} {t.time} · By: {t.by}</div></div></div>; })}</div>
       </AnalysisBlock>
     </div>
   );
@@ -2816,7 +2817,7 @@ function TempUnitFormModal({ item, brands, onSave, onClose }) {
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "Add Temp Unit"} onClose={onClose}
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
       <div className="space-y-4">
         <div><label className={labelCls}>Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
         <div className="grid grid-cols-2 gap-4">
@@ -2846,7 +2847,7 @@ function CleaningTaskFormModal({ item, onSave, onClose }) {
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "Add Cleaning Task"} onClose={onClose}
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
       <div className="space-y-4">
         <div><label className={labelCls}>Task Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
         <div className="grid grid-cols-2 gap-4">
@@ -2879,7 +2880,7 @@ function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
   };
   return (
     <Modal title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"} onClose={onClose}
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e => set("firstName", e.target.value)} className={inputCls}/></div>
@@ -2914,7 +2915,7 @@ function ChecklistSettingsFormModal({ item, onSave, onClose }) {
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "New Checklist"} onClose={onClose} maxW="max-w-2xl"
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>Name *</label><input value={name} onChange={e => setName(e.target.value)} className={inputCls}/></div>
@@ -2924,16 +2925,16 @@ function ChecklistSettingsFormModal({ item, onSave, onClose }) {
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className={labelCls}>Items</label>
-            <button onClick={addItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button>
+            <button onClick={addItem} className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-500"><Plus size={12}/> Add item</button>
           </div>
           <div className="space-y-2">
             {items.map(it => (
-              <div key={it.id} className="flex items-start gap-2 bg-slate-800/60 rounded-xl p-3">
+              <div key={it.id} className="flex items-start gap-2 bg-slate-50 rounded-xl p-3">
                 <div className="flex-1 space-y-1.5">
                   <input value={it.text} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, text: e.target.value } : x))} placeholder="Checklist item…" className={inputCls}/>
                   <input value={it.guide} onChange={e => setItems(its => its.map(x => x.id === it.id ? { ...x, guide: e.target.value } : x))} placeholder="Guidance note…" className={`${inputCls} text-xs py-1.5`}/>
                 </div>
-                <button onClick={() => setItems(its => its.filter(x => x.id !== it.id))} className="text-slate-600 hover:text-red-400 mt-2"><X size={14}/></button>
+                <button onClick={() => setItems(its => its.filter(x => x.id !== it.id))} className="text-slate-400 hover:text-red-700 mt-2"><X size={14}/></button>
               </div>
             ))}
             {items.length === 0 && <div className="text-xs text-slate-500 text-center py-4">No items yet — click Add item above</div>}
@@ -2955,26 +2956,26 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2 bg-slate-900/60 border border-slate-700/60 rounded-2xl p-1.5 w-fit flex-wrap">
-        {tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>{t.label}</button>)}
+      <div className="flex gap-2 bg-white border border-slate-300 rounded-2xl p-1.5 w-fit flex-wrap">
+        {tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-600 hover:text-slate-900"}`}>{t.label}</button>)}
       </div>
 
       {tab === "checklists" && (
         <div className="space-y-4">
           <div className="flex justify-end"><button onClick={() => setClModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> New Checklist</button></div>
           {checklists.map(cl => (
-            <div key={cl.id} className="bg-slate-900/60 border border-slate-700/60 rounded-2xl p-4">
+            <div key={cl.id} className="bg-white border border-slate-300 rounded-2xl p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <div className="text-sm font-bold text-white">{cl.name}</div>
+                  <div className="text-sm font-bold text-slate-900">{cl.name}</div>
                   <div className="flex gap-2 mt-1.5"><Badge label={cl.shift} color="slate"/>{cl.defaultRole && <Badge label={`🎭 ${cl.defaultRole}`} color="violet"/>}<Badge label={`${cl.items.length} items`} color="slate"/></div>
                 </div>
                 <div className="flex gap-1.5">
-                  <button onClick={() => setClModal(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                  <button onClick={() => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                  <button onClick={() => setClModal(cl)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50"><Trash2 size={13}/></button>
                 </div>
               </div>
-              <div className="mt-3 space-y-1">{cl.items.map(it => <div key={it.id} className="flex items-center gap-2 text-xs text-slate-400"><Check size={10} className="text-slate-600"/>{it.text}</div>)}</div>
+              <div className="mt-3 space-y-1">{cl.items.map(it => <div key={it.id} className="flex items-center gap-2 text-xs text-slate-400"><Check size={10} className="text-slate-400"/>{it.text}</div>)}</div>
             </div>
           ))}
         </div>
@@ -2986,12 +2987,12 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
           {tempUnits.map(u => {
             const brand = brands.find(b => b.id === u.brandId);
             return (
-              <div key={u.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
+              <div key={u.id} className="flex items-center gap-4 bg-white border border-slate-300 rounded-2xl px-5 py-4">
                 <span className="text-xl">{TEMP_ICON[u.type] || "🌡️"}</span>
-                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{u.name}</div><div className="text-xs text-slate-400">{brand?.name} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div>
+                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-slate-900">{u.name}</div><div className="text-xs text-slate-400">{brand?.name} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div>
                 <div className="flex gap-1.5">
-                  <button onClick={() => setTuModal(u)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                  <button onClick={() => setDelTarget({ msg: `Delete "${u.name}"?`, fn: () => onDeleteTempUnit(u.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                  <button onClick={() => setTuModal(u)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete "${u.name}"?`, fn: () => onDeleteTempUnit(u.id) })} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50"><Trash2 size={13}/></button>
                 </div>
               </div>
             );
@@ -3006,11 +3007,11 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
             <div key={area} className="space-y-2">
               <div className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{area}</div>
               {cleaningTasks.filter(t => t.area === area).map(t => (
-                <div key={t.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-xl px-4 py-3">
-                  <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-white">{t.name}</div><div className="text-xs text-slate-400">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div></div>
+                <div key={t.id} className="flex items-center gap-4 bg-white border border-slate-300 rounded-xl px-4 py-3">
+                  <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-900">{t.name}</div><div className="text-xs text-slate-400">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div></div>
                   <div className="flex gap-1.5">
-                    <button onClick={() => setCtModal(t)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                    <button onClick={() => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                    <button onClick={() => setCtModal(t)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200"><Edit size={13}/></button>
+                    <button onClick={() => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50"><Trash2 size={13}/></button>
                   </div>
                 </div>
               ))}
@@ -3026,20 +3027,20 @@ function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam
             onAdd={onAddShiftPreset} onUpdate={onUpdateShiftPreset} onDelete={onDeleteShiftPreset}
             currentUser={currentUser}
           />
-          <div className="border-t border-slate-700/60 pt-4 space-y-4">
+          <div className="border-t border-slate-300 pt-4 space-y-4">
           <div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>
           {opsTeam.map(m => {
             const brand = brands.find(b => b.id === m.brandId);
             return (
-              <div key={m.id} className="flex items-center gap-4 bg-slate-900/60 border border-slate-700/60 rounded-2xl px-5 py-4">
+              <div key={m.id} className="flex items-center gap-4 bg-white border border-slate-300 rounded-2xl px-5 py-4">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-400 font-normal ml-1">({m.nickname})</span> : ""}</div>
+                  <div className="text-sm font-bold text-slate-900">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-400 font-normal ml-1">({m.nickname})</span> : ""}</div>
                   <div className="text-xs text-slate-400">{[m.role, m.department, brand?.name].filter(Boolean).join(" · ")}</div>
                 </div>
                 <div className="flex gap-1.5">
-                  <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                  <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30"><Trash2 size={13}/></button>
+                  <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50"><Trash2 size={13}/></button>
                 </div>
               </div>
             );
@@ -3151,16 +3152,16 @@ function AvailCalendarPicker({ value, minDate, onSelect, onClose }) {
   while (cells.length % 7 !== 0) cells.push(null);
 
   return (
-    <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 w-72"
+    <div className="absolute z-50 top-full mt-1 left-0 bg-white border border-slate-300 rounded-2xl shadow-2xl p-3 w-72"
       onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between mb-2 px-1">
-        <button onClick={prevMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+        <button onClick={prevMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-all">
           <ChevronLeft size={15}/>
         </button>
-        <div className="text-sm font-bold text-white">
+        <div className="text-sm font-bold text-slate-900">
           {calMonth.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
         </div>
-        <button onClick={nextMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+        <button onClick={nextMonth} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-all">
           <ChevronRight size={15}/>
         </button>
       </div>
@@ -3179,19 +3180,19 @@ function AvailCalendarPicker({ value, minDate, onSelect, onClose }) {
             <button key={i} disabled={isDisabled}
               onClick={() => { onSelect(dateStr); }}
               className={`h-8 w-full rounded-lg text-xs font-medium transition-all ${
-                isDisabled  ? "text-slate-700 cursor-not-allowed" :
+                isDisabled  ? "text-slate-300 cursor-not-allowed" :
                 isSelected  ? "bg-indigo-600 text-white font-bold" :
-                isToday     ? "border border-indigo-500/50 text-indigo-300 hover:bg-indigo-600/20" :
-                              "text-slate-300 hover:bg-slate-800"
+                isToday     ? "border border-indigo-300 text-indigo-500 hover:bg-indigo-100" :
+                              "text-slate-300 hover:bg-slate-100"
               }`}>
               {parseInt(dateStr.split("-")[2])}
             </button>
           );
         })}
       </div>
-      <div className="flex justify-between mt-2 pt-2 border-t border-slate-800">
+      <div className="flex justify-between mt-2 pt-2 border-t border-slate-200">
         <button onClick={() => { onSelect(""); onClose(); }} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
-        <button onClick={onClose} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">Done</button>
+        <button onClick={onClose} className="text-xs text-indigo-600 hover:text-indigo-500 font-semibold transition-colors">Done</button>
       </div>
     </div>
   );
@@ -3211,7 +3212,7 @@ function AvailDateField({ label, value, onChange, minDate, placeholder }) {
         {label && (
           <div className={`${labelCls} group-hover:text-slate-300 transition-colors`}>{label}</div>
         )}
-        <div className={`${inputCls} flex items-center justify-between w-full ${!value ? "text-slate-500" : "text-white"}`}>
+        <div className={`${inputCls} flex items-center justify-between w-full ${!value ? "text-slate-500" : "text-slate-900"}`}>
           <span className="truncate">{display}</span>
           <Calendar size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
         </div>
@@ -3254,12 +3255,12 @@ function AvailTimeField({ label, value, onChange }) {
           <div className={`${labelCls} group-hover:text-slate-300 transition-colors`}>{label}</div>
         )}
         <div className={`${inputCls} flex items-center justify-between w-full`}>
-          <span className="text-white font-mono">{value || "09:00"}</span>
+          <span className="text-slate-900 font-mono">{value || "09:00"}</span>
           <Clock size={14} className="text-slate-400 flex-shrink-0 ml-2"/>
         </div>
       </button>
       {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 w-52"
+        <div className="absolute z-50 top-full mt-1 left-0 bg-white border border-slate-300 rounded-2xl shadow-2xl p-3 w-52"
           onClick={e => e.stopPropagation()}>
           <div className="flex gap-2">
             <div className="flex-1">
@@ -3268,20 +3269,20 @@ function AvailTimeField({ label, value, onChange }) {
                 {hours.map(h => (
                   <button key={h}
                     onClick={() => onChange(`${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}`)}
-                    className={`w-full text-center text-sm py-1.5 rounded-lg transition-all font-mono ${hh === h ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"}`}>
+                    className={`w-full text-center text-sm py-1.5 rounded-lg transition-all font-mono ${hh === h ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-100"}`}>
                     {String(h).padStart(2,"0")}
                   </button>
                 ))}
               </div>
             </div>
-            <div className="w-px bg-slate-800"/>
+            <div className="w-px bg-slate-100"/>
             <div className="flex-1">
               <div className="text-xs font-semibold text-slate-400 text-center mb-1">Min</div>
               <div className="space-y-0.5" ref={mmRef}>
                 {minutes.map(m => (
                   <button key={m}
                     onClick={() => onChange(`${String(hh).padStart(2,"0")}:${String(m).padStart(2,"0")}`)}
-                    className={`w-full text-center text-sm py-1.5 rounded-lg transition-all font-mono ${mm === m ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"}`}>
+                    className={`w-full text-center text-sm py-1.5 rounded-lg transition-all font-mono ${mm === m ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-100"}`}>
                     {String(m).padStart(2,"0")}
                   </button>
                 ))}
@@ -3289,7 +3290,7 @@ function AvailTimeField({ label, value, onChange }) {
             </div>
           </div>
           <button onClick={() => setOpen(false)}
-            className="w-full mt-3 pt-2 border-t border-slate-800 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
+            className="w-full mt-3 pt-2 border-t border-slate-200 text-xs text-indigo-600 hover:text-indigo-500 font-semibold transition-colors">
             Done
           </button>
         </div>
@@ -3341,11 +3342,11 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
-        <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200/80 bg-white flex-shrink-0">
+        <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-all">
           <ChevronLeft size={18}/>
         </button>
-        <div className="text-sm font-bold text-white">Submit Availability</div>
+        <div className="text-sm font-bold text-slate-900">Submit Availability</div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -3362,11 +3363,11 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
           <label className={labelCls}>I am…</label>
           <div className="flex gap-2">
             <button onClick={() => setAvailable(true)}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
               ✓ Available
             </button>
             <button onClick={() => setAvailable(false)}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${!available ? "bg-red-600 border-red-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${!available ? "bg-red-600 border-red-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
               ✗ Unavailable
             </button>
           </div>
@@ -3378,7 +3379,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
           <div className="flex gap-2">
             {[{key:"one_off",label:"One-off"},{key:"weekly",label:"Every week"},{key:"recurring",label:"Date range"}].map(t => (
               <button key={t.key} onClick={() => setType(t.key)}
-                className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all ${type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all ${type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
                 {t.label}
               </button>
             ))}
@@ -3395,7 +3396,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
             <div className="grid grid-cols-4 gap-2">
               {DAYS_OF_WEEK.map(d => (
                 <button key={d} onClick={() => set("dayOfWeek", d)}
-                  className={`py-2.5 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                  className={`py-2.5 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
                   {d.slice(0,3)}
                 </button>
               ))}
@@ -3423,7 +3424,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
         </div>
       </div>
 
-      <div className="flex-shrink-0 p-4 border-t border-slate-800/80">
+      <div className="flex-shrink-0 p-4 border-t border-slate-200/80">
         <button onClick={handleSubmit} disabled={!isValid()}
           className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
           <Send size={14}/> Submit Availability
@@ -3482,36 +3483,36 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
   });
 
   const statusBg = {
-    pending:  "bg-amber-950/30 border-amber-500/30",
-    approved: "bg-emerald-950/30 border-emerald-500/30",
-    rejected: "bg-red-950/30 border-red-500/30",
-    amended:  "bg-indigo-950/30 border-indigo-500/30",
-  }[localItem.status] || "bg-slate-900/60 border-slate-700/60";
+    pending:  "bg-amber-50 border-amber-300",
+    approved: "bg-emerald-50 border-emerald-300",
+    rejected: "bg-red-50 border-red-300",
+    amended:  "bg-indigo-50 border-indigo-200",
+  }[localItem.status] || "bg-white border-slate-300";
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg flex flex-col" style={{maxHeight:"90vh"}}>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white border border-slate-300 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg flex flex-col" style={{maxHeight:"90vh"}}>
         {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-700 flex-shrink-0">
+        <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-300 flex-shrink-0">
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-bold text-white truncate">{localItem.employeeName}</div>
+            <div className="text-sm font-bold text-slate-900 truncate">{localItem.employeeName}</div>
             <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               <Badge label={`${AVAIL_STATUS_ICON[localItem.status]} ${localItem.status.charAt(0).toUpperCase()+localItem.status.slice(1)}`} color={AVAIL_STATUS_COLOR[localItem.status]}/>
               <Badge label={localItem.available ? "✓ Available" : "✗ Unavailable"} color={localItem.available ? "emerald" : "red"}/>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex-shrink-0">
+          <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-all flex-shrink-0">
             <X size={16}/>
           </button>
         </div>
 
         {/* Availability summary card */}
         <div className={`mx-4 mt-4 rounded-xl border p-3 ${statusBg} flex-shrink-0`}>
-          <div className="text-sm font-bold text-white">{fmtAvailDate(localItem)}</div>
+          <div className="text-sm font-bold text-slate-900">{fmtAvailDate(localItem)}</div>
           <div className="text-xs text-slate-400 mt-0.5">{fmtAvailTime(localItem)}</div>
           {localItem.notes && <div className="text-xs text-slate-500 mt-1 italic">"{localItem.notes}"</div>}
           {localItem.status === "amended" && (
-            <div className="mt-2 text-xs text-indigo-300 space-y-0.5">
+            <div className="mt-2 text-xs text-indigo-500 space-y-0.5">
               {localItem.amendedDate && <div>✎ Date → {new Date(localItem.amendedDate).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}</div>}
               {localItem.amendedDayOfWeek && <div>✎ Day → {localItem.amendedDayOfWeek}</div>}
               {(localItem.amendedStartTime||localItem.amendedEndTime) && <div>✎ Time → {localItem.amendedStartTime||localItem.startTime}–{localItem.amendedEndTime||localItem.endTime}</div>}
@@ -3533,7 +3534,7 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
                 <RefreshCw size={14}/> Re-submit with changes
               </button>
             ) : (
-              <div className="bg-slate-800/60 rounded-xl p-3 space-y-3">
+              <div className="bg-slate-50 rounded-xl p-3 space-y-3">
                 <div className="text-xs font-bold text-slate-300">Re-submit availability</div>
                 <div className="grid grid-cols-2 gap-2">
                   <AvailDateField label="New date" value={localItem.date || ""} onChange={v => setLocalItem(x => ({...x, date: v}))} placeholder="Select date"/>
@@ -3544,7 +3545,7 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
                   <AvailTimeField label="End"   value={localItem.endTime}   onChange={v => setLocalItem(x => ({...x, endTime:   v}))}/>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => setShowResubmit(false)} className="flex-1 py-2 rounded-xl bg-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-600 transition-colors">Cancel</button>
+                  <button onClick={() => setShowResubmit(false)} className="flex-1 py-2 rounded-xl bg-slate-200 text-slate-300 text-xs font-semibold hover:bg-slate-300 transition-colors">Cancel</button>
                   <button onClick={() => {
                     const updated = { ...localItem, status: "pending", managerNotes: "", updatedAt: new Date().toISOString() };
                     setLocalItem(updated); onUpdate(updated); setShowResubmit(false);
@@ -3558,8 +3559,8 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
         {/* Comment thread */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1 min-h-0">
           {grouped.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-24 text-slate-600">
-              <MessageSquare size={20} className="mb-2 text-slate-700"/>
+            <div className="flex flex-col items-center justify-center h-24 text-slate-400">
+              <MessageSquare size={20} className="mb-2 text-slate-300"/>
               <div className="text-xs text-center">
                 {isManager ? "Add a note for the employee below" : "Message your manager about this — type below and hit Enter"}
               </div>
@@ -3569,7 +3570,7 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
             if (item.type === "date") {
               return (
                 <div key={`d-${idx}`} className="flex items-center justify-center my-2">
-                  <span className="bg-slate-800/80 border border-slate-700/60 text-slate-500 text-xs px-3 py-0.5 rounded-full">{item.label}</span>
+                  <span className="bg-slate-100 border border-slate-300 text-slate-500 text-xs px-3 py-0.5 rounded-full">{item.label}</span>
                 </div>
               );
             }
@@ -3595,10 +3596,10 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
                     isMe
                       ? "bg-indigo-600 text-white rounded-br-md"
                       : isStaff
-                        ? "bg-slate-700 text-slate-100 border border-slate-600/60 rounded-bl-md"
-                        : "bg-slate-800 text-slate-100 border border-slate-700/60 rounded-bl-md"
+                        ? "bg-slate-200 text-slate-100 border border-slate-400/60 rounded-bl-md"
+                        : "bg-slate-100 text-slate-100 border border-slate-300 rounded-bl-md"
                   }`}>{c.text}</div>
-                  <div className="text-xs text-slate-600 mt-0.5 px-1">
+                  <div className="text-xs text-slate-400 mt-0.5 px-1">
                     {new Date(c.createdAt).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
                   </div>
                 </div>
@@ -3610,7 +3611,7 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
         </div>
 
         {/* Message input */}
-        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80 bg-slate-900/40">
+        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-200/80 bg-slate-100/60">
           {!isManager && (
             <div className="text-xs text-slate-500 mb-2 px-1">
               💬 Reply to your manager
@@ -3623,14 +3624,14 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAddComment(); } }}
               placeholder={isManager ? "Add a note or update for the employee…" : "Type your message here…"}
               rows={2}
-              className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-24 transition-colors"
+              className="flex-1 bg-slate-100 border border-slate-300 rounded-2xl px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none resize-none max-h-24 transition-colors"
             />
             <button onClick={handleAddComment} disabled={!comment.trim()}
               className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
-              <Send size={15} className="text-white ml-0.5"/>
+              <Send size={15} className="text-slate-900 ml-0.5"/>
             </button>
           </div>
-          <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+          <div className="text-xs text-slate-300 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
         </div>
       </div>
     </div>
@@ -3674,7 +3675,7 @@ function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd, on
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-bold text-white">My Availability</h2>
+          <h2 className="text-base font-bold text-slate-900">My Availability</h2>
           <p className="text-xs text-slate-400 mt-0.5">Submit your availability for your manager to review</p>
         </div>
         <button onClick={() => setShowForm(true)}
@@ -3685,9 +3686,9 @@ function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd, on
 
       {myAvail.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-          <Calendar size={32} className="mb-3 text-slate-700"/>
+          <Calendar size={32} className="mb-3 text-slate-300"/>
           <div className="text-sm font-semibold">No availability submitted yet</div>
-          <div className="text-xs mt-1 text-slate-600">Tap the button above to get started</div>
+          <div className="text-xs mt-1 text-slate-400">Tap the button above to get started</div>
         </div>
       )}
 
@@ -3698,10 +3699,10 @@ function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd, on
           return (
             <button key={a.id} onClick={() => setDetailItem(a)}
               className={`w-full text-left rounded-2xl border p-4 transition-all hover:border-slate-500/60 ${
-                a.status === "approved" ? "bg-emerald-950/20 border-emerald-500/30" :
-                a.status === "rejected" ? "bg-red-950/20 border-red-500/30" :
-                a.status === "amended"  ? "bg-indigo-950/20 border-indigo-500/30" :
-                "bg-slate-900/60 border-slate-700/60"
+                a.status === "approved" ? "bg-emerald-50 border-emerald-300" :
+                a.status === "rejected" ? "bg-red-50 border-red-300" :
+                a.status === "amended"  ? "bg-indigo-50 border-indigo-200" :
+                "bg-white border-slate-300"
               }`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -3710,33 +3711,33 @@ function EmployeeAvailabilityView({ brands, currentUser, availability, onAdd, on
                     <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
                     <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
                   </div>
-                  <div className="text-sm font-bold text-white">{fmtAvailDate(a)}</div>
+                  <div className="text-sm font-bold text-slate-900">{fmtAvailDate(a)}</div>
                   <div className="text-xs text-slate-400">{fmtAvailTime(a)}</div>
                   <div className="flex items-center gap-3 mt-1.5">
                     {commentCount > 0 && (
-                      <span className={`flex items-center gap-1 text-xs ${hasComment ? "text-indigo-400 font-semibold" : "text-slate-500"}`}>
+                      <span className={`flex items-center gap-1 text-xs ${hasComment ? "text-indigo-600 font-semibold" : "text-slate-500"}`}>
                         <MessageSquare size={11}/>{commentCount} {hasComment && "· Manager replied"}
                       </span>
                     )}
                     {a.status === "rejected" && (
-                      <span className="text-xs text-red-400 font-semibold">Tap to re-submit →</span>
+                      <span className="text-xs text-red-700 font-semibold">Tap to re-submit →</span>
                     )}
                   </div>
                 </div>
                 {/* Always-visible open button */}
                 <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs font-semibold">
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-100 border border-indigo-200 text-indigo-600 text-xs font-semibold">
                     <MessageSquare size={11}/>
                     {commentCount > 0 ? `Reply (${commentCount})` : "Open"}
                   </div>
                 </div>
               </div>
               {a.managerNotes && a.status !== "pending" && (
-                <div className={`mt-2 text-xs italic px-1 ${a.status === "rejected" ? "text-red-400" : a.status === "amended" ? "text-indigo-400" : "text-slate-500"}`}>
+                <div className={`mt-2 text-xs italic px-1 ${a.status === "rejected" ? "text-red-700" : a.status === "amended" ? "text-indigo-600" : "text-slate-500"}`}>
                   Manager: "{a.managerNotes}"
                 </div>
               )}
-              <div className="text-xs text-slate-600 mt-1.5">
+              <div className="text-xs text-slate-400 mt-1.5">
                 Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
               </div>
             </button>
@@ -3782,11 +3783,11 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
   return (
     <Modal title="Amend Availability" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Amendment</button>
       </>}>
       <div className="space-y-4">
-        <div className="bg-slate-800/50 rounded-xl p-3 text-xs text-slate-400 space-y-1">
+        <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-400 space-y-1">
           <div><span className="font-semibold text-slate-300">{item.employeeName}</span> · {item.type === "one_off" ? "One-off" : item.type === "weekly" ? "Weekly" : "Date Range"}</div>
           <div>Original: {fmtAvailDate(item)} · {item.startTime}–{item.endTime}</div>
         </div>
@@ -3798,7 +3799,7 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
             <div className="grid grid-cols-4 gap-2">
               {DAYS_OF_WEEK.map(d => (
                 <button key={d} onClick={() => set("amendedDayOfWeek", d)}
-                  className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.amendedDayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                  className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.amendedDayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
                   {d.slice(0,3)}
                 </button>
               ))}
@@ -3862,7 +3863,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
   return (
     <Modal title="Add Employee Availability" onClose={onClose} maxW="max-w-lg"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={handleSave} disabled={!isValid()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add</button>
       </>}>
       <div className="space-y-4">
@@ -3877,19 +3878,19 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
         </div>
         <div><label className={labelCls}>Availability</label>
           <div className="flex gap-2">
-            <button onClick={() => set("available", true)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${form.available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>✓ Available</button>
-            <button onClick={() => set("available", false)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${!form.available ? "bg-red-600 border-red-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>✗ Unavailable</button>
+            <button onClick={() => set("available", true)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${form.available ? "bg-emerald-600 border-emerald-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>✓ Available</button>
+            <button onClick={() => set("available", false)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${!form.available ? "bg-red-600 border-red-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>✗ Unavailable</button>
           </div>
         </div>
         <div><label className={labelCls}>Schedule Type</label>
           <div className="flex gap-2">
             {[{key:"one_off",label:"One-off"},{key:"weekly",label:"Weekly"},{key:"recurring",label:"Date Range"}].map(t => (
-              <button key={t.key} onClick={() => set("type", t.key)} className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{t.label}</button>
+              <button key={t.key} onClick={() => set("type", t.key)} className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all ${form.type === t.key ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>{t.label}</button>
             ))}
           </div>
         </div>
         {form.type === "one_off"   && <AvailDateField label="Date" value={form.date} onChange={v => set("date", v)} placeholder="Select date"/>}
-        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><div className="grid grid-cols-4 gap-2">{DAYS_OF_WEEK.map(d => <button key={d} onClick={() => set("dayOfWeek", d)} className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{d.slice(0,3)}</button>)}</div></div>}
+        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><div className="grid grid-cols-4 gap-2">{DAYS_OF_WEEK.map(d => <button key={d} onClick={() => set("dayOfWeek", d)} className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>{d.slice(0,3)}</button>)}</div></div>}
         {form.type === "recurring" && <div className="grid grid-cols-2 gap-3"><AvailDateField label="From" value={form.startDate} onChange={v => set("startDate", v)} placeholder="Start date"/><AvailDateField label="To" value={form.endDate} onChange={v => set("endDate", v)} minDate={form.startDate} placeholder="End date"/></div>}
         <div className="grid grid-cols-2 gap-3">
           <AvailTimeField label="Start Time" value={form.startTime} onChange={v => set("startTime", v)}/>
@@ -3971,13 +3972,13 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">Availability Tracker</h2>
-          {pendingCount > 0 && <div className="text-xs text-amber-400 mt-0.5">{pendingCount} pending review</div>}
+          <h2 className="text-base font-bold text-slate-900">Availability Tracker</h2>
+          {pendingCount > 0 && <div className="text-xs text-amber-700 mt-0.5">{pendingCount} pending review</div>}
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
-            <button onClick={() => setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
-            <button onClick={() => setViewMode("calendar")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="calendar"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
+          <div className="flex bg-white border border-slate-300 rounded-xl p-0.5 gap-0.5">
+            <button onClick={() => setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>List</button>
+            <button onClick={() => setViewMode("calendar")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="calendar"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>Week</button>
           </div>
           <button onClick={() => setAddModal(true)} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
             <Plus size={14}/> Add
@@ -4010,7 +4011,7 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
         <>
           {visible.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-              <Calendar size={32} className="mb-3 text-slate-700"/>
+              <Calendar size={32} className="mb-3 text-slate-300"/>
               <div className="text-sm font-semibold">No availability records found</div>
             </div>
           )}
@@ -4021,15 +4022,15 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
               const hasEmployeeComment = (a.comments||[]).some(c => c.authorRole === "employee");
               return (
                 <div key={a.id} className={`rounded-2xl border p-4 ${
-                  a.status === "pending"  ? "bg-amber-950/20 border-amber-500/30" :
-                  a.status === "approved" ? "bg-emerald-950/10 border-emerald-500/20" :
-                  a.status === "rejected" ? "bg-red-950/10 border-red-500/20" :
-                  "bg-indigo-950/10 border-indigo-500/20"
+                  a.status === "pending"  ? "bg-amber-50 border-amber-300" :
+                  a.status === "approved" ? "bg-emerald-50/10 border-emerald-200" :
+                  a.status === "rejected" ? "bg-red-50/10 border-red-200" :
+                  "bg-indigo-50/60 border-indigo-500/20"
                 }`}>
                   <div className="flex items-start justify-between gap-3 flex-wrap">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <div className="text-sm font-bold text-white">{a.employeeName}</div>
+                        <div className="text-sm font-bold text-slate-900">{a.employeeName}</div>
                         <Badge label={`${AVAIL_STATUS_ICON[a.status]} ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}`} color={statusColor(a.status)}/>
                         <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
                         <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
@@ -4041,11 +4042,11 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
                       <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                         {commentCount > 0 && (
                           <button onClick={() => setDetailItem(a)}
-                            className={`flex items-center gap-1 text-xs transition-colors ${hasEmployeeComment ? "text-amber-400 font-semibold hover:text-amber-300" : "text-slate-500 hover:text-slate-300"}`}>
+                            className={`flex items-center gap-1 text-xs transition-colors ${hasEmployeeComment ? "text-amber-700 font-semibold hover:text-amber-600" : "text-slate-500 hover:text-slate-300"}`}>
                             <MessageSquare size={11}/>{commentCount} {hasEmployeeComment && "· Employee commented"}
                           </button>
                         )}
-                        <div className="text-xs text-slate-600">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                        <div className="text-xs text-slate-400">Submitted {new Date(a.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
                       </div>
                     </div>
 
@@ -4057,13 +4058,13 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
                           <button onClick={() => setAmendModal(a)} className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors">✎ Amend</button>
                         </>
                       )}
-                      <button onClick={() => setDetailItem(a)} className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5">
+                      <button onClick={() => setDetailItem(a)} className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 text-xs font-semibold transition-colors flex items-center gap-1.5">
                         <MessageSquare size={11}/> Chat
                       </button>
                       {a.status !== "pending" && (
                         <div className="flex gap-1.5">
-                          <button onClick={() => setAmendModal(a)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
-                          <button onClick={() => onDelete(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors" title="Delete"><Trash2 size={13}/></button>
+                          <button onClick={() => setAmendModal(a)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors" title="Amend"><Edit size={13}/></button>
+                          <button onClick={() => onDelete(a.id)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors" title="Delete"><Trash2 size={13}/></button>
                         </div>
                       )}
                     </div>
@@ -4078,26 +4079,26 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
       {viewMode === "calendar" && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <button onClick={() => setCalWeekOffset(w => w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-            <div className="text-sm font-semibold text-white">
+            <button onClick={() => setCalWeekOffset(w => w-1)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 transition-colors"><ChevronLeft size={16}/></button>
+            <div className="text-sm font-semibold text-slate-900">
               {weekDays[0].toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {weekDays[6].toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
             </div>
-            <button onClick={() => setCalWeekOffset(w => w+1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronRight size={16}/></button>
+            <button onClick={() => setCalWeekOffset(w => w+1)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 transition-colors"><ChevronRight size={16}/></button>
           </div>
           <div className="grid grid-cols-7 gap-1.5">
             {weekDays.map((day, idx) => {
               const dayAvail = getAvailForDay(day);
               const isToday  = day.toDateString() === new Date().toDateString();
               return (
-                <div key={idx} className={`rounded-xl border p-2 min-h-24 ${isToday ? "border-indigo-500/50 bg-indigo-950/20" : "border-slate-800/60 bg-slate-900/40"}`}>
-                  <div className={`text-xs font-bold mb-1.5 ${isToday ? "text-indigo-400" : "text-slate-400"}`}>
+                <div key={idx} className={`rounded-xl border p-2 min-h-24 ${isToday ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-100/60"}`}>
+                  <div className={`text-xs font-bold mb-1.5 ${isToday ? "text-indigo-600" : "text-slate-400"}`}>
                     <div>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
-                    <div className={`text-sm ${isToday ? "text-indigo-300" : "text-slate-300"}`}>{day.getDate()}</div>
+                    <div className={`text-sm ${isToday ? "text-indigo-500" : "text-slate-300"}`}>{day.getDate()}</div>
                   </div>
                   <div className="space-y-1">
                     {dayAvail.map(a => (
                       <button key={a.id} onClick={() => setDetailItem(a)}
-                        className={`w-full text-xs rounded-lg px-1.5 py-1 truncate font-medium text-left transition-all ${a.available ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30" : "bg-red-500/20 text-red-300 hover:bg-red-500/30"}`}
+                        className={`w-full text-xs rounded-lg px-1.5 py-1 truncate font-medium text-left transition-all ${a.available ? "bg-emerald-100 text-emerald-600 hover:bg-emerald-500/30" : "bg-red-100 text-red-600 hover:bg-red-500/30"}`}
                         title={`${a.employeeName} · ${fmtAvailTime(a)}`}>
                         {a.employeeName.split(" ")[0]}
                       </button>
@@ -4131,11 +4132,11 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
       {rejectModal && (
         <Modal title="Reject Availability" onClose={() => setRejectModal(null)}
           footer={<>
-            <button onClick={() => setRejectModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={() => setRejectModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
             <button onClick={() => { handleReject(rejectModal, rejectNote); setRejectModal(null); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reject</button>
           </>}>
           <div className="space-y-3">
-            <div className="bg-slate-800/50 rounded-xl p-3 text-xs text-slate-400">
+            <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-400">
               <div className="font-semibold text-slate-300 mb-1">{rejectModal.employeeName}</div>
               <div>{fmtAvailDate(rejectModal)} · {fmtAvailTime(rejectModal)}</div>
             </div>
@@ -4209,9 +4210,9 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
   return (
     <div className="flex flex-col h-full">
       {/* Thread header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200/80 bg-white flex-shrink-0">
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
+          <div className="text-sm font-bold text-slate-900 truncate">{ticket.title}</div>
           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
             <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
             <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
@@ -4221,7 +4222,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
         </div>
         {isManager && (
           <button onClick={() => setShowInfo(s => !s)}
-            className={`p-2 rounded-xl transition-all ${showInfo ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
+            className={`p-2 rounded-xl transition-all ${showInfo ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:text-slate-900"}`}
             title="Ticket details">
             <Info size={15}/>
           </button>
@@ -4235,7 +4236,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
             {/* Original description */}
             {ticket.description && (
               <div className="flex justify-center mb-3">
-                <div className="bg-slate-800/60 border border-slate-700/40 rounded-2xl px-4 py-3 max-w-[80%] text-sm text-slate-300 text-center">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 max-w-[80%] text-sm text-slate-300 text-center">
                   <div className="text-xs text-slate-500 mb-1">Raised by {ticket.createdByName}</div>
                   {ticket.description}
                 </div>
@@ -4243,14 +4244,14 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
             )}
             {ticket.assignedTo?.length > 0 && (
               <div className="flex justify-center mb-2">
-                <span className="bg-indigo-950/60 border border-indigo-500/20 text-indigo-300 text-xs px-3 py-1 rounded-full">
+                <span className="bg-indigo-50/60 border border-indigo-500/20 text-indigo-500 text-xs px-3 py-1 rounded-full">
                   Assigned to {ticket.assignedTo.join(", ")}
                 </span>
               </div>
             )}
             {grouped.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-32 text-slate-600">
-                <MessageSquare size={24} className="mb-2 text-slate-700"/>
+              <div className="flex flex-col items-center justify-center h-32 text-slate-400">
+                <MessageSquare size={24} className="mb-2 text-slate-300"/>
                 <div className="text-xs">No messages yet — send the first one</div>
               </div>
             )}
@@ -4258,7 +4259,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
               if (item.type === "date") {
                 return (
                   <div key={`d-${idx}`} className="flex items-center justify-center my-3">
-                    <span className="bg-slate-800/80 border border-slate-700/60 text-slate-400 text-xs px-3 py-1 rounded-full">{item.label}</span>
+                    <span className="bg-slate-100 border border-slate-300 text-slate-400 text-xs px-3 py-1 rounded-full">{item.label}</span>
                   </div>
                 );
               }
@@ -4285,10 +4286,10 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                       isMe
                         ? "bg-indigo-600 text-white rounded-br-md"
                         : isStaff
-                          ? "bg-slate-700 text-slate-100 border border-slate-600/60 rounded-bl-md"
-                          : "bg-slate-800 text-slate-100 border border-slate-700/60 rounded-bl-md"
+                          ? "bg-slate-200 text-slate-100 border border-slate-400/60 rounded-bl-md"
+                          : "bg-slate-100 text-slate-100 border border-slate-300 rounded-bl-md"
                     }`}>{c.text}</div>
-                    <div className={`text-xs text-slate-600 mt-0.5 px-1 ${isMe ? "text-right" : "text-left"}`}>
+                    <div className={`text-xs text-slate-400 mt-0.5 px-1 ${isMe ? "text-right" : "text-left"}`}>
                       {new Date(c.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
                     </div>
                   </div>
@@ -4301,35 +4302,35 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
 
           {/* Input bar */}
           {isClosed ? (
-            <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800/80 text-center text-xs text-slate-600">
+            <div className="flex-shrink-0 px-4 py-3 border-t border-slate-200/80 text-center text-xs text-slate-400">
               This ticket is closed
             </div>
           ) : (
-            <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80 bg-slate-900/40">
+            <div className="flex-shrink-0 px-3 py-3 border-t border-slate-200/80 bg-slate-100/60">
               <div className="flex items-end gap-2">
                 <textarea value={body} onChange={e => setBody(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                   placeholder="Type a message…" rows={1}
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-28 transition-colors"/>
+                  className="flex-1 bg-slate-100 border border-slate-300 rounded-2xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none resize-none max-h-28 transition-colors"/>
                 <button onClick={handleSend} disabled={!body.trim()}
                   className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
-                  <Send size={15} className="text-white ml-0.5"/>
+                  <Send size={15} className="text-slate-900 ml-0.5"/>
                 </button>
               </div>
-              <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+              <div className="text-xs text-slate-300 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
             </div>
           )}
         </div>
 
         {/* Manager info side panel */}
         {isManager && showInfo && (
-          <div className="w-56 flex-shrink-0 border-l border-slate-800/80 bg-slate-900/40 overflow-y-auto p-4 space-y-4">
+          <div className="w-56 flex-shrink-0 border-l border-slate-200/80 bg-slate-100/60 overflow-y-auto p-4 space-y-4">
             <div>
               <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Status</div>
               <div className="space-y-1">
                 {HELPDESK_STATUSES.map(s => (
                   <button key={s} onClick={() => onStatusChange(ticket, s)}
-                    className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold transition-all ${ticket.status === s ? "text-white" : "text-slate-400 hover:bg-slate-800"}`}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold transition-all ${ticket.status === s ? "text-slate-900" : "text-slate-400 hover:bg-slate-100"}`}
                     style={ticket.status === s ? { background: statusColors[s] } : {}}>{s}</button>
                 ))}
               </div>
@@ -4341,15 +4342,15 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                   const assigned = ticket.assignedTo?.includes(p.name);
                   return (
                     <button key={p.id} onClick={() => onAssignToggle(ticket, p.name)}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-500 hover:bg-slate-800/60"}`}>
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-100 text-indigo-500" : "text-slate-500 hover:bg-slate-50"}`}>
                       <span className="truncate">{p.name}</span>
-                      {assigned && <Check size={11} className="text-indigo-400 flex-shrink-0"/>}
+                      {assigned && <Check size={11} className="text-indigo-600 flex-shrink-0"/>}
                     </button>
                   );
                 })}
               </div>
             </div>
-            <div className="text-xs text-slate-600 space-y-1 border-t border-slate-800 pt-3">
+            <div className="text-xs text-slate-400 space-y-1 border-t border-slate-200 pt-3">
               <div>Raised by {ticket.createdByName}</div>
               <div>{new Date(ticket.createdAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
               <div>{ticket.comments?.length || 0} message{ticket.comments?.length !== 1 ? "s" : ""}</div>
@@ -4385,11 +4386,11 @@ function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
-        <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200/80 bg-white flex-shrink-0">
+        <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-all">
           <ChevronLeft size={18}/>
         </button>
-        <div className="text-sm font-bold text-white">New Ticket</div>
+        <div className="text-sm font-bold text-slate-900">New Ticket</div>
       </div>
       <div className="flex-1 overflow-y-auto p-5 space-y-4">
         {myBrands.length > 1 && (
@@ -4418,7 +4419,7 @@ function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
           </div>
         </div>
       </div>
-      <div className="flex-shrink-0 p-4 border-t border-slate-800/80">
+      <div className="flex-shrink-0 p-4 border-t border-slate-200/80">
         <button onClick={handleSubmit} disabled={!form.title.trim()}
           className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
           <Send size={14}/> Submit Ticket
@@ -4488,15 +4489,15 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
     return acc;
   }, {});
 
-  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
+  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-300" }[s]||"bg-slate-300");
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/80 bg-slate-950">
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50">
       {/* Left panel */}
-      <div className={`flex flex-col border-r border-slate-800/80 bg-slate-900/80 flex-shrink-0 w-full lg:w-80 xl:w-96 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
-        <div className="px-4 py-3.5 border-b border-slate-800/80 space-y-3">
+      <div className={`flex flex-col border-r border-slate-200/80 bg-white flex-shrink-0 w-full lg:w-80 xl:w-96 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        <div className="px-4 py-3.5 border-b border-slate-200/80 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-bold text-white">Help Desk</div>
+            <div className="text-sm font-bold text-slate-900">Help Desk</div>
             <div className="flex items-center gap-1">
               {HELPDESK_STATUSES.map(s => (
                 <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)} title={s}
@@ -4505,7 +4506,7 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
             </div>
           </div>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
-            className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
+            className="w-full bg-slate-50 border border-slate-300/50 rounded-xl px-3 py-2 text-sm text-slate-900 placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
           <div className="flex gap-2">
             <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="flex-1"/>
             <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="flex-1">
@@ -4515,10 +4516,10 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
           </div>
         </div>
         {/* Status count strip */}
-        <div className="flex gap-2 px-4 py-2 border-b border-slate-800/50 overflow-x-auto">
+        <div className="flex gap-2 px-4 py-2 border-b border-slate-200/50 overflow-x-auto">
           {HELPDESK_STATUSES.map(s => (
             <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 ${filterStatus === s ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 ${filterStatus === s ? "bg-slate-200 text-slate-900" : "text-slate-500 hover:text-slate-300"}`}>
               <div className={`w-1.5 h-1.5 rounded-full ${statusDot(s)}`}/>{counts[s]||0} {s}
             </button>
           ))}
@@ -4526,8 +4527,8 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
         {/* Ticket list */}
         <div className="flex-1 overflow-y-auto">
           {visible.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
-              <LifeBuoy size={28} className="mb-2 text-slate-700"/>
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 px-4">
+              <LifeBuoy size={28} className="mb-2 text-slate-300"/>
               <div className="text-sm font-semibold text-center">No tickets found</div>
             </div>
           )}
@@ -4537,12 +4538,12 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
             const lastComment = ticket.comments?.[ticket.comments.length-1];
             return (
               <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setMobileShowChat(true); }}
-                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/40 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-200 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-100/50"}`}>
                 <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${statusDot(ticket.status)}`}/>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-0.5">
-                    <div className="text-sm font-semibold text-white truncate">{ticket.title}</div>
-                    <div className="text-xs text-slate-600 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
+                    <div className="text-sm font-semibold text-slate-900 truncate">{ticket.title}</div>
+                    <div className="text-xs text-slate-400 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
                   </div>
                   <div className="flex items-center gap-2 mb-1">
                     <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority]||"slate"}/>
@@ -4552,8 +4553,8 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
                     {lastComment ? `${lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
                   </div>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs text-slate-600">by {ticket.createdByName}</span>
-                    {ticket.comments?.length > 0 && <span className="flex items-center gap-1 text-xs text-slate-600"><MessageSquare size={10}/>{ticket.comments.length}</span>}
+                    <span className="text-xs text-slate-400">by {ticket.createdByName}</span>
+                    {ticket.comments?.length > 0 && <span className="flex items-center gap-1 text-xs text-slate-400"><MessageSquare size={10}/>{ticket.comments.length}</span>}
                   </div>
                 </div>
               </button>
@@ -4564,14 +4565,14 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
       {/* Right panel */}
       <div className={`flex-1 flex flex-col min-w-0 ${!mobileShowChat ? "hidden lg:flex" : "flex"}`}>
         {!activeTicket ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
-            <LifeBuoy size={32} className="text-slate-700"/>
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-3">
+            <LifeBuoy size={32} className="text-slate-300"/>
             <div className="text-base font-semibold text-slate-500">Select a ticket</div>
           </div>
         ) : (
           <>
-            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/80 bg-slate-900/40">
-              <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
+            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-200/80 bg-slate-100/60">
+              <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-slate-900"><ChevronLeft size={18}/></button>
               <span className="text-xs text-slate-400">Back to tickets</span>
             </div>
             <TicketChatPanel ticket={activeTicket} currentUser={currentUser}
@@ -4611,28 +4612,28 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
     onUpdate(updated); setActiveTicket(updated);
   };
 
-  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
+  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-300" }[s]||"bg-slate-300");
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/80 bg-slate-950">
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50">
       {/* Left panel */}
-      <div className={`flex flex-col border-r border-slate-800/80 bg-slate-900/80 flex-shrink-0 w-full lg:w-72 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/80">
+      <div className={`flex flex-col border-r border-slate-200/80 bg-white flex-shrink-0 w-full lg:w-72 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-200/80">
           <div>
-            <div className="text-sm font-bold text-white">My Tickets</div>
+            <div className="text-sm font-bold text-slate-900">My Tickets</div>
             {myTickets.length > 0 && <div className="text-xs text-slate-500">{myTickets.length} open</div>}
           </div>
           <button onClick={() => { setShowNewForm(true); setActiveTicket(null); setMobileShowChat(true); }}
             className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-all shadow-md" title="New ticket">
-            <Plus size={17} className="text-white"/>
+            <Plus size={17} className="text-slate-900"/>
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">
           {myTickets.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
-              <LifeBuoy size={28} className="mb-2 text-slate-700"/>
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 px-4">
+              <LifeBuoy size={28} className="mb-2 text-slate-300"/>
               <div className="text-sm font-semibold text-center">No open tickets</div>
-              <div className="text-xs text-slate-700 text-center mt-1">Tap + to raise one</div>
+              <div className="text-xs text-slate-300 text-center mt-1">Tap + to raise one</div>
             </div>
           )}
           {myTickets.map(ticket => {
@@ -4641,12 +4642,12 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
             const hasManagerReply = ticket.comments?.some(c => c.authorRole === "manager" || c.authorRole === "owner");
             return (
               <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setShowNewForm(false); setMobileShowChat(true); }}
-                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/40 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-200 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-100/50"}`}>
                 <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${statusDot(ticket.status)}`}/>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-0.5">
-                    <div className="text-sm font-semibold text-white truncate">{ticket.title}</div>
-                    <div className="text-xs text-slate-600 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
+                    <div className="text-sm font-semibold text-slate-900 truncate">{ticket.title}</div>
+                    <div className="text-xs text-slate-400 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
                   </div>
                   <div className="flex items-center gap-2 mb-1">
                     <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status]||"slate"}/>
@@ -4654,7 +4655,7 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
                   <div className="text-xs text-slate-500 truncate">
                     {lastComment ? `${lastComment.author === currentUser.name ? "You" : lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
                   </div>
-                  {hasManagerReply && <div className="text-xs text-indigo-400 mt-1 flex items-center gap-1"><MessageSquare size={10}/> Manager replied</div>}
+                  {hasManagerReply && <div className="text-xs text-indigo-600 mt-1 flex items-center gap-1"><MessageSquare size={10}/> Manager replied</div>}
                 </div>
               </button>
             );
@@ -4669,8 +4670,8 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
             onCancel={() => { setShowNewForm(false); setMobileShowChat(false); }}/>
         ) : activeTicket ? (
           <>
-            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/80 bg-slate-900/40">
-              <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
+            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-200/80 bg-slate-100/60">
+              <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-slate-900"><ChevronLeft size={18}/></button>
               <span className="text-xs text-slate-400">Back to my tickets</span>
             </div>
             <TicketChatPanel ticket={activeTicket} currentUser={currentUser}
@@ -4678,10 +4679,10 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
               allPeople={[]} brands={brands} isManager={false}/>
           </>
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
-            <LifeBuoy size={32} className="text-slate-700"/>
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-3">
+            <LifeBuoy size={32} className="text-slate-300"/>
             <div className="text-base font-semibold text-slate-500">Select a ticket</div>
-            <div className="text-sm text-slate-600">or tap + to raise a new one</div>
+            <div className="text-sm text-slate-400">or tap + to raise a new one</div>
           </div>
         )}
       </div>
@@ -4786,13 +4787,13 @@ function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose })
             const icon = o.type === "location" ? "📍" : o.type === "broadcast" ? "📢" : null;
             return (
               <button key={o.id} onClick={() => onStart(o)}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-800/60 transition-all text-left">
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 transition-all text-left">
                 <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
                   style={{ background: av.bg + "30", color: av.bg }}>
                   {icon || av.initials}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white">{o.name}</div>
+                  <div className="text-sm font-semibold text-slate-900">{o.name}</div>
                   <div className="text-xs text-slate-500">{o.sub}</div>
                 </div>
               </button>
@@ -4862,8 +4863,8 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
       {/* Thread messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
         {threadMsgs.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-slate-600">
-            <MessageSquare size={32} className="mb-3 text-slate-700"/>
+          <div className="flex flex-col items-center justify-center h-full text-slate-400">
+            <MessageSquare size={32} className="mb-3 text-slate-300"/>
             <div className="text-sm font-semibold">No messages yet</div>
             <div className="text-xs mt-1">Send the first message below</div>
           </div>
@@ -4872,7 +4873,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
           if (item.type === "date") {
             return (
               <div key={`date-${idx}`} className="flex items-center justify-center my-3">
-                <span className="bg-slate-800/80 border border-slate-700/60 text-slate-400 text-xs px-3 py-1 rounded-full">{item.label}</span>
+                <span className="bg-slate-100 border border-slate-300 text-slate-400 text-xs px-3 py-1 rounded-full">{item.label}</span>
               </div>
             );
           }
@@ -4897,15 +4898,15 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
                 <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
                   isMe
                     ? "bg-indigo-600 text-white rounded-br-md"
-                    : "bg-slate-800 text-slate-100 border border-slate-700/60 rounded-bl-md"
+                    : "bg-slate-100 text-slate-100 border border-slate-300 rounded-bl-md"
                 }`}>
                   {m.body}
                 </div>
                 {/* Timestamp + read receipt */}
                 <div className={`flex items-center gap-1 mt-0.5 px-1 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-                  <span className="text-xs text-slate-600">{fmtChatFull(m.createdAt)}</span>
+                  <span className="text-xs text-slate-400">{fmtChatFull(m.createdAt)}</span>
                   {isMe && (
-                    <span className="text-xs text-slate-600">
+                    <span className="text-xs text-slate-400">
                       {(m.readBy?.length || 0) > 1 ? "✓✓" : "✓"}
                     </span>
                   )}
@@ -4920,7 +4921,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
       </div>
 
       {/* Input bar */}
-      <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/80 bg-slate-900/60">
+      <div className="flex-shrink-0 px-3 py-3 border-t border-slate-200/80 bg-white">
         <div className="flex items-end gap-2">
           <textarea
             value={body}
@@ -4928,7 +4929,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             placeholder="Type a message…"
             rows={1}
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-32 transition-colors"
+            className="flex-1 bg-slate-100 border border-slate-300 rounded-2xl px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none resize-none max-h-32 transition-colors"
             style={{ lineHeight: "1.5" }}
           />
           <button
@@ -4936,10 +4937,10 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
             disabled={!body.trim()}
             className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0"
           >
-            <Send size={16} className="text-white ml-0.5"/>
+            <Send size={16} className="text-slate-900 ml-0.5"/>
           </button>
         </div>
-        <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+        <div className="text-xs text-slate-300 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
       </div>
     </div>
   );
@@ -5039,41 +5040,41 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   const getLastMsg = (thread) => thread.messages[thread.messages.length - 1];
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/80 bg-slate-950">
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50">
 
       {/* ── Left panel: thread list ─────────────────────────────────────────── */}
-      <div className={`flex flex-col border-r border-slate-800/80 bg-slate-900/80 flex-shrink-0
+      <div className={`flex flex-col border-r border-slate-200/80 bg-white flex-shrink-0
         ${mobileShowThread ? "hidden" : "flex"} w-full lg:flex lg:w-80 xl:w-96`}>
 
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/80">
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-200/80">
           <div>
-            <div className="text-sm font-bold text-white">Messages</div>
-            {totalUnread > 0 && <div className="text-xs text-indigo-400">{totalUnread} unread</div>}
+            <div className="text-sm font-bold text-slate-900">Messages</div>
+            {totalUnread > 0 && <div className="text-xs text-indigo-600">{totalUnread} unread</div>}
           </div>
           <button onClick={() => setNewChat(true)}
             className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-all shadow-md"
             title="New chat">
-            <Plus size={18} className="text-white"/>
+            <Plus size={18} className="text-slate-900"/>
           </button>
         </div>
 
         {/* Search */}
-        <div className="px-3 py-2.5 border-b border-slate-800/50">
+        <div className="px-3 py-2.5 border-b border-slate-200/50">
           <div className="relative">
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search conversations…"
-              className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl pl-3 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
+              className="w-full bg-slate-50 border border-slate-300/50 rounded-xl pl-3 pr-3 py-2 text-sm text-slate-900 placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
           </div>
         </div>
 
         {/* Thread list */}
         <div className="flex-1 overflow-y-auto">
           {filtered.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
-              <MessageSquare size={28} className="mb-2 text-slate-700"/>
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 px-4">
+              <MessageSquare size={28} className="mb-2 text-slate-300"/>
               <div className="text-sm font-semibold text-center">{search ? "No matches" : "No conversations yet"}</div>
-              <div className="text-xs mt-1 text-center text-slate-700">Tap + to start a new chat</div>
+              <div className="text-xs mt-1 text-center text-slate-300">Tap + to start a new chat</div>
             </div>
           )}
           {filtered.map(thread => {
@@ -5084,7 +5085,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
             const icon = thread.type === "location" ? "📍" : thread.type === "broadcast" ? "📢" : null;
             return (
               <button key={thread.key} onClick={() => handleThreadClick(thread)}
-                className={`w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-800/40 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                className={`w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-200 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-100/50"}`}>
                 {/* Avatar */}
                 <div className="relative flex-shrink-0">
                   <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold"
@@ -5093,20 +5094,20 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
                   </div>
                   {unread > 0 && (
                     <div className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center">
-                      <span className="text-white text-xs font-bold leading-none">{unread > 9 ? "9+" : unread}</span>
+                      <span className="text-slate-900 text-xs font-bold leading-none">{unread > 9 ? "9+" : unread}</span>
                     </div>
                   )}
                 </div>
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
-                    <div className={`text-sm truncate ${unread > 0 ? "font-bold text-white" : "font-semibold text-slate-200"}`}>{thread.name}</div>
-                    <div className="text-xs text-slate-600 flex-shrink-0">{last ? fmtChatTime(last.createdAt) : ""}</div>
+                    <div className={`text-sm truncate ${unread > 0 ? "font-bold text-slate-900" : "font-semibold text-slate-200"}`}>{thread.name}</div>
+                    <div className="text-xs text-slate-400 flex-shrink-0">{last ? fmtChatTime(last.createdAt) : ""}</div>
                   </div>
                   <div className={`text-xs truncate mt-0.5 ${unread > 0 ? "text-slate-300 font-medium" : "text-slate-500"}`}>
                     {last
                       ? `${last.fromId === myId || last.fromId === myOpsId ? "You: " : ""}${last.body}`
-                      : <span className="italic text-slate-600">No messages yet</span>
+                      : <span className="italic text-slate-400">No messages yet</span>
                     }
                   </div>
                 </div>
@@ -5119,19 +5120,19 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
       {/* ── Right panel: active chat ─────────────────────────────────────────── */}
       <div className={`flex-1 flex flex-col min-w-0 ${!mobileShowThread ? "hidden" : "flex"} lg:flex`}>
         {!activeThread ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
-            <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center">
-              <MessageSquare size={28} className="text-slate-600"/>
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-3">
+            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center">
+              <MessageSquare size={28} className="text-slate-400"/>
             </div>
             <div className="text-base font-semibold text-slate-500">Select a conversation</div>
-            <div className="text-sm text-slate-600">or tap + to start a new chat</div>
+            <div className="text-sm text-slate-400">or tap + to start a new chat</div>
           </div>
         ) : (
           <>
             {/* Thread header */}
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/80 bg-slate-900/60 flex-shrink-0">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200/80 bg-white flex-shrink-0">
               {/* Back button on mobile */}
-              <button onClick={() => setMobileShowThread(false)} className="lg:hidden p-1.5 -ml-1 text-slate-400 hover:text-white transition-colors">
+              <button onClick={() => setMobileShowThread(false)} className="lg:hidden p-1.5 -ml-1 text-slate-400 hover:text-slate-900 transition-colors">
                 <ChevronLeft size={20}/>
               </button>
               {/* Avatar */}
@@ -5146,7 +5147,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
                 );
               })()}
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-bold text-white">{activeThread.name}</div>
+                <div className="text-sm font-bold text-slate-900">{activeThread.name}</div>
                 <div className="text-xs text-slate-500">{activeThread.sub}</div>
               </div>
             </div>
@@ -5240,13 +5241,13 @@ function CommunicationView({
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
       {/* Tab bar */}
-      <div className="flex items-center gap-1 bg-slate-900/80 border border-slate-700/60 rounded-2xl p-1 mb-4 flex-wrap">
+      <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-2xl p-1 mb-4 flex-wrap">
         {TABS.map(t => {
           const TIcon = t.icon;
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
-                tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-slate-200"
+                tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}>
               <TIcon size={13}/>
               {t.label}
@@ -5329,7 +5330,7 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <div className="text-sm font-bold text-white">Shift Presets</div>
+          <div className="text-sm font-bold text-slate-900">Shift Presets</div>
           <div className="text-xs text-slate-500 mt-0.5">Custom shift types per location — used in the schedule builder</div>
         </div>
         <div className="flex items-center gap-2">
@@ -5346,15 +5347,15 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
       )}
       <div className="space-y-2">
         {brandPresets.map(p => (
-          <div key={p.id} className="flex items-center gap-3 bg-slate-800/40 rounded-xl px-4 py-3 border border-slate-700/40">
+          <div key={p.id} className="flex items-center gap-3 bg-slate-100/50 rounded-xl px-4 py-3 border border-slate-200">
             <div className="w-3 h-3 rounded-full flex-shrink-0" style={{background:p.color}}/>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-white">{p.name}</div>
+              <div className="text-sm font-bold text-slate-900">{p.name}</div>
               <div className="text-xs text-slate-400">{p.startTime} – {p.endTime}</div>
             </div>
             <div className="flex gap-1.5">
-              <button onClick={() => openEdit(p)} className="p-1.5 rounded-lg bg-slate-700 text-slate-400 hover:text-white transition-colors"><Edit size={12}/></button>
-              <button onClick={() => onDelete(p.id)} className="p-1.5 rounded-lg bg-slate-700 text-slate-400 hover:text-red-400 transition-colors"><Trash2 size={12}/></button>
+              <button onClick={() => openEdit(p)} className="p-1.5 rounded-lg bg-slate-200 text-slate-400 hover:text-slate-900 transition-colors"><Edit size={12}/></button>
+              <button onClick={() => onDelete(p.id)} className="p-1.5 rounded-lg bg-slate-200 text-slate-400 hover:text-red-700 transition-colors"><Trash2 size={12}/></button>
             </div>
           </div>
         ))}
@@ -5362,7 +5363,7 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
 
       {/* Inline edit / new form */}
       {editing && (
-        <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4 space-y-3">
+        <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 space-y-3">
           <div className="text-xs font-bold text-slate-300">{editing === "new" ? "New Preset" : `Edit — ${editing.name}`}</div>
           <div><label className={labelCls}>Preset Name *</label>
             <input value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Early Morning, Split Shift…" className={inputCls} autoFocus/>
@@ -5382,7 +5383,7 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={()=>setEditing(null)} className="flex-1 py-2 rounded-xl bg-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-600">Cancel</button>
+            <button onClick={()=>setEditing(null)} className="flex-1 py-2 rounded-xl bg-slate-200 text-slate-300 text-xs font-semibold hover:bg-slate-300">Cancel</button>
             <button onClick={handleSave} disabled={!form.name.trim()} className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-40">Save</button>
           </div>
         </div>
@@ -5490,19 +5491,19 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
       footer={<>
         {isEdit && onDelete && (
           <button onClick={() => { onDelete(slot.id); onClose(); }}
-            className="p-2.5 rounded-xl bg-red-950/40 border border-red-500/30 text-red-400 hover:bg-red-950/60 transition-colors" title="Delete shift">
+            className="p-2.5 rounded-xl bg-red-50 border border-red-300 text-red-700 hover:bg-red-50/60 transition-colors" title="Delete shift">
             <Trash2 size={16}/>
           </button>
         )}
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={handleSave} disabled={!employeeId || anyConflict} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
           {isEdit ? "Save changes" : "Add Shift"}
         </button>
       </>}>
       <div className="space-y-4">
         {/* Context */}
-        <div className="bg-slate-800/50 rounded-xl px-4 py-3 space-y-1.5">
-          <div className="flex items-center gap-2 text-sm font-bold text-white">
+        <div className="bg-slate-50 rounded-xl px-4 py-3 space-y-1.5">
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
             <Calendar size={13} className="text-slate-400"/>{dateDisplay}
           </div>
           {selectedMember && (
@@ -5536,9 +5537,9 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
         {/* Availability */}
         {employeeId && (
           <div className={`rounded-xl px-3 py-2.5 text-xs font-semibold flex items-center gap-2 ${
-            isUnavailable ? "bg-red-950/40 border border-red-500/30 text-red-300" :
-            isAvailable   ? "bg-emerald-950/40 border border-emerald-500/30 text-emerald-300" :
-            "bg-slate-800/40 border border-slate-700/40 text-slate-500"
+            isUnavailable ? "bg-red-50 border border-red-300 text-red-600" :
+            isAvailable   ? "bg-emerald-50 border border-emerald-300 text-emerald-600" :
+            "bg-slate-100/50 border border-slate-200 text-slate-500"
           }`}>
             <span className="text-base">{isUnavailable?"⚠️":isAvailable?"✅":"ℹ️"}</span>
             <span>{isUnavailable?"Marked unavailable this day":isAvailable?`Available${availWindow?` · ${availWindow.startTime}–${availWindow.endTime}`:""}` : "No availability submitted"}</span>
@@ -5547,13 +5548,13 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
 
         {/* Conflict warning: employee already has a shift on this day or any copy day */}
         {anyConflict && (
-          <div className="flex items-start gap-2 bg-red-950/40 border border-red-500/40 rounded-xl px-3 py-2.5 text-xs">
+          <div className="flex items-start gap-2 bg-red-50 border border-red-300 rounded-xl px-3 py-2.5 text-xs">
             <span className="text-base flex-shrink-0">🚫</span>
             <div className="flex-1">
-              <div className="text-red-400 font-bold">Conflict — can't save</div>
-              <div className="text-red-300 mt-0.5">{conflictMsg}.</div>
+              <div className="text-red-700 font-bold">Conflict — can't save</div>
+              <div className="text-red-600 mt-0.5">{conflictMsg}.</div>
               {copyDayConflicts.length > 0 && copyDayConflicts.length > 1 && (
-                <div className="text-red-300/80 mt-1">
+                <div className="text-red-600/80 mt-1">
                   Conflicting days: {copyDayConflicts.map(d => new Date(d+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})).join(", ")}
                 </div>
               )}
@@ -5569,14 +5570,14 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
             <div className="flex flex-wrap gap-2">
               {brandPresets.map(p => (
                 <button key={p.id} onClick={() => handlePresetClick(p)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${shift===p.name?"text-white border-transparent":"bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${shift===p.name?"text-slate-900 border-transparent":"bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}
                   style={shift===p.name?{background:p.color}:{}}>
                   {p.name}
                   <span className="ml-1 opacity-60">{p.startTime}–{p.endTime}</span>
                 </button>
               ))}
               <button onClick={()=>setShift("Custom")}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${shift==="Custom"?"bg-slate-600 border-slate-500 text-white":"bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${shift==="Custom"?"bg-slate-300 border-slate-500 text-slate-900":"bg-slate-100 border-slate-300 text-slate-400 hover:bg-slate-200"}`}>
                 Custom
               </button>
             </div>
@@ -5621,8 +5622,8 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
                       }}
                       className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                         isBase ? "bg-indigo-600 text-white cursor-default" :
-                        active ? "bg-indigo-500/30 border border-indigo-400 text-indigo-200" :
-                        "bg-slate-800 border border-slate-700 text-slate-400 hover:bg-slate-700"
+                        active ? "bg-indigo-100 border border-indigo-400 text-indigo-500" :
+                        "bg-slate-100 border border-slate-300 text-slate-400 hover:bg-slate-200"
                       }`}>
                       {DAYS_OF_WEEK[idx].slice(0,3)} {d.getDate()}{isBase && " ★"}
                     </button>
@@ -5630,7 +5631,7 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
                 })}
               </div>
               {copyDays.size > 0 && (
-                <div className="text-xs text-indigo-400 mt-2">
+                <div className="text-xs text-indigo-600 mt-2">
                   Will create {copyDays.size + 1} shifts total
                 </div>
               )}
@@ -5920,32 +5921,32 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
     <div className="space-y-5">
       {/* ── Top stats / totals strip ──────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3">
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled hours</div>
-          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.hours)}</div>
+          <div className="text-xl font-black text-slate-900 mt-1">{fmtHrs(weekTotals.hours)}</div>
           <div className="text-xs text-slate-500 mt-0.5">{weekTotals.totalShifts} shifts</div>
         </div>
-        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3">
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled wages</div>
-          <div className="text-xl font-black text-white mt-1">{fmtMoney(weekTotals.cost)}</div>
+          <div className="text-xl font-black text-slate-900 mt-1">{fmtMoney(weekTotals.cost)}</div>
           <div className="text-xs text-slate-500 mt-0.5">Forecast</div>
         </div>
-        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3">
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Actual hours</div>
-          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.actualHours)}</div>
+          <div className="text-xl font-black text-slate-900 mt-1">{fmtHrs(weekTotals.actualHours)}</div>
           <div className={`text-xs mt-0.5 font-semibold ${
-            weekTotals.actualHours > weekTotals.hours * 1.05 ? "text-red-400" :
-            weekTotals.actualHours < weekTotals.hours * 0.95 ? "text-amber-400" : "text-emerald-400"
+            weekTotals.actualHours > weekTotals.hours * 1.05 ? "text-red-700" :
+            weekTotals.actualHours < weekTotals.hours * 0.95 ? "text-amber-700" : "text-emerald-700"
           }`}>
             {weekTotals.hours ? `${((weekTotals.actualHours/weekTotals.hours - 1)*100).toFixed(0)}%` : "—"} vs plan
           </div>
         </div>
-        <button onClick={()=>setSalesModal(true)} className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/50 transition-colors">
+        <button onClick={()=>setSalesModal(true)} className="bg-white border border-slate-200 rounded-2xl p-3 text-left hover:border-indigo-300 transition-colors">
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">SPLH forecast</div>
           {weekSalesForecast > 0 ? (
             <>
               <div className={`text-xl font-black mt-1 ${
-                splhRating === "green" ? "text-emerald-400" : splhRating === "amber" ? "text-amber-400" : "text-red-400"
+                splhRating === "green" ? "text-emerald-700" : splhRating === "amber" ? "text-amber-700" : "text-red-700"
               }`}>£{splh.toFixed(1)}</div>
               <div className="text-xs text-slate-500 mt-0.5">sales / £1 labour</div>
             </>
@@ -5962,50 +5963,50 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3 flex-wrap">
           {allWeekSlots.length > 0 && (
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
               {isWeekPublished ? "✓ Published" : "Draft"}
             </span>
           )}
           {editLocked && (
             <button onClick={()=>setLocked(false)}
-              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
+              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-400 hover:text-amber-700 transition-colors"
               title="Schedule is locked — click to allow edits">
               🔒 Locked
             </button>
           )}
           {isWeekPublished && !locked && (
             <button onClick={()=>setLocked(true)}
-              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors">
+              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 hover:bg-amber-500/30 transition-colors">
               🔓 Editing — lock again
             </button>
           )}
-          {pendingAvail > 0 && <span className="text-xs text-amber-400">· {pendingAvail} availability pending</span>}
+          {pendingAvail > 0 && <span className="text-xs text-amber-700">· {pendingAvail} availability pending</span>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={()=>setShowCosts(s=>!s)} className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5">
+          <button onClick={()=>setShowCosts(s=>!s)} className="px-2.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5">
             {showCosts ? <Eye size={13}/> : <EyeOff size={13}/>} Costs
           </button>
           <button onClick={()=>setAutofillModal({})} disabled={editLocked}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 hover:bg-indigo-600/30 text-indigo-300 text-xs font-semibold transition-colors disabled:opacity-40" title="Auto-fill shifts from availability">
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-100 border border-indigo-200 hover:bg-indigo-100 text-indigo-500 text-xs font-semibold transition-colors disabled:opacity-40" title="Auto-fill shifts from availability">
             <Zap size={13}/> Auto-fill
           </button>
           {!isMobile && (
-            <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
-              <button onClick={()=>setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Week</button>
-              <button onClick={()=>setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>List</button>
-              <button onClick={()=>setViewMode("coverage")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="coverage"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Coverage</button>
+            <div className="flex bg-white border border-slate-300 rounded-xl p-0.5 gap-0.5">
+              <button onClick={()=>setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>Week</button>
+              <button onClick={()=>setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>List</button>
+              <button onClick={()=>setViewMode("coverage")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="coverage"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>Coverage</button>
             </div>
           )}
           {allWeekSlots.length > 0 && !editLocked && (
             <button onClick={handleCopyWeek} disabled={copying}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50">
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50">
               {copying ? "…" : <><Plus size={13}/> Copy → next</>}
             </button>
           )}
           {allWeekSlots.length > 0 && (
             <button onClick={handlePublish} disabled={publishing}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
-                isWeekPublished ? "bg-slate-700 hover:bg-slate-600 text-slate-300" : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                isWeekPublished ? "bg-slate-200 hover:bg-slate-300 text-slate-300" : "bg-emerald-600 hover:bg-emerald-500 text-white"
               } disabled:opacity-50`}>
               {publishing ? "…" : isWeekPublished ? "Unpublish" : "Publish Week"}
             </button>
@@ -6015,10 +6016,10 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
 
       {/* ── Bulk action bar ─────────────────────────────────────────────── */}
       {selected.size > 0 && (
-        <div className="flex items-center gap-3 bg-indigo-950/40 border border-indigo-500/40 rounded-xl px-4 py-2.5">
-          <span className="text-sm font-bold text-white">{selected.size} shift{selected.size!==1?"s":""} selected</span>
+        <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-300 rounded-xl px-4 py-2.5">
+          <span className="text-sm font-bold text-slate-900">{selected.size} shift{selected.size!==1?"s":""} selected</span>
           <div className="flex-1"/>
-          <button onClick={clearSelection} className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors">Clear</button>
+          <button onClick={clearSelection} className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-300 text-xs font-semibold transition-colors">Clear</button>
           <button onClick={handleBulkDelete} disabled={bulkDeleting || editLocked}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors disabled:opacity-40">
             <Trash2 size={13}/> Delete selected
@@ -6036,22 +6037,22 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
 
       {/* ── Draft banner ────────────────────────────────────────────────── */}
       {isDraft && (
-        <div className="flex items-center gap-3 bg-amber-950/30 border border-amber-500/30 rounded-xl px-4 py-3">
-          <span className="text-amber-400 text-sm">⚠ This week is in draft — employees cannot see it yet.</span>
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3">
+          <span className="text-amber-700 text-sm">⚠ This week is in draft — employees cannot see it yet.</span>
           <button onClick={handlePublish} className="ml-auto px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Publish now</button>
         </div>
       )}
 
       {/* ── Week nav ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
-        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 transition-colors"><ChevronLeft size={16}/></button>
         <div className="flex items-center gap-3">
-          <button onClick={()=>setWeekOffset(0)} className="text-sm font-semibold text-white hover:text-indigo-400 transition-colors">
+          <button onClick={()=>setWeekOffset(0)} className="text-sm font-semibold text-slate-900 hover:text-indigo-600 transition-colors">
             {weekDays[0].toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {weekDays[6].toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
           </button>
-          {weekOffset !== 0 && <button onClick={()=>setWeekOffset(0)} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold">Today →</button>}
+          {weekOffset !== 0 && <button onClick={()=>setWeekOffset(0)} className="text-xs text-indigo-600 hover:text-indigo-500 font-semibold">Today →</button>}
         </div>
-        <button onClick={()=>setWeekOffset(w=>w+1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronRight size={16}/></button>
+        <button onClick={()=>setWeekOffset(w=>w+1)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 transition-colors"><ChevronRight size={16}/></button>
       </div>
 
       {/* ── Mobile day-swipe view ─────────────────────────────────────────── */}
@@ -6066,8 +6067,8 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                 <button key={idx} onClick={()=>setMobileDay(idx)}
                   className={`flex-shrink-0 px-3 py-2 rounded-xl text-center transition-all ${
                     active ? "bg-indigo-600 text-white" :
-                    isToday ? "bg-indigo-950/40 border border-indigo-500/30 text-indigo-300" :
-                    "bg-slate-900/60 text-slate-400"
+                    isToday ? "bg-indigo-50 border border-indigo-200 text-indigo-500" :
+                    "bg-white text-slate-400"
                   }`}>
                   <div className="text-xs font-semibold">{DAYS_OF_WEEK[idx].slice(0,3)}</div>
                   <div className="text-base font-bold">{day.getDate()}</div>
@@ -6084,25 +6085,25 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
               <div className="space-y-3">
                 {/* Day totals */}
                 <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-slate-900/60 rounded-xl p-3 text-center">
+                  <div className="bg-white rounded-xl p-3 text-center">
                     <div className="text-xs text-slate-500">Hours</div>
-                    <div className="text-base font-bold text-white">{fmtHrs(dt.hours)}</div>
+                    <div className="text-base font-bold text-slate-900">{fmtHrs(dt.hours)}</div>
                   </div>
                   {showCosts && (
-                    <div className="bg-slate-900/60 rounded-xl p-3 text-center">
+                    <div className="bg-white rounded-xl p-3 text-center">
                       <div className="text-xs text-slate-500">Wages</div>
-                      <div className="text-base font-bold text-emerald-400">{fmtMoney(dt.cost)}</div>
+                      <div className="text-base font-bold text-emerald-700">{fmtMoney(dt.cost)}</div>
                     </div>
                   )}
-                  <div className="bg-slate-900/60 rounded-xl p-3 text-center">
+                  <div className="bg-white rounded-xl p-3 text-center">
                     <div className="text-xs text-slate-500">On shift</div>
-                    <div className="text-base font-bold text-white">{dt.headcount}</div>
+                    <div className="text-base font-bold text-slate-900">{dt.headcount}</div>
                   </div>
                 </div>
 
                 {/* Add shift */}
                 <button onClick={()=>!editLocked && setShiftModal({date:dateStr})} disabled={editLocked}
-                  className="w-full py-2.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 text-sm font-semibold disabled:opacity-40 hover:bg-indigo-600/30 transition-colors flex items-center justify-center gap-2">
+                  className="w-full py-2.5 rounded-xl bg-indigo-100 border border-indigo-200 text-indigo-500 text-sm font-semibold disabled:opacity-40 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2">
                   <Plus size={14}/> Add shift
                 </button>
 
@@ -6114,16 +6115,16 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                       const conflict = getSlotConflict(s, member);
                       const hrs = calcShiftHours(s.startTime, s.endTime);
                       return (
-                        <div key={s.id} className={`bg-slate-900/60 rounded-xl p-3 border ${conflict ? "border-red-500/40" : "border-slate-800/60"}`}
+                        <div key={s.id} className={`bg-white rounded-xl p-3 border ${conflict ? "border-red-300" : "border-slate-200"}`}
                           onClick={()=>!editLocked && setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName})}>
                           <div className="flex items-center gap-2 mb-1">
                             <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:getPresetColor(s.shift)}}/>
-                            <div className="text-sm font-bold text-white truncate">{s.employeeName}</div>
-                            {!s.published && <span className="text-xs text-amber-400 font-semibold ml-auto">Draft</span>}
+                            <div className="text-sm font-bold text-slate-900 truncate">{s.employeeName}</div>
+                            {!s.published && <span className="text-xs text-amber-700 font-semibold ml-auto">Draft</span>}
                           </div>
                           <div className="text-xs text-slate-400">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h</div>
-                          {conflict && <div className="text-xs text-red-400 font-semibold mt-1">⚠ {conflict==="unavailable"?"Employee unavailable":"Outside availability"}</div>}
-                          {showCosts && member?.hourlyRate > 0 && <div className="text-xs text-emerald-400 font-semibold mt-1">{fmtMoney(hrs * member.hourlyRate)}</div>}
+                          {conflict && <div className="text-xs text-red-700 font-semibold mt-1">⚠ {conflict==="unavailable"?"Employee unavailable":"Outside availability"}</div>}
+                          {showCosts && member?.hourlyRate > 0 && <div className="text-xs text-emerald-700 font-semibold mt-1">{fmtMoney(hrs * member.hourlyRate)}</div>}
                         </div>
                       );
                     })
@@ -6144,14 +6145,14 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                 const isToday = toLocalDateStr(day)===toLocalDateStr(today);
                 const dt = dailyTotals[idx];
                 return (
-                  <div key={idx} className={`text-center rounded-xl py-2 ${isToday?"bg-indigo-600/20 border border-indigo-500/30":"bg-slate-900/40"}`}>
-                    <div className={`text-xs font-semibold ${isToday?"text-indigo-300":"text-slate-400"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
-                    <div className={`text-sm font-bold ${isToday?"text-indigo-200":"text-slate-300"}`}>{day.getDate()}</div>
+                  <div key={idx} className={`text-center rounded-xl py-2 ${isToday?"bg-indigo-100 border border-indigo-200":"bg-slate-100/60"}`}>
+                    <div className={`text-xs font-semibold ${isToday?"text-indigo-500":"text-slate-400"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
+                    <div className={`text-sm font-bold ${isToday?"text-indigo-500":"text-slate-300"}`}>{day.getDate()}</div>
                     {dt.headcount > 0 && <div className="text-xs text-slate-500 mt-0.5">{dt.headcount} on shift</div>}
                   </div>
                 );
               })}
-              <div className="text-center rounded-xl py-2 bg-slate-900/40">
+              <div className="text-center rounded-xl py-2 bg-slate-100/60">
                 <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Total</div>
               </div>
             </div>
@@ -6162,13 +6163,13 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
               const empTotal = employeeTotals[mIdx];
               return (
                 <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
-                  <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900/60 rounded-xl">
+                  <div className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-xl">
                     <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs font-semibold text-white truncate">{member.nickname||member.firstName} {!member.nickname&&member.lastName}</div>
+                      <div className="text-xs font-semibold text-slate-900 truncate">{member.nickname||member.firstName} {!member.nickname&&member.lastName}</div>
                       <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
                     </div>
                   </div>
@@ -6182,7 +6183,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                     const isToday = toLocalDateStr(day)===toLocalDateStr(today);
                     return (
                       <div key={dIdx}
-                        className={`relative rounded-xl min-h-16 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/40 bg-slate-900/30 hover:bg-slate-800/40"}`}
+                        className={`relative rounded-xl min-h-16 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-200 bg-indigo-50/60":"border-slate-200 bg-slate-100/40 hover:bg-slate-100/50"}`}
                         onClick={()=>!editLocked && setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}>
                         {/* Availability strip — thin bar, hover for details */}
                         {avails.length>0 && (
@@ -6221,38 +6222,38 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                               </div>
                             );
                           })}
-                          {slots.length===0&&<div className="hidden group-hover:flex items-center justify-center h-6 text-slate-600 hover:text-slate-400"><Plus size={12}/></div>}
+                          {slots.length===0&&<div className="hidden group-hover:flex items-center justify-center h-6 text-slate-400 hover:text-slate-400"><Plus size={12}/></div>}
                         </div>
                       </div>
                     );
                   })}
 
-                  <div className="flex flex-col items-center justify-center px-2 py-1.5 bg-slate-900/40 rounded-xl border border-slate-800/40">
-                    <div className="text-sm font-bold text-white">{fmtHrs(empTotal.hours)}</div>
+                  <div className="flex flex-col items-center justify-center px-2 py-1.5 bg-slate-100/60 rounded-xl border border-slate-200">
+                    <div className="text-sm font-bold text-slate-900">{fmtHrs(empTotal.hours)}</div>
                     {showCosts && member.hourlyRate > 0 && (
-                      <div className="text-xs text-emerald-400 font-semibold">{fmtMoney(empTotal.cost)}</div>
+                      <div className="text-xs text-emerald-700 font-semibold">{fmtMoney(empTotal.cost)}</div>
                     )}
                   </div>
                 </div>
               );
             })}
 
-            <div className="grid gap-1 mt-3 pt-3 border-t border-slate-800/60" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
+            <div className="grid gap-1 mt-3 pt-3 border-t border-slate-200" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
               <div className="flex flex-col justify-center px-2">
                 <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Daily</div>
-                <div className="text-xs text-slate-600">hours / wages / sales</div>
+                <div className="text-xs text-slate-400">hours / wages / sales</div>
               </div>
               {dailyTotals.map((dt, idx) => (
-                <div key={idx} className="rounded-xl py-2 px-1 bg-slate-900/60 border border-slate-800/40 text-center">
-                  <div className="text-sm font-bold text-white">{fmtHrs(dt.hours)}</div>
-                  {showCosts && <div className="text-xs text-emerald-400 font-semibold">{fmtMoney(dt.cost)}</div>}
-                  {dailySales[idx] > 0 && <div className="text-xs text-indigo-400 mt-0.5">{fmtMoney(dailySales[idx])}</div>}
+                <div key={idx} className="rounded-xl py-2 px-1 bg-white border border-slate-200 text-center">
+                  <div className="text-sm font-bold text-slate-900">{fmtHrs(dt.hours)}</div>
+                  {showCosts && <div className="text-xs text-emerald-700 font-semibold">{fmtMoney(dt.cost)}</div>}
+                  {dailySales[idx] > 0 && <div className="text-xs text-indigo-600 mt-0.5">{fmtMoney(dailySales[idx])}</div>}
                   {dt.actualHours > 0 && <div className="text-xs text-slate-500 mt-0.5">act {fmtHrs(dt.actualHours)}</div>}
                 </div>
               ))}
-              <div className="rounded-xl py-2 px-1 bg-indigo-950/40 border border-indigo-500/30 text-center">
-                <div className="text-sm font-black text-white">{fmtHrs(weekTotals.hours)}</div>
-                {showCosts && <div className="text-xs text-emerald-300 font-bold">{fmtMoney(weekTotals.cost)}</div>}
+              <div className="rounded-xl py-2 px-1 bg-indigo-50 border border-indigo-200 text-center">
+                <div className="text-sm font-black text-slate-900">{fmtHrs(weekTotals.hours)}</div>
+                {showCosts && <div className="text-xs text-emerald-600 font-bold">{fmtMoney(weekTotals.cost)}</div>}
               </div>
             </div>
 
@@ -6277,31 +6278,31 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
             const isToday = toLocalDateStr(day)===toLocalDateStr(today);
             const dt = dailyTotals[dIdx];
             return (
-              <div key={dateStr} className={`rounded-2xl border overflow-hidden ${isToday?"border-indigo-500/30":"border-slate-800/60"}`}>
-                <div className={`flex items-center justify-between px-4 py-2.5 ${isToday?"bg-indigo-950/30":"bg-slate-900/60"}`}>
+              <div key={dateStr} className={`rounded-2xl border overflow-hidden ${isToday?"border-indigo-200":"border-slate-200"}`}>
+                <div className={`flex items-center justify-between px-4 py-2.5 ${isToday?"bg-indigo-50":"bg-white"}`}>
                   <div className="flex items-center gap-3 flex-wrap">
-                    <div className={`text-sm font-bold ${isToday?"text-indigo-300":"text-slate-300"}`}>
+                    <div className={`text-sm font-bold ${isToday?"text-indigo-500":"text-slate-300"}`}>
                       {day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
                     </div>
                     {dt.hours > 0 && (
                       <div className="flex items-center gap-2 text-xs">
                         <span className="text-slate-400">{fmtHrs(dt.hours)}</span>
-                        {showCosts && <span className="text-emerald-400 font-semibold">{fmtMoney(dt.cost)}</span>}
-                        {dailySales[dIdx] > 0 && <span className="text-indigo-400">forecast {fmtMoney(dailySales[dIdx])}</span>}
-                        <span className="text-slate-600">·</span>
+                        {showCosts && <span className="text-emerald-700 font-semibold">{fmtMoney(dt.cost)}</span>}
+                        {dailySales[dIdx] > 0 && <span className="text-indigo-600">forecast {fmtMoney(dailySales[dIdx])}</span>}
+                        <span className="text-slate-400">·</span>
                         <span className="text-slate-500">{dt.headcount} on shift</span>
                       </div>
                     )}
                   </div>
                   {!editLocked && (
-                    <button onClick={()=>setShiftModal({date:dateStr})} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition-colors">
+                    <button onClick={()=>setShiftModal({date:dateStr})} className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-500 font-semibold transition-colors">
                       <Plus size={12}/> Add shift
                     </button>
                   )}
                 </div>
                 {daySlots.length===0
-                  ? <div className="px-4 py-3 text-xs text-slate-600 italic">No shifts scheduled</div>
-                  : <div className="divide-y divide-slate-800/40">
+                  ? <div className="px-4 py-3 text-xs text-slate-400 italic">No shifts scheduled</div>
+                  : <div className="divide-y divide-slate-200">
                       {daySlots.map(s=>{
                         const member = opsTeam.find(m=>m.id===s.employeeId);
                         const conflict = getSlotConflict(s, member);
@@ -6310,26 +6311,26 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                         return (
                           <div key={s.id}
                             onClick={e=>{ if (e.shiftKey) toggleSelect(s.id, e); }}
-                            className={`flex items-center gap-3 px-4 py-3 ${s.status==="cancelled"?"opacity-50":""} ${isSelected?"bg-indigo-950/20":""}`}>
+                            className={`flex items-center gap-3 px-4 py-3 ${s.status==="cancelled"?"opacity-50":""} ${isSelected?"bg-indigo-50":""}`}>
                             <input type="checkbox" checked={isSelected} onChange={e=>{e.stopPropagation();toggleSelect(s.id,e);}}
-                              className="rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500"/>
+                              className="rounded border-slate-400 bg-slate-100 text-indigo-500 focus:ring-indigo-500"/>
                             <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:getPresetColor(s.shift)}}/>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <div className="text-sm font-semibold text-white">{s.employeeName}</div>
-                                {!s.published&&<span className="text-xs text-amber-400 font-semibold">Draft</span>}
-                                {conflict && <span className="text-xs text-red-400 font-semibold">⚠ {conflict==="unavailable"?"Unavailable":"Outside availability"}</span>}
+                                <div className="text-sm font-semibold text-slate-900">{s.employeeName}</div>
+                                {!s.published&&<span className="text-xs text-amber-700 font-semibold">Draft</span>}
+                                {conflict && <span className="text-xs text-red-700 font-semibold">⚠ {conflict==="unavailable"?"Unavailable":"Outside availability"}</span>}
                               </div>
                               <div className="text-xs text-slate-400">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h{s.role?` · ${s.role}`:""}</div>
                               {s.notes&&<div className="text-xs text-slate-500 italic mt-0.5">{s.notes}</div>}
                             </div>
                             {showCosts && member?.hourlyRate > 0 && (
-                              <div className="text-xs text-emerald-400 font-semibold flex-shrink-0">{fmtMoney(hrs * member.hourlyRate)}</div>
+                              <div className="text-xs text-emerald-700 font-semibold flex-shrink-0">{fmtMoney(hrs * member.hourlyRate)}</div>
                             )}
                             {!editLocked && (
                               <div className="flex items-center gap-1.5 flex-shrink-0">
-                                <button onClick={e=>{e.stopPropagation();setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName});}} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
-                                <button onClick={e=>{e.stopPropagation();setDeleteId(s.id);}} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"><Trash2 size={13}/></button>
+                                <button onClick={e=>{e.stopPropagation();setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName});}} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors"><Edit size={13}/></button>
+                                <button onClick={e=>{e.stopPropagation();setDeleteId(s.id);}} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"><Trash2 size={13}/></button>
                               </div>
                             )}
                           </div>
@@ -6361,7 +6362,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
                 const maxCount = Math.max(...row.counts, 1);
                 return (
                   <div key={row.date} className="grid gap-1 mb-1" style={{gridTemplateColumns:"100px repeat(24, 1fr)"}}>
-                    <div className={`flex items-center px-2 py-1.5 rounded-xl text-xs font-semibold ${isToday?"bg-indigo-950/30 text-indigo-300":"bg-slate-900/60 text-slate-300"}`}>
+                    <div className={`flex items-center px-2 py-1.5 rounded-xl text-xs font-semibold ${isToday?"bg-indigo-50 text-indigo-500":"bg-white text-slate-300"}`}>
                       {day.toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}
                     </div>
                     {row.counts.map((c, h) => {
@@ -6494,15 +6495,15 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
   return (
     <Modal title="Auto-fill shifts from availability" onClose={onClose} maxW="max-w-2xl"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={handleApply} disabled={proposalsActive.length === 0}
           className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
           Create {proposalsActive.length} shift{proposalsActive.length!==1?"s":""}
         </button>
       </>}>
       <div className="space-y-4">
-        <div className="bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-3">
-          <div className="text-xs text-indigo-300">
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
+          <div className="text-xs text-indigo-500">
             For each day & employee selected, propose a shift if they've marked themselves available and aren't already scheduled.
           </div>
         </div>
@@ -6514,7 +6515,7 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
             {shiftPresets.map(p => (
               <button key={p.id} onClick={()=>setPresetId(p.id)}
                 className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all border ${
-                  presetId === p.id ? "border-transparent text-white" : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"
+                  presetId === p.id ? "border-transparent text-slate-900" : "bg-slate-100 text-slate-400 border-slate-300 hover:bg-slate-200"
                 }`}
                 style={presetId === p.id ? { background: p.color } : {}}>
                 {p.name} · {p.startTime}–{p.endTime}
@@ -6533,7 +6534,7 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
               const active = selectedDays.has(dStr);
               return (
                 <button key={dStr} onClick={()=>setSelectedDays(prev=>{const n=new Set(prev);if(n.has(dStr))n.delete(dStr);else n.add(dStr);return n;})}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold ${active?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold ${active?"bg-indigo-600 text-white":"bg-slate-100 text-slate-400 hover:bg-slate-200"}`}>
                   {DAYS_OF_WEEK[idx].slice(0,3)} {d.getDate()}
                 </button>
               );
@@ -6545,12 +6546,12 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
         <div className="space-y-2">
           <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
             <input type="checkbox" checked={skipIfHasShift} onChange={e=>setSkipIfHasShift(e.target.checked)}
-              className="rounded border-slate-600 bg-slate-800 text-indigo-500"/>
+              className="rounded border-slate-400 bg-slate-100 text-indigo-500"/>
             Skip employees who already have a shift on that day
           </label>
           <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
             <input type="checkbox" checked={respectAvailWindow} onChange={e=>setRespectAvailWindow(e.target.checked)}
-              className="rounded border-slate-600 bg-slate-800 text-indigo-500"/>
+              className="rounded border-slate-400 bg-slate-100 text-indigo-500"/>
             Only propose if shift fits within their availability window
           </label>
         </div>
@@ -6561,14 +6562,14 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
           {proposals.length === 0 ? (
             <div className="text-xs text-slate-500 italic py-4 text-center">No proposals — no eligible employees or no availability submitted. Try toggling the options above.</div>
           ) : (
-            <div className="max-h-64 overflow-y-auto space-y-1 bg-slate-900/40 rounded-xl p-2">
+            <div className="max-h-64 overflow-y-auto space-y-1 bg-slate-100/60 rounded-xl p-2">
               {proposals.map(p => {
                 const key = `${p.memberId}-${p.date}`;
                 const isExcl = excluded.has(key);
                 return (
                   <button key={key} onClick={()=>toggleExclude(key)}
-                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all ${isExcl?"bg-slate-800/40 opacity-50":"bg-slate-800/80 hover:bg-slate-700"}`}>
-                    <input type="checkbox" checked={!isExcl} readOnly className="rounded border-slate-600 bg-slate-800 text-indigo-500 pointer-events-none"/>
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all ${isExcl?"bg-slate-100/50 opacity-50":"bg-slate-100 hover:bg-slate-200"}`}>
+                    <input type="checkbox" checked={!isExcl} readOnly className="rounded border-slate-400 bg-slate-100 text-indigo-500 pointer-events-none"/>
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background: p.preset.color}}/>
                     <div className="flex-1 text-left text-slate-200 font-semibold">{p.memberName}</div>
                     <div className="text-slate-400">{new Date(p.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}</div>
@@ -6597,7 +6598,7 @@ function SalesForecastModal({ brand, weekDays, weekDayStrs, onSave, onClose }) {
   return (
     <Modal title="Sales forecast for this week" onClose={onClose} maxW="max-w-md"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={()=>onSave(forecasts)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Save Forecast</button>
       </>}>
       <div className="space-y-3">
@@ -6620,9 +6621,9 @@ function SalesForecastModal({ brand, weekDays, weekDayStrs, onSave, onClose }) {
             </div>
           );
         })}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+        <div className="flex items-center justify-between pt-3 border-t border-slate-200">
           <span className="text-sm font-semibold text-slate-300">Week total</span>
-          <span className="text-lg font-black text-emerald-400">£{total.toFixed(2)}</span>
+          <span className="text-lg font-black text-emerald-700">£{total.toFixed(2)}</span>
         </div>
       </div>
     </Modal>
@@ -6680,7 +6681,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
       ? (myMember?.nickname || myMember?.firstName || shift.employeeName)
       : (member?.role || shift.role || shift.employeeName);
     return (
-      <div className={`rounded-2xl border p-4 ${isMe ? "bg-indigo-950/30 border-indigo-500/30" : "bg-slate-900/60 border-slate-700/60"}`}>
+      <div className={`rounded-2xl border p-4 ${isMe ? "bg-indigo-50 border-indigo-200" : "bg-white border-slate-300"}`}>
         <div className="flex items-center gap-3">
           {isMe && (
             <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
@@ -6689,7 +6690,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <div className={`text-sm font-bold ${isMe ? "text-indigo-200" : "text-slate-200"}`}>
+            <div className={`text-sm font-bold ${isMe ? "text-indigo-500" : "text-slate-200"}`}>
               {isMe ? `${displayName} (You)` : displayName}
             </div>
             <div className="text-xs text-slate-400 mt-0.5">
@@ -6698,7 +6699,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
             {shift.notes && <div className="text-xs text-slate-500 italic mt-1">{shift.notes}</div>}
           </div>
           <div className="text-right flex-shrink-0">
-            <div className="text-sm font-bold text-white">{shift.startTime}</div>
+            <div className="text-sm font-bold text-slate-900">{shift.startTime}</div>
             <div className="text-xs text-slate-500">– {shift.endTime}</div>
           </div>
         </div>
@@ -6725,19 +6726,19 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-bold text-white">My Schedule</h2>
+          <h2 className="text-base font-bold text-slate-900">My Schedule</h2>
           {brand && <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
         </div>
       </div>
 
       {/* Today / Tomorrow toggle */}
-      <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-2xl p-1 gap-1 w-fit">
+      <div className="flex bg-white border border-slate-300 rounded-2xl p-1 gap-1 w-fit">
         <button onClick={()=>setViewDate(todayStr)}
-          className={`px-5 py-2 rounded-xl text-sm font-semibold transition-all ${viewDate===todayStr?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>
+          className={`px-5 py-2 rounded-xl text-sm font-semibold transition-all ${viewDate===todayStr?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>
           Today
         </button>
         <button onClick={()=>setViewDate(tomorrowStr)}
-          className={`px-5 py-2 rounded-xl text-sm font-semibold transition-all ${viewDate===tomorrowStr?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>
+          className={`px-5 py-2 rounded-xl text-sm font-semibold transition-all ${viewDate===tomorrowStr?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>
           Tomorrow
         </button>
       </div>
@@ -6751,7 +6752,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
       <div>
         <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Your Shifts</div>
         {myShifts.length === 0
-          ? <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 text-center text-slate-500 text-sm">Not scheduled {viewLabel.toLowerCase()}</div>
+          ? <div className="bg-slate-100/60 border border-slate-200 rounded-2xl p-6 text-center text-slate-500 text-sm">Not scheduled {viewLabel.toLowerCase()}</div>
           : <div className="space-y-2">{myShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={true}/>)}</div>
         }
       </div>
@@ -6778,12 +6779,12 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
           <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Coming Up This Week</div>
           <div className="space-y-2">
             {upcomingMyShifts.map(s => (
-              <div key={s.id} className="flex items-center gap-3 bg-slate-900/60 border border-slate-700/60 rounded-xl px-4 py-3">
+              <div key={s.id} className="flex items-center gap-3 bg-white border border-slate-300 rounded-xl px-4 py-3">
                 <div className="text-xs font-bold text-slate-400 w-16 flex-shrink-0">
                   {new Date(s.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white">{s.shift}</div>
+                  <div className="text-sm font-semibold text-slate-900">{s.shift}</div>
                   <div className="text-xs text-slate-400">{s.startTime} – {s.endTime}</div>
                 </div>
               </div>
@@ -7042,7 +7043,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
           <span className="text-white font-bold text-xl">Create Brands</span>
         </div>
         <div className="text-3xl font-black text-white tabular-nums">{fmtTime(clock)}</div>
-        <div className="text-slate-400 text-sm mt-0.5">{fmtDate(clock)}</div>
+        <div className="text-slate-600 text-sm mt-0.5">{fmtDate(clock)}</div>
       </div>
 
       {/* Camera preview */}
@@ -7051,13 +7052,13 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
           ref={videoRef}
           autoPlay playsInline muted
           className={`w-32 h-32 rounded-full object-cover border-2 transition-all ${
-            cameraReady ? "border-emerald-500/40" : cameraError ? "border-red-500/40 opacity-30" : "border-slate-700 opacity-40"
+            cameraReady ? "border-emerald-500/40" : cameraError ? "border-red-500/40 opacity-30" : "border-slate-700/60 opacity-40"
           }`}
           style={{ transform: "scaleX(-1)" }}
         />
         {/* Status dot */}
         <div className={`absolute bottom-1 right-1 w-3 h-3 rounded-full border-2 border-slate-950 ${
-          cameraReady ? "bg-emerald-500" : cameraError ? "bg-red-500" : "bg-amber-500"
+          cameraReady ? "bg-emerald-9500" : cameraError ? "bg-red-9500" : "bg-amber-9500"
         }`}/>
       </div>
       {/* Privacy notice */}
@@ -7070,14 +7071,14 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
       {/* PIN display */}
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center">
-          <div className="text-slate-400 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
+          <div className="text-slate-600 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
 
           {/* PIN dots */}
           <div className={`flex justify-center gap-4 mb-3 ${shake ? "animate-bounce" : ""}`}>
             {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
               <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all ${
                 i < pin.length
-                  ? matched ? "bg-emerald-500 border-emerald-400" : "bg-indigo-500 border-indigo-400"
+                  ? matched ? "bg-emerald-9500 border-emerald-400" : "bg-indigo-9500 border-indigo-400"
                   : "bg-transparent border-slate-600"
               }`}/>
             ))}
@@ -7085,7 +7086,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
 
           {/* Matched name */}
           {matched && (
-            <div className={`rounded-2xl px-6 py-4 mx-4 border ${isClockedIn ? "bg-amber-950/40 border-amber-500/40" : "bg-emerald-950/40 border-emerald-500/40"}`}>
+            <div className={`rounded-2xl px-6 py-4 mx-4 border ${isClockedIn ? "bg-amber-950 border-amber-500/30" : "bg-emerald-950 border-emerald-500/40"}`}>
               <div className="text-xl font-bold text-white">{matched.firstName} {matched.lastName}</div>
               <div className="text-sm mt-0.5 font-semibold">
                 {isClockedIn
@@ -7094,7 +7095,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
                 }
               </div>
               {isClockedIn && openRecord && (
-                <div className="text-xs text-slate-400 mt-1">
+                <div className="text-xs text-slate-600 mt-1">
                   In at {new Date(openRecord.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}
                 </div>
               )}
@@ -7116,7 +7117,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
                 onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
                 className={`h-20 rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
                   key === "⌫"
-                    ? "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                    ? "bg-slate-800 text-slate-600 hover:bg-slate-700"
                     : "bg-slate-800 text-white hover:bg-slate-700"
                 }`}>
                 {key}
@@ -7133,8 +7134,8 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
               submitting ? "bg-slate-700 text-slate-500 cursor-not-allowed" :
               matched
                 ? isClockedIn
-                  ? "bg-amber-500 hover:bg-amber-400 text-white"
-                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                  ? "bg-amber-9500 hover:bg-amber-400 text-white"
+                  : "bg-emerald-600 hover:bg-emerald-9500 text-white"
                 : "bg-slate-800 text-slate-600 cursor-not-allowed"
             }`}>
             {submitting ? "Processing…" : matched
@@ -7160,13 +7161,13 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
               {successIsIn ? "Clocked In ✓" : "Clocked Out ✓"}
             </div>
             <div className="text-3xl font-bold text-white">{lastAction.name}</div>
-            <div className="text-xl text-slate-400">{fmtTime(lastAction.time)}</div>
+            <div className="text-xl text-slate-600">{fmtTime(lastAction.time)}</div>
 
             {!successIsIn && (
               <div className="bg-black/30 rounded-2xl p-5 space-y-3 text-left">
                 {lastAction.hours != null && (
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-400 text-sm">Hours worked</span>
+                    <span className="text-slate-600 text-sm">Hours worked</span>
                     <span className="text-white text-lg font-bold">
                       {Math.floor(lastAction.hours)}h {String(Math.round((lastAction.hours % 1)*60)).padStart(2,"0")}m
                     </span>
@@ -7177,7 +7178,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
                     <div className="text-red-300 font-bold text-sm mb-1">
                       ⚠ {successUnsched ? "Unscheduled shift" : `${lastAction.overtimeHrs.toFixed(2)}h extra time`}
                     </div>
-                    <div className="text-slate-300 text-xs">
+                    <div className="text-slate-700 text-xs">
                       {successUnsched
                         ? "This shift wasn't scheduled. Open the app → My Hours to submit a reason for your manager to approve."
                         : "You worked outside your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
@@ -7330,36 +7331,39 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
   const handleApproveOT = (r) => onUpdate({ ...r,
     overtimeApproved: true, overtimeApprovedBy: currentUser.name,
-    overtimeHours: r.overtimeHrs, updatedAt: new Date().toISOString() });
+    overtimeHours: r.overtimeHrs,
+    approved: true, approvedBy: r.approvedBy || currentUser.name,  // also approve the hours
+    updatedAt: new Date().toISOString() });
 
   const handleRejectOT = (r, reason) => onUpdate({ ...r,
     overtimeApproved: false, overtimeHours: 0,
-    overtimeReason: r.overtimeReason, // keep employee reason
+    overtimeReason: r.overtimeReason,
     overtimeRejectedReason: reason || "",
+    approved: true, approvedBy: r.approvedBy || currentUser.name,  // hours still get approved (the regular portion); just the OT is rejected
     updatedAt: new Date().toISOString() });
 
   return (
     <div className="space-y-5">
       {/* Top stats strip */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3">
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Hours worked</div>
-          <div className="text-xl font-black text-white mt-1 tabular-nums">{totalHours.toFixed(1)}<span className="text-base text-slate-500 font-bold ml-1">h</span></div>
+          <div className="text-xl font-black text-slate-900 mt-1 tabular-nums">{totalHours.toFixed(1)}<span className="text-base text-slate-500 font-bold ml-1">h</span></div>
           <div className="text-xs text-slate-500 mt-0.5">this week</div>
         </div>
-        <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3">
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Total pay</div>
-          <div className="text-xl font-black text-emerald-400 mt-1 tabular-nums">£{totalPay.toFixed(2)}</div>
+          <div className="text-xl font-black text-emerald-700 mt-1 tabular-nums">£{totalPay.toFixed(2)}</div>
           <div className="text-xs text-slate-500 mt-0.5">incl. approved OT</div>
         </div>
-        <div className={`bg-slate-900/60 border rounded-2xl p-3 ${pendingApproval > 0 ? "border-amber-500/30" : "border-slate-800/60"}`}>
+        <div className={`bg-white border rounded-2xl p-3 ${pendingApproval > 0 ? "border-amber-300" : "border-slate-200"}`}>
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Pending approval</div>
-          <div className={`text-xl font-black mt-1 tabular-nums ${pendingApproval > 0 ? "text-amber-400" : "text-white"}`}>{pendingApproval}</div>
+          <div className={`text-xl font-black mt-1 tabular-nums ${pendingApproval > 0 ? "text-amber-700" : "text-slate-900"}`}>{pendingApproval}</div>
           <div className="text-xs text-slate-500 mt-0.5">{pendingApproval === 1 ? "record" : "records"}</div>
         </div>
-        <div className={`bg-slate-900/60 border rounded-2xl p-3 ${pendingOT > 0 ? "border-red-500/30" : "border-slate-800/60"}`}>
+        <div className={`bg-white border rounded-2xl p-3 ${pendingOT > 0 ? "border-red-300" : "border-slate-200"}`}>
           <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Overtime to review</div>
-          <div className={`text-xl font-black mt-1 tabular-nums ${pendingOT > 0 ? "text-red-400" : "text-white"}`}>{pendingOT}</div>
+          <div className={`text-xl font-black mt-1 tabular-nums ${pendingOT > 0 ? "text-red-700" : "text-slate-900"}`}>{pendingOT}</div>
           <div className="text-xs text-slate-500 mt-0.5">awaiting decision</div>
         </div>
       </div>
@@ -7367,14 +7371,14 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">Time & Attendance</h2>
+          <h2 className="text-base font-bold text-slate-900">Time & Attendance</h2>
           <div className="text-xs text-slate-500 mt-0.5">Approve hours, review overtime, and amend records</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={()=>setAddManualModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"><Plus size={13}/> Manual Entry</button>
-          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
-            <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Records</button>
-            <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Summary</button>
+          <button onClick={()=>setAddManualModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-300 text-xs font-semibold transition-colors"><Plus size={13}/> Manual Entry</button>
+          <div className="flex bg-white border border-slate-300 rounded-xl p-0.5 gap-0.5">
+            <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>Records</button>
+            <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-600 hover:text-slate-900"}`}>Summary</button>
           </div>
         </div>
       </div>
@@ -7390,12 +7394,12 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
       {/* Week nav */}
       <div className="flex items-center justify-between">
-        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-        <div className="text-sm font-semibold text-white">
+        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 transition-colors"><ChevronLeft size={16}/></button>
+        <div className="text-sm font-semibold text-slate-900">
           {new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
-          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}
+          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-600">This week</span>}
         </div>
-        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
       </div>
 
       {/* ── Records ── */}
@@ -7423,33 +7427,33 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
               return (
                 <div key={r.id}
                   onClick={()=>toggleExpanded(r.id)}
-                  className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900/40 border border-slate-800/40 hover:bg-slate-900/60 cursor-pointer transition-colors">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-600/30 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">
+                  className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-100/60 border border-slate-200 hover:bg-white cursor-pointer transition-colors">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-600 flex-shrink-0">
                     {(member?.firstName?.[0]||"?")}{member?.lastName?.[0]||""}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-bold text-white truncate">{r.employeeName}</div>
+                    <div className="text-sm font-bold text-slate-900 truncate">{r.employeeName}</div>
                     <div className="text-xs text-slate-500">
                       {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                       {brand && <> · <span style={{color:brand.color}}>{brand.name}</span></>}
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
-                    {r.grossPay && <div className="text-xs text-emerald-400 tabular-nums">£{r.grossPay.toFixed(2)}</div>}
+                    <div className="text-sm font-bold text-slate-900 tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                    {r.grossPay && <div className="text-xs text-emerald-700 tabular-nums">£{r.grossPay.toFixed(2)}</div>}
                   </div>
-                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">OT ✓</span>}
-                  {isRejected && <span className="text-xs text-red-400 font-semibold flex-shrink-0">OT ✗</span>}
-                  {!hasOT && r.approved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">✓</span>}
-                  <ChevronDown size={14} className="text-slate-600 flex-shrink-0"/>
+                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-700 font-semibold flex-shrink-0">OT ✓</span>}
+                  {isRejected && <span className="text-xs text-red-700 font-semibold flex-shrink-0">OT ✗</span>}
+                  {!hasOT && r.approved && <span className="text-xs text-emerald-700 font-semibold flex-shrink-0">✓</span>}
+                  <ChevronDown size={14} className="text-slate-400 flex-shrink-0"/>
                 </div>
               );
             }
             return (
               <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
-                needsApproval || needsOTApproval ? "bg-amber-950/20 border-amber-500/30" :
-                r.status === "open" ? "bg-slate-900/40 border-slate-700/40" :
-                "bg-slate-900/60 border-slate-700/60"
+                needsApproval || needsOTApproval ? "bg-amber-50 border-amber-300" :
+                r.status === "open" ? "bg-slate-100/60 border-slate-200" :
+                "bg-white border-slate-300"
               }`}>
                 {/* Top row */}
                 <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -7460,7 +7464,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                     </div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <div className="text-sm font-bold text-white">{r.employeeName}</div>
+                        <div className="text-sm font-bold text-slate-900">{r.employeeName}</div>
                         {r.approved && <Badge label="✓ Approved" color="emerald"/>}
                         {needsApproval && <Badge label="Needs approval" color="amber"/>}
                         {r.status === "open" && <Badge label="Still clocked in" color="amber"/>}
@@ -7481,9 +7485,9 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                     {needsApproval && (
                       <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve</button>
                     )}
-                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
+                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors" title="Amend"><Edit size={13}/></button>
                     {isSettled && (
-                      <button onClick={()=>toggleExpanded(r.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Collapse"><ChevronUp size={13}/></button>
+                      <button onClick={()=>toggleExpanded(r.id)} className="p-1.5 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-colors" title="Collapse"><ChevronUp size={13}/></button>
                     )}
                   </div>
                 </div>
@@ -7491,7 +7495,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                 {/* Schedule vs Actual comparison */}
                 <div className="grid grid-cols-2 gap-3">
                   {/* Scheduled */}
-                  <div className="bg-slate-800/60 rounded-xl p-3">
+                  <div className="bg-slate-50 rounded-xl p-3">
                     <div className="text-xs font-semibold text-slate-400 mb-1.5">📅 Scheduled</div>
                     {r.scheduledStart ? (
                       <div className="space-y-1">
@@ -7511,12 +7515,12 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                         )}
                       </div>
                     ) : (
-                      <div className="text-xs text-red-400 font-semibold">No schedule found</div>
+                      <div className="text-xs text-red-700 font-semibold">No schedule found</div>
                     )}
                   </div>
 
                   {/* Actual */}
-                  <div className="bg-slate-800/60 rounded-xl p-3">
+                  <div className="bg-slate-50 rounded-xl p-3">
                     <div className="text-xs font-semibold text-slate-400 mb-1.5">⏱ Actual</div>
                     <div className="space-y-1">
                       <div className="flex justify-between items-center text-xs">
@@ -7524,12 +7528,12 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                         <div className="flex items-center gap-2">
                           {r.photoUrlIn && (
                             <button onClick={() => setPhotoModal({ url: r.photoUrlIn, label: `${r.employeeName} — Clock In`, time: fmtTime(r.punchIn) })}
-                              className="px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 text-xs font-bold hover:bg-emerald-950/60 transition-colors" title="View clock-in photo">📷</button>
+                              className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-50/60 transition-colors" title="View clock-in photo">📷</button>
                           )}
                           {!r.photoUrlIn && r.punchIn && (
                             <span className="text-xs text-amber-500/60" title="No photo captured">⚠</span>
                           )}
-                          <span className="text-white font-mono font-bold">{fmtTime(r.punchIn)}</span>
+                          <span className="text-slate-900 font-mono font-bold">{fmtTime(r.punchIn)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-xs">
@@ -7537,17 +7541,17 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                         <div className="flex items-center gap-2">
                           {r.photoUrlOut && (
                             <button onClick={() => setPhotoModal({ url: r.photoUrlOut, label: `${r.employeeName} — Clock Out`, time: fmtTime(r.punchOut) })}
-                              className="px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 text-xs font-bold hover:bg-emerald-950/60 transition-colors" title="View clock-out photo">📷</button>
+                              className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-emerald-700 text-xs font-bold hover:bg-emerald-50/60 transition-colors" title="View clock-out photo">📷</button>
                           )}
                           {!r.photoUrlOut && r.punchOut && (
                             <span className="text-xs text-amber-500/60" title="No photo captured">⚠</span>
                           )}
-                          <span className={`font-mono font-bold ${r.punchOut ? "text-white" : "text-amber-400"}`}>{r.punchOut ? fmtTime(r.punchOut) : "Still in"}</span>
+                          <span className={`font-mono font-bold ${r.punchOut ? "text-slate-900" : "text-amber-700"}`}>{r.punchOut ? fmtTime(r.punchOut) : "Still in"}</span>
                         </div>
                       </div>
                       <div className="flex justify-between text-xs">
                         <span className="text-slate-500">Hours</span>
-                        <span className="text-white font-bold">{fmtDur(r.hoursWorked)}</span>
+                        <span className="text-slate-900 font-bold">{fmtDur(r.hoursWorked)}</span>
                       </div>
                     </div>
                   </div>
@@ -7555,19 +7559,19 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
                 {/* Overtime section */}
                 {hasOT && (
-                  <div className={`rounded-xl p-3 border space-y-3 ${r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" : "bg-red-950/20 border-red-500/20"}`}>
+                  <div className={`rounded-xl p-3 border space-y-3 ${r.overtimeApproved ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"}`}>
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs font-bold text-red-400 mb-1">
+                        <div className="text-xs font-bold text-red-700 mb-1">
                           ⏱ {r.overtimeHrs.toFixed(2)}h overtime
-                          {r.overtimeApproved && <span className="text-emerald-400 ml-2">✓ Approved by {r.overtimeApprovedBy}</span>}
-                          {r.overtimeApproved === false && r.overtimeRejectedReason && <span className="text-red-400 ml-2">✗ Rejected</span>}
+                          {r.overtimeApproved && <span className="text-emerald-700 ml-2">✓ Approved by {r.overtimeApprovedBy}</span>}
+                          {r.overtimeApproved === false && r.overtimeRejectedReason && <span className="text-red-700 ml-2">✗ Rejected</span>}
                         </div>
                         {!r.overtimeReason && (r.overtimeComments?.length || 0) === 0 && (
                           <div className="text-xs text-slate-500">Awaiting employee reason</div>
                         )}
                         {r.overtimeApproved === false && r.overtimeRejectedReason && (
-                          <div className="text-xs text-red-300 mt-1">Final note: "{r.overtimeRejectedReason}"</div>
+                          <div className="text-xs text-red-600 mt-1">Final note: "{r.overtimeRejectedReason}"</div>
                         )}
                       </div>
                       {/* Approve/reject OT */}
@@ -7585,8 +7589,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                     {/* Gross pay with/without OT */}
                     {r.hourlyRate > 0 && r.punchOut && (
                       <div className="mt-2 pt-2 border-t border-white/10 flex gap-4 text-xs">
-                        <span className="text-slate-400">Scheduled pay: <span className="text-white font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*r.hourlyRate) : 0).toFixed(2)}</span></span>
-                        {r.overtimeApproved && <span className="text-emerald-400">+OT: <span className="font-bold">£{(r.overtimeHrs * r.hourlyRate).toFixed(2)}</span></span>}
+                        <span className="text-slate-400">Scheduled pay: <span className="text-slate-900 font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*r.hourlyRate) : 0).toFixed(2)}</span></span>
+                        {r.overtimeApproved && <span className="text-emerald-700">+OT: <span className="font-bold">£{(r.overtimeHrs * r.hourlyRate).toFixed(2)}</span></span>}
                       </div>
                     )}
                   </div>
@@ -7594,8 +7598,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
                 {/* Unscheduled shift */}
                 {r.isUnscheduled && r.status === "closed" && (
-                  <div className="bg-red-950/20 border border-red-500/20 rounded-xl p-3">
-                    <div className="text-xs font-bold text-red-400 mb-0.5">⚠ Unscheduled shift — {fmtDur(r.hoursWorked)}</div>
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                    <div className="text-xs font-bold text-red-700 mb-0.5">⚠ Unscheduled shift — {fmtDur(r.hoursWorked)}</div>
                     <div className="text-xs text-slate-500">No matching published schedule found for this date</div>
                   </div>
                 )}
@@ -7610,32 +7614,32 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
         <div className="space-y-3">
           {Object.entries(summary).length === 0 && <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>}
           {Object.entries(summary).map(([empId, s]) => (
-            <div key={empId} className="rounded-2xl border border-slate-700/60 bg-slate-900/60 p-5">
+            <div key={empId} className="rounded-2xl border border-slate-300 bg-white p-5">
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                   <div className="flex items-center gap-2">
-                    <div className="text-sm font-bold text-white">{s.name}</div>
+                    <div className="text-sm font-bold text-slate-900">{s.name}</div>
                     {s.pendingApproval > 0 && <Badge label={`${s.pendingApproval} pending`} color="amber"/>}
                     {s.pendingOT > 0 && <Badge label={`${s.pendingOT} OT pending`} color="red"/>}
                   </div>
                   <div className="text-xs text-slate-400 mt-0.5">{s.role} · {s.days} days worked</div>
                 </div>
                 <div className="flex gap-4 text-right flex-wrap">
-                  <div><div className="text-xs text-slate-500">Regular</div><div className="text-sm font-bold text-white">{fmtDur(s.regularHours)}</div></div>
-                  {s.overtimeHours > 0 && <div><div className="text-xs text-slate-500">Approved OT</div><div className="text-sm font-bold text-amber-400">{fmtDur(s.overtimeHours)}</div></div>}
-                  <div><div className="text-xs text-slate-500">Total</div><div className="text-sm font-bold text-white">{fmtDur(s.totalHours)}</div></div>
+                  <div><div className="text-xs text-slate-500">Regular</div><div className="text-sm font-bold text-slate-900">{fmtDur(s.regularHours)}</div></div>
+                  {s.overtimeHours > 0 && <div><div className="text-xs text-slate-500">Approved OT</div><div className="text-sm font-bold text-amber-700">{fmtDur(s.overtimeHours)}</div></div>}
+                  <div><div className="text-xs text-slate-500">Total</div><div className="text-sm font-bold text-slate-900">{fmtDur(s.totalHours)}</div></div>
                   <div><div className="text-xs text-slate-500">Rate</div><div className="text-sm font-bold text-slate-300">£{(s.hourlyRate||0).toFixed(2)}/hr</div></div>
-                  <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-sm font-bold text-emerald-400">£{(s.totalPay||0).toFixed(2)}</div></div>
+                  <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-sm font-bold text-emerald-700">£{(s.totalPay||0).toFixed(2)}</div></div>
                 </div>
               </div>
             </div>
           ))}
           {Object.entries(summary).length > 0 && (
-            <div className="rounded-2xl bg-indigo-950/30 border border-indigo-500/30 px-5 py-4 flex items-center justify-between">
-              <div className="text-sm font-bold text-white">Week Total</div>
+            <div className="rounded-2xl bg-indigo-50 border border-indigo-200 px-5 py-4 flex items-center justify-between">
+              <div className="text-sm font-bold text-slate-900">Week Total</div>
               <div className="flex gap-6 text-right">
-                <div><div className="text-xs text-slate-500">Hours</div><div className="text-sm font-bold text-white">{fmtDur(totalHours)}</div></div>
-                <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-lg font-black text-emerald-400">£{totalPay.toFixed(2)}</div></div>
+                <div><div className="text-xs text-slate-500">Hours</div><div className="text-sm font-bold text-slate-900">{fmtDur(totalHours)}</div></div>
+                <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-lg font-black text-emerald-700">£{totalPay.toFixed(2)}</div></div>
               </div>
             </div>
           )}
@@ -7664,7 +7668,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
       {photoModal && (
         <Modal title={photoModal.label} onClose={() => setPhotoModal(null)} maxW="max-w-md">
           <div className="space-y-3">
-            <img src={photoModal.url} alt="Punch verification" className="w-full rounded-2xl border border-slate-700"
+            <img src={photoModal.url} alt="Punch verification" className="w-full rounded-2xl border border-slate-300"
               style={{ transform: "scaleX(-1)" }}
             />
             <div className="text-center text-xs text-slate-500">
@@ -7707,20 +7711,20 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
       footer={<>
         {confirmDel ? (
           <>
-            <div className="flex-1 text-xs text-red-400 font-semibold self-center">Delete this record?</div>
-            <button onClick={() => setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">No</button>
+            <div className="flex-1 text-xs text-red-700 font-semibold self-center">Delete this record?</div>
+            <button onClick={() => setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">No</button>
             <button onClick={() => { onDelete(record.id); onClose(); }} className="px-3 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
           </>
         ) : (
           <>
-            <button onClick={() => setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-950/40 border border-red-500/30 text-red-400 hover:bg-red-950/60 transition-colors" title="Delete record"><Trash2 size={15}/></button>
-            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={() => setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-50 border border-red-300 text-red-700 hover:bg-red-50/60 transition-colors" title="Delete record"><Trash2 size={15}/></button>
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
             <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button>
           </>
         )}
       </>}>
       <div className="space-y-4">
-        <div className="bg-slate-800/50 rounded-xl px-4 py-3 text-xs text-slate-400">
+        <div className="bg-slate-50 rounded-xl px-4 py-3 text-xs text-slate-400">
           {record.employeeName} · {new Date(record.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -7749,12 +7753,12 @@ function RejectOTModal({ record, onReject, onClose }) {
   return (
     <Modal title="Reject Overtime" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={() => { onReject(record, reason); onClose(); }}
           className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reject</button>
       </>}>
       <div className="space-y-3">
-        <div className="bg-slate-800/50 rounded-xl p-3 text-xs text-slate-400">
+        <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-400">
           <div className="font-semibold text-slate-300">{record.employeeName}</div>
           <div>{record.overtimeHrs?.toFixed(2)}h overtime — Employee reason: "{record.overtimeReason}"</div>
         </div>
@@ -7814,8 +7818,8 @@ function OvertimeConversation({ record, currentUser, isEmployee, onAddComment, c
                   isMine
                     ? "bg-indigo-600 text-white"
                     : isFromManager
-                      ? "bg-amber-950/40 border border-amber-500/30 text-amber-100"
-                      : "bg-slate-800 text-slate-200"
+                      ? "bg-amber-50 border border-amber-300 text-amber-100"
+                      : "bg-slate-100 text-slate-200"
                 }`}>
                   <div className="text-xs font-semibold mb-0.5 opacity-80">
                     {c.authorName}{isFromManager && !isMine ? " · Manager" : ""}
@@ -7884,7 +7888,7 @@ function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) 
   return (
     <Modal title="Add Manual Hours" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-300 text-sm font-semibold hover:bg-slate-200">Cancel</button>
         <button onClick={handleSave} disabled={!empId||!date} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add Entry</button>
       </>}>
       <div className="space-y-4">
@@ -7902,8 +7906,8 @@ function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) 
         </div>
         {hoursWorked !== null && (
           <div className="text-xs text-slate-400 px-1">
-            Hours: <span className="text-white font-bold">{hoursWorked.toFixed(2)}h</span>
-            {member?.hourlyRate > 0 && <span className="ml-3">Pay: <span className="text-emerald-400 font-bold">£{(hoursWorked*member.hourlyRate).toFixed(2)}</span></span>}
+            Hours: <span className="text-slate-900 font-bold">{hoursWorked.toFixed(2)}h</span>
+            {member?.hourlyRate > 0 && <span className="ml-3">Pay: <span className="text-emerald-700 font-bold">£{(hoursWorked*member.hourlyRate).toFixed(2)}</span></span>}
           </div>
         )}
         <div><label className={labelCls}>Notes</label>
@@ -7996,23 +8000,23 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     <div className="space-y-5 max-w-2xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">My Hours</h2>
+          <h2 className="text-base font-bold text-slate-900">My Hours</h2>
           {brand && <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
         </div>
         <div className="flex items-center gap-3 text-xs">
           <span className="text-slate-400">{fmtDur(totalHours)} this week</span>
-          {approvedOT > 0 && <span className="text-amber-400 font-semibold">+ {fmtDur(approvedOT)} approved OT</span>}
+          {approvedOT > 0 && <span className="text-amber-700 font-semibold">+ {fmtDur(approvedOT)} approved OT</span>}
         </div>
       </div>
 
       {/* Week nav */}
       <div className="flex items-center justify-between">
-        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-        <div className="text-sm font-semibold text-white">
+        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 transition-colors"><ChevronLeft size={16}/></button>
+        <div className="text-sm font-semibold text-slate-900">
           {new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
-          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}
+          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-600">This week</span>}
         </div>
-        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-100 text-slate-400 hover:text-slate-900 disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
       </div>
 
       {enriched.length === 0 && (
@@ -8042,18 +8046,18 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
             return (
               <div key={r.id}
                 onClick={()=>toggleExpanded(r.id)}
-                className="flex items-center justify-between gap-3 bg-slate-900/40 border border-slate-800/40 rounded-xl px-4 py-2.5 hover:bg-slate-900/60 cursor-pointer transition-colors">
+                className="flex items-center justify-between gap-3 bg-slate-100/60 border border-slate-200 rounded-xl px-4 py-2.5 hover:bg-white cursor-pointer transition-colors">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div className="text-xs font-semibold text-slate-400 w-20 flex-shrink-0">
                     {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                   </div>
-                  <div className="text-sm font-bold text-white tabular-nums flex-shrink-0">{fmtDur(r.hoursWorked)}</div>
-                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold">+ OT approved</span>}
+                  <div className="text-sm font-bold text-slate-900 tabular-nums flex-shrink-0">{fmtDur(r.hoursWorked)}</div>
+                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-700 font-semibold">+ OT approved</span>}
                   {rejected && <span className="text-xs text-slate-500 font-semibold">OT not approved</span>}
                 </div>
-                {r.approved && !rejected && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">✓</span>}
-                {!r.approved && <span className="text-xs text-amber-400 font-semibold flex-shrink-0">Pending</span>}
-                <ChevronDown size={14} className="text-slate-600 flex-shrink-0"/>
+                {r.approved && !rejected && <span className="text-xs text-emerald-700 font-semibold flex-shrink-0">✓</span>}
+                {!r.approved && <span className="text-xs text-amber-700 font-semibold flex-shrink-0">Pending</span>}
+                <ChevronDown size={14} className="text-slate-400 flex-shrink-0"/>
               </div>
             );
           }
@@ -8061,14 +8065,14 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
           // ── Expanded mode ──
           return (
             <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
-              needsReason   ? "bg-red-950/20 border-red-500/30" :
-              rejected      ? "bg-slate-900/60 border-slate-700/60" :
-              awaitingApproval ? "bg-amber-950/20 border-amber-500/30" :
-              "bg-slate-900/60 border-slate-700/60"
+              needsReason   ? "bg-red-50 border-red-300" :
+              rejected      ? "bg-white border-slate-300" :
+              awaitingApproval ? "bg-amber-50 border-amber-300" :
+              "bg-white border-slate-300"
             }`}>
               {/* Date + status */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="text-sm font-bold text-white">
+                <div className="text-sm font-bold text-slate-900">
                   {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -8076,32 +8080,32 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   {!r.approved && r.status === "closed" && !hasOT && <Badge label="Pending approval" color="amber"/>}
                   {r.status === "open" && <Badge label="Clocked in" color="amber"/>}
                   {!needsAttention && isExpanded && (
-                    <button onClick={()=>toggleExpanded(r.id)} className="p-1 rounded-lg bg-slate-800/60 text-slate-400 hover:text-white transition-colors" title="Collapse"><ChevronUp size={13}/></button>
+                    <button onClick={()=>toggleExpanded(r.id)} className="p-1 rounded-lg bg-slate-50 text-slate-400 hover:text-slate-900 transition-colors" title="Collapse"><ChevronUp size={13}/></button>
                   )}
                 </div>
               </div>
 
               {/* Hours summary — NO scheduled times shown to employee */}
-              <div className="bg-slate-800/60 rounded-xl p-3">
+              <div className="bg-slate-50 rounded-xl p-3">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-semibold text-slate-400">Hours worked</div>
-                  <div className="text-lg font-black text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                  <div className="text-lg font-black text-slate-900 tabular-nums">{fmtDur(r.hoursWorked)}</div>
                 </div>
               </div>
 
               {/* Overtime / unscheduled — ONLY shown if it exists */}
               {(hasOT || r.isUnscheduled) && (
                 <div className={`rounded-xl p-3 border space-y-2 ${
-                  r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" :
-                  rejected ? "bg-slate-800/40 border-slate-700/40" :
-                  needsReason ? "bg-red-950/30 border-red-500/30" :
-                  "bg-amber-950/20 border-amber-500/20"
+                  r.overtimeApproved ? "bg-emerald-50 border-emerald-200" :
+                  rejected ? "bg-slate-100/50 border-slate-200" :
+                  needsReason ? "bg-red-50 border-red-300" :
+                  "bg-amber-50 border-amber-200"
                 }`}>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`text-xs font-bold ${
-                      r.overtimeApproved ? "text-emerald-400" :
+                      r.overtimeApproved ? "text-emerald-700" :
                       rejected ? "text-slate-400" :
-                      "text-red-400"
+                      "text-red-700"
                     }`}>
                       ⏱ {r.isUnscheduled ? "Unscheduled shift" : `${r.overtimeHrs.toFixed(2)}h extra time`}
                     </span>
@@ -8111,7 +8115,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   </div>
 
                   {r.overtimeApproved && (
-                    <div className="text-xs text-emerald-300">This extra time has been approved and will count towards your pay.</div>
+                    <div className="text-xs text-emerald-600">This extra time has been approved and will count towards your pay.</div>
                   )}
 
                   {rejected && (
@@ -8124,7 +8128,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   {/* Initial reason prompt — shown only if no reason yet AND no comments yet */}
                   {needsReason && (r.overtimeComments?.length || 0) === 0 && (
                     <div className="space-y-2">
-                      <div className="text-xs text-red-300 font-semibold">
+                      <div className="text-xs text-red-600 font-semibold">
                         {r.isUnscheduled
                           ? "This shift wasn't in your schedule. Please provide a reason so your manager can approve it."
                           : "You worked outside your scheduled hours. Please explain why so your manager can approve the extra time."}
@@ -8242,14 +8246,14 @@ const IS_KIOSK = window.location.pathname === "/kiosk" ||
 // ── Sidebar Component ─────────────────────────────────────────────────────────
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed }) {
   return (
-    <div className={`flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
+    <div className={`flex flex-col h-full bg-slate-50 border-r border-slate-200 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/40">
+      <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-200">
         <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
           <BarChart2 size={16} className="text-white"/>
         </div>
-        {!collapsed && <div><div className="text-sm font-black text-white">Create Brands</div><div className="text-xs text-slate-500">Hospitality Group</div></div>}
-        <button onClick={() => setCollapsed(c => !c)} className="ml-auto text-slate-600 hover:text-slate-300 p-1 rounded-lg">
+        {!collapsed && <div><div className="text-sm font-black text-slate-900">Create Brands</div><div className="text-xs text-slate-500">Hospitality Group</div></div>}
+        <button onClick={() => setCollapsed(c => !c)} className="ml-auto text-slate-400 hover:text-slate-300 p-1 rounded-lg">
           {collapsed ? <ChevronRight size={14}/> : <ChevronLeft size={14}/>}
         </button>
       </div>
@@ -8257,13 +8261,13 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
       <nav className="flex-1 overflow-y-auto py-2 space-y-0.5 px-2">
         {navGroups.map(g => (
           <div key={g.group}>
-            {!collapsed && <div className="text-xs font-bold text-slate-600 uppercase tracking-widest px-2 pt-3 pb-1">{g.group}</div>}
+            {!collapsed && <div className="text-xs font-bold text-slate-400 uppercase tracking-widest px-2 pt-3 pb-1">{g.group}</div>}
             {g.items.map(n => {
               const NIcon = n.icon;
               const active = activeView === n.key;
               return (
                 <button key={n.key} onClick={() => setActiveView(n.key)}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}>
                   <NIcon size={15} className="flex-shrink-0"/>
                   {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
                   {!collapsed && n.badge && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{n.badge}</span>}
@@ -8274,11 +8278,11 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
         ))}
       </nav>
       {/* User */}
-      <div className="border-t border-slate-800/40 p-3">
+      <div className="border-t border-slate-200 p-3">
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
-          <div className="w-7 h-7 rounded-lg bg-indigo-600/30 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">{currentUser.avatar || currentUser.name?.[0] || "?"}</div>
-          {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-indigo-400 font-semibold uppercase">{currentUser.role}</div></div>}
-          {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
+          <div className="w-7 h-7 rounded-lg bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-600 flex-shrink-0">{currentUser.avatar || currentUser.name?.[0] || "?"}</div>
+          {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-slate-900 truncate">{currentUser.name}</div><div className="text-xs text-indigo-600 font-semibold uppercase">{currentUser.role}</div></div>}
+          {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-700 transition-colors rounded-lg hover:bg-red-50"><LogOut size={14}/></button>}
         </div>
       </div>
     </div>
@@ -8523,13 +8527,13 @@ export default function App() {
   if (IS_KIOSK) return <KioskShell />;
 
   if (dbError) return (
-    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#f87171",fontFamily:"sans-serif",gap:12}}>
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#f8fafc",color:"#dc2626",fontFamily:"sans-serif",gap:12}}>
       <span style={{fontSize:32}}>⚠️</span><strong>Could not connect to database</strong>
       <code style={{fontSize:12,color:"#94a3b8"}}>{dbError}</code>
     </div>
   );
   if (!dbReady) return (
-    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:12}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#f8fafc",color:"#475569",fontFamily:"sans-serif",gap:12}}>
       <span style={{fontSize:24}}>⏳</span><span>Loading data…</span>
     </div>
   );
@@ -8622,7 +8626,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user: currentUser_ctx }}>
-      <div className="flex h-screen bg-slate-950 overflow-hidden">
+      <div className="flex h-screen bg-slate-50 overflow-hidden">
         {/* Sidebar */}
         <Sidebar
           navGroups={NAV_GROUPS} activeView={activeView} setActiveView={setActiveView}
@@ -8632,12 +8636,12 @@ export default function App() {
         {/* Main */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Topbar */}
-          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
+          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-white/95 flex-shrink-0">
             <div>
-              <h1 className="text-sm font-bold text-white">{titles[activeView] || activeView}</h1>
+              <h1 className="text-sm font-bold text-slate-900">{titles[activeView] || activeView}</h1>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
                 <span>{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</span>
-                <span className="text-slate-700">·</span>
+                <span className="text-slate-300">·</span>
                 <span className="tabular-nums font-semibold text-slate-400">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</span>
               </div>
             </div>
@@ -8647,13 +8651,13 @@ export default function App() {
                 const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
                 const onShift = punchRecords.filter(p => visibleBrands.some(b=>b.id===p.brandId) && p.date === todayStr && p.status === "open").length;
                 return onShift > 0 ? (
-                  <div className="flex items-center gap-1.5 text-xs text-indigo-300 font-semibold bg-indigo-950/40 border border-indigo-500/30 rounded-full px-2.5 py-0.5">
+                  <div className="flex items-center gap-1.5 text-xs text-indigo-500 font-semibold bg-indigo-50 border border-indigo-200 rounded-full px-2.5 py-0.5">
                     <UserCheck size={12}/>
                     <span className="tabular-nums">{onShift}</span> on shift
                   </div>
                 ) : null;
               })()}
-              <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
+              <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
               {inboxUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{inboxUnread} unread</div>}
             </div>
           </div>
