@@ -882,10 +882,22 @@ function dbFlipdishSaleToApp(s) {
   };
 }
 
-export async function fetchFlipdishSales({ from, to, limit = 10000, brandId = "chocoberry" } = {}) {
-  let q = supabase.from("flipdish_sales").select("*").order("first_event_at", { ascending: false });
+export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "chocoberry" } = {}) {
+  // Select only the lean columns the dashboard needs — skip raw_rms, sale_items,
+  // discounts_detail, receipt_lines (each ~5-50KB per row). For 30k+ rows
+  // selecting * causes statement timeout.
+  const cols = [
+    "sale_id", "brand_id", "channel", "store_id", "status",
+    "first_event_at", "last_event_at", "event_count",
+    "amount_total", "amount_subtotal", "amount_tax", "amount_discount", "amount_paid",
+    "business_date", "sale_time", "property_name", "storefront_type",
+    "payment_method", "is_cancelled", "is_fully_refunded",
+  ].join(",");
+  // Default: last 60 days (covers 30d view + prior 30d comparison)
+  const effFrom = from || new Date(Date.now() - 60 * 24 * 3600 * 1000);
+  let q = supabase.from("flipdish_sales").select(cols).order("first_event_at", { ascending: false });
   if (brandId) q = q.eq("brand_id", brandId);   // default: Chocoberry only (excludes Tove)
-  if (from) q = q.gte("first_event_at", from instanceof Date ? from.toISOString() : from);
+  q = q.gte("first_event_at", effFrom instanceof Date ? effFrom.toISOString() : effFrom);
   if (to)   q = q.lte("first_event_at", to   instanceof Date ? to.toISOString()   : to);
   q = q.limit(limit);
   const { data, error } = await q;
