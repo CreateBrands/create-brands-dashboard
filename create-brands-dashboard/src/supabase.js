@@ -866,11 +866,25 @@ function dbFlipdishSaleToApp(s) {
     lastEventAt:    s.last_event_at,
     eventCount:     s.event_count || 0,
     storeId:        s.store_id,                   // our internal store_id (via property_id map)
+    // RMS Reporting API fields (per-sale amounts across all channels)
+    amountTotal:    s.amount_total    != null ? Number(s.amount_total)    : null,
+    amountSubtotal: s.amount_subtotal != null ? Number(s.amount_subtotal) : null,
+    amountTax:      s.amount_tax      != null ? Number(s.amount_tax)      : null,
+    amountDiscount: s.amount_discount != null ? Number(s.amount_discount) : null,
+    amountPaid:     s.amount_paid     != null ? Number(s.amount_paid)     : null,
+    businessDate:   s.business_date,
+    saleTime:       s.sale_time,
+    propertyName:   s.property_name,
+    storefrontType: s.storefront_type,
+    paymentMethod:  s.payment_method,
+    isCancelled:    !!s.is_cancelled,
+    isFullyRefunded:!!s.is_fully_refunded,
   };
 }
 
-export async function fetchFlipdishSales({ from, to, limit = 10000 } = {}) {
+export async function fetchFlipdishSales({ from, to, limit = 10000, brandId = "chocoberry" } = {}) {
   let q = supabase.from("flipdish_sales").select("*").order("first_event_at", { ascending: false });
+  if (brandId) q = q.eq("brand_id", brandId);   // default: Chocoberry only (excludes Tove)
   if (from) q = q.gte("first_event_at", from instanceof Date ? from.toISOString() : from);
   if (to)   q = q.lte("first_event_at", to   instanceof Date ? to.toISOString()   : to);
   q = q.limit(limit);

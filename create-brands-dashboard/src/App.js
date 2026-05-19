@@ -1662,10 +1662,15 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
       storeId: id, revenue: 0, orders: 0, items: 0,
       online: 0, pos: 0, extra: 0,
       prevRevenue: 0, prevOrders: 0,
-      // New: per-channel sale counts (count only, no revenue from webhook data)
-      salePos: 0, saleUber: 0, saleDeli: 0, saleJe: 0, saleFda: 0, saleKiosk: 0,
-      totalSales: 0,
-      prevTotalSales: 0,
+      // Per-channel sale counts AND revenue (from RMS Reporting API)
+      salePos: 0,    revPos: 0,
+      saleUber: 0,   revUber: 0,
+      saleDeli: 0,   revDeli: 0,
+      saleJe: 0,     revJe: 0,
+      saleFda: 0,    revFda: 0,
+      saleKiosk: 0,  revKiosk: 0,
+      totalSales: 0, salesRevenue: 0,
+      prevTotalSales: 0, prevSalesRevenue: 0,
     });
     const m = {};
     visibleStores.forEach(s => { m[s.id] = init(s.id); });
@@ -1688,22 +1693,25 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
       m[link.storeId].prevOrders += 1;
     });
 
-    // New: count sales (POS/UberEats/Deliveroo/JustEats/FlipdishWebApp/FlipdishKIOSK)
+    // RMS sales: count + sum amount_total per channel per store
     periodSales.forEach(s => {
       if (!s.storeId || !m[s.storeId]) return;
-      m[s.storeId].totalSales += 1;
+      const amt = s.amountTotal || 0;
+      m[s.storeId].totalSales   += 1;
+      m[s.storeId].salesRevenue += amt;
       switch (s.channel) {
-        case "POS":            m[s.storeId].salePos++;   break;
-        case "UberEats":       m[s.storeId].saleUber++;  break;
-        case "Deliveroo":      m[s.storeId].saleDeli++;  break;
-        case "JustEats":       m[s.storeId].saleJe++;    break;
-        case "FlipdishWebApp": m[s.storeId].saleFda++;   break;
-        case "FlipdishKIOSK":  m[s.storeId].saleKiosk++; break;
+        case "POS":            m[s.storeId].salePos++;   m[s.storeId].revPos   += amt; break;
+        case "UberEats":       m[s.storeId].saleUber++;  m[s.storeId].revUber  += amt; break;
+        case "Deliveroo":      m[s.storeId].saleDeli++;  m[s.storeId].revDeli  += amt; break;
+        case "JustEats":       m[s.storeId].saleJe++;    m[s.storeId].revJe    += amt; break;
+        case "FlipdishWebApp": m[s.storeId].saleFda++;   m[s.storeId].revFda   += amt; break;
+        case "FlipdishKIOSK":  m[s.storeId].saleKiosk++; m[s.storeId].revKiosk += amt; break;
       }
     });
     prevSales.forEach(s => {
       if (!s.storeId || !m[s.storeId]) return;
-      m[s.storeId].prevTotalSales += 1;
+      m[s.storeId].prevTotalSales   += 1;
+      m[s.storeId].prevSalesRevenue += s.amountTotal || 0;
     });
     return m;
   }, [visibleStores, periodOrders, prevOrders, periodSales, prevSales, fsToStore]);
@@ -1715,22 +1723,30 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
         revenue: 0, orders: 0, items: 0, prevRevenue: 0, prevOrders: 0,
         online: 0, pos: 0, extra: 0,
         salePos: 0, saleUber: 0, saleDeli: 0, saleJe: 0, saleFda: 0, saleKiosk: 0,
-        totalSales: 0, prevTotalSales: 0,
+        revPos: 0, revUber: 0, revDeli: 0, revJe: 0, revFda: 0, revKiosk: 0,
+        totalSales: 0, salesRevenue: 0,
+        prevTotalSales: 0, prevSalesRevenue: 0,
       };
-      // ATV: based on Web revenue / Web orders only (only channel with amounts)
-      const atv = m.orders > 0 ? m.revenue / m.orders : 0;
-      const deltaPct = m.prevRevenue > 0 ? ((m.revenue - m.prevRevenue) / m.prevRevenue) * 100 : (m.revenue > 0 ? 100 : 0);
-      // Combined order count = Web orders + all non-Web sales
-      const totalOrders = m.orders + m.totalSales;
-      const prevTotalOrders = m.prevOrders + m.prevTotalSales;
-      const ordersDelta = prevTotalOrders > 0 ? ((totalOrders - prevTotalOrders) / prevTotalOrders) * 100 : (totalOrders > 0 ? 100 : 0);
-      return { store: s, ...m, atv, deltaPct, totalOrders, prevTotalOrders, ordersDelta };
+      // Total revenue = RMS salesRevenue (which already includes Web/Kiosk via FlipdishWebApp/FlipdishKIOSK).
+      // We do NOT add m.revenue from flipdish_orders because RMS already covers those channels.
+      const totalRevenue = m.salesRevenue;
+      const prevTotalRevenue = m.prevSalesRevenue;
+      const totalOrders = m.totalSales;       // RMS captures every channel
+      const prevTotalOrders = m.prevTotalSales;
+      const atv = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+      const deltaPct = prevTotalRevenue > 0
+        ? ((totalRevenue - prevTotalRevenue) / prevTotalRevenue) * 100
+        : (totalRevenue > 0 ? 100 : 0);
+      const ordersDelta = prevTotalOrders > 0
+        ? ((totalOrders - prevTotalOrders) / prevTotalOrders) * 100
+        : (totalOrders > 0 ? 100 : 0);
+      return { store: s, ...m, totalRevenue, prevTotalRevenue, totalOrders, prevTotalOrders, atv, deltaPct, ordersDelta };
     });
     rows.sort((a, b) => {
-      if (sortBy === "revenue") return b.revenue - a.revenue;
-      if (sortBy === "orders")  return b.totalOrders - a.totalOrders;
-      if (sortBy === "atv")     return b.atv     - a.atv;
-      if (sortBy === "delta")   return b.deltaPct - a.deltaPct;
+      if (sortBy === "revenue") return b.totalRevenue - a.totalRevenue;
+      if (sortBy === "orders")  return b.totalOrders  - a.totalOrders;
+      if (sortBy === "atv")     return b.atv          - a.atv;
+      if (sortBy === "delta")   return b.deltaPct     - a.deltaPct;
       return 0;
     });
     return rows;
@@ -1738,31 +1754,30 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
 
   // ── Chain-level totals ───────────────────────────────────────────────────
   const totals = useMemo(() => {
-    let revenue = 0, webOrders = 0, items = 0, online = 0, pos = 0, extra = 0;
-    let prevRevenue = 0, prevWebOrders = 0;
+    let revenue = 0, prevRevenue = 0;
+    let orders = 0, prevOrders = 0;
+    let revPos = 0, revUber = 0, revDeli = 0, revJe = 0, revFda = 0, revKiosk = 0;
     let salePos = 0, saleUber = 0, saleDeli = 0, saleJe = 0, saleFda = 0, saleKiosk = 0;
-    let totalSales = 0, prevTotalSales = 0;
     leaderboard.forEach(r => {
-      revenue += r.revenue; webOrders += r.orders; items += r.items;
-      online += r.online; pos += r.pos; extra += r.extra;
-      prevRevenue += r.prevRevenue; prevWebOrders += r.prevOrders;
+      revenue       += r.totalRevenue;
+      prevRevenue   += r.prevTotalRevenue;
+      orders        += r.totalOrders;
+      prevOrders    += r.prevTotalOrders;
       salePos += r.salePos; saleUber += r.saleUber; saleDeli += r.saleDeli;
-      saleJe += r.saleJe; saleFda += r.saleFda; saleKiosk += r.saleKiosk;
-      totalSales += r.totalSales; prevTotalSales += r.prevTotalSales;
+      saleJe  += r.saleJe;  saleFda  += r.saleFda;  saleKiosk += r.saleKiosk;
+      revPos  += r.revPos;  revUber  += r.revUber;  revDeli  += r.revDeli;
+      revJe   += r.revJe;   revFda   += r.revFda;   revKiosk += r.revKiosk;
     });
-    // Combined orders = Web orders + all non-Web sales
-    const orders = webOrders + totalSales;
-    const prevOrders = prevWebOrders + prevTotalSales;
-    // ATV is Web-only because non-Web sales don't carry amounts
-    const atv = webOrders > 0 ? revenue / webOrders : 0;
-    const prevAtv = prevWebOrders > 0 ? prevRevenue / prevWebOrders : 0;
-    const revDelta = prevRevenue > 0 ? ((revenue - prevRevenue) / prevRevenue) * 100 : (revenue > 0 ? 100 : 0);
-    const orderDelta = prevOrders > 0 ? ((orders - prevOrders) / prevOrders) * 100 : (orders > 0 ? 100 : 0);
-    const atvDelta = prevAtv > 0 ? ((atv - prevAtv) / prevAtv) * 100 : 0;
-    const activeStores = leaderboard.filter(r => (r.orders + r.totalSales) > 0).length;
+    const atv         = orders > 0 ? revenue / orders : 0;
+    const prevAtv     = prevOrders > 0 ? prevRevenue / prevOrders : 0;
+    const revDelta    = prevRevenue > 0 ? ((revenue - prevRevenue) / prevRevenue) * 100 : (revenue > 0 ? 100 : 0);
+    const orderDelta  = prevOrders  > 0 ? ((orders  - prevOrders)  / prevOrders)  * 100 : (orders  > 0 ? 100 : 0);
+    const atvDelta    = prevAtv     > 0 ? ((atv     - prevAtv)     / prevAtv)     * 100 : 0;
+    const activeStores = leaderboard.filter(r => r.totalOrders > 0).length;
     return {
-      revenue, orders, webOrders, items, atv, online, pos, extra,
-      salePos, saleUber, saleDeli, saleJe, saleFda, saleKiosk, totalSales,
+      revenue, orders, atv,
+      revPos, revUber, revDeli, revJe, revFda, revKiosk,
+      salePos, saleUber, saleDeli, saleJe, saleFda, saleKiosk,
       revDelta, orderDelta, atvDelta, activeStores,
     };
   }, [leaderboard]);
@@ -1860,21 +1875,21 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
         <StatCard
           label="Revenue"
           value={fmtMoney(totals.revenue)}
-          sub={`${fmtPct(totals.revDelta)} vs prior · ${totals.webOrders} Web orders`}
+          sub={`${fmtPct(totals.revDelta)} vs prior · all channels`}
           icon={PoundSterling}
           accent={totals.revDelta >= 0 ? "emerald" : "amber"}
         />
         <StatCard
           label="Orders"
           value={totals.orders.toLocaleString("en-GB")}
-          sub={`${totals.webOrders} Web · ${totals.totalSales} POS/marketplaces`}
+          sub={`${totals.salePos} POS · ${totals.saleUber + totals.saleDeli + totals.saleJe} marketplace · ${totals.saleFda + totals.saleKiosk} digital`}
           icon={ListChecks}
           accent={totals.orderDelta >= 0 ? "emerald" : "amber"}
         />
         <StatCard
           label="Avg Ticket"
           value={fmtMoneyDec(totals.atv)}
-          sub={`${fmtPct(totals.atvDelta)} vs prior · ${totals.items} items`}
+          sub={`${fmtPct(totals.atvDelta)} vs prior · chain-wide`}
           icon={ChefHat}
           accent="sky"
         />
@@ -1970,14 +1985,14 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
                 <tr><td colSpan="7" className="text-center py-10 text-slate-500">No stores match the filters</td></tr>
               )}
               {leaderboard.map(r => {
-                // Channel mini-bar: count-based (Web + 5 non-Web), not revenue-based
+                // Channel mini-bar: count-based across all 6 channels
                 const chanCounts = [
-                  { key: "web",   count: r.orders,    color: "bg-indigo-500", label: "Web" },
                   { key: "pos",   count: r.salePos,   color: "bg-emerald-500", label: "POS" },
-                  { key: "uber",  count: r.saleUber,  color: "bg-teal-500", label: "UberEats" },
-                  { key: "deli",  count: r.saleDeli,  color: "bg-cyan-500", label: "Deliveroo" },
-                  { key: "je",    count: r.saleJe,    color: "bg-orange-500", label: "JustEat" },
-                  { key: "fda",   count: r.saleFda,   color: "bg-pink-500", label: "App" },
+                  { key: "uber",  count: r.saleUber,  color: "bg-teal-500",    label: "UberEats" },
+                  { key: "deli",  count: r.saleDeli,  color: "bg-cyan-500",    label: "Deliveroo" },
+                  { key: "je",    count: r.saleJe,    color: "bg-orange-500",  label: "JustEat" },
+                  { key: "fda",   count: r.saleFda,   color: "bg-pink-500",    label: "Web" },
+                  { key: "kiosk", count: r.saleKiosk, color: "bg-indigo-500",  label: "Kiosk" },
                 ];
                 const channelTotal = chanCounts.reduce((a, c) => a + c.count, 0);
                 return (
@@ -1996,15 +2011,15 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
                         {r.store.status}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-right text-white font-bold tabular-nums">{fmtMoney(r.revenue)}</td>
+                    <td className="px-3 py-2.5 text-right text-white font-bold tabular-nums">{fmtMoney(r.totalRevenue)}</td>
                     <td className="px-3 py-2.5 text-right text-slate-300 tabular-nums">{r.totalOrders.toLocaleString("en-GB")}</td>
-                    <td className="px-3 py-2.5 text-right text-slate-300 tabular-nums">{r.orders > 0 ? fmtMoneyDec(r.atv) : "—"}</td>
+                    <td className="px-3 py-2.5 text-right text-slate-300 tabular-nums">{r.totalOrders > 0 ? fmtMoneyDec(r.atv) : "—"}</td>
                     <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${
                       r.totalOrders === 0 ? "text-slate-600" :
-                      r.ordersDelta >= 5 ? "text-emerald-400" :
-                      r.ordersDelta <= -5 ? "text-red-400" :
+                      r.deltaPct >= 5 ? "text-emerald-400" :
+                      r.deltaPct <= -5 ? "text-red-400" :
                       "text-slate-400"
-                    }`}>{r.totalOrders === 0 ? "—" : fmtPct(r.ordersDelta)}</td>
+                    }`}>{r.totalOrders === 0 ? "—" : fmtPct(r.deltaPct)}</td>
                     <td className="px-3 py-2.5">
                       {channelTotal === 0 ? (
                         <span className="text-slate-600">—</span>
@@ -2087,9 +2102,12 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
             <div className="text-sm text-slate-500 italic">No orders this period</div>
           ) : (
             <div className="space-y-3">
-              <ChannelRow label="Online" value={totals.online} total={totals.revenue} color="bg-indigo-500" textColor="text-indigo-400"/>
-              <ChannelRow label="In-store POS" value={totals.pos} total={totals.revenue} color="bg-emerald-500" textColor="text-emerald-400"/>
-              {totals.extra > 0 && <ChannelRow label="Other" value={totals.extra} total={totals.revenue} color="bg-slate-400" textColor="text-slate-300"/>}
+              <ChannelRow label="POS"        value={totals.revPos}   total={totals.revenue} color="bg-emerald-500" textColor="text-emerald-400"/>
+              <ChannelRow label="UberEats"   value={totals.revUber}  total={totals.revenue} color="bg-teal-500"    textColor="text-teal-400"/>
+              <ChannelRow label="Deliveroo"  value={totals.revDeli}  total={totals.revenue} color="bg-cyan-500"    textColor="text-cyan-400"/>
+              <ChannelRow label="JustEat"    value={totals.revJe}    total={totals.revenue} color="bg-orange-500"  textColor="text-orange-400"/>
+              <ChannelRow label="Flipdish Web" value={totals.revFda} total={totals.revenue} color="bg-pink-500"    textColor="text-pink-400"/>
+              <ChannelRow label="Kiosk"      value={totals.revKiosk} total={totals.revenue} color="bg-indigo-500"  textColor="text-indigo-400"/>
             </div>
           )}
         </div>
