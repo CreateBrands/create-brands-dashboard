@@ -894,8 +894,9 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
     "payment_method", "is_cancelled", "is_fully_refunded",
   ].join(",");
 
-  // Default: last 60 days (covers 30d view + prior 30d comparison)
-  const effFrom = from || new Date(Date.now() - 60 * 24 * 3600 * 1000);
+  // Default: last 14 days (covers default 7d view + prior 7d comparison).
+  // Larger windows (30d) will be passed explicitly by the caller with `from`.
+  const effFrom = from || new Date(Date.now() - 14 * 24 * 3600 * 1000);
 
   // business_date is a `date` column — pass YYYY-MM-DD, not an ISO timestamp.
   // Using business_date (not first_event_at) so trading-day semantics are correct:
@@ -913,13 +914,12 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
   const PAGE = 1000;
   const out = [];
   let offset = 0;
-  let totalCount = null;
 
   while (offset < limit) {
     const upper = Math.min(offset + PAGE, limit) - 1;
     let q = supabase
       .from("flipdish_sales")
-      .select(cols, offset === 0 ? { count: "exact" } : undefined)
+      .select(cols)                                 // no count:exact — the extra COUNT(*) on first page can blow statement_timeout
       .order("business_date", { ascending: false })
       .order("sale_time",     { ascending: false }); // stable secondary sort
 
@@ -929,9 +929,8 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
     q = q.not("amount_total", "is", null);          // excludes inert br1153 webhook rows
     q = q.range(offset, upper);
 
-    const { data, error, count } = await q;
+    const { data, error } = await q;
     if (error) throw error;
-    if (count != null) totalCount = count;
     if (!data || data.length === 0) break;
     out.push(...data);
     if (data.length < PAGE) break;                  // last page
@@ -939,7 +938,7 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
   }
 
   // eslint-disable-next-line no-console
-  console.log(`[fetchFlipdishSales] fetched ${out.length}${totalCount != null ? ` of ${totalCount}` : ""} rows`);
+  console.log(`[fetchFlipdishSales] fetched ${out.length} rows across ${Math.ceil(out.length / PAGE)} page(s)`);
 
   return out.map(dbFlipdishSaleToApp);
 }
