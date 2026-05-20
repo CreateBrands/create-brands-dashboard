@@ -1628,15 +1628,18 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
   }), [flipdishOrders, prevFromDate.getTime(), prevToDate.getTime()]);
 
   // ── Filter sales (POS / UberEats / Deliveroo / JustEats / FlipdishWebApp) ─
+  // Filter on businessDate (the trading day) to match the server-side query
+  // and operator intent. Using firstEventAt instead would mis-bucket late-night
+  // sales that spill across midnight UTC.
   const periodSales = useMemo(() => flipdishSales.filter(s => {
-    if (!s.firstEventAt) return false;
-    const t = new Date(s.firstEventAt);
+    if (!s.businessDate) return false;
+    const t = new Date(s.businessDate + "T12:00:00");   // noon avoids TZ-edge bugs
     return t >= fromDate && t <= toDate;
   }), [flipdishSales, fromDate.getTime(), toDate.getTime()]);
 
   const prevSales = useMemo(() => flipdishSales.filter(s => {
-    if (!s.firstEventAt) return false;
-    const t = new Date(s.firstEventAt);
+    if (!s.businessDate) return false;
+    const t = new Date(s.businessDate + "T12:00:00");
     return t >= prevFromDate && t <= prevToDate;
   }), [flipdishSales, prevFromDate.getTime(), prevToDate.getTime()]);
 

@@ -894,9 +894,11 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
     "payment_method", "is_cancelled", "is_fully_refunded",
   ].join(",");
 
-  // Default: last 14 days (covers default 7d view + prior 7d comparison).
-  // Larger windows (30d) will be passed explicitly by the caller with `from`.
-  const effFrom = from || new Date(Date.now() - 14 * 24 * 3600 * 1000);
+  // Default: last 35 days. App.js fetches once on mount and filters in memory,
+  // so this must cover the longest UI period (30d) + a small buffer for the
+  // prior-period comparison. Don't drop below 35 without first refactoring
+  // App.js to re-fetch when the period selector changes.
+  const effFrom = from || new Date(Date.now() - 35 * 24 * 3600 * 1000);
 
   // business_date is a `date` column — pass YYYY-MM-DD, not an ISO timestamp.
   // Using business_date (not first_event_at) so trading-day semantics are correct:
