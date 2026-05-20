@@ -2212,7 +2212,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
         <StoreDetailModal
           store={detailStore}
           flipdishStores={flipdishStores}
-          flipdishOrders={flipdishOrders}
+          flipdishSales={flipdishSales}
           fromDate={fromDate}
           toDate={toDate}
           periodLabel={periodLabel}
@@ -2242,64 +2242,56 @@ function ChannelRow({ label, value, total, color, textColor }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Per-store drill-down modal
 // ═══════════════════════════════════════════════════════════════════════════════
-function StoreDetailModal({ store, flipdishStores, flipdishOrders, fromDate, toDate, periodLabel, onClose }) {
+function StoreDetailModal({ store, flipdishStores, flipdishSales, fromDate, toDate, periodLabel, onClose }) {
   const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // Flipdish stores for THIS physical store
+  // Flipdish stores for THIS physical store (used to display linked IDs at the bottom)
   const myFsIds = useMemo(() =>
     flipdishStores.filter(fs => fs.storeId === store.id).map(fs => fs.id),
   [flipdishStores, store.id]);
 
-  // Orders for THIS store in the period
-  const orders = useMemo(() => flipdishOrders.filter(o => {
-    if (!myFsIds.includes(o.flipdishStoreId)) return false;
-    const t = new Date(o.orderPlacedTime);
+  // Sales for THIS store in the period — match on internal store_id (already
+  // resolved upstream by the sync from property_id), filter by businessDate
+  // to match the trading-day semantics used everywhere else on the dashboard.
+  const sales = useMemo(() => flipdishSales.filter(s => {
+    if (s.storeId !== store.id) return false;
+    if (!s.businessDate) return false;
+    const t = new Date(s.businessDate + "T12:00:00");
     return t >= fromDate && t <= toDate;
-  }), [flipdishOrders, myFsIds, fromDate.getTime(), toDate.getTime()]);
+  }), [flipdishSales, store.id, fromDate.getTime(), toDate.getTime()]);
 
-  const revenue = orders.reduce((a, o) => a + (o.amountTotal || 0), 0);
-  const atv = orders.length > 0 ? revenue / orders.length : 0;
+  const revenue = sales.reduce((a, s) => a + (s.amountTotal || 0), 0);
+  const atv = sales.length > 0 ? revenue / sales.length : 0;
 
-  // Daily revenue series
+  // Daily revenue series — keyed on businessDate so each calendar trading day
+  // is one bar regardless of late-night sales crossing midnight UTC.
   const daily = useMemo(() => {
     const m = {};
-    orders.forEach(o => {
-      if (!o.orderPlacedTime) return;
-      const d = o.orderPlacedTime.slice(0, 10);
+    sales.forEach(s => {
+      const d = s.businessDate;
+      if (!d) return;
       if (!m[d]) m[d] = { date: d, revenue: 0, orders: 0 };
-      m[d].revenue += o.amountTotal || 0;
-      m[d].orders += 1;
+      m[d].revenue += s.amountTotal || 0;
+      m[d].orders  += 1;
     });
     return Object.values(m).sort((a, b) => a.date.localeCompare(b.date));
-  }, [orders]);
+  }, [sales]);
 
-  // Top items at this store
-  const topItems = useMemo(() => {
-    const tally = {};
-    orders.forEach(o => {
-      (o.items || []).forEach(it => {
-        const name = it.Name || it.name || "Unknown";
-        const qty = it.Quantity || it.quantity || 1;
-        if (!tally[name]) tally[name] = { name, qty: 0 };
-        tally[name].qty += qty;
-      });
-    });
-    return Object.values(tally).sort((a, b) => b.qty - a.qty).slice(0, 8);
-  }, [orders]);
-
-  // Channel breakdown for this store
+  // Channel breakdown for this store. Uses the `channel` field on the sale
+  // directly (POS / UberEats / Deliveroo / JustEats / FlipdishWebApp / etc.),
+  // which is the right grain — the same store can take orders across multiple
+  // channels and we want to see the mix.
   const channels = useMemo(() => {
-    const m = { online: 0, pos: 0, extra: 0 };
-    orders.forEach(o => {
-      const fs = flipdishStores.find(f => f.id === o.flipdishStoreId);
-      const ch = fs?.channel || "extra";
-      if (ch === "online") m.online += o.amountTotal || 0;
-      else if (ch === "pos") m.pos += o.amountTotal || 0;
-      else m.extra += o.amountTotal || 0;
+    const m = {};
+    sales.forEach(s => {
+      const ch = s.channel || "Other";
+      m[ch] = (m[ch] || 0) + (s.amountTotal || 0);
     });
-    return m;
-  }, [orders, flipdishStores]);
+    return Object.entries(m)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [sales]);
 
   return (
     <Modal title={store.shortName || store.name} onClose={onClose} maxW="max-w-3xl"
@@ -2315,11 +2307,11 @@ function StoreDetailModal({ store, flipdishStores, flipdishOrders, fromDate, toD
           </div>
           <div className="bg-slate-800/60 rounded-xl p-3">
             <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Orders</div>
-            <div className="text-xl font-black text-white tabular-nums mt-1">{orders.length}</div>
+            <div className="text-xl font-black text-white tabular-nums mt-1">{sales.length}</div>
           </div>
           <div className="bg-slate-800/60 rounded-xl p-3">
             <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Avg ticket</div>
-            <div className="text-xl font-black text-white tabular-nums mt-1">{orders.length > 0 ? fmtMoneyDec(atv) : "—"}</div>
+            <div className="text-xl font-black text-white tabular-nums mt-1">{sales.length > 0 ? fmtMoneyDec(atv) : "—"}</div>
           </div>
         </div>
 
@@ -2328,44 +2320,29 @@ function StoreDetailModal({ store, flipdishStores, flipdishOrders, fromDate, toD
           <div>
             <div className="text-xs text-slate-400 font-semibold mb-2">Daily revenue</div>
             <div className="flex items-end gap-1 h-24 bg-slate-800/40 rounded-xl p-3">
-              {daily.map(d => {
-                const maxRev = Math.max(...daily.map(x => x.revenue), 1);
-                const h = (d.revenue / maxRev) * 100;
-                return (
-                  <div key={d.date} className="flex-1 flex flex-col items-center gap-1" title={`${d.date}: ${fmtMoney(d.revenue)} (${d.orders} orders)`}>
-                    <div className="w-full bg-indigo-500 rounded-t" style={{ height: `${h}%`, minHeight: "2px" }}/>
+              {(() => {
+                const max = Math.max(...daily.map(d => d.revenue), 1);
+                return daily.map(d => (
+                  <div key={d.date} className="flex-1 flex flex-col items-center justify-end gap-1" title={`${d.date} · ${fmtMoney(d.revenue)} · ${d.orders} orders`}>
+                    <div className="w-full rounded-sm bg-indigo-500/70 hover:bg-indigo-400 transition-colors" style={{ height: `${(d.revenue / max) * 100}%`, minHeight: 2 }} />
                   </div>
-                );
-              })}
+                ));
+              })()}
             </div>
-            <div className="flex justify-between text-xs text-slate-600 mt-1">
+            <div className="flex justify-between text-[10px] text-slate-500 mt-1 px-1">
               <span>{daily[0]?.date}</span>
               <span>{daily[daily.length - 1]?.date}</span>
             </div>
           </div>
         )}
 
-        {/* Channels */}
-        <div>
-          <div className="text-xs text-slate-400 font-semibold mb-2">Channel split</div>
-          <div className="space-y-2">
-            {channels.online > 0 && <ChannelRow label="Online" value={channels.online} total={revenue} color="bg-indigo-500" textColor="text-indigo-400"/>}
-            {channels.pos    > 0 && <ChannelRow label="In-store POS" value={channels.pos} total={revenue} color="bg-emerald-500" textColor="text-emerald-400"/>}
-            {channels.extra  > 0 && <ChannelRow label="Other" value={channels.extra} total={revenue} color="bg-slate-400" textColor="text-slate-300"/>}
-          </div>
-        </div>
-
-        {/* Top items */}
-        {topItems.length > 0 && (
+        {/* Channel split */}
+        {channels.length > 0 && (
           <div>
-            <div className="text-xs text-slate-400 font-semibold mb-2">Top items</div>
-            <div className="space-y-1">
-              {topItems.map((it, idx) => (
-                <div key={it.name} className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-slate-800/40">
-                  <span className="text-xs text-slate-500 font-bold w-5">{idx + 1}</span>
-                  <span className="text-sm text-white flex-1 truncate">{it.name}</span>
-                  <span className="text-sm font-bold text-emerald-400 tabular-nums">×{it.qty}</span>
-                </div>
+            <div className="text-xs text-slate-400 font-semibold mb-2">Channel split</div>
+            <div className="space-y-1.5">
+              {channels.map(c => (
+                <ChannelRow key={c.name} label={c.name} value={c.value} total={revenue} color="bg-indigo-500" textColor="text-indigo-300" />
               ))}
             </div>
           </div>
