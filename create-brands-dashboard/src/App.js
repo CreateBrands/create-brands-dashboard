@@ -1854,8 +1854,22 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
   }, [entries, fromDate, toDate, totals.revenue]);
 
   // ── Last sync indicator ──────────────────────────────────────────────────
-  const lastSync = flipdishSyncLog[0];
-  const lastSyncDate = lastSync?.finished_at ? new Date(lastSync.finished_at) : null;
+  // Last sync: derive from the actual ingested data, not from flipdish_sync_log.
+  // The log stopped being written when we switched ingestion paths from the
+  // webhook /orders endpoint to the RMS Reporting API. The freshest signal is
+  // the max sale_time on rows we actually have — that proves the sync ran AND
+  // returned data, in one number.
+  // Note: flipdishSales rows don't include rms_synced_at in the lean column
+  // set, so we use sale_time (the latest sale we know about) as a proxy.
+  const lastSyncDate = useMemo(() => {
+    let maxTs = 0;
+    for (const s of flipdishSales) {
+      if (!s.saleTime) continue;
+      const t = new Date(s.saleTime).getTime();
+      if (t > maxTs) maxTs = t;
+    }
+    return maxTs ? new Date(maxTs) : null;
+  }, [flipdishSales]);
   const minsSinceSync = lastSyncDate ? Math.floor((Date.now() - lastSyncDate.getTime()) / 60000) : null;
 
   const handleSync = async () => {
@@ -1880,8 +1894,11 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
             {minsSinceSync !== null && (
               <>
                 <span className="text-slate-700">·</span>
-                <span className={minsSinceSync > 20 ? "text-amber-400" : "text-emerald-400"}>
-                  Synced {minsSinceSync}m ago
+                <span className={minsSinceSync > 360 ? "text-amber-400" : "text-emerald-400"}
+                      title="Time since the latest sale we have data for. Stays green during quiet hours.">
+                  {minsSinceSync < 60
+                    ? `Latest sale ${minsSinceSync}m ago`
+                    : `Latest sale ${Math.floor(minsSinceSync / 60)}h ${minsSinceSync % 60}m ago`}
                 </span>
               </>
             )}
