@@ -913,7 +913,7 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
   // db.max_rows cap (default 1000) that silently overrides .limit(). Using
   // .range() with explicit pagination is the only way to fetch >1000 rows —
   // which we definitely need (a 7-day window for Chocoberry is ~15k rows).
-  const PAGE = 1000;
+  const PAGE = 10000;
   const out = [];
   let offset = 0;
 
