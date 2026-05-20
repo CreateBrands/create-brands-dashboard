@@ -1818,33 +1818,28 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
   }, [leaderboard]);
 
   // ── Hour-of-day heatmap ──────────────────────────────────────────────────
+  // Reads from periodSales (RMS) using sale_time. Webhook orders are no longer
+  // the source of truth.
   const hourHeatmap = useMemo(() => {
     const grid = Array.from({ length: 7 }, () => Array(24).fill(0));  // [dayOfWeek][hour] = order count
-    periodOrders.forEach(o => {
-      if (!o.orderPlacedTime) return;
-      const t = new Date(o.orderPlacedTime);
+    periodSales.forEach(s => {
+      if (!s.saleTime) return;
+      const t = new Date(s.saleTime);
       const dow = (t.getDay() + 6) % 7;  // Monday=0
       grid[dow][t.getHours()] += 1;
     });
     return grid;
-  }, [periodOrders]);
+  }, [periodSales]);
   const maxHourCount = useMemo(() => Math.max(1, ...hourHeatmap.flat()), [hourHeatmap]);
 
   // ── Top items chain-wide ─────────────────────────────────────────────────
-  const topItems = useMemo(() => {
-    const tally = {};
-    periodOrders.forEach(o => {
-      (o.items || []).forEach(it => {
-        const name = it.Name || it.name || "Unknown";
-        const qty  = it.Quantity || it.quantity || 1;
-        const price = (it.Price || it.price || 0) * qty;
-        if (!tally[name]) tally[name] = { name, qty: 0, revenue: 0 };
-        tally[name].qty += qty;
-        tally[name].revenue += price;
-      });
-    });
-    return Object.values(tally).sort((a, b) => b.qty - a.qty).slice(0, 10);
-  }, [periodOrders]);
+  // Currently disabled. Item-level data lives in flipdish_sales.sale_items
+  // (JSONB, 5-50KB per row). We deliberately don't fetch that column — adding
+  // it back would push initial dashboard load over ~1GB of transfer for the
+  // 30-day window. To re-enable cleanly, build a Postgres RPC that aggregates
+  // top items server-side and returns ~10 rows. Until then, return [] so the
+  // section renders as empty (caller already gates on .length > 0).
+  const topItems = useMemo(() => [], []);
 
   // ── EOD reconciliation: compare flipdish revenue vs eod_entries.net_sales ──
   const reconciliation = useMemo(() => {
