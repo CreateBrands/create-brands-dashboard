@@ -1568,7 +1568,7 @@ function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
 // CHAIN PERFORMANCE VIEW — Chocoberry HQ rollup dashboard
 // ═══════════════════════════════════════════════════════════════════════════════
 function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, flipdishSales = [], flipdishSyncLog, entries, currentUser, onRefreshSync }) {
-  const [period,        setPeriod]        = useState("today");  // today | week | month | custom
+  const [period,        setPeriod]        = useState("week");  // today | yesterday | this_week | last_week | week | month | custom
   const [customFrom,    setCustomFrom]    = useState("");
   const [customTo,      setCustomTo]      = useState("");
   const [ownerFilter,   setOwnerFilter]   = useState("all");    // all | owned | joint_venture | franchise
@@ -1589,10 +1589,42 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
   const { fromDate, toDate, prevFromDate, prevToDate, periodLabel } = useMemo(() => {
     let from, to, prevFrom, prevTo, label;
     const endOfToday = new Date(today); endOfToday.setHours(23,59,59,999);
+
+    // Helper: start of current week (Monday 00:00) — UK convention.
+    const startOfThisWeek = () => {
+      const d = new Date(today);
+      const dow = d.getDay();                 // 0=Sun..6=Sat
+      const daysFromMonday = (dow + 6) % 7;   // Mon=0, Tue=1, ... Sun=6
+      d.setDate(d.getDate() - daysFromMonday);
+      return d;                                // already at 00:00 from `today`
+    };
+
     if (period === "today") {
       from = new Date(today); to = endOfToday; label = "today";
+      // Compare to same weekday last week
       prevFrom = new Date(today); prevFrom.setDate(prevFrom.getDate() - 7);
-      prevTo = new Date(prevFrom); prevTo.setHours(23,59,59,999);
+      prevTo   = new Date(prevFrom); prevTo.setHours(23,59,59,999);
+    } else if (period === "yesterday") {
+      from = new Date(today); from.setDate(from.getDate() - 1);
+      to   = new Date(from);  to.setHours(23,59,59,999);
+      label = "yesterday";
+      prevFrom = new Date(from); prevFrom.setDate(prevFrom.getDate() - 7);
+      prevTo   = new Date(prevFrom); prevTo.setHours(23,59,59,999);
+    } else if (period === "this_week") {
+      from = startOfThisWeek();
+      to   = endOfToday;
+      label = "this week";
+      // Prior period: same number of elapsed days, ending the day before this week started
+      const span = to - from;
+      prevTo   = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo.getTime() - span);
+    } else if (period === "last_week") {
+      const thisMon = startOfThisWeek();
+      from = new Date(thisMon); from.setDate(from.getDate() - 7);                  // last Monday 00:00
+      to   = new Date(thisMon); to.setMilliseconds(to.getMilliseconds() - 1);      // last Sunday 23:59:59.999
+      label = "last week";
+      prevTo   = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo); prevFrom.setDate(prevFrom.getDate() - 6); prevFrom.setHours(0,0,0,0);
     } else if (period === "week") {
       from = new Date(today); from.setDate(from.getDate() - 6); to = endOfToday;
       label = "last 7 days";
@@ -1606,7 +1638,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
     } else {
       from = customFrom ? new Date(customFrom + "T00:00:00") : new Date(today);
       to   = customTo   ? new Date(customTo   + "T23:59:59") : endOfToday;
-      label = `${customFrom} – ${customTo}`;
+      label = customFrom && customTo ? `${customFrom} – ${customTo}` : "custom range";
       const span = to - from;
       prevTo = new Date(from.getTime() - 1);
       prevFrom = new Date(prevTo.getTime() - span);
@@ -1865,11 +1897,38 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50">
             {syncing ? "Syncing…" : <><RefreshCw size={13}/> Sync now</>}
           </button>
-          <div className="flex bg-slate-900/80 border border-slate-700/60 rounded-xl p-0.5 gap-0.5">
-            <button onClick={()=>setPeriod("today")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${period==="today"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>Today</button>
-            <button onClick={()=>setPeriod("week")}  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${period==="week" ?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>7d</button>
-            <button onClick={()=>setPeriod("month")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${period==="month"?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>30d</button>
-          </div>
+          <select
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-700/60 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer"
+          >
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="this_week">This week</option>
+            <option value="last_week">Last week</option>
+            <option value="week">Last 7 days</option>
+            <option value="month">Last 30 days</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          {period === "custom" && (
+            <>
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="px-2 py-2 rounded-xl bg-slate-900/80 border border-slate-700/60 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                aria-label="From date"
+              />
+              <span className="text-slate-500 text-xs">to</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="px-2 py-2 rounded-xl bg-slate-900/80 border border-slate-700/60 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                aria-label="To date"
+              />
+            </>
+          )}
         </div>
       </div>
 
