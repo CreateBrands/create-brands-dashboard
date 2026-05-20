@@ -20,6 +20,7 @@ import {
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync,
+  insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -3134,7 +3135,15 @@ function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
 }
 
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
-function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onDeleteBrand, onAddUser, onUpdateUser, onDeleteUser, onUpdateKPITargets, onBulkImport }) {
+function AdminPanelView({
+  brands, users, entries,
+  stores = [], flipdishStores = [],
+  onAddBrand, onUpdateBrand, onDeleteBrand,
+  onAddUser, onUpdateUser, onDeleteUser,
+  onAddStore, onUpdateStore, onDeleteStore,
+  onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
+  onUpdateKPITargets, onBulkImport
+}) {
   const [tab, setTab] = useState("locations");
   const [kpiModal, setKpiModal] = useState(null);
   const [locModal, setLocModal] = useState(null);
@@ -3142,7 +3151,12 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
   const [deleteModal, setDeleteModal] = useState(null);
   const [showImport, setShowImport] = useState(false);
 
-  const tabs = [{key:"locations",label:"Locations"},{key:"managers",label:"Managers & Access"},{key:"kpis",label:"KPI Targets"}];
+  const tabs = [
+    {key:"locations",label:"Locations"},
+    {key:"stores",label:"Stores"},
+    {key:"managers",label:"Managers & Access"},
+    {key:"kpis",label:"KPI Targets"},
+  ];
 
   return (
     <div className="space-y-6">
@@ -3178,6 +3192,20 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
             );
           })}
         </div>
+      )}
+
+      {tab==="stores"&&(
+        <StoreManagementSection
+          brands={brands}
+          stores={stores}
+          flipdishStores={flipdishStores}
+          onAddStore={onAddStore}
+          onUpdateStore={onUpdateStore}
+          onDeleteStore={onDeleteStore}
+          onLinkFlipdish={onLinkFlipdish}
+          onUnlinkFlipdish={onUnlinkFlipdish}
+          onBackfillStoreSales={onBackfillStoreSales}
+        />
       )}
 
       {tab==="managers"&&(
@@ -3243,6 +3271,443 @@ function AdminPanelView({ brands, users, entries, onAddBrand, onUpdateBrand, onD
       )}
       {showImport&&<ExcelUploadModal brands={brands} entries={entries} onImport={async rows=>{ await onBulkImport(rows); }} onClose={()=>setShowImport(false)}/>}
     </div>
+  );
+}
+
+// ─── Store Management (under Admin Panel) ─────────────────────────────────────
+// Admin-only screen for managing the canonical stores table. Lets the owner:
+//   - browse all stores (optionally filtered by brand)
+//   - add a new store (e.g. opening a new branch, or onboarding a new brand)
+//   - edit an existing store's metadata (name, ownership, status, address...)
+//   - delete a store (only if no flipdish_stores reference it)
+//   - link/unlink Flipdish RMS storefronts to a physical store record
+//   - backfill historical sales when a new store is added after data exists
+//
+// Two-pane layout: filter + table on the left, edit/add form modal on demand.
+function StoreManagementSection({
+  brands, stores, flipdishStores,
+  onAddStore, onUpdateStore, onDeleteStore,
+  onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
+}) {
+  const [brandFilter, setBrandFilter]   = useState("all");
+  const [search, setSearch]             = useState("");
+  const [editing, setEditing]           = useState(null);   // store row being edited, or "new"
+  const [linkModal, setLinkModal]       = useState(null);   // store row whose Flipdish links we're managing
+  const [confirmDelete, setConfirmDelete] = useState(null); // store row pending delete confirmation
+  const [busy, setBusy]                 = useState(false);
+
+  const filteredStores = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return stores
+      .filter(s => brandFilter === "all" || s.brandId === brandFilter)
+      .filter(s => !q || (s.shortName || "").toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q) || (s.id || "").toLowerCase().includes(q))
+      .sort((a,b) => (a.brandId || "").localeCompare(b.brandId || "") || (a.shortName || "").localeCompare(b.shortName || ""));
+  }, [stores, brandFilter, search]);
+
+  const linkCounts = useMemo(() => {
+    const m = {};
+    flipdishStores.forEach(fs => {
+      if (!fs.storeId) return;
+      m[fs.storeId] = (m[fs.storeId] || 0) + 1;
+    });
+    return m;
+  }, [flipdishStores]);
+
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
+    setBusy(true);
+    try { await onDeleteStore(confirmDelete.id); setConfirmDelete(null); }
+    catch (_) { /* toast already shown by handler */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={brandFilter}
+            onChange={e => setBrandFilter(e.target.value)}
+            className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer"
+          >
+            <option value="all">All brands ({stores.length})</option>
+            {brands.map(b => (
+              <option key={b.id} value={b.id}>
+                {b.name} ({stores.filter(s => s.brandId === b.id).length})
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search store…"
+            className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 w-56"
+          />
+        </div>
+        <button
+          onClick={() => setEditing("new")}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"
+        >
+          <Plus size={14}/> Add Store
+        </button>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-900/60 border-b border-slate-800">
+            <tr>
+              <th className="text-left px-4 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Store</th>
+              <th className="text-left px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Brand</th>
+              <th className="text-left px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Ownership</th>
+              <th className="text-left px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Status</th>
+              <th className="text-right px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Flipdish links</th>
+              <th className="text-right px-4 py-2.5 text-slate-500 font-semibold uppercase tracking-widest"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredStores.length === 0 && (
+              <tr><td colSpan={6} className="text-center py-8 text-slate-500">No stores match the current filter.</td></tr>
+            )}
+            {filteredStores.map(s => {
+              const brand = brands.find(b => b.id === s.brandId);
+              const linkCount = linkCounts[s.id] || 0;
+              return (
+                <tr key={s.id} className="border-b border-slate-800/40 hover:bg-slate-800/30">
+                  <td className="px-4 py-2.5">
+                    <div className="text-sm text-white font-semibold">{s.shortName || s.name}</div>
+                    <div className="text-[10px] text-slate-600">{s.id}</div>
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-300">{brand?.name || s.brandId}</td>
+                  <td className="px-3 py-2.5">
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
+                      s.ownershipModel === "owned"         ? "bg-indigo-950/30 text-indigo-400" :
+                      s.ownershipModel === "joint_venture" ? "bg-sky-950/30 text-sky-400" :
+                                                              "bg-slate-800/60 text-slate-400"
+                    }`}>
+                      {s.ownershipModel === "joint_venture" ? "JV" : s.ownershipModel || "—"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className={`text-[11px] ${
+                      s.status === "operational" ? "text-emerald-400" :
+                      s.status === "test"        ? "text-amber-400" :
+                      s.status === "pre_opening" ? "text-sky-400" :
+                                                    "text-slate-500"
+                    }`}>● {s.status || "—"}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <button
+                      onClick={() => setLinkModal(s)}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold tabular-nums"
+                    >
+                      {linkCount} linked
+                    </button>
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      onClick={() => setEditing(s)}
+                      className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 mr-1"
+                      title="Edit"
+                    ><Edit size={13}/></button>
+                    <button
+                      onClick={() => setConfirmDelete(s)}
+                      className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"
+                      title="Delete"
+                    ><Trash2 size={13}/></button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {editing && (
+        <StoreEditModal
+          brands={brands}
+          store={editing === "new" ? null : editing}
+          existingIds={stores.map(s => s.id)}
+          onSave={async (payload) => {
+            if (editing === "new") {
+              const saved = await onAddStore(payload);
+              // Offer to backfill historical sales for this brand if any
+              // unlinked rows exist. Use a confirm() — it's an admin-only
+              // screen so an extra modal isn't worth the code.
+              // eslint-disable-next-line no-restricted-globals
+              if (confirm(`Backfill any unlinked historical ${payload.brandId} sales to "${saved.shortName}"? (Safe — only updates rows currently with no store_id.)`)) {
+                try { await onBackfillStoreSales(payload.brandId, saved.id); } catch (e) { /* toast in handler */ }
+              }
+            } else {
+              await onUpdateStore(editing.id, payload);
+            }
+            setEditing(null);
+          }}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      {linkModal && (
+        <FlipdishLinkModal
+          store={linkModal}
+          flipdishStores={flipdishStores}
+          onLink={onLinkFlipdish}
+          onUnlink={onUnlinkFlipdish}
+          onClose={() => setLinkModal(null)}
+        />
+      )}
+
+      {confirmDelete && (
+        <Modal
+          title={`Delete "${confirmDelete.shortName || confirmDelete.name}"?`}
+          onClose={() => setConfirmDelete(null)}
+          maxW="max-w-md"
+          footer={
+            <div className="flex gap-2 w-full">
+              <button onClick={() => setConfirmDelete(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+              <button onClick={handleDelete} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 disabled:opacity-50">{busy ? "Deleting…" : "Delete"}</button>
+            </div>
+          }
+        >
+          <p className="text-sm text-slate-300">
+            This will remove the store from the dashboard. Historical sales rows
+            keep their data but lose their link to this store.
+          </p>
+          {(linkCounts[confirmDelete.id] || 0) > 0 && (
+            <p className="text-xs text-amber-400 mt-3">
+              ⚠ This store has {linkCounts[confirmDelete.id]} linked Flipdish storefront(s).
+              You may need to unlink them first if the delete fails.
+            </p>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Store Edit/Add modal ─────────────────────────────────────────────────────
+function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
+  const isNew = !store;
+  const [form, setForm] = useState({
+    id:              store?.id              || "",
+    brandId:         store?.brandId         || brands[0]?.id || "",
+    shortName:       store?.shortName       || "",
+    name:            store?.name            || "",
+    ownershipModel:  store?.ownershipModel  || "owned",
+    franchiseeName:  store?.franchiseeName  || "",
+    status:          store?.status          || "operational",
+    address:         store?.address         || "",
+    city:            store?.city            || "",
+    postcode:        store?.postcode        || "",
+    country:         store?.country         || "United Kingdom",
+    phone:           store?.phone           || "",
+    email:           store?.email           || "",
+    notes:           store?.notes           || "",
+  });
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  // Auto-derive the id from short name (only for new stores; established ids
+  // shouldn't change because flipdish_sales references them).
+  useEffect(() => {
+    if (!isNew) return;
+    if (!form.shortName) return;
+    const slug = form.shortName.toLowerCase().trim()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-");
+    setForm(f => ({ ...f, id: f.id && f.id !== `store-${slug.slice(0, -1)}` ? f.id : `store-${slug}` }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.shortName, isNew]);
+
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const handleSubmit = async () => {
+    setError(null);
+    // Validation
+    if (!form.shortName.trim()) return setError("Short name is required.");
+    if (!form.name.trim())      return setError("Full name is required.");
+    if (!form.brandId)          return setError("Pick a brand.");
+    if (isNew && !form.id)      return setError("Couldn't derive an ID — try a different short name.");
+    if (isNew && existingIds.includes(form.id)) {
+      return setError(`A store with id "${form.id}" already exists. Edit that one or pick a different short name.`);
+    }
+    setSaving(true);
+    try { await onSave(form); }
+    catch (e) { setError(e.message || String(e)); setSaving(false); }
+  };
+
+  return (
+    <Modal
+      title={isNew ? "Add new store" : `Edit ${form.shortName}`}
+      onClose={onClose}
+      maxW="max-w-2xl"
+      footer={
+        <div className="flex gap-2 w-full">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={handleSubmit} disabled={saving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">
+            {saving ? "Saving…" : (isNew ? "Add Store" : "Save changes")}
+          </button>
+        </div>
+      }
+    >
+      {error && <div className="mb-3 px-3 py-2 rounded-lg bg-red-950/40 border border-red-900 text-red-300 text-xs">{error}</div>}
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Short name *">
+          <input value={form.shortName} onChange={set("shortName")} className={fieldCls} placeholder="e.g. Cardiff" />
+        </Field>
+        <Field label="Full name *">
+          <input value={form.name} onChange={set("name")} className={fieldCls} placeholder="e.g. Chocoberry Cardiff" />
+        </Field>
+
+        <Field label="Brand *">
+          <select value={form.brandId} onChange={set("brandId")} className={fieldCls}>
+            {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Store ID">
+          <input
+            value={form.id}
+            onChange={set("id")}
+            disabled={!isNew}
+            className={fieldCls + (isNew ? "" : " opacity-50 cursor-not-allowed")}
+            placeholder="auto-derived from short name"
+          />
+        </Field>
+
+        <Field label="Ownership *">
+          <select value={form.ownershipModel} onChange={set("ownershipModel")} className={fieldCls}>
+            <option value="owned">Owned</option>
+            <option value="joint_venture">Joint Venture</option>
+            <option value="franchise">Franchise</option>
+          </select>
+        </Field>
+        <Field label="Status *">
+          <select value={form.status} onChange={set("status")} className={fieldCls}>
+            <option value="operational">Operational</option>
+            <option value="pre_opening">Pre-opening</option>
+            <option value="test">Test (hidden from leaderboard)</option>
+            <option value="closed">Closed</option>
+          </select>
+        </Field>
+
+        {form.ownershipModel === "franchise" && (
+          <Field label="Franchisee name" full>
+            <input value={form.franchiseeName} onChange={set("franchiseeName")} className={fieldCls} placeholder="Person/company running this franchise" />
+          </Field>
+        )}
+
+        <Field label="Address" full>
+          <input value={form.address} onChange={set("address")} className={fieldCls} placeholder="Street + number" />
+        </Field>
+        <Field label="City">
+          <input value={form.city} onChange={set("city")} className={fieldCls} />
+        </Field>
+        <Field label="Postcode">
+          <input value={form.postcode} onChange={set("postcode")} className={fieldCls} />
+        </Field>
+        <Field label="Country">
+          <input value={form.country} onChange={set("country")} className={fieldCls} />
+        </Field>
+        <Field label="Phone">
+          <input value={form.phone} onChange={set("phone")} className={fieldCls} placeholder="+44…" />
+        </Field>
+        <Field label="Email" full>
+          <input value={form.email} onChange={set("email")} className={fieldCls} type="email" />
+        </Field>
+        <Field label="Notes" full>
+          <textarea value={form.notes} onChange={set("notes")} className={fieldCls + " min-h-[60px]"} rows={2} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+const fieldCls = "w-full px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500";
+function Field({ label, children, full }) {
+  return (
+    <div className={full ? "col-span-2" : ""}>
+      <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// ─── Flipdish linkage modal ───────────────────────────────────────────────────
+// Shows the list of all flipdish_stores; user clicks to link/unlink to the
+// currently-edited store. Linked rows for THIS store appear first.
+function FlipdishLinkModal({ store, flipdishStores, onLink, onUnlink, onClose }) {
+  const [search, setSearch] = useState("");
+  const [busyId, setBusyId] = useState(null);
+
+  const sorted = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return [...flipdishStores]
+      .filter(fs => !q || (fs.name || "").toLowerCase().includes(q) || String(fs.id || "").includes(q))
+      .sort((a, b) => {
+        // Linked to THIS store first, then unlinked, then linked to others
+        const aMine = a.storeId === store.id ? 0 : a.storeId ? 2 : 1;
+        const bMine = b.storeId === store.id ? 0 : b.storeId ? 2 : 1;
+        if (aMine !== bMine) return aMine - bMine;
+        return (a.name || "").localeCompare(b.name || "");
+      });
+  }, [flipdishStores, search, store.id]);
+
+  const toggle = async (fs) => {
+    setBusyId(fs.id);
+    try {
+      if (fs.storeId === store.id) await onUnlink(fs.id);
+      else                          await onLink(fs.id, store.id);
+    } catch (_) { /* toast in handler */ }
+    finally { setBusyId(null); }
+  };
+
+  return (
+    <Modal
+      title={`Link Flipdish storefronts to "${store.shortName}"`}
+      onClose={onClose}
+      maxW="max-w-2xl"
+      footer={<button onClick={onClose} className="w-full py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Done</button>}
+    >
+      <div className="text-xs text-slate-500 mb-3">
+        Flipdish RMS storefronts are channel-specific (POS / online / Uber / Deliveroo).
+        One physical store can have several. Click to link or unlink.
+      </div>
+      <input
+        type="text"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="Search Flipdish storefronts…"
+        className="w-full px-3 py-2 mb-3 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+      />
+      <div className="max-h-96 overflow-y-auto space-y-1.5">
+        {sorted.length === 0 && <div className="text-center py-6 text-slate-500 text-sm">No Flipdish storefronts match.</div>}
+        {sorted.map(fs => {
+          const linkedHere = fs.storeId === store.id;
+          const linkedElse = fs.storeId && !linkedHere;
+          return (
+            <div key={fs.id} className={`flex items-center gap-3 px-3 py-2 rounded-lg ${linkedHere ? "bg-indigo-950/40 border border-indigo-900/60" : "bg-slate-800/40 border border-slate-800"}`}>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-white truncate">{fs.name || "(unnamed)"}</div>
+                <div className="text-[10px] text-slate-500">id {fs.id} · {fs.channel || "—"}{linkedElse ? ` · linked to ${fs.storeId}` : ""}</div>
+              </div>
+              <button
+                onClick={() => toggle(fs)}
+                disabled={busyId === fs.id || (linkedElse && !linkedHere)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  linkedHere ? "bg-rose-600/30 text-rose-300 hover:bg-rose-600/40"
+                            : linkedElse ? "bg-slate-800 text-slate-600 cursor-not-allowed"
+                                          : "bg-indigo-600/30 text-indigo-300 hover:bg-indigo-600/40"
+                }`}
+              >
+                {busyId === fs.id ? "…" : linkedHere ? "Unlink" : linkedElse ? "linked elsewhere" : "Link"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
   );
 }
 
@@ -9352,6 +9817,52 @@ export default function App() {
   const addUser      = useCallback(async u=>{const s=await insertUser(u);setUsers(us=>[...us,s]);showToast("User added");}, [showToast]);
   const updateUser   = useCallback(async u=>{const s=await upsertUser(u);setUsers(us=>us.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteUser   = useCallback(async id=>{await removeUser(id);setUsers(us=>us.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  // ── Store CRUD (admin) ────────────────────────────────────────────────────
+  const addStore = useCallback(async s => {
+    const saved = await insertStore(s);
+    setStores(prev => [...prev, saved].sort((a,b)=>(a.shortName||"").localeCompare(b.shortName||"")));
+    showToast("Store added");
+    return saved;
+  }, [showToast]);
+  const updateStoreRow = useCallback(async (id, patch) => {
+    const saved = await updateStore(id, patch);
+    setStores(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Store updated");
+    return saved;
+  }, [showToast]);
+  const deleteStoreRow = useCallback(async id => {
+    try {
+      await deleteStore(id);
+      setStores(prev => prev.filter(x => x.id !== id));
+      showToast("Store deleted");
+    } catch (err) {
+      // Most common failure: flipdish_stores rows still reference this store.
+      // Surface a clear message instead of the raw Postgres error.
+      const msg = /foreign key|violates/.test(err.message || "")
+        ? "Can't delete — unlink Flipdish stores first."
+        : `Couldn't delete: ${err.message}`;
+      showToast(msg, "error");
+      throw err;
+    }
+  }, [showToast]);
+  const linkFlipdishToStore = useCallback(async (flipdishStoreId, storeId) => {
+    const saved = await linkFlipdishStore(flipdishStoreId, storeId);
+    setFlipdishStores(prev => prev.map(x => x.id === saved.id ? saved : x));
+    showToast("Linked");
+    return saved;
+  }, [showToast]);
+  const unlinkFlipdishFromStore = useCallback(async flipdishStoreId => {
+    const saved = await unlinkFlipdishStore(flipdishStoreId);
+    setFlipdishStores(prev => prev.map(x => x.id === saved.id ? saved : x));
+    showToast("Unlinked");
+    return saved;
+  }, [showToast]);
+  const backfillStoreSales = useCallback(async (brandId, storeId) => {
+    const { linked } = await backfillSalesStoreId(brandId, storeId);
+    invalidateFlipdishSalesCache();
+    showToast(`Linked ${linked} historical sales`);
+    return linked;
+  }, [showToast]);
   const updateKPITargets = useCallback(async(brandId,targets)=>{const s=await upsertBrand({...brands.find(b=>b.id===brandId),kpiTargets:targets});setBrands(bs=>bs.map(x=>x.id===s.id?s:x));showToast("KPI saved");}, [brands,showToast]);
   const handleBulkImport = useCallback(async rows=>{const saved=await upsertEntries(rows);setEntries(es=>{const m=new Map(es.map(x=>[x.id,x]));saved.forEach(s=>m.set(s.id,s));return[...m.values()];});showToast(`${saved.length} entries imported`);}, [showToast]);
   const addChecklist    = useCallback(async c=>{const s=await upsertChecklist(c);setChecklists(cs=>cs.some(x=>x.id===s.id)?cs.map(x=>x.id===s.id?s:x):[...cs,s]);showToast("Saved");}, [showToast]);
@@ -9607,8 +10118,12 @@ export default function App() {
             />}
             {activeView === "admin"          && currentUser.role === "owner" && <AdminPanelView
               brands={brands} users={users} entries={entries}
+              stores={stores} flipdishStores={flipdishStores}
               onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand}
               onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser}
+              onAddStore={addStore} onUpdateStore={updateStoreRow} onDeleteStore={deleteStoreRow}
+              onLinkFlipdish={linkFlipdishToStore} onUnlinkFlipdish={unlinkFlipdishFromStore}
+              onBackfillStoreSales={backfillStoreSales}
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {activeView === "comms" && <CommunicationView

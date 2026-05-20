@@ -743,7 +743,7 @@ function dbStoreToApp(s) {
     flipdishStoreId:  s.flipdish_store_id,
     name:             s.name,
     shortName:        s.short_name,
-    ownershipModel:   s.ownership_model,
+    ownershipModel:   (s.ownership_model || "").toLowerCase().trim().replace(/\s+/g, "_"),
     franchiseeName:   s.franchisee_name,
     status:           s.status,
     address:          s.address,
@@ -815,6 +815,93 @@ export async function fetchFlipdishStores() {
   const { data, error } = await supabase.from("flipdish_stores").select("*");
   if (error) throw error;
   return (data || []).map(dbFlipdishStoreToApp);
+}
+
+// ─── Store CRUD (admin only) ──────────────────────────────────────────────────
+// All inputs use the camelCase app-shape; we translate to snake_case for the DB.
+// Returns the inserted/updated row in app-shape so callers can just setState(...).
+
+function appStoreToDb(s) {
+  // Whitelist only the fields the admin form ever touches. Avoids accidentally
+  // wiping metadata, raw, or other backend-managed columns.
+  const row = {};
+  if (s.id              !== undefined) row.id               = s.id;
+  if (s.brandId         !== undefined) row.brand_id         = s.brandId;
+  if (s.shortName       !== undefined) row.short_name       = s.shortName;
+  if (s.name            !== undefined) row.name             = s.name;
+  if (s.ownershipModel  !== undefined) row.ownership_model  = s.ownershipModel;
+  if (s.franchiseeName  !== undefined) row.franchisee_name  = s.franchiseeName || null;
+  if (s.status          !== undefined) row.status           = s.status;
+  if (s.address         !== undefined) row.address          = s.address || null;
+  if (s.city            !== undefined) row.city             = s.city || null;
+  if (s.postcode        !== undefined) row.postcode         = s.postcode || null;
+  if (s.country         !== undefined) row.country          = s.country || "United Kingdom";
+  if (s.phone           !== undefined) row.phone            = s.phone || null;
+  if (s.email           !== undefined) row.email            = s.email || null;
+  if (s.notes           !== undefined) row.notes            = s.notes || null;
+  return row;
+}
+
+export async function insertStore(store) {
+  const row = appStoreToDb(store);
+  const { data, error } = await supabase.from("stores").insert(row).select().single();
+  if (error) throw error;
+  return dbStoreToApp(data);
+}
+
+export async function updateStore(id, patch) {
+  const row = appStoreToDb(patch);
+  const { data, error } = await supabase
+    .from("stores").update(row).eq("id", id).select().single();
+  if (error) throw error;
+  return dbStoreToApp(data);
+}
+
+export async function deleteStore(id) {
+  // Caller is responsible for unlinking flipdish_stores rows first if they
+  // exist — otherwise the FK constraint will block this. We surface the error.
+  const { error } = await supabase.from("stores").delete().eq("id", id);
+  if (error) throw error;
+  return { id };
+}
+
+// ─── Flipdish-store linkage CRUD ──────────────────────────────────────────────
+// Used by the admin form to attach RMS Flipdish stores to a physical store row.
+// Each Flipdish store is (RMS store_id, channel) — same physical site can have
+// multiple rows for POS / online / Uber / Deliveroo etc.
+
+export async function linkFlipdishStore(flipdishStoreId, storeId) {
+  const { data, error } = await supabase
+    .from("flipdish_stores")
+    .update({ store_id: storeId })
+    .eq("id", flipdishStoreId)
+    .select().single();
+  if (error) throw error;
+  return dbFlipdishStoreToApp(data);
+}
+
+export async function unlinkFlipdishStore(flipdishStoreId) {
+  const { data, error } = await supabase
+    .from("flipdish_stores")
+    .update({ store_id: null })
+    .eq("id", flipdishStoreId)
+    .select().single();
+  if (error) throw error;
+  return dbFlipdishStoreToApp(data);
+}
+
+// Backfill: link all existing flipdish_sales rows for a given brand to a store.
+// Useful right after creating a new store record so its historical sales become
+// visible on the dashboard.
+export async function backfillSalesStoreId(brandId, storeId) {
+  const { data, error } = await supabase
+    .from("flipdish_sales")
+    .update({ store_id: storeId })
+    .eq("brand_id", brandId)
+    .is("store_id", null)
+    .select("sale_id");
+  if (error) throw error;
+  return { linked: (data || []).length };
 }
 
 // Pull flipdish orders for a date window — defaults to last 30 days
@@ -909,11 +996,13 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
     return v;
   };
 
-  // Page through results in 1000-row chunks. PostgREST enforces a server-side
-  // db.max_rows cap (default 1000) that silently overrides .limit(). Using
-  // .range() with explicit pagination is the only way to fetch >1000 rows —
-  // which we definitely need (a 7-day window for Chocoberry is ~15k rows).
-  const PAGE = 10000;
+  // Page through results in 10000-row chunks (matches Supabase project's
+  // max_rows setting). Five round-trips to fetch 42k rows instead of forty-three.
+  // If the server cap is lower than PAGE, the first response will return fewer
+  // rows than asked for — we adapt and use the actual returned size as our
+  // stride, so we never wrongly bail out after a short first page.
+  let PAGE = 10000;
+  let actualPageSize = null;
   const out = [];
   let offset = 0;
 
@@ -933,14 +1022,23 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
 
     const { data, error } = await q;
     if (error) throw error;
-    if (!data || data.length === 0) break;
+    if (!data || data.length === 0) break;          // genuinely no more rows — stop
     out.push(...data);
-    if (data.length < PAGE) break;                  // last page
+
+    // On the first response, learn the server's actual page size cap.
+    // If the server returned fewer rows than we asked for, that's our stride
+    // for subsequent calls — *not* a signal to stop. Only an empty response stops us.
+    if (actualPageSize === null) {
+      actualPageSize = data.length;
+      if (actualPageSize < PAGE) PAGE = actualPageSize;
+    }
+
+    if (data.length < PAGE) break;                  // last page (smaller than the known stride)
     offset += PAGE;
   }
 
   // eslint-disable-next-line no-console
-  console.log(`[fetchFlipdishSales] fetched ${out.length} rows across ${Math.ceil(out.length / PAGE)} page(s)`);
+  console.log(`[fetchFlipdishSales] fetched ${out.length} rows across ${Math.ceil(out.length / Math.max(PAGE, 1))} page(s)`);
 
   return out.map(dbFlipdishSaleToApp);
 }
