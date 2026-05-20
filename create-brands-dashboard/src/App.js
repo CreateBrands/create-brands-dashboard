@@ -40,6 +40,32 @@ import {
   Globe, FileText, ChefHat, PoundSterling
 } from "lucide-react";
 
+// ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
+// Chain Performance loads ~40k rows. Fetching that on every app mount made
+// the whole app slow for users who only use Today's Tasks or Temperatures.
+// This module-scope cache lets the data load once when Chain Performance is
+// first opened, then reuses for 5 minutes. invalidateFlipdishSalesCache() is
+// called after a manual Sync so the next render fetches fresh.
+const FLIPDISH_SALES_TTL_MS = 5 * 60 * 1000;   // 5 minutes
+let _flipdishSalesCache = null;                 // { data, fetchedAt }
+let _flipdishSalesCacheBuster = 0;              // bumped by invalidate()
+function invalidateFlipdishSalesCache() {
+  _flipdishSalesCache = null;
+  _flipdishSalesCacheBuster += 1;
+}
+async function fetchFlipdishSalesCached() {
+  const now = Date.now();
+  if (_flipdishSalesCache && (now - _flipdishSalesCache.fetchedAt) < FLIPDISH_SALES_TTL_MS) {
+    return _flipdishSalesCache.data;
+  }
+  const data = await fetchFlipdishSales();
+  _flipdishSalesCache = { data, fetchedAt: now };
+  return data;
+}
+function getFlipdishSalesCacheBuster() {
+  return _flipdishSalesCacheBuster;
+}
+
 // ─── Global font + style injection ────────────────────────────────────────────
 // Runs once per page load. Adds Inter from Google Fonts + a few base style overrides.
 if (typeof document !== "undefined" && !document.getElementById("cb-global-style")) {
@@ -1567,7 +1593,28 @@ function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // CHAIN PERFORMANCE VIEW — Chocoberry HQ rollup dashboard
 // ═══════════════════════════════════════════════════════════════════════════════
-function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, flipdishSales = [], flipdishSyncLog, entries, currentUser, onRefreshSync }) {
+function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog, entries, currentUser, onRefreshSync }) {
+  // Self-fetched sales (lazy-loaded, cached for 5 min). When the user clicks
+  // Sync Now, invalidateFlipdishSalesCache() bumps the cache buster, which
+  // re-runs this effect and fetches fresh.
+  const [flipdishSales, setFlipdishSales] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(true);
+  const [salesError, setSalesError] = useState(null);
+  const cacheBuster = getFlipdishSalesCacheBuster();
+  useEffect(() => {
+    let cancelled = false;
+    setSalesLoading(true);
+    fetchFlipdishSalesCached()
+      .then(data => { if (!cancelled) { setFlipdishSales(data); setSalesError(null); }})
+      .catch(err  => { if (!cancelled) { setSalesError(err.message || String(err)); }})
+      .finally(()  => { if (!cancelled) { setSalesLoading(false); }});
+    return () => { cancelled = true; };
+  }, [cacheBuster]);
+
+  // Webhook-era orders are no longer fetched anywhere. Kept as an empty array
+  // so the few remaining .filter()/.forEach() references downstream (in dead
+  // codepaths that populate unused row fields) don't crash.
+  const flipdishOrders = [];
   const [period,        setPeriod]        = useState("week");  // today | yesterday | this_week | last_week | week | month | custom
   const [customFrom,    setCustomFrom]    = useState("");
   const [customTo,      setCustomTo]      = useState("");
@@ -1880,6 +1927,39 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishOrders, 
 
   // ── Open store detail modal ──────────────────────────────────────────────
   const detailStore = storeDetailId ? stores.find(s => s.id === storeDetailId) : null;
+
+  // Loading & error guards — show before the main dashboard renders, since
+  // every section below depends on flipdishSales being populated.
+  if (salesLoading && flipdishSales.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-base font-bold text-white">Chain Performance</h2>
+          <div className="text-xs text-slate-500 mt-0.5">Loading sales data…</div>
+        </div>
+        <div className="flex items-center justify-center py-20">
+          <div className="text-slate-400 text-sm">⏳ Fetching ~40k rows · this takes a few seconds on first open</div>
+        </div>
+      </div>
+    );
+  }
+  if (salesError) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-base font-bold text-white">Chain Performance</h2>
+        </div>
+        <div className="rounded-xl bg-rose-950/40 border border-rose-900/60 p-4">
+          <div className="text-sm font-semibold text-rose-300 mb-1">Couldn't load sales data</div>
+          <div className="text-xs text-rose-200/70">{salesError}</div>
+          <button
+            onClick={() => { invalidateFlipdishSalesCache(); window.location.reload(); }}
+            className="mt-3 px-3 py-1.5 rounded-lg bg-rose-900/50 hover:bg-rose-800/70 text-rose-100 text-xs font-semibold"
+          >Retry</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -9126,9 +9206,9 @@ export default function App() {
   const [punchRecords,    setPunchRecords]   = useState([]);
   const [stores,            setStores]            = useState([]);
   const [flipdishStores,    setFlipdishStores]    = useState([]);
-  const [flipdishOrders,    setFlipdishOrders]    = useState([]);
-  const [flipdishSales,     setFlipdishSales]     = useState([]);
   const [flipdishSyncLog,   setFlipdishSyncLog]   = useState([]);
+  // flipdishOrders and flipdishSales used to be App-level state. They're now
+  // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
   const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
@@ -9151,16 +9231,19 @@ export default function App() {
       fetchOpsTeam(), fetchTempLogs(), fetchDeliveries(), fetchChecklistStates(),
       fetchAuditTrail(), fetchHelpdeskTickets(), fetchInboxMessages(),
       fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
-      fetchStores(), fetchFlipdishStores(), fetchFlipdishOrders(), fetchFlipdishSyncLog(), fetchFlipdishSales(),
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fo, fsl, fsales]) => {
+      fetchStores(), fetchFlipdishStores(), fetchFlipdishSyncLog(),
+      // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
+      // ~40k rows of POS+marketplace data and were forcing every user to wait
+      // even if they never opened Chain Performance. ChainPerformanceView now
+      // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
       setChecklistStates(cs || {});
       setAuditTrail(at); setHdTickets(hd); setMessages(msgs); setAvailability(avail);
       setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
-      setStores(st); setFlipdishStores(fs); setFlipdishOrders(fo); setFlipdishSyncLog(fsl);
-      setFlipdishSales(fsales);
+      setStores(st); setFlipdishStores(fs); setFlipdishSyncLog(fsl);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -9330,9 +9413,11 @@ export default function App() {
     try {
       showToast("Starting Flipdish sync…");
       await runFlipdishSync({});  // default: last 7 days
-      // refresh local state with new data
-      const [fo, fsl, fsales] = await Promise.all([fetchFlipdishOrders(), fetchFlipdishSyncLog(), fetchFlipdishSales()]);
-      setFlipdishOrders(fo); setFlipdishSyncLog(fsl); setFlipdishSales(fsales);
+      // Bust the lazy-load cache so the next Chain Performance render fetches fresh.
+      // If the user is currently *on* Chain Performance, the view re-reads via
+      // its own effect (keyed on the cache-bust counter) and shows new data.
+      invalidateFlipdishSalesCache();
+      setFlipdishSyncLog(await fetchFlipdishSyncLog());
       showToast("Sync complete");
     } catch (err) {
       showToast("Sync failed: " + err.message, "error");
@@ -9493,7 +9578,7 @@ export default function App() {
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
             {activeView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView === "chain"           && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishOrders={flipdishOrders} flipdishSales={flipdishSales} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
+            {activeView === "chain"           && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {activeView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
             {activeView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
