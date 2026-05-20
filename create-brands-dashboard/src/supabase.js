@@ -893,14 +893,53 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
     "business_date", "sale_time", "property_name", "storefront_type",
     "payment_method", "is_cancelled", "is_fully_refunded",
   ].join(",");
+
   // Default: last 60 days (covers 30d view + prior 30d comparison)
   const effFrom = from || new Date(Date.now() - 60 * 24 * 3600 * 1000);
-  let q = supabase.from("flipdish_sales").select(cols).order("first_event_at", { ascending: false });
-  if (brandId) q = q.eq("brand_id", brandId);   // default: Chocoberry only (excludes Tove)
-  q = q.gte("first_event_at", effFrom instanceof Date ? effFrom.toISOString() : effFrom);
-  if (to)   q = q.lte("first_event_at", to   instanceof Date ? to.toISOString()   : to);
-  q = q.limit(limit);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data || []).map(dbFlipdishSaleToApp);
+
+  // business_date is a `date` column — pass YYYY-MM-DD, not an ISO timestamp.
+  // Using business_date (not first_event_at) so trading-day semantics are correct:
+  // a late-night sale belongs to the day the operator considers it part of.
+  const toIsoDate = (v) => {
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "string") return v.slice(0, 10);
+    return v;
+  };
+
+  // Page through results in 1000-row chunks. PostgREST enforces a server-side
+  // db.max_rows cap (default 1000) that silently overrides .limit(). Using
+  // .range() with explicit pagination is the only way to fetch >1000 rows —
+  // which we definitely need (a 7-day window for Chocoberry is ~15k rows).
+  const PAGE = 1000;
+  const out = [];
+  let offset = 0;
+  let totalCount = null;
+
+  while (offset < limit) {
+    const upper = Math.min(offset + PAGE, limit) - 1;
+    let q = supabase
+      .from("flipdish_sales")
+      .select(cols, offset === 0 ? { count: "exact" } : undefined)
+      .order("business_date", { ascending: false })
+      .order("sale_time",     { ascending: false }); // stable secondary sort
+
+    if (brandId) q = q.eq("brand_id", brandId);     // default: Chocoberry only (excludes Tove)
+    q = q.gte("business_date", toIsoDate(effFrom));
+    if (to) q = q.lte("business_date", toIsoDate(to));
+    q = q.not("amount_total", "is", null);          // excludes inert br1153 webhook rows
+    q = q.range(offset, upper);
+
+    const { data, error, count } = await q;
+    if (error) throw error;
+    if (count != null) totalCount = count;
+    if (!data || data.length === 0) break;
+    out.push(...data);
+    if (data.length < PAGE) break;                  // last page
+    offset += PAGE;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(`[fetchFlipdishSales] fetched ${out.length}${totalCount != null ? ` of ${totalCount}` : ""} rows`);
+
+  return out.map(dbFlipdishSaleToApp);
 }
