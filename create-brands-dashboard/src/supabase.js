@@ -324,8 +324,32 @@ function dbCleanTaskToApp(t) { return { id: t.id, name: t.name, area: t.area, fr
 function appAssignmentToDb(a) { return { id: a.id, brand_id: a.brandId, type: a.type, task_id: a.taskId, role: a.role || "", person_id: a.personId || "", freq: a.freq, weekday: a.weekday || null, once_date: a.date || null, custom_days: a.customDays || [], win_start: a.winStart, win_end: a.winEnd, priority: a.priority, notes: a.notes || "", updated_at: new Date().toISOString() }; }
 function dbAssignmentToApp(a) { return { id: a.id, brandId: a.brand_id, type: a.type, taskId: a.task_id, role: a.role, personId: a.person_id, freq: a.freq, weekday: a.weekday, date: a.once_date, customDays: a.custom_days || [], winStart: a.win_start, winEnd: a.win_end, priority: a.priority, notes: a.notes }; }
 
-function appOpsTeamToDb(m) { return { id: m.id, brand_id: m.brandId, first_name: m.firstName, last_name: m.lastName || "", nickname: m.nickname || "", department: m.department || "", role: m.role, pin: m.pin || "", color: m.color || "#6366f1", updated_at: new Date().toISOString() }; }
-function dbOpsTeamToApp(m) { return { id: m.id, brandId: m.brand_id, firstName: m.first_name, lastName: m.last_name, nickname: m.nickname || "", department: m.department || "", role: m.role, pin: m.pin, color: m.color }; }
+function appOpsTeamToDb(m) {
+  return {
+    id: m.id, brand_id: m.brandId,
+    first_name: m.firstName, last_name: m.lastName || "",
+    nickname: m.nickname || "", department: m.department || "",
+    role: m.role, pin: m.pin || "", color: m.color || "#6366f1",
+    // New store-aware fields. store_ids: text[] — a staff member may work at
+    // several stores (the floating-barista case). role_id/department_id are
+    // optional references into store_roles/store_departments.
+    store_ids: m.storeIds || [],
+    role_id: m.roleId || null,
+    department_id: m.departmentId || null,
+    updated_at: new Date().toISOString(),
+  };
+}
+function dbOpsTeamToApp(m) {
+  return {
+    id: m.id, brandId: m.brand_id,
+    firstName: m.first_name, lastName: m.last_name,
+    nickname: m.nickname || "", department: m.department || "",
+    role: m.role, pin: m.pin, color: m.color,
+    storeIds: m.store_ids || [],
+    roleId: m.role_id || null,
+    departmentId: m.department_id || null,
+  };
+}
 
 function appTempLogToDb(l) { return { id: l.id, brand_id: l.brandId, unit_id: l.unitId, date: l.date, time: l.time, value: l.value, is_breach: l.isBreach || false, notes: l.notes || "", logged_by: l.loggedBy || "" }; }
 function dbTempLogToApp(l) { return { id: l.id, brandId: l.brand_id, unitId: l.unit_id, date: l.date, time: l.time, value: Number(l.value), isBreach: l.is_breach, notes: l.notes, loggedBy: l.logged_by }; }
@@ -544,7 +568,7 @@ export async function removeSchedule(id) {
 
 function appScheduleToDb(s) {
   return {
-    id: s.id, brand_id: s.brandId,
+    id: s.id, brand_id: s.brandId, store_id: s.storeId || null,
     employee_id: s.employeeId || "", employee_name: s.employeeName || "",
     date: s.date, shift: s.shift || "Morning",
     start_time: s.startTime || "08:00", end_time: s.endTime || "16:00",
@@ -557,7 +581,7 @@ function appScheduleToDb(s) {
 }
 function dbScheduleToApp(s) {
   return {
-    id: s.id, brandId: s.brand_id,
+    id: s.id, brandId: s.brand_id, storeId: s.store_id || null,
     employeeId: s.employee_id, employeeName: s.employee_name,
     date: s.date, shift: s.shift,
     startTime: s.start_time?.slice(0,5) || "08:00",
@@ -599,14 +623,24 @@ export async function removeShiftPreset(id) {
 }
 
 // ── Publish/unpublish a week of schedules ─────────────────────────────────────
-export async function publishWeekSchedules(brandId, weekStart, published) {
-  const weekEnd = new Date(weekStart);
+// Publish (or unpublish) all schedules in a given week for a given scope.
+// New shape: pass { storeId, weekStart, published } to publish per-store.
+// Legacy shape (brandId positional) still works for backward compatibility.
+export async function publishWeekSchedules(arg1, weekStart, published) {
+  // Detect calling shape: object means new-style, string means legacy brandId.
+  const opts = (typeof arg1 === "object" && arg1 !== null)
+    ? arg1
+    : { brandId: arg1, weekStart, published };
+  const weekEnd = new Date(opts.weekStart);
   weekEnd.setDate(weekEnd.getDate() + 6);
-  const { error } = await supabase.from("schedules")
-    .update({ published, updated_at: new Date().toISOString() })
-    .eq("brand_id", brandId)
-    .gte("date", weekStart)
+  let q = supabase.from("schedules")
+    .update({ published: opts.published, updated_at: new Date().toISOString() })
+    .gte("date", opts.weekStart)
     .lte("date", weekEnd.toISOString().split("T")[0]);
+  // Scope to a single store if provided, else to the legacy brand path.
+  if (opts.storeId) q = q.eq("store_id", opts.storeId);
+  else if (opts.brandId) q = q.eq("brand_id", opts.brandId);
+  const { error } = await q;
   if (error) throw error;
 }
 
@@ -649,7 +683,7 @@ export async function upsertPunchRecord(record) {
 
 function appPunchToDb(p) {
   return {
-    id: p.id, brand_id: p.brandId,
+    id: p.id, brand_id: p.brandId, store_id: p.storeId || null,
     employee_id: p.employeeId, employee_name: p.employeeName,
     date: p.date, punch_in: p.punchIn, punch_out: p.punchOut || null,
     hours_worked: p.hoursWorked || null, hourly_rate: p.hourlyRate || 0,
@@ -670,7 +704,7 @@ function appPunchToDb(p) {
 }
 function dbPunchToApp(p) {
   return {
-    id: p.id, brandId: p.brand_id,
+    id: p.id, brandId: p.brand_id, storeId: p.store_id || null,
     employeeId: p.employee_id, employeeName: p.employee_name,
     date: p.date, punchIn: p.punch_in, punchOut: p.punch_out,
     hoursWorked: p.hours_worked ? parseFloat(p.hours_worked) : null,
@@ -910,6 +944,193 @@ export async function backfillSalesStoreId(brandId, storeId) {
     .select("sale_id");
   if (error) throw error;
   return { linked: (data || []).length };
+}
+
+// ─── Store Departments + Roles (per-store org structure) ──────────────────────
+// Backed by the store_departments and store_roles tables added in Stage 1.
+// Each store has its own set; managers/owners can create/edit/archive.
+// We use soft delete (archived_at = now()) so historical references survive.
+
+function dbStoreDepartmentToApp(d) {
+  return {
+    id:         d.id,
+    storeId:    d.store_id,
+    name:       d.name,
+    sortOrder:  d.sort_order ?? 0,
+    createdAt:  d.created_at,
+    updatedAt:  d.updated_at,
+    archivedAt: d.archived_at,
+  };
+}
+
+function appStoreDepartmentToDb(d) {
+  const row = {};
+  if (d.id         !== undefined) row.id         = d.id;
+  if (d.storeId    !== undefined) row.store_id   = d.storeId;
+  if (d.name       !== undefined) row.name       = d.name;
+  if (d.sortOrder  !== undefined) row.sort_order = d.sortOrder;
+  if (d.archivedAt !== undefined) row.archived_at = d.archivedAt;
+  return row;
+}
+
+function dbStoreRoleToApp(r) {
+  return {
+    id:            r.id,
+    storeId:       r.store_id,
+    departmentId:  r.department_id,
+    name:          r.name,
+    hourlyRate:    r.hourly_rate != null ? Number(r.hourly_rate) : null,
+    isManagement:  r.is_management ?? false,
+    sortOrder:     r.sort_order ?? 0,
+    createdAt:     r.created_at,
+    updatedAt:     r.updated_at,
+    archivedAt:    r.archived_at,
+  };
+}
+
+function appStoreRoleToDb(r) {
+  const row = {};
+  if (r.id            !== undefined) row.id            = r.id;
+  if (r.storeId       !== undefined) row.store_id      = r.storeId;
+  if (r.departmentId  !== undefined) row.department_id = r.departmentId || null;
+  if (r.name          !== undefined) row.name          = r.name;
+  if (r.hourlyRate    !== undefined) row.hourly_rate   = r.hourlyRate === "" || r.hourlyRate == null ? null : Number(r.hourlyRate);
+  if (r.isManagement  !== undefined) row.is_management = !!r.isManagement;
+  if (r.sortOrder     !== undefined) row.sort_order    = r.sortOrder;
+  if (r.archivedAt    !== undefined) row.archived_at   = r.archivedAt;
+  return row;
+}
+
+export async function fetchStoreDepartments() {
+  // We fetch ALL departments (including archived) and let the UI filter,
+  // since active/archived counts are useful to display.
+  const { data, error } = await supabase
+    .from("store_departments")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("name",       { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbStoreDepartmentToApp);
+}
+
+export async function fetchStoreRoles() {
+  const { data, error } = await supabase
+    .from("store_roles")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("name",       { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbStoreRoleToApp);
+}
+
+export async function insertStoreDepartment(dept) {
+  // ID is caller-supplied to avoid a server round-trip for the id alone.
+  // Format: "dept-{storeId-tail}-{slug}" e.g. "dept-evington-road-kitchen"
+  const row = appStoreDepartmentToDb({
+    ...dept,
+    id: dept.id || `dept-${Date.now()}`,
+  });
+  const { data, error } = await supabase
+    .from("store_departments").insert(row).select().single();
+  if (error) throw error;
+  return dbStoreDepartmentToApp(data);
+}
+
+export async function updateStoreDepartment(id, patch) {
+  const row = appStoreDepartmentToDb({ ...patch, updatedAt: undefined });
+  row.updated_at = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("store_departments").update(row).eq("id", id).select().single();
+  if (error) throw error;
+  return dbStoreDepartmentToApp(data);
+}
+
+export async function archiveStoreDepartment(id) {
+  // Soft delete — preserves history for any ops_team / schedules referencing it
+  return updateStoreDepartment(id, { archivedAt: new Date().toISOString() });
+}
+
+export async function unarchiveStoreDepartment(id) {
+  return updateStoreDepartment(id, { archivedAt: null });
+}
+
+export async function insertStoreRole(role) {
+  const row = appStoreRoleToDb({
+    ...role,
+    id: role.id || `role-${Date.now()}`,
+  });
+  const { data, error } = await supabase
+    .from("store_roles").insert(row).select().single();
+  if (error) throw error;
+  return dbStoreRoleToApp(data);
+}
+
+export async function updateStoreRole(id, patch) {
+  const row = appStoreRoleToDb({ ...patch, updatedAt: undefined });
+  row.updated_at = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("store_roles").update(row).eq("id", id).select().single();
+  if (error) throw error;
+  return dbStoreRoleToApp(data);
+}
+
+export async function archiveStoreRole(id) {
+  return updateStoreRole(id, { archivedAt: new Date().toISOString() });
+}
+
+export async function unarchiveStoreRole(id) {
+  return updateStoreRole(id, { archivedAt: null });
+}
+
+// Copy-from-another-store: clone all active departments + roles from a source
+// store into a target store. New IDs generated; archived items excluded.
+// Returns counts so the UI can show "Copied N depts and M roles".
+export async function copyStoreStructure(sourceStoreId, targetStoreId) {
+  if (!sourceStoreId || !targetStoreId || sourceStoreId === targetStoreId) {
+    throw new Error("Source and target stores must be different and non-empty.");
+  }
+  // Fetch source structure
+  const [{ data: sDepts, error: e1 }, { data: sRoles, error: e2 }] = await Promise.all([
+    supabase.from("store_departments").select("*").eq("store_id", sourceStoreId).is("archived_at", null),
+    supabase.from("store_roles").select("*").eq("store_id", sourceStoreId).is("archived_at", null),
+  ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
+
+  // Insert departments first, recording old→new ID mapping so we can rewire
+  // role.department_id correctly.
+  const deptIdMap = {};
+  const newDepts = (sDepts || []).map(d => {
+    const newId = `dept-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    deptIdMap[d.id] = newId;
+    return {
+      id:         newId,
+      store_id:   targetStoreId,
+      name:       d.name,
+      sort_order: d.sort_order || 0,
+    };
+  });
+  if (newDepts.length > 0) {
+    const { error } = await supabase.from("store_departments").insert(newDepts);
+    if (error) throw error;
+  }
+
+  // Then roles, rewiring department_id through the map
+  const newRoles = (sRoles || []).map(r => ({
+    id:            `role-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    store_id:      targetStoreId,
+    department_id: r.department_id ? (deptIdMap[r.department_id] || null) : null,
+    name:          r.name,
+    hourly_rate:   r.hourly_rate,
+    is_management: r.is_management || false,
+    sort_order:    r.sort_order || 0,
+  }));
+  if (newRoles.length > 0) {
+    const { error } = await supabase.from("store_roles").insert(newRoles);
+    if (error) throw error;
+  }
+
+  return { departments: newDepts.length, roles: newRoles.length };
 }
 
 // Pull flipdish orders for a date window — defaults to last 30 days

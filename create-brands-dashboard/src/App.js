@@ -21,6 +21,10 @@ import {
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
+  fetchStoreDepartments, fetchStoreRoles,
+  insertStoreDepartment, updateStoreDepartment, archiveStoreDepartment, unarchiveStoreDepartment,
+  insertStoreRole, updateStoreRole, archiveStoreRole, unarchiveStoreRole,
+  copyStoreStructure,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
 } from "./supabase";
@@ -5042,20 +5046,533 @@ function ChecklistSettingsFormModal({ item, onSave, onClose }) {
   );
 }
 
-function OpsSettingsView({ brands, checklists, tempUnits, cleaningTasks, opsTeam, shiftPresets = [], onAddChecklist, onUpdateChecklist, onDeleteChecklist, onAddTempUnit, onUpdateTempUnit, onDeleteTempUnit, onAddCleanTask, onUpdateCleanTask, onDeleteCleanTask, onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam, onAddShiftPreset, onUpdateShiftPreset, onDeleteShiftPreset, currentUser }) {
-  const [tab, setTab] = useState("checklists");
+// ─── Per-store structure: Departments + Roles ─────────────────────────────────
+// Lives under Ops Setup → Structure. Lets the owner/HQ/store-manager build the
+// org structure for each store: which departments exist (Kitchen, FOH, Deliveries)
+// and which roles within each (Head Chef, Barista, Server).
+//
+// Permissions:
+//   - Owner/HQ: see and edit every store
+//   - Store Manager: see and edit only the stores in their storeIds
+//   - Staff: would see read-only (not currently routed here)
+//
+// Soft delete via archived_at — preserves history for opsTeam members who
+// were previously assigned to a now-removed role.
+function StructureSection({
+  brands, stores, visibleStoreIds, departments, roles, opsTeam, currentUser,
+  onAddDept, onUpdateDept, onArchiveDept, onUnarchiveDept,
+  onAddRole, onUpdateRole, onArchiveRole, onUnarchiveRole,
+  onCopyStructure,
+}) {
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [storeId, setStoreId] = useState("");
+  useEffect(() => {
+    if (!storeId && allVisibleStores[0]) setStoreId(allVisibleStores[0].id);
+    if (storeId && !allVisibleStores.some(s => s.id === storeId)) setStoreId(allVisibleStores[0]?.id || "");
+  }, [allVisibleStores, storeId]);
+
+  const [showArchived, setShowArchived] = useState(false);
+  const [deptModal,    setDeptModal]    = useState(null);  // dept being edited, "new" for create
+  const [roleModal,    setRoleModal]    = useState(null);  // role being edited, or { isNew: true, deptId }
+  const [confirmAction, setConfirmAction] = useState(null); // { msg, fn }
+  const [copyOpen,     setCopyOpen]     = useState(false);
+
+  const selectedStore = allVisibleStores.find(s => s.id === storeId) || null;
+
+  // Filter to selected store, optionally include archived
+  const visibleDepts = useMemo(() => {
+    return departments
+      .filter(d => d.storeId === storeId)
+      .filter(d => showArchived || !d.archivedAt)
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name));
+  }, [departments, storeId, showArchived]);
+
+  const visibleRoles = useMemo(() => {
+    return roles
+      .filter(r => r.storeId === storeId)
+      .filter(r => showArchived || !r.archivedAt)
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name));
+  }, [roles, storeId, showArchived]);
+
+  const rolesByDept = useMemo(() => {
+    const m = { _unassigned: [] };
+    visibleRoles.forEach(r => {
+      const key = r.departmentId || "_unassigned";
+      (m[key] = m[key] || []).push(r);
+    });
+    return m;
+  }, [visibleRoles]);
+
+  // Count opsTeam members per role/dept — useful to show "X staff" and to
+  // warn before archiving something that's still in use.
+  const teamCountByRole = useMemo(() => {
+    const m = {};
+    (opsTeam || []).forEach(member => {
+      if (member.roleId) m[member.roleId] = (m[member.roleId] || 0) + 1;
+    });
+    return m;
+  }, [opsTeam]);
+
+  const teamCountByDept = useMemo(() => {
+    const m = {};
+    (opsTeam || []).forEach(member => {
+      if (member.departmentId) m[member.departmentId] = (m[member.departmentId] || 0) + 1;
+    });
+    return m;
+  }, [opsTeam]);
+
+  // Stores the user could copy from — any store EXCEPT the currently-selected one
+  // that already has some structure defined. Limits to user's accessible stores.
+  const copyableSources = useMemo(() => {
+    return allVisibleStores
+      .filter(s => s.id !== storeId)
+      .filter(s => departments.some(d => d.storeId === s.id && !d.archivedAt))
+      .sort((a, b) => (a.shortName || a.name).localeCompare(b.shortName || b.name));
+  }, [allVisibleStores, storeId, departments]);
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <Settings size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
+  const showBrandPrefix = new Set(allVisibleStores.map(s => s.brandId)).size > 1;
+
+  return (
+    <div className="space-y-5">
+      {/* Top bar — store picker + actions */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={storeId}
+            onChange={e => setStoreId(e.target.value)}
+            className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer min-w-[200px]"
+          >
+            {allVisibleStores.map(s => {
+              const b = brands.find(br => br.id === s.brandId);
+              return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+            })}
+          </select>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
+            <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} className="rounded"/>
+            Show archived
+          </label>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {copyableSources.length > 0 && visibleDepts.filter(d => !d.archivedAt).length === 0 && (
+            <button onClick={() => setCopyOpen(true)} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 px-3 py-2 rounded-xl border border-indigo-500/30 bg-indigo-950/30">
+              📋 Copy structure from another store
+            </button>
+          )}
+          <button onClick={() => setDeptModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold">
+            <Plus size={14}/> Add Department
+          </button>
+        </div>
+      </div>
+
+      {/* Empty state for new store */}
+      {visibleDepts.length === 0 && !showArchived && (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl">
+          <Settings size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No departments yet for {selectedStore?.shortName || "this store"}</div>
+          <div className="text-xs text-slate-600 mt-1 max-w-md text-center">
+            Start by adding departments (Kitchen, FOH, etc.), then create roles within each one.
+            {copyableSources.length > 0 && <> Or copy the structure from another store using the button above.</>}
+          </div>
+        </div>
+      )}
+
+      {/* Departments + nested roles */}
+      <div className="space-y-3">
+        {visibleDepts.map(dept => {
+          const deptRoles = (rolesByDept[dept.id] || []);
+          const deptStaff = teamCountByDept[dept.id] || 0;
+          return (
+            <div key={dept.id} className={`bg-slate-900 border rounded-2xl ${dept.archivedAt ? "border-slate-800 opacity-60" : "border-slate-700"}`}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="text-sm font-bold text-white truncate">{dept.name}</div>
+                  {dept.archivedAt && <Badge label="Archived" color="slate"/>}
+                  <span className="text-xs text-slate-500">{deptRoles.filter(r => !r.archivedAt).length} role{deptRoles.filter(r => !r.archivedAt).length !== 1 ? "s" : ""}</span>
+                  {deptStaff > 0 && <span className="text-xs text-slate-600">· {deptStaff} staff</span>}
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {!dept.archivedAt && (
+                    <button onClick={() => setRoleModal({ isNew: true, deptId: dept.id })}
+                      className="text-xs font-semibold text-slate-400 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700">
+                      + Role
+                    </button>
+                  )}
+                  {!dept.archivedAt && (
+                    <button onClick={() => setDeptModal(dept)}
+                      className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                  )}
+                  {dept.archivedAt ? (
+                    <button onClick={() => onUnarchiveDept(dept.id)}
+                      className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700">
+                      Restore
+                    </button>
+                  ) : (
+                    <button onClick={() => setConfirmAction({
+                      msg: deptStaff > 0
+                        ? `Archive "${dept.name}"? ${deptStaff} staff member(s) currently belong to it. They'll keep their record but the department will be hidden.`
+                        : `Archive "${dept.name}"?`,
+                      fn: () => onArchiveDept(dept.id),
+                    })} className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                  )}
+                </div>
+              </div>
+              {/* Roles in this department */}
+              {deptRoles.length === 0 ? (
+                <div className="px-4 py-3 text-xs text-slate-600 italic">No roles in this department yet.</div>
+              ) : (
+                <div className="divide-y divide-slate-800/60">
+                  {deptRoles.map(role => {
+                    const staffCount = teamCountByRole[role.id] || 0;
+                    return (
+                      <div key={role.id} className={`flex items-center justify-between px-4 py-2 ${role.archivedAt ? "opacity-60" : ""}`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="text-sm text-white truncate">{role.name}</div>
+                          {role.isManagement && <Badge label="Management" color="indigo"/>}
+                          {role.archivedAt && <Badge label="Archived" color="slate"/>}
+                          {role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">£{role.hourlyRate.toFixed(2)}/hr</span>}
+                          {staffCount > 0 && <span className="text-xs text-slate-600">· {staffCount} staff</span>}
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {!role.archivedAt && (
+                            <button onClick={() => setRoleModal(role)}
+                              className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                          )}
+                          {role.archivedAt ? (
+                            <button onClick={() => onUnarchiveRole(role.id)}
+                              className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700">
+                              Restore
+                            </button>
+                          ) : (
+                            <button onClick={() => setConfirmAction({
+                              msg: staffCount > 0
+                                ? `Archive role "${role.name}"? ${staffCount} staff member(s) hold this role.`
+                                : `Archive role "${role.name}"?`,
+                              fn: () => onArchiveRole(role.id),
+                            })} className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Roles with no department (unassigned bucket) */}
+        {(rolesByDept._unassigned || []).length > 0 && (
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl">
+            <div className="px-4 py-3 border-b border-slate-800">
+              <div className="text-sm font-semibold text-slate-400">Unassigned roles</div>
+              <div className="text-xs text-slate-600 mt-0.5">These roles aren't in any department. Edit them to assign.</div>
+            </div>
+            <div className="divide-y divide-slate-800/60">
+              {rolesByDept._unassigned.map(role => {
+                const staffCount = teamCountByRole[role.id] || 0;
+                return (
+                  <div key={role.id} className="flex items-center justify-between px-4 py-2">
+                    <div className="flex items-center gap-3"><div className="text-sm text-white">{role.name}</div>{role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">£{role.hourlyRate.toFixed(2)}/hr</span>}{staffCount > 0 && <span className="text-xs text-slate-600">· {staffCount} staff</span>}</div>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => setRoleModal(role)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                      <button onClick={() => setConfirmAction({ msg: `Archive role "${role.name}"?`, fn: () => onArchiveRole(role.id) })} className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Modals */}
+      {deptModal && (
+        <DepartmentEditorModal
+          dept={deptModal === "new" ? null : deptModal}
+          storeId={storeId}
+          onSave={async (payload) => {
+            if (deptModal === "new") await onAddDept(payload);
+            else                      await onUpdateDept(deptModal.id, payload);
+            setDeptModal(null);
+          }}
+          onClose={() => setDeptModal(null)}
+        />
+      )}
+
+      {roleModal && (
+        <RoleEditorModal
+          role={roleModal.isNew ? null : roleModal}
+          storeId={storeId}
+          presetDeptId={roleModal.isNew ? roleModal.deptId : null}
+          departments={visibleDepts.filter(d => !d.archivedAt)}
+          onSave={async (payload) => {
+            if (roleModal.isNew) await onAddRole(payload);
+            else                  await onUpdateRole(roleModal.id, payload);
+            setRoleModal(null);
+          }}
+          onClose={() => setRoleModal(null)}
+        />
+      )}
+
+      {confirmAction && (
+        <Modal
+          title="Confirm"
+          onClose={() => setConfirmAction(null)}
+          maxW="max-w-md"
+          footer={
+            <div className="flex gap-2 w-full">
+              <button onClick={() => setConfirmAction(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+              <button onClick={async () => { await confirmAction.fn(); setConfirmAction(null); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Archive</button>
+            </div>
+          }
+        >
+          <p className="text-sm text-slate-300">{confirmAction.msg}</p>
+          <p className="text-xs text-slate-500 mt-2">Archived items are hidden but kept for history. You can restore them later.</p>
+        </Modal>
+      )}
+
+      {copyOpen && (
+        <CopyStructureModal
+          sources={copyableSources}
+          brands={brands}
+          targetStore={selectedStore}
+          onCopy={async (sourceId) => {
+            await onCopyStructure(sourceId, storeId);
+            setCopyOpen(false);
+          }}
+          onClose={() => setCopyOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Department editor ────────────────────────────────────────────────────────
+function DepartmentEditorModal({ dept, storeId, onSave, onClose }) {
+  const isCreate = !dept;
+  const [name, setName] = useState(dept?.name || "");
+  const [sortOrder, setSortOrder] = useState(dept?.sortOrder ?? 0);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      await onSave({
+        ...(dept || {}),
+        storeId,
+        name: name.trim(),
+        sortOrder: Number(sortOrder) || 0,
+      });
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal
+      title={isCreate ? "Add Department" : `Edit — ${dept.name}`}
+      onClose={onClose}
+      maxW="max-w-md"
+      footer={
+        <div className="flex gap-2 w-full">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !name.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">{saving ? "Saving…" : (isCreate ? "Create" : "Save")}</button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Department name *</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Kitchen, FOH, Deliveries" className={fieldCls}/>
+        </div>
+        <div>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Sort order</label>
+          <input type="number" value={sortOrder} onChange={e => setSortOrder(e.target.value)} className={fieldCls}/>
+          <div className="text-[10px] text-slate-600 mt-1">Lower numbers appear first. Useful to put Kitchen above FOH, etc.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Role editor ──────────────────────────────────────────────────────────────
+function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onClose }) {
+  const isCreate = !role;
+  const [name, setName]           = useState(role?.name || "");
+  const [departmentId, setDeptId] = useState(role?.departmentId || presetDeptId || "");
+  const [hourlyRate, setRate]     = useState(role?.hourlyRate != null ? String(role.hourlyRate) : "");
+  const [isManagement, setMgmt]   = useState(role?.isManagement || false);
+  const [sortOrder, setSortOrder] = useState(role?.sortOrder ?? 0);
+  const [saving, setSaving]       = useState(false);
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      await onSave({
+        ...(role || {}),
+        storeId,
+        departmentId: departmentId || null,
+        name: name.trim(),
+        hourlyRate: hourlyRate === "" ? null : Number(hourlyRate),
+        isManagement,
+        sortOrder: Number(sortOrder) || 0,
+      });
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal
+      title={isCreate ? "Add Role" : `Edit — ${role.name}`}
+      onClose={onClose}
+      maxW="max-w-md"
+      footer={
+        <div className="flex gap-2 w-full">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !name.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">{saving ? "Saving…" : (isCreate ? "Create" : "Save")}</button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Role name *</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Head Chef, Barista, Server" className={fieldCls}/>
+        </div>
+        <div>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Department</label>
+          <select value={departmentId} onChange={e => setDeptId(e.target.value)} className={fieldCls}>
+            <option value="">— None —</option>
+            {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Hourly rate (£)</label>
+            <input type="number" step="0.25" value={hourlyRate} onChange={e => setRate(e.target.value)} placeholder="Optional" className={fieldCls}/>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Sort order</label>
+            <input type="number" value={sortOrder} onChange={e => setSortOrder(e.target.value)} className={fieldCls}/>
+          </div>
+        </div>
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={isManagement} onChange={e => setMgmt(e.target.checked)} className="rounded"/>
+            <span className="text-sm text-slate-300">Management role</span>
+          </label>
+          <div className="text-[10px] text-slate-600 mt-0.5 ml-6">Used for permission checks and shift authority.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Copy structure modal ─────────────────────────────────────────────────────
+function CopyStructureModal({ sources, brands, targetStore, onCopy, onClose }) {
+  const [sourceId, setSourceId] = useState(sources[0]?.id || "");
+  const [copying, setCopying] = useState(false);
+
+  const handleCopy = async () => {
+    if (!sourceId) return;
+    setCopying(true);
+    try { await onCopy(sourceId); }
+    finally { setCopying(false); }
+  };
+
+  return (
+    <Modal
+      title={`Copy structure to ${targetStore?.shortName || "this store"}`}
+      onClose={onClose}
+      maxW="max-w-md"
+      footer={
+        <div className="flex gap-2 w-full">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={handleCopy} disabled={copying || !sourceId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">{copying ? "Copying…" : "Copy"}</button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-sm text-slate-300">Pick a store to copy departments and roles from. New copies are created — the source store is unchanged.</p>
+        <select value={sourceId} onChange={e => setSourceId(e.target.value)} className={fieldCls}>
+          {sources.map(s => {
+            const b = brands.find(br => br.id === s.brandId);
+            return <option key={s.id} value={s.id}>{b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+          })}
+        </select>
+        <p className="text-xs text-slate-500">Hourly rates are copied but should be reviewed for the new store.</p>
+      </div>
+    </Modal>
+  );
+}
+
+function OpsSettingsView({
+  brands, stores = [], visibleStoreIds = [],
+  storeDepartments = [], storeRoles = [],
+  checklists, tempUnits, cleaningTasks, opsTeam, shiftPresets = [],
+  onAddChecklist, onUpdateChecklist, onDeleteChecklist,
+  onAddTempUnit, onUpdateTempUnit, onDeleteTempUnit,
+  onAddCleanTask, onUpdateCleanTask, onDeleteCleanTask,
+  onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam,
+  onAddShiftPreset, onUpdateShiftPreset, onDeleteShiftPreset,
+  onAddStoreDepartment, onUpdateStoreDepartment, onArchiveStoreDepartment, onUnarchiveStoreDepartment,
+  onAddStoreRole, onUpdateStoreRole, onArchiveStoreRole, onUnarchiveStoreRole,
+  onCopyStoreStructure,
+  currentUser
+}) {
+  const [tab, setTab] = useState("structure");
   const [clModal, setClModal] = useState(null);
   const [tuModal, setTuModal] = useState(null);
   const [ctModal, setCtModal] = useState(null);
   const [tmModal, setTmModal] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
-  const tabs = [{ key: "checklists", label: "Checklists" }, { key: "tempunits", label: "Temp Units" }, { key: "cleaning", label: "Cleaning Tasks" }, { key: "team", label: "Ops Team" }];
+  // "Structure" combines departments + roles in one screen since roles belong
+  // to departments. Listed first because it's the per-store identity that
+  // everything else hangs off of.
+  const tabs = [
+    { key: "structure",  label: "Structure" },
+    { key: "checklists", label: "Checklists" },
+    { key: "tempunits",  label: "Temp Units" },
+    { key: "cleaning",   label: "Cleaning Tasks" },
+    { key: "team",       label: "Ops Team" },
+  ];
 
   return (
     <div className="space-y-6">
       <div className="flex gap-2 bg-slate-900 border border-slate-700 rounded-2xl p-1.5 w-fit flex-wrap">
         {tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{t.label}</button>)}
       </div>
+
+      {tab === "structure" && (
+        <StructureSection
+          brands={brands}
+          stores={stores}
+          visibleStoreIds={visibleStoreIds}
+          departments={storeDepartments}
+          roles={storeRoles}
+          opsTeam={opsTeam}
+          currentUser={currentUser}
+          onAddDept={onAddStoreDepartment}
+          onUpdateDept={onUpdateStoreDepartment}
+          onArchiveDept={onArchiveStoreDepartment}
+          onUnarchiveDept={onUnarchiveStoreDepartment}
+          onAddRole={onAddStoreRole}
+          onUpdateRole={onUpdateStoreRole}
+          onArchiveRole={onArchiveStoreRole}
+          onUnarchiveRole={onUnarchiveStoreRole}
+          onCopyStructure={onCopyStoreStructure}
+        />
+      )}
 
       {tab === "checklists" && (
         <div className="space-y-4">
@@ -10586,6 +11103,8 @@ export default function App() {
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
   const [stores,            setStores]            = useState([]);
+  const [storeDepartments,  setStoreDepartments]  = useState([]);
+  const [storeRoles,        setStoreRoles]        = useState([]);
   const [flipdishStores,    setFlipdishStores]    = useState([]);
   const [flipdishSyncLog,   setFlipdishSyncLog]   = useState([]);
   // flipdishOrders and flipdishSales used to be App-level state. They're now
@@ -10613,11 +11132,12 @@ export default function App() {
       fetchAuditTrail(), fetchHelpdeskTickets(), fetchInboxMessages(),
       fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
       fetchStores(), fetchFlipdishStores(), fetchFlipdishSyncLog(),
+      fetchStoreDepartments(), fetchStoreRoles(),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -10625,6 +11145,7 @@ export default function App() {
       setAuditTrail(at); setHdTickets(hd); setMessages(msgs); setAvailability(avail);
       setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
       setStores(st); setFlipdishStores(fs); setFlipdishSyncLog(fsl);
+      setStoreDepartments(sdepts || []); setStoreRoles(sroles || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -10834,6 +11355,69 @@ export default function App() {
     invalidateFlipdishSalesCache();
     showToast(`Linked ${linked} historical sales`);
     return linked;
+  }, [showToast]);
+
+  // ── Store department CRUD ─────────────────────────────────────────────────
+  const addStoreDepartment = useCallback(async d => {
+    const saved = await insertStoreDepartment(d);
+    setStoreDepartments(prev => [...prev, saved]);
+    showToast("Department added");
+    return saved;
+  }, [showToast]);
+  const updateStoreDepartmentRow = useCallback(async (id, patch) => {
+    const saved = await updateStoreDepartment(id, patch);
+    setStoreDepartments(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Department updated");
+    return saved;
+  }, [showToast]);
+  const archiveStoreDepartmentRow = useCallback(async id => {
+    const saved = await archiveStoreDepartment(id);
+    setStoreDepartments(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Department archived");
+    return saved;
+  }, [showToast]);
+  const unarchiveStoreDepartmentRow = useCallback(async id => {
+    const saved = await unarchiveStoreDepartment(id);
+    setStoreDepartments(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Department restored");
+    return saved;
+  }, [showToast]);
+
+  // ── Store role CRUD ───────────────────────────────────────────────────────
+  const addStoreRole = useCallback(async r => {
+    const saved = await insertStoreRole(r);
+    setStoreRoles(prev => [...prev, saved]);
+    showToast("Role added");
+    return saved;
+  }, [showToast]);
+  const updateStoreRoleRow = useCallback(async (id, patch) => {
+    const saved = await updateStoreRole(id, patch);
+    setStoreRoles(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Role updated");
+    return saved;
+  }, [showToast]);
+  const archiveStoreRoleRow = useCallback(async id => {
+    const saved = await archiveStoreRole(id);
+    setStoreRoles(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Role archived");
+    return saved;
+  }, [showToast]);
+  const unarchiveStoreRoleRow = useCallback(async id => {
+    const saved = await unarchiveStoreRole(id);
+    setStoreRoles(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Role restored");
+    return saved;
+  }, [showToast]);
+
+  // Copy from another store, then refetch to get new IDs + parent links
+  const copyStructureFromStore = useCallback(async (sourceId, targetId) => {
+    const result = await copyStoreStructure(sourceId, targetId);
+    // Re-fetch both lists since inserts batched without per-row select returns
+    const [d, r] = await Promise.all([fetchStoreDepartments(), fetchStoreRoles()]);
+    setStoreDepartments(d || []);
+    setStoreRoles(r || []);
+    showToast(`Copied ${result.departments} departments and ${result.roles} roles`);
+    return result;
   }, [showToast]);
   const updateKPITargets = useCallback(async(brandId,targets)=>{const s=await upsertBrand({...brands.find(b=>b.id===brandId),kpiTargets:targets});setBrands(bs=>bs.map(x=>x.id===s.id?s:x));showToast("KPI saved");}, [brands,showToast]);
   const handleBulkImport = useCallback(async rows=>{const saved=await upsertEntries(rows);setEntries(es=>{const m=new Map(es.map(x=>[x.id,x]));saved.forEach(s=>m.set(s.id,s));return[...m.values()];});showToast(`${saved.length} entries imported`);}, [showToast]);
@@ -11121,13 +11705,20 @@ export default function App() {
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
-              brands={visibleBrands} checklists={checklists} tempUnits={tempUnits}
+              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+              storeDepartments={storeDepartments} storeRoles={storeRoles}
+              checklists={checklists} tempUnits={tempUnits}
               cleaningTasks={cleaningTasks} opsTeam={opsTeam} shiftPresets={shiftPresets}
               onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist}
               onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit}
               onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask}
               onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
               onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
+              onAddStoreDepartment={addStoreDepartment} onUpdateStoreDepartment={updateStoreDepartmentRow}
+              onArchiveStoreDepartment={archiveStoreDepartmentRow} onUnarchiveStoreDepartment={unarchiveStoreDepartmentRow}
+              onAddStoreRole={addStoreRole} onUpdateStoreRole={updateStoreRoleRow}
+              onArchiveStoreRole={archiveStoreRoleRow} onUnarchiveStoreRole={unarchiveStoreRoleRow}
+              onCopyStoreStructure={copyStructureFromStore}
               currentUser={currentUser}
             />}
             {effectiveActiveView === "time-attend"    && <TimeAttendanceView
