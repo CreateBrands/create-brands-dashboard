@@ -10108,10 +10108,8 @@ export default function App() {
   const commsBadge = inboxUnread + pendingAvail;
 
   // Nav items declared with optional `roles` array. If omitted, all roles see it.
-  // Hierarchy: owner > hq_staff > manager > staff.
-  // Filtering applied below so Sidebar only sees the items relevant to the
-  // current user. Impersonation flows through `currentUser`, so previewing as
-  // a manager hides Chain Performance / Admin from the sidebar correctly.
+  // Filtered by current user's role; empty groups dropped so the sidebar doesn't
+  // render an orphan header. Recomputed every render — cheap, no hook needed.
   const NAV_GROUPS_RAW = [
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
@@ -10143,30 +10141,21 @@ export default function App() {
     ]},
   ];
 
-  // Filter NAV by current user's role; drop empty groups so the sidebar
-  // doesn't render a header with nothing under it.
-  const NAV_GROUPS = useMemo(() => {
-    const role = currentUser?.role;
-    return NAV_GROUPS_RAW
-      .map(g => ({
-        ...g,
-        items: g.items.filter(item => !item.roles || item.roles.includes(role)),
-      }))
-      .filter(g => g.items.length > 0);
-    // NAV_GROUPS_RAW is intentionally excluded from deps — it's rebuilt every
-    // render anyway and depends on the same closure values as the filter.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.role, commsBadge, openIssueCount]);
+  const NAV_GROUPS = NAV_GROUPS_RAW
+    .map(g => ({ ...g, items: g.items.filter(item => !item.roles || item.roles.includes(currentUser?.role)) }))
+    .filter(g => g.items.length > 0);
 
-  // Safety: if the user has switched (impersonation) into a role that no
-  // longer permits the current activeView, redirect to a permitted one.
-  useEffect(() => {
-    if (!currentUser) return;
-    const allKeys = NAV_GROUPS.flatMap(g => g.items.map(i => i.key));
-    if (!allKeys.includes(activeView) && allKeys.length > 0) {
-      setActiveView(allKeys[0]);
-    }
-  }, [currentUser?.role, activeView, NAV_GROUPS]);
+  // If after role-filtering the current activeView is no longer in the menu
+  // (e.g. owner impersonated into a manager while sitting on Chain Performance),
+  // fall back to the first allowed view at render-time. No state change needed —
+  // we just pick a different view to render this pass. The user can click the
+  // sidebar to "stick" a different view if they want.
+  const effectiveActiveView = (() => {
+    const allowedKeys = NAV_GROUPS.flatMap(g => g.items.map(i => i.key));
+    if (allowedKeys.length === 0) return activeView;
+    if (allowedKeys.includes(activeView)) return activeView;
+    return allowedKeys[0];
+  })();
 
   const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
@@ -10181,7 +10170,7 @@ export default function App() {
       <div className="flex h-screen bg-slate-950 overflow-hidden">
         {/* Sidebar */}
         <Sidebar
-          navGroups={NAV_GROUPS} activeView={activeView} setActiveView={setActiveView}
+          navGroups={NAV_GROUPS} activeView={effectiveActiveView} setActiveView={setActiveView}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
           actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}
@@ -10208,7 +10197,7 @@ export default function App() {
           {/* Topbar */}
           <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
             <div>
-              <h1 className="text-sm font-bold text-white">{titles[activeView] || activeView}</h1>
+              <h1 className="text-sm font-bold text-white">{titles[effectiveActiveView] || effectiveActiveView}</h1>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
                 <span>{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</span>
                 <span className="text-slate-700">·</span>
@@ -10233,19 +10222,19 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
-            {activeView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
-            {activeView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {activeView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
-            {activeView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {activeView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
-            {activeView === "ops-temps"      && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
-            {activeView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-            {activeView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
-            {activeView === "ops-compliance" && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
-            {activeView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {activeView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-            {activeView === "ops-settings"   && <OpsSettingsView
+            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
+            {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
+            {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
+            {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
+            {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
+            {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
+            {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
+            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} checklists={checklists} tempUnits={tempUnits}
               cleaningTasks={cleaningTasks} opsTeam={opsTeam} shiftPresets={shiftPresets}
               onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist}
@@ -10255,13 +10244,13 @@ export default function App() {
               onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
               currentUser={currentUser}
             />}
-            {activeView === "time-attend"    && <TimeAttendanceView
+            {effectiveActiveView === "time-attend"    && <TimeAttendanceView
               brands={visibleBrands} opsTeam={opsTeam} schedules={schedules}
               punchRecords={punchRecords} currentUser={currentUser}
               onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
               onAddComment={handleAddPunchComment}
             />}
-            {activeView === "admin"          && currentUser.role === "owner" && <AdminPanelView
+            {effectiveActiveView === "admin"          && currentUser.role === "owner" && <AdminPanelView
               brands={brands} users={users} entries={entries}
               stores={stores} flipdishStores={flipdishStores}
               onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand}
@@ -10271,7 +10260,7 @@ export default function App() {
               onBackfillStoreSales={backfillStoreSales}
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
-            {activeView === "comms" && <CommunicationView
+            {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
