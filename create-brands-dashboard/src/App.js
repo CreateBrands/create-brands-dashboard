@@ -4970,24 +4970,22 @@ function OpsTeamMemberFormModal({
   onSave, onClose,
 }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
-  const { user } = useAuth();
 
-  // Stores in scope for the current user.
-  //   - Managers: visibleStoreIds already filters to their assigned stores —
-  //     no extra ownership filter (their scope IS what they can do).
-  //   - Owner/HQ: visibleStoreIds gives them everything (all 24); we further
-  //     restrict to ownership="owned" so they can only place company staff
-  //     at company-owned stores. JV/franchise stores are managed by their
-  //     own teams. If you ever need to add staff to a non-owned store, that's
-  //     a rare exception we'd handle separately.
-  //   - Archived stores are always excluded.
-  const allowedStores = useMemo(() => {
-    let list = (stores || []).filter(s => visibleStoreIds.includes(s.id) && !s.archivedAt);
-    if (isHqOrAbove(user.role)) {
-      list = list.filter(s => s.ownershipModel === "owned");
-    }
-    return list;
-  }, [stores, visibleStoreIds, user.role]);
+  // Stores a manager (or owner/HQ) can assign staff to.
+  //
+  // IMPORTANT: This is intentionally NOT the same as the user's "scope" of
+  // stores they can manage. A manager only manages 2 stores, but a staff
+  // member they're adding might be a floater who works across several owned
+  // stores company-wide. The dropdown therefore shows ALL owned stores
+  // (excluding archived), regardless of who's adding the team member.
+  //
+  // Franchise / joint-venture stores are excluded — those are managed by
+  // their own teams, not company HQ. If you ever need to add staff at a JV
+  // or franchise store, that's a separate workflow.
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
 
   // Initial form. Legacy rows may not have storeIds/roleId/departmentId yet.
   // Show whatever they have; user picks them on first edit.
