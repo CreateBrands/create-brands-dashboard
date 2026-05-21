@@ -1022,11 +1022,21 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 }
 
 // ─── Issues Tracker View ──────────────────────────────────────────────────────
-function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
+function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+
+  const [selStore, setSelStore] = useState("all");
   const [filterStatus, setFilterStatus] = useState("All");
-  const [filterBrand, setFilterBrand] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All");
   const [filterType, setFilterType] = useState("All");
   const [showForm, setShowForm] = useState(false);
@@ -1035,10 +1045,41 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
   const [editIssue, setEditIssue] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
 
+  // Reset selStore if it falls out of scope (ownership change)
+  useEffect(() => {
+    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleStores, selStore]);
+
+  const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
+  const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+
+  // visibleBrands kept for backward-compat with downstream IssueFormModal that
+  // still uses brand chips for issue authorship. Falls out of scope cleanly
+  // when a manager has no brands.
+  const visibleBrands = useMemo(
+    () => brands.filter(b => visibleBrandIds.has(b.id) || isHqOrAbove(user.role) || user.brandIds?.includes(b.id)),
+    [brands, visibleBrandIds, user.role, user.brandIds]
+  );
+
+  // Per the design decision: store managers see only their stores' issues.
+  // Owner/HQ see everything in scope. A row with no storeId (legacy) is
+  // accepted if its brandId matches a brand in the user's store set OR if
+  // the user is HQ/owner.
+  const inScope = (i) => {
+    if (i.storeId) {
+      if (selStore === "all") return inScopeStoreIds.has(i.storeId);
+      return i.storeId === selStore;
+    }
+    // Legacy issue without storeId: brand-level fallback.
+    if (isHqOrAbove(user.role)) return true;
+    return visibleBrandIds.has(i.brandId);
+  };
+
   const visibleIssues = issues.filter(issue => {
-    if (!visibleBrands.some(b => b.id === issue.brandId)) return false;
+    if (!inScope(issue)) return false;
     if (filterStatus !== "All" && issue.status !== filterStatus) return false;
-    if (filterBrand !== "All" && issue.brandId !== filterBrand) return false;
     if (filterPriority !== "All" && issue.priority !== filterPriority) return false;
     if (filterType !== "All" && (issue.type || "Issue") !== filterType) return false;
     return true;
@@ -1048,9 +1089,18 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
     return new Date(b.createdAt) - new Date(a.createdAt);
   });
 
-  const statusCounts = ISSUE_STATUSES.reduce((acc, s) => { acc[s] = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && i.status === s).length; return acc; }, {});
+  const statusCounts = ISSUE_STATUSES.reduce((acc, s) => { acc[s] = issues.filter(i => inScope(i) && i.status === s).length; return acc; }, {});
 
   const filterBtnCls = (active) => `px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-600 hover:bg-slate-700"}`;
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <CheckSquare size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -1091,7 +1141,8 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <LocationDropdown brands={visibleBrands} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
+          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
           <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="w-36">
             <option value="All">All Priorities</option>
             {ISSUE_PRIORITIES.map(p => <option key={p}>{p}</option>)}
@@ -1110,6 +1161,7 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
       <div className="space-y-3">
         {visibleIssues.map(issue => {
           const brand = brands.find(b => b.id === issue.brandId);
+          const store = issue.storeId ? stores?.find(s => s.id === issue.storeId) : null;
           const sc = STATUS_CONFIG[issue.status];
           const pc = PRIORITY_CONFIG[issue.priority];
           const SIcon = sc?.icon || AlertCircle;
@@ -1131,7 +1183,8 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
                         <Badge label={issue.status} color={sc.color} />
                         {brand && (
                           <span className="text-xs text-slate-500 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }} />{brand.name}
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }} />
+                            {brand.name}{store ? ` · ${store.shortName || store.name}` : ""}
                           </span>
                         )}
                       </div>
@@ -2837,21 +2890,49 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
 }
 
 // ─── EOD Form ─────────────────────────────────────────────────────────────────
-function EODFormView({ brands, onAddEntry }) {
+function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+
+  // Sort stores alphabetically (matches your "default to alpha first" decision
+  // for multi-store managers).
+  const sortedStores = useMemo(
+    () => [...visibleStores].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleStores]
+  );
+
   const [zone, setZone] = useState(0);
   const [success, setSuccess] = useState(false);
   const today = new Date().toISOString().split("T")[0];
 
   const [form, setForm] = useState({
-    brandId: visibleBrands[0]?.id || "", date: today, manager: user.name, submittedBy: user.name,
+    storeId: sortedStores[0]?.id || "",
+    date: today, manager: user.name, submittedBy: user.name,
     netSales: "", cardRevenue: "", cashExpected: "", physicalCash: "", varianceJustification: "",
     openingFloat: 200, closingFloat: 200,
     totalOrders: "", atv: "",
     fiveStarReviews: "", midStarReviews: "", oneStarReviews: "",
     laborCost: "", cogsCost: "", totalHours: "", notes: ""
   });
+
+  // If the picked store falls out of scope (ownership change, role change),
+  // reset to the first available store. Avoids submitting against a stale id.
+  useEffect(() => {
+    if (form.storeId && !sortedStores.some(s => s.id === form.storeId)) {
+      setForm(f => ({ ...f, storeId: sortedStores[0]?.id || "" }));
+    } else if (!form.storeId && sortedStores[0]) {
+      setForm(f => ({ ...f, storeId: sortedStores[0].id }));
+    }
+  }, [sortedStores, form.storeId]);
 
   const set = (k, v) => setForm(f => {
     const updated = { ...f, [k]: v };
@@ -2864,7 +2945,8 @@ function EODFormView({ brands, onAddEntry }) {
     return updated;
   });
 
-  const selectedBrand = visibleBrands.find(b => b.id === form.brandId);
+  const selectedStore = sortedStores.find(s => s.id === form.storeId);
+  const selectedBrand = selectedStore ? brands.find(b => b.id === selectedStore.brandId) : null;
   const ns = parseFloat(form.netSales) || 0;
   const lc = parseFloat(form.laborCost) || 0;
   const cc = parseFloat(form.cogsCost) || 0;
@@ -2880,10 +2962,14 @@ function EODFormView({ brands, onAddEntry }) {
 
   const handleSubmit = () => {
     if (zone < 3) { setZone(z => z + 1); return; }
+    if (!selectedStore) { alert("Please pick a store first."); return; }
     if (hasVariance && !form.varianceJustification.trim()) { alert("Please provide a variance justification."); return; }
     const entry = {
-      id: `${form.brandId}-${form.date}-${Date.now()}`,
-      brandId: form.brandId, brandName: selectedBrand?.name || "", date: form.date,
+      id: `${selectedStore.id}-${form.date}-${Date.now()}`,
+      brandId: selectedBrand?.id || selectedStore.brandId,
+      brandName: selectedBrand?.name || "",
+      storeId: selectedStore.id,
+      date: form.date,
       manager: form.manager, submittedBy: form.submittedBy,
       netSales: ns, cardRevenue: parseFloat(form.cardRevenue)||0,
       cashExpected: ce, physicalCash: pc, cashVariance: variance,
@@ -2901,7 +2987,7 @@ function EODFormView({ brands, onAddEntry }) {
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false); setZone(0);
-      setForm({ brandId: visibleBrands[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
+      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
     }, 2500);
   };
 
@@ -2913,11 +2999,31 @@ function EODFormView({ brands, onAddEntry }) {
     </div>
   );
 
+  // No stores in scope at all (manager unassigned, or HQ filter returns 0)
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <FileText size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+        <div className="text-xs text-slate-600 mt-1">Ask an admin to assign you to one or more stores.</div>
+      </div>
+    );
+  }
+
   const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors";
   const labelCls = "text-xs text-slate-600 font-semibold mb-1.5 block";
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      {/* Ownership filter — owner/HQ only; lets them narrow which stores
+          appear in Zone 1's picker. Default is "Owned". */}
+      {isHqOrAbove(user.role) && allVisibleStores.length > 1 && (
+        <div className="flex items-center gap-2">
+          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+          <div className="text-xs text-slate-600">Scope: <strong className="text-slate-300">{sortedStores.length}</strong> store{sortedStores.length === 1 ? "" : "s"}</div>
+        </div>
+      )}
+
       <div className="flex gap-2">
         {zones.map((z,i) => (
           <button key={i} onClick={() => i < zone && setZone(i)}
@@ -2933,16 +3039,21 @@ function EODFormView({ brands, onAddEntry }) {
           <>
             <h2 className="text-base font-bold text-white mb-2">Zone 1 — Identity</h2>
             <div>
-              <div className={labelCls}>Location</div>
+              <div className={labelCls}>Store</div>
               <div className="flex flex-wrap gap-2">
-                {visibleBrands.map(b => (
-                  <button key={b.id} onClick={() => set("brandId",b.id)}
-                    className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.brandId===b.id?"text-white border-transparent":"bg-slate-800 text-slate-600 border-slate-700 hover:bg-slate-700"}`}
-                    style={form.brandId===b.id?{background:b.color}:{}}>
-                    {b.name}
-                  </button>
-                ))}
+                {sortedStores.map(s => {
+                  const b = brands.find(br => br.id === s.brandId);
+                  const showBrand = new Set(sortedStores.map(x => x.brandId)).size > 1;
+                  return (
+                    <button key={s.id} onClick={() => set("storeId", s.id)}
+                      className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.storeId===s.id?"text-white border-transparent":"bg-slate-800 text-slate-600 border-slate-700 hover:bg-slate-700"}`}
+                      style={form.storeId===s.id?{background: b?.color || "#6366f1"}:{}}>
+                      {showBrand && b ? `${b.name} · ` : ""}{s.shortName || s.name}
+                    </button>
+                  );
+                })}
               </div>
+              {sortedStores.length === 0 && <div className="text-xs text-slate-600 mt-2">No stores in current filter. Try changing the ownership filter above.</div>}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e=>set("date",e.target.value)} max={today} className={inputCls}/></div>
@@ -10499,8 +10610,8 @@ export default function App() {
             {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
-            {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={addEntry}/>}
+            {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
