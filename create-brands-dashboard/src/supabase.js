@@ -330,6 +330,7 @@ function appOpsTeamToDb(m) {
     first_name: m.firstName, last_name: m.lastName || "",
     nickname: m.nickname || "", department: m.department || "",
     role: m.role, pin: m.pin || "", color: m.color || "#6366f1",
+    hourly_rate: m.hourlyRate || 0,
     // New store-aware fields. store_ids: text[] — a staff member may work at
     // several stores (the floating-barista case). role_id/department_id are
     // optional references into store_roles/store_departments.
@@ -345,6 +346,7 @@ function dbOpsTeamToApp(m) {
     firstName: m.first_name, lastName: m.last_name,
     nickname: m.nickname || "", department: m.department || "",
     role: m.role, pin: m.pin, color: m.color,
+    hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,
     storeIds: m.store_ids || [],
     roleId: m.role_id || null,
     departmentId: m.department_id || null,

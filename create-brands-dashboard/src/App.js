@@ -4962,42 +4962,269 @@ function CleaningTaskFormModal({ item, onSave, onClose }) {
   );
 }
 
-function OpsTeamMemberFormModal({ item, brands, onSave, onClose }) {
+function OpsTeamMemberFormModal({
+  item, brands,
+  // New: store-driven structure
+  stores = [], visibleStoreIds = [],
+  storeDepartments = [], storeRoles = [],
+  onSave, onClose,
+}) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
+
+  // Stores in scope for the current user. Owner/HQ see everything,
+  // managers see only their assigned stores. visibleStoreIds is passed in
+  // by the parent already filtered. We also drop archived stores.
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+
+  // Initial form. Legacy rows may not have storeIds/roleId/departmentId yet.
+  // Show whatever they have; user picks them on first edit.
+  const initialPrimary = item?.storeIds?.[0] || "";
+  const initialAlsoAt  = (item?.storeIds || []).slice(1);
+
   const [form, setFormState] = useState({
-    firstName:  item?.firstName   || "",
-    lastName:   item?.lastName    || "",
-    nickname:   item?.nickname    || "",
-    role:       item?.role        || "",
-    department: item?.department  || "",
-    brandId:    item?.brandId     || brands[0]?.id || "",
-    pin:        item?.pin         || "",
-    hourlyRate: item?.hourlyRate  || 0,
+    firstName:    item?.firstName    || "",
+    lastName:     item?.lastName     || "",
+    nickname:     item?.nickname     || "",
+    pin:          item?.pin          || "",
+    hourlyRate:   item?.hourlyRate   || 0,
+    primaryStoreId: initialPrimary,
+    alsoStoreIds:   initialAlsoAt,
+    roleId:       item?.roleId       || "",
+    // Legacy free-text fields kept so old rows still render — once a roleId
+    // is picked these become derived from the role/department records.
+    roleText:     item?.role         || "",
+    deptText:     item?.department   || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  // If the primary store changes, clear the role (the role might not exist
+  // under the new store). User can re-pick.
+  const setPrimaryStore = (sid) => {
+    setFormState(f => ({
+      ...f,
+      primaryStoreId: sid,
+      // Drop the also-at stores that don't include this one
+      alsoStoreIds: f.alsoStoreIds.filter(x => x !== sid),
+      roleId: "",
+    }));
+  };
+
+  // Roles available under the selected primary store (excluding archived).
+  const rolesInStore = useMemo(() => {
+    if (!form.primaryStoreId) return [];
+    return storeRoles
+      .filter(r => r.storeId === form.primaryStoreId && !r.archivedAt)
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name));
+  }, [storeRoles, form.primaryStoreId]);
+
+  // Group roles by department for the dropdown, so users can see structure
+  const rolesGrouped = useMemo(() => {
+    const groups = new Map();
+    const unassigned = [];
+    rolesInStore.forEach(r => {
+      if (r.departmentId) {
+        if (!groups.has(r.departmentId)) groups.set(r.departmentId, []);
+        groups.get(r.departmentId).push(r);
+      } else {
+        unassigned.push(r);
+      }
+    });
+    return { groups, unassigned };
+  }, [rolesInStore]);
+
+  // Auto-derive the department from the selected role
+  const selectedRole = rolesInStore.find(r => r.id === form.roleId) || null;
+  const derivedDept = selectedRole?.departmentId
+    ? storeDepartments.find(d => d.id === selectedRole.departmentId)
+    : null;
+
+  // When a role is picked AND it has an hourly rate, suggest it (only if
+  // current value is 0 / empty — don't clobber a manually-entered rate)
+  useEffect(() => {
+    if (selectedRole?.hourlyRate != null && (!form.hourlyRate || Number(form.hourlyRate) === 0)) {
+      setFormState(f => ({ ...f, hourlyRate: selectedRole.hourlyRate }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.roleId]);
+
+  // Stores allowed for the "also works at" multi-select: anything in scope
+  // except the primary.
+  const alsoCandidates = useMemo(
+    () => allowedStores.filter(s => s.id !== form.primaryStoreId),
+    [allowedStores, form.primaryStoreId]
+  );
+  const toggleAlsoStore = (id) => {
+    setFormState(f => ({
+      ...f,
+      alsoStoreIds: f.alsoStoreIds.includes(id)
+        ? f.alsoStoreIds.filter(x => x !== id)
+        : [...f.alsoStoreIds, id],
+    }));
+  };
+
+  const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
+  const storeLabel = (s) => {
+    const b = brands.find(br => br.id === s.brandId);
+    return showBrandPrefix && b ? `${b.name} · ${s.shortName || s.name}` : (s.shortName || s.name);
+  };
+
   const handleSave = () => {
     if (!form.firstName.trim()) return;
-    onSave({ id: item?.id || `ot-${Date.now()}`, ...form, hourlyRate: parseFloat(form.hourlyRate) || 0, color: item?.color || COLORS[Math.floor(Math.random() * COLORS.length)] });
+    if (!form.primaryStoreId)   { alert("Please pick a primary store."); return; }
+    if (rolesInStore.length > 0 && !form.roleId) {
+      alert("Please pick a role. (If this store has no roles defined yet, add one under Ops Setup → Structure first.)");
+      return;
+    }
+
+    // Derive brandId from the primary store so legacy brand-keyed code keeps
+    // working during transition.
+    const primaryStore = allowedStores.find(s => s.id === form.primaryStoreId);
+    const brandId = primaryStore?.brandId || item?.brandId || "";
+
+    // Combine primary + also stores into a single array, primary first.
+    const storeIds = [form.primaryStoreId, ...form.alsoStoreIds.filter(Boolean)];
+
+    onSave({
+      id: item?.id || `ot-${Date.now()}`,
+      firstName: form.firstName.trim(),
+      lastName:  form.lastName.trim(),
+      nickname:  form.nickname.trim(),
+      pin:       form.pin,
+      hourlyRate: parseFloat(form.hourlyRate) || 0,
+      color:     item?.color || COLORS[Math.floor(Math.random() * COLORS.length)],
+      brandId,
+      storeIds,
+      roleId:        selectedRole?.id || null,
+      departmentId:  derivedDept?.id   || null,
+      // Mirror the text fields too — keeps old reports/badges working until
+      // they migrate to FK-based lookups.
+      role:       selectedRole?.name || form.roleText || "",
+      department: derivedDept?.name  || form.deptText || "",
+    });
   };
+
   return (
-    <Modal title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"} onClose={onClose}
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+    <Modal
+      title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"}
+      onClose={onClose}
+      maxW="max-w-lg"
+      footer={
+        <>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button>
+        </>
+      }
+    >
       <div className="space-y-4">
+        {/* Identity */}
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e => set("firstName", e.target.value)} className={inputCls}/></div>
           <div><label className={labelCls}>Last Name</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} className={inputCls}/></div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className={labelCls}>Nickname / Preferred name</label><input value={form.nickname} onChange={e => set("nickname", e.target.value)} placeholder="e.g. Jimmy" className={inputCls}/></div>
-          <div><label className={labelCls}>Department</label><input value={form.department} onChange={e => set("department", e.target.value)} placeholder="e.g. Kitchen, Front of House" className={inputCls}/></div>
+        <div>
+          <label className={labelCls}>Nickname / Preferred name</label>
+          <input value={form.nickname} onChange={e => set("nickname", e.target.value)} placeholder="e.g. Jimmy" className={inputCls}/>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className={labelCls}>Role / Job title</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
-          <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+
+        {/* Store assignment */}
+        <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-3 space-y-3">
+          <div>
+            <label className={labelCls}>Primary Store *</label>
+            {allowedStores.length === 0 ? (
+              <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">
+                No stores in your scope. Ask an admin to assign you to stores first.
+              </div>
+            ) : (
+              <select value={form.primaryStoreId} onChange={e => setPrimaryStore(e.target.value)} className={inputCls}>
+                <option value="">— Pick a store —</option>
+                {allowedStores.map(s => <option key={s.id} value={s.id}>{storeLabel(s)}</option>)}
+              </select>
+            )}
+          </div>
+
+          {form.primaryStoreId && alsoCandidates.length > 0 && (
+            <div>
+              <label className={labelCls}>Also works at (optional)</label>
+              <div className="flex flex-wrap gap-1.5">
+                {alsoCandidates.map(s => {
+                  const checked = form.alsoStoreIds.includes(s.id);
+                  return (
+                    <button
+                      key={s.id} onClick={() => toggleAlsoStore(s.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${checked ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}
+                    >
+                      {checked && <span className="mr-1">✓</span>}{storeLabel(s)}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] text-slate-600 mt-1.5">For staff who cover multiple sites. Primary store is where they're rostered by default.</div>
+            </div>
+          )}
         </div>
+
+        {/* Role + auto-derived department */}
+        {form.primaryStoreId && (
+          <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-3 space-y-3">
+            <div>
+              <label className={labelCls}>Role *</label>
+              {rolesInStore.length === 0 ? (
+                <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">
+                  This store has no roles defined yet. Go to <strong>Ops Setup → Structure</strong> to add some, then come back.
+                </div>
+              ) : (
+                <select value={form.roleId} onChange={e => set("roleId", e.target.value)} className={inputCls}>
+                  <option value="">— Pick a role —</option>
+                  {/* Roles grouped by department */}
+                  {storeDepartments
+                    .filter(d => d.storeId === form.primaryStoreId && !d.archivedAt)
+                    .filter(d => rolesGrouped.groups.has(d.id))
+                    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name))
+                    .map(d => (
+                      <optgroup key={d.id} label={d.name}>
+                        {rolesGrouped.groups.get(d.id).map(r => (
+                          <option key={r.id} value={r.id}>{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)}/hr)` : ""}</option>
+                        ))}
+                      </optgroup>
+                    ))
+                  }
+                  {/* Unassigned-to-department roles */}
+                  {rolesGrouped.unassigned.length > 0 && (
+                    <optgroup label="Other">
+                      {rolesGrouped.unassigned.map(r => (
+                        <option key={r.id} value={r.id}>{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)}/hr)` : ""}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              )}
+            </div>
+            {selectedRole && (
+              <div className="text-xs text-slate-500">
+                Department: <strong className="text-slate-300">{derivedDept?.name || "—"}</strong>
+                {selectedRole.isManagement && <span className="ml-2"><Badge label="Management" color="indigo"/></span>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PIN + rate */}
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>PIN (4–6 digits)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="e.g. 1234" className={inputCls}/></div>
-          <div><label className={labelCls}>Hourly Rate (£)</label><input type="number" step="0.01" min="0" value={form.hourlyRate} onChange={e => set("hourlyRate", e.target.value)} placeholder="e.g. 11.44" className={inputCls}/></div>
+          <div>
+            <label className={labelCls}>Hourly Rate (£)</label>
+            <input type="number" step="0.01" min="0" value={form.hourlyRate} onChange={e => set("hourlyRate", e.target.value)} placeholder="e.g. 11.44" className={inputCls}/>
+            {selectedRole?.hourlyRate != null && Number(form.hourlyRate) !== Number(selectedRole.hourlyRate) && (
+              <div className="text-[10px] text-slate-600 mt-1">
+                Role default: £{selectedRole.hourlyRate.toFixed(2)}/hr
+                {" — "}
+                <button onClick={() => set("hourlyRate", selectedRole.hourlyRate)} className="text-indigo-400 hover:text-indigo-300 underline">use role default</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </Modal>
@@ -5645,12 +5872,27 @@ function OpsSettingsView({
           <div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>
           {opsTeam.map(m => {
             const brand = brands.find(b => b.id === m.brandId);
+            // Prefer the per-store assignment if present; fall back to brand
+            // for legacy rows.
+            const primaryStore = (m.storeIds && m.storeIds[0])
+              ? stores.find(s => s.id === m.storeIds[0])
+              : null;
+            const extraStoreCount = Math.max(0, (m.storeIds || []).length - 1);
+            // Role + department come from FKs if linked, else legacy text
+            const roleLabel = storeRoles.find(r => r.id === m.roleId)?.name || m.role || "";
+            const deptLabel = storeDepartments.find(d => d.id === m.departmentId)?.name || m.department || "";
+            const locationLabel = primaryStore
+              ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}${extraStoreCount > 0 ? ` +${extraStoreCount}` : ""}`
+              : (brand?.name || "");
             return (
               <div key={m.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}</div>
-                  <div className="text-xs text-slate-600">{[m.role, m.department, brand?.name].filter(Boolean).join(" · ")}</div>
+                  <div className="text-xs text-slate-600">{[roleLabel, deptLabel, locationLabel].filter(Boolean).join(" · ")}</div>
+                  {!primaryStore && (m.storeIds?.length || 0) === 0 && (
+                    <div className="text-[10px] text-amber-500 mt-0.5">⚠ Not yet linked to a store — edit to set</div>
+                  )}
                 </div>
                 <div className="flex gap-1.5">
                   <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
@@ -5689,6 +5931,10 @@ function OpsSettingsView({
         <OpsTeamMemberFormModal
           item={tmModal === "new" ? null : tmModal}
           brands={brands}
+          stores={stores}
+          visibleStoreIds={visibleStoreIds}
+          storeDepartments={storeDepartments}
+          storeRoles={storeRoles}
           onSave={item => { tmModal === "new" ? onAddOpsTeam(item) : onUpdateOpsTeam(item); setTmModal(null); }}
           onClose={() => setTmModal(null)}
         />
