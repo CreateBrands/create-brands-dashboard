@@ -4970,14 +4970,24 @@ function OpsTeamMemberFormModal({
   onSave, onClose,
 }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
+  const { user } = useAuth();
 
-  // Stores in scope for the current user. Owner/HQ see everything,
-  // managers see only their assigned stores. visibleStoreIds is passed in
-  // by the parent already filtered. We also drop archived stores.
-  const allowedStores = useMemo(
-    () => (stores || []).filter(s => visibleStoreIds.includes(s.id) && !s.archivedAt),
-    [stores, visibleStoreIds]
-  );
+  // Stores in scope for the current user.
+  //   - Managers: visibleStoreIds already filters to their assigned stores —
+  //     no extra ownership filter (their scope IS what they can do).
+  //   - Owner/HQ: visibleStoreIds gives them everything (all 24); we further
+  //     restrict to ownership="owned" so they can only place company staff
+  //     at company-owned stores. JV/franchise stores are managed by their
+  //     own teams. If you ever need to add staff to a non-owned store, that's
+  //     a rare exception we'd handle separately.
+  //   - Archived stores are always excluded.
+  const allowedStores = useMemo(() => {
+    let list = (stores || []).filter(s => visibleStoreIds.includes(s.id) && !s.archivedAt);
+    if (isHqOrAbove(user.role)) {
+      list = list.filter(s => s.ownershipModel === "owned");
+    }
+    return list;
+  }, [stores, visibleStoreIds, user.role]);
 
   // Initial form. Legacy rows may not have storeIds/roleId/departmentId yet.
   // Show whatever they have; user picks them on first edit.
