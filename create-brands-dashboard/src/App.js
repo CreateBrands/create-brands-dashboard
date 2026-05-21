@@ -5396,22 +5396,52 @@ function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
   );
 }
 
-function CleaningTaskFormModal({ item, onSave, onClose }) {
+function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose }) {
+  // Per-store cleaning tasks. brand_id is derived from the chosen store
+  // so legacy code that filters by brand still works.
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
   const [form, setFormState] = useState({
     name: item?.name || "", area: item?.area || "Kitchen",
     freq: item?.freq || "Daily - Opening",
     assignRole: item?.assignRole || "", notes: item?.notes || "",
+    storeId: item?.storeId || allowedStores[0]?.id || "",
+    brandId: item?.brandId || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
+
   const handleSave = () => {
     if (!form.name.trim()) return;
-    onSave({ id: item?.id || `ct-${Date.now()}`, ...form });
+    if (!form.storeId)     { alert("Please pick a store."); return; }
+    const store = allowedStores.find(s => s.id === form.storeId);
+    onSave({
+      id: item?.id || `ct-${Date.now()}`,
+      ...form,
+      brandId: store?.brandId || form.brandId,
+    });
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "Add Cleaning Task"} onClose={onClose}
       footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
       <div className="space-y-4">
         <div><label className={labelCls}>Task Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
+        <div>
+          <label className={labelCls}>Store *</label>
+          {allowedStores.length === 0 ? (
+            <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">No owned stores available.</div>
+          ) : (
+            <select value={form.storeId} onChange={e => set("storeId", e.target.value)} className={inputCls}>
+              <option value="">— Pick a store —</option>
+              {allowedStores.map(s => {
+                const b = brands.find(br => br.id === s.brandId);
+                return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+              })}
+            </select>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>Area</label><input value={form.area} onChange={e => set("area", e.target.value)} placeholder="Kitchen, FOH…" className={inputCls}/></div>
           <div><label className={labelCls}>Frequency</label><input value={form.freq} onChange={e => set("freq", e.target.value)} placeholder="Daily - Opening…" className={inputCls}/></div>
@@ -5700,20 +5730,49 @@ function OpsTeamMemberFormModal({
   );
 }
 
-function ChecklistSettingsFormModal({ item, onSave, onClose }) {
+function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, onClose }) {
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
   const [name, setName] = useState(item?.name || "");
   const [shift, setShift] = useState(item?.shift || "Opening");
   const [defaultRole, setDefaultRole] = useState(item?.defaultRole || "");
+  const [storeId, setStoreId] = useState(item?.storeId || allowedStores[0]?.id || "");
   const [items, setItems] = useState(item?.items || []);
   const addItem = () => setItems(its => [...its, { id: `ci-${Date.now()}`, text: "", guide: "" }]);
+  const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
+
   const handleSave = () => {
     if (!name.trim()) return;
-    onSave({ id: item?.id || `cl-${Date.now()}`, name: name.trim(), shift, defaultRole, items: items.filter(i => i.text.trim()) });
+    if (!storeId)    { alert("Please pick a store."); return; }
+    const store = allowedStores.find(s => s.id === storeId);
+    onSave({
+      id: item?.id || `cl-${Date.now()}`,
+      name: name.trim(),
+      shift, defaultRole,
+      storeId, brandId: store?.brandId || null,
+      items: items.filter(i => i.text.trim()),
+    });
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "New Checklist"} onClose={onClose} maxW="max-w-2xl"
       footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
       <div className="space-y-4">
+        <div>
+          <label className={labelCls}>Store *</label>
+          {allowedStores.length === 0 ? (
+            <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">No owned stores available.</div>
+          ) : (
+            <select value={storeId} onChange={e => setStoreId(e.target.value)} className={inputCls}>
+              <option value="">— Pick a store —</option>
+              {allowedStores.map(s => {
+                const b = brands.find(br => br.id === s.brandId);
+                return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+              })}
+            </select>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>Name *</label><input value={name} onChange={e => setName(e.target.value)} className={inputCls}/></div>
           <div><label className={labelCls}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} className={inputCls}><option>Opening</option><option>Mid-shift</option><option>Closing</option><option>Any</option></select></div>
@@ -6212,6 +6271,167 @@ function CopyStructureModal({ sources, brands, targetStore, onCopy, onClose }) {
   );
 }
 
+// ─── Per-store Checklists list (used in Ops Setup → Checklists tab) ──────────
+// Same shape as the Structure tab: pick a store, see THAT store's checklists.
+// "All my stores" is intentionally not offered here because the screen is
+// configuration-focused — you create/edit at one store at a time.
+function ChecklistListSection({ brands, stores, visibleStoreIds, checklists, onNew, onEdit, onDelete }) {
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt && s.ownershipModel === "owned"),
+    [stores, visibleStoreIds]
+  );
+  const [storeId, setStoreId] = useState("");
+  useEffect(() => {
+    if (!storeId && allVisibleStores[0]) setStoreId(allVisibleStores[0].id);
+    if (storeId && !allVisibleStores.some(s => s.id === storeId)) setStoreId(allVisibleStores[0]?.id || "");
+  }, [allVisibleStores, storeId]);
+
+  const visible = useMemo(
+    () => checklists.filter(cl => cl.storeId === storeId)
+                    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name)),
+    [checklists, storeId]
+  );
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <CheckSquare size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No owned stores available.</div>
+      </div>
+    );
+  }
+
+  const showBrandPrefix = new Set(allVisibleStores.map(s => s.brandId)).size > 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <select
+          value={storeId}
+          onChange={e => setStoreId(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer min-w-[200px]"
+        >
+          {allVisibleStores.map(s => {
+            const b = brands.find(br => br.id === s.brandId);
+            return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+          })}
+        </select>
+        <button onClick={onNew} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold">
+          <Plus size={14}/> New Checklist
+        </button>
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl">
+          <CheckSquare size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No checklists for this store yet</div>
+          <div className="text-xs text-slate-600 mt-1">Click "New Checklist" to add one.</div>
+        </div>
+      ) : (
+        visible.map(cl => (
+          <div key={cl.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-sm font-bold text-white">{cl.name}</div>
+                <div className="flex gap-2 mt-1.5">
+                  <Badge label={cl.shift} color="slate"/>
+                  {cl.defaultRole && <Badge label={`🎭 ${cl.defaultRole}`} color="violet"/>}
+                  <Badge label={`${cl.items.length} items`} color="slate"/>
+                </div>
+              </div>
+              <div className="flex gap-1.5">
+                <button onClick={() => onEdit(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                <button onClick={() => onDelete(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+              </div>
+            </div>
+            <div className="mt-3 space-y-1">
+              {cl.items.map(it => (
+                <div key={it.id} className="flex items-center gap-2 text-xs text-slate-600"><Check size={10} className="text-slate-600"/>{it.text}</div>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ─── Per-store Cleaning Tasks list (used in Ops Setup → Cleaning tab) ────────
+function CleaningTaskListSection({ brands, stores, visibleStoreIds, cleaningTasks, onNew, onEdit, onDelete }) {
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt && s.ownershipModel === "owned"),
+    [stores, visibleStoreIds]
+  );
+  const [storeId, setStoreId] = useState("");
+  useEffect(() => {
+    if (!storeId && allVisibleStores[0]) setStoreId(allVisibleStores[0].id);
+    if (storeId && !allVisibleStores.some(s => s.id === storeId)) setStoreId(allVisibleStores[0]?.id || "");
+  }, [allVisibleStores, storeId]);
+
+  const visible = useMemo(
+    () => cleaningTasks.filter(t => t.storeId === storeId),
+    [cleaningTasks, storeId]
+  );
+  const areas = useMemo(() => [...new Set(visible.map(t => t.area))].sort(), [visible]);
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <CheckSquare size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No owned stores available.</div>
+      </div>
+    );
+  }
+
+  const showBrandPrefix = new Set(allVisibleStores.map(s => s.brandId)).size > 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <select
+          value={storeId}
+          onChange={e => setStoreId(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer min-w-[200px]"
+        >
+          {allVisibleStores.map(s => {
+            const b = brands.find(br => br.id === s.brandId);
+            return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+          })}
+        </select>
+        <button onClick={onNew} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold">
+          <Plus size={14}/> Add Task
+        </button>
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl">
+          <CheckSquare size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No cleaning tasks for this store yet</div>
+          <div className="text-xs text-slate-600 mt-1">Click "Add Task" to create one.</div>
+        </div>
+      ) : (
+        areas.map(area => (
+          <div key={area} className="space-y-2">
+            <div className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{area}</div>
+            {visible.filter(t => t.area === area).map(t => (
+              <div key={t.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-white">{t.name}</div>
+                  <div className="text-xs text-slate-600">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div>
+                </div>
+                <div className="flex gap-1.5">
+                  <button onClick={() => onEdit(t)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                  <button onClick={() => onDelete(t)} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 function OpsSettingsView({
   brands, stores = [], visibleStoreIds = [],
   storeDepartments = [], storeRoles = [],
@@ -6271,24 +6491,15 @@ function OpsSettingsView({
       )}
 
       {tab === "checklists" && (
-        <div className="space-y-4">
-          <div className="flex justify-end"><button onClick={() => setClModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> New Checklist</button></div>
-          {checklists.map(cl => (
-            <div key={cl.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-sm font-bold text-white">{cl.name}</div>
-                  <div className="flex gap-2 mt-1.5"><Badge label={cl.shift} color="slate"/>{cl.defaultRole && <Badge label={`🎭 ${cl.defaultRole}`} color="violet"/>}<Badge label={`${cl.items.length} items`} color="slate"/></div>
-                </div>
-                <div className="flex gap-1.5">
-                  <button onClick={() => setClModal(cl)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                  <button onClick={() => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
-                </div>
-              </div>
-              <div className="mt-3 space-y-1">{cl.items.map(it => <div key={it.id} className="flex items-center gap-2 text-xs text-slate-600"><Check size={10} className="text-slate-600"/>{it.text}</div>)}</div>
-            </div>
-          ))}
-        </div>
+        <ChecklistListSection
+          brands={brands}
+          stores={stores}
+          visibleStoreIds={visibleStoreIds}
+          checklists={checklists}
+          onNew={() => setClModal("new")}
+          onEdit={cl => setClModal(cl)}
+          onDelete={cl => setDelTarget({ msg: `Delete "${cl.name}"?`, fn: () => onDeleteChecklist(cl.id) })}
+        />
       )}
 
       {tab === "tempunits" && (
@@ -6296,10 +6507,11 @@ function OpsSettingsView({
           <div className="flex justify-end"><button onClick={() => setTuModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Unit</button></div>
           {tempUnits.map(u => {
             const brand = brands.find(b => b.id === u.brandId);
+            const store = u.storeId ? stores.find(s => s.id === u.storeId) : null;
             return (
               <div key={u.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
                 <span className="text-xl">{TEMP_ICON[u.type] || "🌡️"}</span>
-                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{u.name}</div><div className="text-xs text-slate-600">{brand?.name} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div>
+                <div className="flex-1 min-w-0"><div className="text-sm font-bold text-white">{u.name}</div><div className="text-xs text-slate-600">{brand?.name}{store ? ` · ${store.shortName || store.name}` : ""} · {tempLimitText(u)}{u.assignRole ? ` · 🎭 ${u.assignRole}` : ""}</div></div>
                 <div className="flex gap-1.5">
                   <button onClick={() => setTuModal(u)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
                   <button onClick={() => setDelTarget({ msg: `Delete "${u.name}"?`, fn: () => onDeleteTempUnit(u.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
@@ -6311,23 +6523,15 @@ function OpsSettingsView({
       )}
 
       {tab === "cleaning" && (
-        <div className="space-y-4">
-          <div className="flex justify-end"><button onClick={() => setCtModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Task</button></div>
-          {[...new Set(cleaningTasks.map(t => t.area))].sort().map(area => (
-            <div key={area} className="space-y-2">
-              <div className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{area}</div>
-              {cleaningTasks.filter(t => t.area === area).map(t => (
-                <div key={t.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3">
-                  <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-white">{t.name}</div><div className="text-xs text-slate-600">{t.freq}{t.assignRole ? ` · 🎭 ${t.assignRole}` : ""}</div></div>
-                  <div className="flex gap-1.5">
-                    <button onClick={() => setCtModal(t)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                    <button onClick={() => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
+        <CleaningTaskListSection
+          brands={brands}
+          stores={stores}
+          visibleStoreIds={visibleStoreIds}
+          cleaningTasks={cleaningTasks}
+          onNew={() => setCtModal("new")}
+          onEdit={t => setCtModal(t)}
+          onDelete={t => setDelTarget({ msg: `Delete "${t.name}"?`, fn: () => onDeleteCleanTask(t.id) })}
+        />
       )}
 
       {tab === "team" && (
@@ -6377,6 +6581,8 @@ function OpsSettingsView({
       {clModal && (
         <ChecklistSettingsFormModal
           item={clModal === "new" ? null : clModal}
+          brands={brands}
+          stores={stores}
           onSave={item => { clModal === "new" ? onAddChecklist(item) : onUpdateChecklist(item); setClModal(null); }}
           onClose={() => setClModal(null)}
         />
@@ -6393,6 +6599,8 @@ function OpsSettingsView({
       {ctModal && (
         <CleaningTaskFormModal
           item={ctModal === "new" ? null : ctModal}
+          brands={brands}
+          stores={stores}
           onSave={item => { ctModal === "new" ? onAddCleanTask(item) : onUpdateCleanTask(item); setCtModal(null); }}
           onClose={() => setCtModal(null)}
         />
