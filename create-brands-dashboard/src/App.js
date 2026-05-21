@@ -4775,20 +4775,81 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
 }
 
 // ─── Assignments View ─────────────────────────────────────────────────────────
-function AssignmentFormModal({ brands, checklists, tempUnits, cleaningTasks, item, onSave, onClose }) {
-  const [form, setForm] = useState({ brandId: item?.brandId || brands[0]?.id || "", type: item?.type || "checklist", taskId: item?.taskId || "", role: item?.role || "", personId: item?.personId || "", freq: item?.freq || "daily", weekday: item?.weekday || "Monday", date: item?.date || "", customDays: item?.customDays || [], winStart: item?.winStart || "08:00", winEnd: item?.winEnd || "10:00", priority: item?.priority || "normal", notes: item?.notes || "" });
+function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, item, onSave, onClose }) {
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
+
+  const [form, setForm] = useState({
+    storeId: item?.storeId || allowedStores[0]?.id || "",
+    brandId: item?.brandId || "",   // derived from store on save
+    type: item?.type || "checklist",
+    taskId: item?.taskId || "",
+    role: item?.role || "",
+    personId: item?.personId || "",
+    freq: item?.freq || "daily",
+    weekday: item?.weekday || "Monday",
+    date: item?.date || "",
+    customDays: item?.customDays || [],
+    winStart: item?.winStart || "08:00",
+    winEnd: item?.winEnd || "10:00",
+    priority: item?.priority || "normal",
+    notes: item?.notes || "",
+  });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const selectedStore = allowedStores.find(s => s.id === form.storeId);
+
+  // Filter equipment/tasks to the selected store. Checklists + cleaning tasks
+  // are currently chain-wide (no store_id yet) — show all of them. Temp units
+  // now have store_id — filter to the picked store (with fallback for legacy
+  // brand-only rows).
   const taskOptions = () => {
     if (form.type === "checklist") return checklists.map(c => ({ id: c.id, label: `${c.name} (${c.shift})` }));
-    if (form.type === "temp") return tempUnits.filter(t => !t.brandId || t.brandId === form.brandId).map(t => ({ id: t.id, label: t.name }));
+    if (form.type === "temp") {
+      return tempUnits
+        .filter(t => {
+          if (t.storeId) return t.storeId === form.storeId;
+          // Legacy temp unit (no storeId yet): fall back to brand match
+          return !t.brandId || t.brandId === selectedStore?.brandId;
+        })
+        .map(t => ({ id: t.id, label: t.name }));
+    }
     if (form.type === "cleaning") return cleaningTasks.map(t => ({ id: t.id, label: `${t.name} — ${t.area}` }));
     return [{ id: "delivery", label: "Delivery check" }];
   };
+
+  const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
   const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+  const handleSave = () => {
+    if (!form.taskId || !form.role) return;
+    if (!form.storeId) { alert("Please pick a store."); return; }
+    onSave({
+      id: item?.id || `as-${Date.now()}`,
+      ...form,
+      brandId: selectedStore?.brandId || form.brandId,
+    });
+  };
+
   return (
-    <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl" footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.taskId || !form.role) return; onSave({ id: item?.id || `as-${Date.now()}`, ...form }); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+    <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl"
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
       <div className="space-y-4">
-        <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+        <div>
+          <label className={labelCls}>Store *</label>
+          {allowedStores.length === 0 ? (
+            <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">No owned stores available.</div>
+          ) : (
+            <select value={form.storeId} onChange={e => { set("storeId", e.target.value); set("taskId", ""); }} className={inputCls}>
+              <option value="">— Pick a store —</option>
+              {allowedStores.map(s => {
+                const b = brands.find(br => br.id === s.brandId);
+                return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+              })}
+            </select>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Task Type</label><select value={form.type} onChange={e => { set("type", e.target.value); set("taskId", ""); }} className={inputCls}><option value="checklist">Checklist</option><option value="cleaning">Cleaning</option><option value="temp">Temperature</option><option value="delivery">Delivery</option></select></div><div><label className={labelCls}>Task</label><select value={form.taskId} onChange={e => set("taskId", e.target.value)} className={inputCls}><option value="">— Select —</option>{taskOptions().map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Role *</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>
         <div><label className={labelCls}>Frequency</label><select value={form.freq} onChange={e => set("freq", e.target.value)} className={inputCls}><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="weekly">Weekly</option><option value="once">One-off</option><option value="custom">Custom days</option></select></div>
@@ -4802,7 +4863,7 @@ function AssignmentFormModal({ brands, checklists, tempUnits, cleaningTasks, ite
   );
 }
 
-function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningTasks, opsTeam, auditTrail, onAdd, onEdit, onDelete }) {
+function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, cleaningTasks, opsTeam, auditTrail, onAdd, onEdit, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filter, setFilter] = useState("all");
@@ -4850,7 +4911,7 @@ function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningT
           </div>
         );
       })}</div>
-      {showForm && <AssignmentFormModal brands={vb} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
+      {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
       {deleteId && <OpsConfirmModal message="Delete this assignment?" onConfirm={() => onDelete(deleteId)} onClose={() => setDeleteId(null)}/>}
     </div>
   );
@@ -4900,22 +4961,38 @@ function AuditTrailView({ brands, auditTrail, onClear }) {
 // ─── Ops Settings View ────────────────────────────────────────────────────────
 // ─── Ops Settings modals (proper top-level components — no hooks-in-callbacks) ──
 
-function TempUnitFormModal({ item, brands, onSave, onClose }) {
+function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
+  // Same logic as OpsTeamMemberFormModal: temp units are physical equipment
+  // installed at company-owned stores. Franchise/JV stores manage their own.
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
+
   const [form, setFormState] = useState({
     name: item?.name || "", type: item?.type || "fridge",
-    brandId: item?.brandId || brands[0]?.id || "",
+    storeId: item?.storeId || allowedStores[0]?.id || "",
+    brandId: item?.brandId || "",   // legacy fallback; we derive from store on save
     min: item?.min ?? "", max: item?.max ?? "",
     assignRole: item?.assignRole || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
+
   const handleSave = () => {
     if (!form.name.trim()) return;
+    if (!form.storeId)     { alert("Please pick a store."); return; }
+    const store = allowedStores.find(s => s.id === form.storeId);
     onSave({
-      id: item?.id || `tu-${Date.now()}`, ...form,
+      id: item?.id || `tu-${Date.now()}`,
+      ...form,
+      brandId: store?.brandId || form.brandId,  // derived from the selected store
       min: form.min !== "" ? parseFloat(form.min) : null,
       max: form.max !== "" ? parseFloat(form.max) : null,
     });
   };
+
   return (
     <Modal title={item ? `Edit — ${item.name}` : "Add Temp Unit"} onClose={onClose}
       footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
@@ -4923,7 +5000,20 @@ function TempUnitFormModal({ item, brands, onSave, onClose }) {
         <div><label className={labelCls}>Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>Type</label><select value={form.type} onChange={e => set("type", e.target.value)} className={inputCls}><option value="fridge">Fridge 🧊</option><option value="freezer">Freezer ❄️</option><option value="hot">Hot Hold 🔥</option></select></div>
-          <div><label className={labelCls}>Location</label><select value={form.brandId} onChange={e => set("brandId", e.target.value)} className={inputCls}>{brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+          <div>
+            <label className={labelCls}>Store *</label>
+            {allowedStores.length === 0 ? (
+              <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">No owned stores available.</div>
+            ) : (
+              <select value={form.storeId} onChange={e => set("storeId", e.target.value)} className={inputCls}>
+                <option value="">— Pick a store —</option>
+                {allowedStores.map(s => {
+                  const b = brands.find(br => br.id === s.brandId);
+                  return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+                })}
+              </select>
+            )}
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>Min temp (°C)</label><input type="number" step="0.5" value={form.min} onChange={e => set("min", e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div>
@@ -5924,6 +6014,7 @@ function OpsSettingsView({
         <TempUnitFormModal
           item={tuModal === "new" ? null : tuModal}
           brands={brands}
+          stores={stores}
           onSave={item => { tuModal === "new" ? onAddTempUnit(item) : onUpdateTempUnit(item); setTuModal(null); }}
           onClose={() => setTuModal(null)}
         />
@@ -11957,7 +12048,7 @@ export default function App() {
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
