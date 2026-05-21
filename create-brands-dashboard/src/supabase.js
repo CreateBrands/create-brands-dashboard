@@ -433,22 +433,41 @@ export async function removeHelpdeskTicket(id) {
 
 function helpdeskTicketToDb(t) {
   return {
-    id: t.id, brand_id: t.brandId, title: t.title,
-    description: t.description || "", category: t.category || "General",
-    priority: t.priority || "Normal", status: t.status || "Open",
-    created_by_id: t.createdById || "", created_by_name: t.createdByName || "",
-    assigned_to: t.assignedTo || [], comments: t.comments || [],
+    id: t.id,
+    brand_id: t.brandId,
+    store_id: t.storeId || null,   // nullable: chain-wide tickets have no store
+    title: t.title,
+    description: t.description || "",
+    category: t.category || "General",
+    priority: t.priority || "Normal",
+    status: t.status || "Open",
+    created_by_id: t.createdById || "",
+    created_by_name: t.createdByName || "",
+    // We keep `assigned_to` as text[] (matches existing schema) but per Q2
+    // we enforce ONE assignee in practice. Empty array = unassigned (HQ
+    // triage queue). Single-element array = assigned. Multi-element would
+    // work technically but UI never produces it.
+    assigned_to: t.assignedTo || [],
+    comments: t.comments || [],
     updated_at: new Date().toISOString(),
   };
 }
 function dbTicketToHelpdesk(t) {
   return {
-    id: t.id, brandId: t.brand_id, title: t.title,
-    description: t.description, category: t.category,
-    priority: t.priority, status: t.status,
-    createdById: t.created_by_id, createdByName: t.created_by_name,
-    assignedTo: t.assigned_to || [], comments: t.comments || [],
-    createdAt: t.created_at, updatedAt: t.updated_at,
+    id: t.id,
+    brandId: t.brand_id,
+    storeId: t.store_id || null,
+    title: t.title,
+    description: t.description,
+    category: t.category,
+    priority: t.priority,
+    status: t.status,
+    createdById: t.created_by_id,
+    createdByName: t.created_by_name,
+    assignedTo: t.assigned_to || [],
+    comments: t.comments || [],
+    createdAt: t.created_at,
+    updatedAt: t.updated_at,
   };
 }
 

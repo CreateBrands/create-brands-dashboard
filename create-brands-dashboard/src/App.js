@@ -7502,11 +7502,16 @@ function fmtTicketTime(iso) {
 }
 
 // Shared chat panel — used by both manager and employee
-function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStatusChange, onAssignToggle, allPeople, brands }) {
+function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStatusChange, onAssign, onAssignToggle, allPeople, brands, stores = [], canAssign = true }) {
+  // Backward-compat: if a caller still passes onAssignToggle (older code), we
+  // fall through to it. New code should use onAssign with single-assignee
+  // semantics — handler picks a person ID and the modal updates the ticket.
+  const assignHandler = onAssign || onAssignToggle;
   const [body, setBody]         = useState("");
   const [showInfo, setShowInfo] = useState(false);
   const bottomRef               = useRef(null);
   const brand = brands.find(b => b.id === ticket.brandId);
+  const ticketStore = ticket.storeId ? stores.find(s => s.id === ticket.storeId) : null;
   const statusColors = { Open:"#dc2626","In Progress":"#d97706",Pending:"#4f46e5",Resolved:"#059669",Closed:"#475569" };
 
   useEffect(() => {
@@ -7547,7 +7552,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
             <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
             <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority] || "slate"}/>
             <Badge label={ticket.category} color="slate"/>
-            {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+            {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}{ticketStore ? ` · ${ticketStore.shortName || ticketStore.name}` : ""}</span>}
           </div>
         </div>
         {isManager && (
@@ -7668,12 +7673,19 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
             <div>
               <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Assigned To</div>
               <div className="space-y-1 max-h-48 overflow-y-auto">
+                {!canAssign && (
+                  <div className="text-[10px] text-slate-600 italic px-2 py-1">Only Owner/HQ can change assignee.</div>
+                )}
                 {allPeople.map(p => {
-                  const assigned = ticket.assignedTo?.includes(p.name);
+                  // Single-assignee semantics: only the first element of
+                  // assignedTo is the active assignee. We accept legacy rows
+                  // that stored names instead of IDs by checking both.
+                  const assignedId = (ticket.assignedTo || [])[0];
+                  const assigned = assignedId === p.id || assignedId === p.name;
                   return (
-                    <button key={p.id} onClick={() => onAssignToggle(ticket, p.name)}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-500 hover:bg-slate-950"}`}>
-                      <span className="truncate">{p.name}</span>
+                    <button key={p.id} onClick={() => canAssign && assignHandler(ticket, p.id, p.name)} disabled={!canAssign}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-500 hover:bg-slate-950"} ${!canAssign ? "opacity-60 cursor-not-allowed" : ""}`}>
+                      <span className="truncate">{p.name}{p.role ? <span className="text-slate-600 ml-1">({p.role})</span> : ""}</span>
                       {assigned && <Check size={11} className="text-indigo-400 flex-shrink-0"/>}
                     </button>
                   );
@@ -7693,22 +7705,50 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
 }
 
 // New ticket form — used in employee view
-function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
+function NewTicketForm({ brands, stores = [], currentUser, onSubmit, onCancel }) {
   const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
+  // Stores in scope for the user — picks from storeIds (for staff/managers)
+  // or all owned stores (for owner/HQ). Lets them raise a ticket at a
+  // specific store, or leave it as "General/HQ" (no store).
+  const myStores = useMemo(() => {
+    const all = (stores || []).filter(s => !s.archivedAt);
+    if (isHqOrAbove(currentUser?.role)) return all;
+    const ids = currentUser?.storeIds || [];
+    return all.filter(s => ids.includes(s.id));
+  }, [stores, currentUser]);
+  // Default store: first one assigned to user, or "" (general) if no stores
+  const [storeId, setStoreId] = useState(myStores[0]?.id || "");
+  // brandId is derived from storeId when one is picked, otherwise user picks
   const [brandId, setBrandId] = useState(myBrands[0]?.id || "");
   const [form, setFormState]  = useState({ title: "", description: "", category: "General", priority: "Normal" });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+
+  // When store changes, also update brandId to the store's brand
+  const setStoreAndBrand = (sid) => {
+    setStoreId(sid);
+    if (sid) {
+      const s = myStores.find(x => x.id === sid);
+      if (s?.brandId) setBrandId(s.brandId);
+    }
+  };
+
+  const showBrandPrefix = new Set(myStores.map(s => s.brandId)).size > 1;
 
   const handleSubmit = () => {
     if (!form.title.trim()) return;
     const brand = myBrands.find(b => b.id === brandId);
     onSubmit({
-      id: `hd-${Date.now()}`, brandId, brandName: brand?.name || "",
-      ...form, title: form.title.trim(),
+      id: `hd-${Date.now()}`,
+      brandId,
+      brandName: brand?.name || "",
+      storeId: storeId || null,
+      ...form,
+      title: form.title.trim(),
       status: "Open",
       createdById: currentUser.opsTeamMemberId || currentUser.id,
       createdByName: currentUser.name,
-      assignedTo: [], comments: [],
+      assignedTo: [],   // Q1: starts unassigned for HQ triage
+      comments: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -7723,8 +7763,24 @@ function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
         <div className="text-sm font-bold text-white">New Ticket</div>
       </div>
       <div className="flex-1 overflow-y-auto p-5 space-y-4">
-        {myBrands.length > 1 && (
-          <div><label className={labelCls}>Location</label>
+        {/* Store picker — replaces the old brand picker when stores are present.
+            Optional: "General / HQ" lets you raise a ticket with no store. */}
+        {myStores.length > 0 && (
+          <div>
+            <label className={labelCls}>Store</label>
+            <select value={storeId} onChange={e => setStoreAndBrand(e.target.value)} className={inputCls}>
+              <option value="">— General / HQ (no specific store) —</option>
+              {myStores.map(s => {
+                const b = brands.find(br => br.id === s.brandId);
+                return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+              })}
+            </select>
+          </div>
+        )}
+        {/* Brand picker fallback — only shown when no store is picked AND
+            user has multiple brands (rare, mostly HQ/owner). */}
+        {!storeId && myBrands.length > 1 && (
+          <div><label className={labelCls}>Brand</label>
             <LocationDropdown brands={myBrands} value={brandId} onChange={setBrandId} className="w-full"/>
           </div>
         )}
@@ -7760,20 +7816,71 @@ function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
 }
 
 // ── Manager Helpdesk ──────────────────────────────────────────────────────────
-function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onUpdate, onDelete }) {
+function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], tickets, opsTeam, users, currentUser, onUpdate, onDelete }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+
+  // Store scope (same pattern as other views). Used for: which tickets the
+  // user CAN see + which people can be assigned + which stores show in the
+  // ticket location chip.
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleScopedStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const [selStore, setSelStore] = useState("all");
+  useEffect(() => {
+    if (selStore !== "all" && !visibleScopedStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleScopedStores, selStore]);
+  const inScopeStoreIds = useMemo(() => new Set(visibleScopedStores.map(s => s.id)), [visibleScopedStores]);
+  const visibleBrandIds = useMemo(() => new Set(visibleScopedStores.map(s => s.brandId)), [visibleScopedStores]);
+  const canAssign = isHqOrAbove(user.role);   // Q6 — only owner/HQ can assign
+
+  // ── Bucket filter (replaces "see everything" mental model) ────────────────
+  // - mine:        tickets assigned to me (default for managers)
+  // - unassigned:  tickets with no assignee (HQ triage queue)
+  // - all:         everything in scope (HQ overview, managers can flip to it)
+  const defaultBucket = canAssign ? "unassigned" : "mine";
+  const [bucket, setBucket] = useState(defaultBucket);
+
   const [filterStatus,   setFilterStatus]   = useState("all");
-  const [filterBrand,    setFilterBrand]    = useState("all");
   const [filterPriority, setFilterPriority] = useState("all");
   const [search,         setSearch]         = useState("");
   const [activeTicket,   setActiveTicket]   = useState(null);
   const [mobileShowChat, setMobileShowChat] = useState(false);
 
-  const allPeople = [
-    ...users.filter(u => u.role !== "employee").map(u => ({ id: u.id, name: u.name, role: u.role })),
-    ...opsTeam.map(m => ({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), role: m.role })),
-  ];
+  // Assignment candidates: anyone in the org. We label each with role so HQ
+  // can pick "Aishwarya (Manager)". Excludes archived stores' employees.
+  // For Q7: anyone can raise; for assignment we limit to internal staff.
+  const allPeople = useMemo(() => {
+    const internalUsers = users
+      .filter(u => u.role !== "employee")
+      .map(u => ({ id: u.id, name: u.name, role: u.role, kind: "user" }));
+    const opsMembers = opsTeam.map(m => ({
+      id: m.id,
+      name: `${m.firstName} ${m.lastName}`.trim(),
+      role: m.role || "Staff",
+      kind: "ops",
+    }));
+    return [...internalUsers, ...opsMembers];
+  }, [users, opsTeam]);
+
+  // Scope predicate. Store-keyed tickets match by storeId; legacy
+  // brand-keyed (storeId NULL) match by brand membership. Tickets with
+  // NULL both are visible to owner/HQ as "general/HQ" tickets.
+  const inScope = (t) => {
+    if (t.storeId) {
+      if (selStore === "all") return inScopeStoreIds.has(t.storeId);
+      return t.storeId === selStore;
+    }
+    if (isHqOrAbove(user.role)) return true;                  // owner/HQ see general/HQ
+    return t.brandId && visibleBrandIds.has(t.brandId);       // managers: brand fallback
+  };
 
   // Keep active ticket in sync with live state — no refresh needed
   useEffect(() => {
@@ -7783,13 +7890,22 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
     }
   }, [tickets]);
 
+  // Visible list = scope ∩ bucket ∩ status/priority/search.
+  const myId = currentUser?.id;
+  const myOpsId = currentUser?.opsTeamMemberId || currentUser?.id;
+  const isAssignedToMe = (t) => {
+    const a = t.assignedTo || [];
+    return a.includes(myId) || a.includes(myOpsId) || a.includes(currentUser?.name);
+  };
+
   const visible = tickets.filter(t => {
-    if (!vb.some(b => b.id === t.brandId)) return false;
-    if (filterStatus !== "all" && t.status !== filterStatus) return false;
-    if (filterBrand  !== "all" && t.brandId !== filterBrand) return false;
-    if (filterPriority !== "all" && t.priority !== filterPriority) return false;
+    if (!inScope(t)) return false;
+    if (bucket === "mine"       && !isAssignedToMe(t))                  return false;
+    if (bucket === "unassigned" && (t.assignedTo || []).length > 0)     return false;
+    if (filterStatus   !== "all" && t.status   !== filterStatus)        return false;
+    if (filterPriority !== "all" && t.priority !== filterPriority)      return false;
     if (search && !t.title.toLowerCase().includes(search.toLowerCase()) &&
-        !t.createdByName.toLowerCase().includes(search.toLowerCase())) return false;
+        !t.createdByName.toLowerCase().includes(search.toLowerCase()))  return false;
     return true;
   }).sort((a, b) => {
     const prio = { Urgent:0, High:1, Normal:2, Low:3 };
@@ -7797,6 +7913,17 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
     if (b.status === "Closed" && a.status !== "Closed") return -1;
     return (prio[a.priority] - prio[b.priority]) || new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt);
   });
+
+  // Counts for the bucket strip — computed against scope (NOT bucket itself).
+  const scopeTickets = useMemo(() => tickets.filter(inScope), [tickets, inScope]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const bucketCounts = useMemo(() => ({
+    mine:       scopeTickets.filter(isAssignedToMe).length,
+    unassigned: scopeTickets.filter(t => (t.assignedTo || []).length === 0).length,
+    all:        scopeTickets.length,
+  }), [scopeTickets, currentUser?.id]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleSendComment = (ticket, comment) => {
     const updated = { ...ticket, comments: [...(ticket.comments||[]), comment], updatedAt: new Date().toISOString() };
@@ -7806,20 +7933,57 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
     const updated = { ...ticket, status, updatedAt: new Date().toISOString() };
     onUpdate(updated); setActiveTicket(updated);
   };
-  const handleAssignToggle = (ticket, name) => {
-    const assignedTo = ticket.assignedTo?.includes(name)
-      ? ticket.assignedTo.filter(n => n !== name)
-      : [...(ticket.assignedTo||[]), name];
-    const updated = { ...ticket, assignedTo, updatedAt: new Date().toISOString() };
-    onUpdate(updated); setActiveTicket(updated);
+  // Single-assignee assignment (Q2). Clicking a person SETS them as the sole
+  // assignee. Clicking the current assignee unassigns. Reassignment generates
+  // an audit comment (Q4).
+  const handleAssign = (ticket, personId, personName) => {
+    if (!canAssign) return;
+    const wasAssigned = (ticket.assignedTo || [])[0];
+    let newAssignment;
+    let auditText;
+    if (wasAssigned === personId) {
+      newAssignment = [];
+      auditText = `Unassigned (was ${personName}) — by ${currentUser?.name || "system"}`;
+    } else {
+      newAssignment = [personId];
+      const wasPerson = allPeople.find(p => p.id === wasAssigned);
+      auditText = wasAssigned
+        ? `Reassigned from ${wasPerson?.name || "previous"} to ${personName} — by ${currentUser?.name || "system"}`
+        : `Assigned to ${personName} — by ${currentUser?.name || "system"}`;
+    }
+    const auditComment = {
+      id: `c-${Date.now()}`,
+      author: "System",
+      text: auditText,
+      isSystem: true,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = {
+      ...ticket,
+      assignedTo: newAssignment,
+      comments: [...(ticket.comments || []), auditComment],
+      updatedAt: new Date().toISOString(),
+    };
+    onUpdate(updated);
+    setActiveTicket(updated);
   };
 
+  // ── UI ────────────────────────────────────────────────────────────────────
+
   const counts = HELPDESK_STATUSES.reduce((acc, s) => {
-    acc[s] = tickets.filter(t => vb.some(b => b.id === t.brandId) && t.status === s).length;
+    acc[s] = scopeTickets.filter(t => t.status === s).length;
     return acc;
   }, {});
-
   const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <LifeBuoy size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60/80 bg-slate-950">
@@ -7835,11 +7999,28 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
               ))}
             </div>
           </div>
+          {/* Bucket selector — the main navigation */}
+          <div className="flex gap-1 bg-slate-950 rounded-xl p-1">
+            {[
+              { key:"mine",       label:"My queue",   count:bucketCounts.mine },
+              ...(canAssign ? [{ key:"unassigned", label:"Unassigned", count:bucketCounts.unassigned }] : []),
+              { key:"all",        label:"All",        count:bucketCounts.all },
+            ].map(b => (
+              <button key={b.key} onClick={() => setBucket(b.key)}
+                className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${bucket === b.key ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
+                {b.label}
+                <span className={`px-1.5 rounded-full text-[10px] ${bucket === b.key ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-500"}`}>{b.count}</span>
+              </button>
+            ))}
+          </div>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
             className="w-full bg-slate-950 border border-slate-700/50 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
-          <div className="flex gap-2">
-            <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="flex-1"/>
-            <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="flex-1">
+          <div className="flex gap-2 flex-wrap">
+            {isHqOrAbove(user.role) && (
+              <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="flex-1 min-w-[120px]"/>
+            )}
+            <StoreScopeDropdown stores={visibleScopedStores} brands={brands} value={selStore} onChange={setSelStore} className="flex-1 min-w-[140px]"/>
+            <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="flex-1 min-w-[100px]">
               <option value="all">All Priorities</option>
               {HELPDESK_PRIORITIES.map(p => <option key={p}>{p}</option>)}
             </SelectDropdown>
@@ -7859,13 +8040,17 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
           {visible.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
               <LifeBuoy size={28} className="mb-2 text-slate-700"/>
-              <div className="text-sm font-semibold text-center">No tickets found</div>
+              <div className="text-sm font-semibold text-center">No tickets in this view</div>
+              {bucket === "unassigned" && <div className="text-xs text-slate-700 mt-1 text-center">Triage queue empty</div>}
+              {bucket === "mine"       && <div className="text-xs text-slate-700 mt-1 text-center">Nothing assigned to you</div>}
             </div>
           )}
           {visible.map(ticket => {
             const isActive = activeTicket?.id === ticket.id;
             const brand = brands.find(b => b.id === ticket.brandId);
+            const store = ticket.storeId ? stores.find(s => s.id === ticket.storeId) : null;
             const lastComment = ticket.comments?.[ticket.comments.length-1];
+            const assignedPerson = allPeople.find(p => p.id === (ticket.assignedTo || [])[0]);
             return (
               <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setMobileShowChat(true); }}
                 className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
@@ -7875,9 +8060,12 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
                     <div className="text-sm font-semibold text-white truncate">{ticket.title}</div>
                     <div className="text-xs text-slate-600 flex-shrink-0">{fmtTicketTime(ticket.updatedAt||ticket.createdAt)}</div>
                   </div>
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <Badge label={ticket.priority} color={HD_PRIORITY_COLOR[ticket.priority]||"slate"}/>
-                    {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+                    {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}{store ? ` · ${store.shortName || store.name}` : ""}</span>}
+                    {(ticket.assignedTo || []).length === 0
+                      ? <Badge label="Unassigned" color="amber"/>
+                      : assignedPerson && <span className="text-xs text-indigo-300">→ {assignedPerson.name}</span>}
                   </div>
                   <div className="text-xs text-slate-500 truncate">
                     {lastComment ? `${lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
@@ -7905,9 +8093,12 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
               <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
               <span className="text-xs text-slate-600">Back to tickets</span>
             </div>
-            <TicketChatPanel ticket={activeTicket} currentUser={currentUser}
+            <TicketChatPanel
+              ticket={activeTicket} currentUser={currentUser}
               onSendComment={handleSendComment} onStatusChange={handleStatusChange}
-              onAssignToggle={handleAssignToggle} allPeople={allPeople} brands={brands} isManager={true}/>
+              onAssign={handleAssign} allPeople={allPeople} brands={brands} stores={stores}
+              isManager={true} canAssign={canAssign}
+            />
           </>
         )}
       </div>
@@ -7916,18 +8107,35 @@ function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onU
 }
 
 // ── Employee Helpdesk ─────────────────────────────────────────────────────────
-function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate }) {
+function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd, onUpdate }) {
   const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
   const [activeTicket,   setActiveTicket]   = useState(null);
   const [showNewForm,    setShowNewForm]    = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
+  const [bucket,         setBucket]         = useState("mine");   // "mine" | "assigned"
 
-  const myId = currentUser.opsTeamMemberId || currentUser.id;
-  const myTickets = tickets
-    .filter(t => t.createdById === myId && t.status !== "Closed")
-    .sort((a, b) => new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
+  const myId    = currentUser.opsTeamMemberId || currentUser.id;
+  const myAltId = currentUser.id;
 
-  // KEY FIX: sync activeTicket with live tickets prop → no manual refresh needed
+  // Tickets I raised
+  const raisedByMe = tickets
+    .filter(t => t.createdById === myId || t.createdById === myAltId)
+    .filter(t => t.status !== "Closed");
+
+  // Tickets assigned to me (single-assignee — check first element; also
+  // tolerate legacy rows that stored names)
+  const assignedToMe = tickets.filter(t => {
+    const first = (t.assignedTo || [])[0];
+    if (!first) return false;
+    return first === myId || first === myAltId || first === currentUser.name;
+  }).filter(t => t.status !== "Closed");
+
+  const sortByRecent = arr => arr.slice().sort((a, b) =>
+    new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+
+  const myTickets = bucket === "mine" ? sortByRecent(raisedByMe) : sortByRecent(assignedToMe);
+
+  // Sync activeTicket with live tickets prop
   useEffect(() => {
     if (activeTicket) {
       const fresh = tickets.find(t => t.id === activeTicket.id);
@@ -7950,7 +8158,7 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
       <div className={`flex flex-col border-r border-slate-800/60/80 bg-slate-900 flex-shrink-0 w-full lg:w-72 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/60/80">
           <div>
-            <div className="text-sm font-bold text-white">My Tickets</div>
+            <div className="text-sm font-bold text-white">Help Desk</div>
             {myTickets.length > 0 && <div className="text-xs text-slate-500">{myTickets.length} open</div>}
           </div>
           <button onClick={() => { setShowNewForm(true); setActiveTicket(null); setMobileShowChat(true); }}
@@ -7958,12 +8166,25 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
             <Plus size={17} className="text-white"/>
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto">
+        {/* Bucket: My raised tickets vs Tickets assigned to me */}
+        <div className="flex gap-1 bg-slate-950 mx-4 mt-3 rounded-xl p-1">
+          <button onClick={() => { setBucket("mine"); setActiveTicket(null); }}
+            className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${bucket === "mine" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
+            Raised by me
+            <span className={`px-1.5 rounded-full text-[10px] ${bucket === "mine" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-500"}`}>{raisedByMe.length}</span>
+          </button>
+          <button onClick={() => { setBucket("assigned"); setActiveTicket(null); }}
+            className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${bucket === "assigned" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
+            Assigned to me
+            <span className={`px-1.5 rounded-full text-[10px] ${bucket === "assigned" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-500"}`}>{assignedToMe.length}</span>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto mt-3">
           {myTickets.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4">
               <LifeBuoy size={28} className="mb-2 text-slate-700"/>
-              <div className="text-sm font-semibold text-center">No open tickets</div>
-              <div className="text-xs text-slate-700 text-center mt-1">Tap + to raise one</div>
+              <div className="text-sm font-semibold text-center">{bucket === "mine" ? "No open tickets" : "Nothing assigned to you"}</div>
+              {bucket === "mine" && <div className="text-xs text-slate-700 text-center mt-1">Tap + to raise one</div>}
             </div>
           )}
           {myTickets.map(ticket => {
@@ -7995,7 +8216,7 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
       {/* Right panel */}
       <div className={`flex-1 flex flex-col min-w-0 ${!mobileShowChat ? "hidden lg:flex" : "flex"}`}>
         {showNewForm ? (
-          <NewTicketForm brands={myBrands} currentUser={currentUser}
+          <NewTicketForm brands={brands} stores={stores} currentUser={currentUser}
             onSubmit={ticket => { onAdd(ticket); setShowNewForm(false); }}
             onCancel={() => { setShowNewForm(false); setMobileShowChat(false); }}/>
         ) : activeTicket ? (
@@ -8005,8 +8226,8 @@ function EmployeeHelpdeskView({ brands, tickets, currentUser, onAdd, onUpdate })
               <span className="text-xs text-slate-600">Back to my tickets</span>
             </div>
             <TicketChatPanel ticket={activeTicket} currentUser={currentUser}
-              onSendComment={handleSendComment} onStatusChange={() => {}} onAssignToggle={() => {}}
-              allPeople={[]} brands={brands} isManager={false}/>
+              onSendComment={handleSendComment} onStatusChange={() => {}} onAssign={() => {}}
+              allPeople={[]} brands={brands} stores={stores} isManager={false} canAssign={false}/>
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-3">
@@ -8595,8 +8816,8 @@ function CommunicationView({
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "helpdesk" && (
           isEmployee
-            ? <EmployeeHelpdeskView brands={brands} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
-            : <HelpdeskManagerView  brands={brands} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
+            ? <EmployeeHelpdeskView brands={brands} stores={stores} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
+            : <HelpdeskManagerView  brands={brands} stores={stores} visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
         )}
         {tab === "chat" && (
           <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead}/>
