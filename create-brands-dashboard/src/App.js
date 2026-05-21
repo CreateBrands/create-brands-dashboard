@@ -403,6 +403,43 @@ function StoreScopeDropdown({ stores, brands, value, onChange, className = "" })
   );
 }
 
+// Ownership filter — owner/HQ only. Lets the user narrow operational views
+// to just the stores they have direct control over (owned), exclude franchises,
+// etc. Default is "owned" because that's what HQ cares about day-to-day.
+// Managers never see this — their store_ids list is already the right scope.
+//
+// Returns null when the role isn't owner/HQ, or when there's nothing to filter
+// (single-ownership-type set, e.g. all 24 stores are franchise = no point).
+function OwnershipFilterDropdown({ stores, value, onChange, role, className = "" }) {
+  if (!isHqOrAbove(role)) return null;
+  if (!stores || stores.length === 0) return null;
+  const counts = stores.reduce((m, s) => {
+    const k = s.ownershipModel || "other";
+    m[k] = (m[k] || 0) + 1;
+    return m;
+  }, {});
+  const types = Object.keys(counts);
+  // No useful filter when there's only one ownership type in scope
+  if (types.length <= 1) return null;
+  return (
+    <SelectDropdown value={value} onChange={onChange} className={className}>
+      <option value="owned">Owned ({counts.owned || 0})</option>
+      <option value="joint_venture">Joint Venture ({counts.joint_venture || 0})</option>
+      <option value="franchise">Franchise ({counts.franchise || 0})</option>
+      <option value="all">All ownership ({stores.length})</option>
+    </SelectDropdown>
+  );
+}
+
+// applyOwnershipFilter — used by views to narrow visibleStores by the
+// ownership filter. Returns stores unchanged when filter === "all" or when
+// the user isn't owner/HQ (managers' scope is already correct).
+function applyOwnershipFilter(stores, ownership, role) {
+  if (!isHqOrAbove(role)) return stores;
+  if (ownership === "all") return stores;
+  return stores.filter(s => (s.ownershipModel || "") === ownership);
+}
+
 // Period dropdown — collapses all the preset buttons into one <select>
 function PeriodFilterBar({ preset, onPreset, customFrom, customTo, onCustomFrom, onCustomTo }) {
   const presets = [
@@ -3932,9 +3969,17 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   // visibleStores = the stores this user can see (already filtered upstream
   // via visibleStoreIds passed from App). For owner/HQ this is every active
   // store; for managers it's just their assigned stores.
-  const visibleStores = useMemo(
+  const allVisibleStores = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
+  );
+
+  // Ownership filter — applied on top of allVisibleStores. Default to "owned"
+  // for owner/HQ (the day-to-day operational subset). No-op for managers.
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
   );
 
   // The visible brands set follows from the stores in scope. We also
@@ -3948,14 +3993,24 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   const [selStore, setSelStore] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
 
-  // Active assignments today, scoped to either the chosen store or all stores
-  // the user can see. Backward-compat: a row with no storeId falls back to a
-  // brandId match against the brands implied by visibleStores.
+  // If the chosen store falls out of scope (e.g. ownership filter narrows
+  // and removes it), reset to "all" so we don't show a stale empty state.
+  useEffect(() => {
+    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleStores, selStore]);
+
+  // Set of store ids in active scope — used for "all my stores" matching.
+  const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
   const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+
+  // Active assignments today, scoped to either the chosen store or all stores
+  // currently in scope. Backward-compat: a row with no storeId falls back to
+  // a brandId match against the brands implied by visibleStores.
   const inScope = (a) => {
     if (a.storeId) {
-      // Store-scoped row: must match the chosen store, OR be in scope when "all"
-      if (selStore === "all") return visibleStoreIds.includes(a.storeId);
+      if (selStore === "all") return inScopeStoreIds.has(a.storeId);
       return a.storeId === selStore;
     }
     // Legacy row without storeId: fall back to brand match. Only relevant
@@ -3975,7 +4030,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 
   // Empty-state when the user has no assigned stores (only managers/staff
   // can hit this — owner/HQ always have all stores in scope).
-  if (visibleStores.length === 0) {
+  if (allVisibleStores.length === 0) {
     return (
       <div className="space-y-6">
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
@@ -3989,7 +4044,10 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 
   return (
     <div className="space-y-6">
-      <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+      <div className="flex flex-wrap items-center gap-2">
+        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+        <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+      </div>
       {overdue.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
       {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments {selStore === "all" ? "across your stores" : "for this store"} today</div></div>}
       <div className="space-y-3">
@@ -4052,30 +4110,83 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 }
 
 // ─── Temperature Log ──────────────────────────────────────────────────────────
-function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
+function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, onLog }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
+
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const [selStore, setSelStore] = useState("all");
+
+  // Reset selStore if it falls out of scope after ownership change
+  useEffect(() => {
+    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleStores, selStore]);
+
+  const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
+  const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+
+  const inScope = (row) => {
+    if (row.storeId) {
+      if (selStore === "all") return inScopeStoreIds.has(row.storeId);
+      return row.storeId === selStore;
+    }
+    return visibleBrandIds.has(row.brandId);
+  };
+
+  const scopedUnits = (tempUnits || []).filter(inScope);
+  const scopedLogs  = (tempLogs  || []).filter(l => inScope(l) && l.date === getTodayStr());
+  const getLatest = unitId => scopedLogs.filter(l => l.unitId === unitId).sort((a,b) => b.time.localeCompare(a.time))[0];
+
+  // For inserts: when "all", default to first store with units; otherwise use selected
+  const writeStoreId = selStore !== "all"
+    ? selStore
+    : (scopedUnits[0]?.storeId || visibleStores[0]?.id || null);
+  const writeBrandId = writeStoreId
+    ? (visibleStores.find(s => s.id === writeStoreId)?.brandId || null)
+    : null;
+
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ unitId: "", value: "", notes: "", time: nowTimeStr() });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const brandUnits = tempUnits.filter(u => u.brandId === selBrand);
-  const todayLogs = tempLogs.filter(l => l.brandId === selBrand && l.date === getTodayStr());
-  const getLatest = unitId => todayLogs.filter(l => l.unitId === unitId).sort((a,b) => b.time.localeCompare(a.time))[0];
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <Thermometer size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
-        <button onClick={() => { setForm({ unitId: brandUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+        </div>
+        <button onClick={() => { setForm({ unitId: scopedUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {brandUnits.map(unit => {
+        {scopedUnits.map(unit => {
           const latest = getLatest(unit.id);
           const ok = latest ? checkTemp(unit, latest.value) : null;
+          const storeBadge = selStore === "all" && unit.storeId
+            ? (stores.find(s => s.id === unit.storeId)?.shortName || null)
+            : null;
           return (
             <div key={unit.id} className={`rounded-2xl border p-4 ${latest && !ok ? "bg-red-950/20 border-red-500/30" : latest && ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-slate-900 border-slate-700"}`}>
               <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2"><span className="text-lg">{TEMP_ICON[unit.type] || "🌡️"}</span><div><div className="text-sm font-bold text-white">{unit.name}</div><div className="text-xs text-slate-500">{tempLimitText(unit)}</div></div></div>
+                <div className="flex items-center gap-2"><span className="text-lg">{TEMP_ICON[unit.type] || "🌡️"}</span><div><div className="text-sm font-bold text-white">{unit.name}{storeBadge && <span className="ml-2 text-xs font-normal text-slate-500">· {storeBadge}</span>}</div><div className="text-xs text-slate-500">{tempLimitText(unit)}</div></div></div>
                 {latest && (ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ BREACH" color="red"/>)}
               </div>
               {latest ? <div className="text-2xl font-bold mb-1" style={{ color: ok ? "#10b981" : "#ef4444" }}>{latest.value}°C</div> : <div className="text-xl font-bold text-slate-600 mb-1">No reading</div>}
@@ -4083,15 +4194,15 @@ function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
             </div>
           );
         })}
-        {brandUnits.length === 0 && <div className="col-span-3 flex flex-col items-center justify-center py-12 text-slate-500"><Thermometer size={28} className="mb-2 text-slate-700"/><div className="text-sm">No temperature units for this location</div><div className="text-xs mt-1">Add units in Ops Settings</div></div>}
+        {scopedUnits.length === 0 && <div className="col-span-3 flex flex-col items-center justify-center py-12 text-slate-500"><Thermometer size={28} className="mb-2 text-slate-700"/><div className="text-sm">No temperature units {selStore === "all" ? "across your stores" : "for this store"}</div><div className="text-xs mt-1">Add units in Ops Settings</div></div>}
       </div>
-      {todayLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>)}</tr></thead><tbody>{[...todayLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-800/60"><td className="px-3 py-2 text-slate-700">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-600 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-600">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
+      {scopedLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>)}</tr></thead><tbody>{[...scopedLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-800/60"><td className="px-3 py-2 text-slate-700">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-600 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-600">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
       {showForm && (
-        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = brandUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: selBrand, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
+        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = scopedUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: unit?.brandId || writeBrandId, storeId: unit?.storeId || writeStoreId, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
           <div className="space-y-4">
-            <div><label className={labelCls}>Unit</label><select value={form.unitId} onChange={e => set("unitId", e.target.value)} className={inputCls}>{brandUnits.map(u => <option key={u.id} value={u.id}>{u.name} ({u.type})</option>)}</select></div>
+            <div><label className={labelCls}>Unit</label><select value={form.unitId} onChange={e => set("unitId", e.target.value)} className={inputCls}>{scopedUnits.map(u => { const sn = stores?.find(s => s.id === u.storeId)?.shortName; return <option key={u.id} value={u.id}>{u.name}{sn ? ` · ${sn}` : ""} ({u.type})</option>; })}</select></div>
             <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Temperature (°C)</label><input type="number" step="0.1" value={form.value} onChange={e => set("value", e.target.value)} placeholder="e.g. 4.5" className={inputCls}/></div><div><label className={labelCls}>Time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div></div>
-            {form.unitId && form.value !== "" && (() => { const unit = brandUnits.find(u => u.id === form.unitId); const ok = unit ? checkTemp(unit, form.value) : true; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-red-950/20 border-red-500/30"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-400" : "text-red-400"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{unit && <div className="text-xs text-slate-600 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
+            {form.unitId && form.value !== "" && (() => { const unit = scopedUnits.find(u => u.id === form.unitId); const ok = unit ? checkTemp(unit, form.value) : true; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-red-950/20 border-red-500/30"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-400" : "text-red-400"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{unit && <div className="text-xs text-slate-600 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
             <div><label className={labelCls}>Notes</label><input value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Any observations…" className={inputCls}/></div>
           </div>
         </Modal>
@@ -4101,25 +4212,80 @@ function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
 }
 
 // ─── Deliveries View ──────────────────────────────────────────────────────────
-function DeliveriesView({ brands, deliveries, onAdd }) {
+function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
+
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const [selStore, setSelStore] = useState("all");
+
+  useEffect(() => {
+    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleStores, selStore]);
+
+  const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
+  const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+
+  const inScope = (d) => {
+    if (d.storeId) {
+      if (selStore === "all") return inScopeStoreIds.has(d.storeId);
+      return d.storeId === selStore;
+    }
+    return visibleBrandIds.has(d.brandId);
+  };
+
+  const scopedDeliveries = (deliveries || [])
+    .filter(inScope)
+    .sort((a, b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
+
+  // For new inserts: if a specific store is selected use it; otherwise default
+  // to the first store in the user's filtered list.
+  const writeStoreId = selStore !== "all" ? selStore : (visibleStores[0]?.id || null);
+  const writeStore   = writeStoreId ? visibleStores.find(s => s.id === writeStoreId) : null;
+  const writeBrandId = writeStore?.brandId || null;
+
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const brandDeliveries = deliveries.filter(d => d.brandId === selBrand).sort((a,b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <Truck size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
+        <div className="flex flex-wrap items-center gap-2">
+          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+        </div>
         <button onClick={() => { setForm({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Delivery</button>
       </div>
-      {brandDeliveries.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Truck size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No deliveries logged</div></div>}
-      <div className="space-y-3">{brandDeliveries.map(d => <div key={d.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-4"><div className="text-sm font-bold text-white">{d.supplier}</div><div className="text-xs text-slate-600 mt-0.5">{d.items}</div><div className="flex gap-2 mt-2 flex-wrap"><Badge label={d.date} color="slate"/><Badge label={d.time} color="slate"/>{d.temp && <Badge label={`${d.temp}°C`} color={d.tempOk === "yes" ? "green" : "red"}/>}<Badge label={d.condition === "good" ? "✓ Good" : `⚠ ${d.condition}`} color={d.condition === "good" ? "green" : "amber"}/><Badge label={`By ${d.loggedBy}`} color="slate"/></div>{d.notes && <div className="text-xs text-slate-500 mt-1.5 italic">{d.notes}</div>}</div>)}</div>
+      {scopedDeliveries.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Truck size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No deliveries logged {selStore === "all" ? "across your stores" : "for this store"}</div></div>}
+      <div className="space-y-3">{scopedDeliveries.map(d => {
+        const storeBadge = selStore === "all" && d.storeId
+          ? (stores.find(s => s.id === d.storeId)?.shortName || null)
+          : null;
+        return <div key={d.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-4"><div className="text-sm font-bold text-white">{d.supplier}{storeBadge && <span className="ml-2 text-xs font-normal text-slate-500">· {storeBadge}</span>}</div><div className="text-xs text-slate-600 mt-0.5">{d.items}</div><div className="flex gap-2 mt-2 flex-wrap"><Badge label={d.date} color="slate"/><Badge label={d.time} color="slate"/>{d.temp && <Badge label={`${d.temp}°C`} color={d.tempOk === "yes" ? "green" : "red"}/>}<Badge label={d.condition === "good" ? "✓ Good" : `⚠ ${d.condition}`} color={d.condition === "good" ? "green" : "amber"}/><Badge label={`By ${d.loggedBy}`} color="slate"/></div>{d.notes && <div className="text-xs text-slate-500 mt-1.5 italic">{d.notes}</div>}</div>;
+      })}</div>
       {showForm && (
-        <Modal title="Log Delivery" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.supplier) return; onAdd({ id: `del-${Date.now()}`, brandId: selBrand, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
+        <Modal title={`Log Delivery${writeStore ? ` — ${writeStore.shortName}` : ""}`} onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.supplier || !writeStoreId) return; onAdd({ id: `del-${Date.now()}`, brandId: writeBrandId, storeId: writeStoreId, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
           <div className="space-y-4">
+            {selStore === "all" && visibleStores.length > 1 && <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 text-xs text-amber-300">📍 Logging for <strong>{writeStore?.shortName || "—"}</strong>. Switch the store filter above to log for a different store.</div>}
             <div><label className={labelCls}>Supplier *</label><input value={form.supplier} onChange={e => set("supplier", e.target.value)} className={inputCls} placeholder="e.g. Fresh Direct"/></div>
             <div><label className={labelCls}>Items delivered</label><textarea value={form.items} onChange={e => set("items", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="List items…"/></div>
             <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Delivery time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Temp check (°C)</label><input type="number" step="0.1" value={form.temp} onChange={e => set("temp", e.target.value)} className={inputCls} placeholder="Optional"/></div></div>
@@ -10336,8 +10502,8 @@ export default function App() {
             {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
-            {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
-            {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
+            {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
