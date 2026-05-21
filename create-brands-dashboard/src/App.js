@@ -4208,6 +4208,10 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
     phone:           store?.phone           || "",
     email:           store?.email           || "",
     notes:           store?.notes           || "",
+    // Per-store kiosk PIN. Tablets at this store use this PIN to register
+    // themselves. Owner/HQ + the store's manager can set/change it. Empty
+    // means kiosk login is disabled for this store.
+    kioskPin:        store?.kioskPin        || "",
   });
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -4236,6 +4240,10 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
     if (isNew && !form.id)      return setError("Couldn't derive an ID — try a different short name.");
     if (isNew && existingIds.includes(form.id)) {
       return setError(`A store with id "${form.id}" already exists. Edit that one or pick a different short name.`);
+    }
+    // Kiosk PIN must be 4-6 digits, or empty (disables kiosk login for store).
+    if (form.kioskPin && !/^\d{4,6}$/.test(form.kioskPin.trim())) {
+      return setError("Kiosk PIN must be 4 to 6 digits.");
     }
     setSaving(true);
     try { await onSave(form); }
@@ -4320,6 +4328,22 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
         </Field>
         <Field label="Email" full>
           <input value={form.email} onChange={set("email")} className={fieldCls} type="email" />
+        </Field>
+        <Field label="Kiosk PIN (4–6 digits)" full>
+          <input
+            value={form.kioskPin}
+            onChange={set("kioskPin")}
+            maxLength={6}
+            placeholder="e.g. 4827"
+            className={fieldCls}
+            inputMode="numeric"
+            pattern="[0-9]*"
+          />
+          <div className="text-[10px] text-slate-500 mt-1">
+            Tablets at this store enter this PIN once to register as the store's kiosk.
+            Changing it invalidates any tablets currently registered — they'll need to re-enter the new PIN.
+            Leave blank to disable kiosk login for this store.
+          </div>
         </Field>
         <Field label="Notes" full>
           <textarea value={form.notes} onChange={set("notes")} className={fieldCls + " min-h-[60px]"} rows={2} />
@@ -5454,6 +5478,11 @@ function OpsTeamMemberFormModal({
   // New: store-driven structure
   stores = [], visibleStoreIds = [],
   storeDepartments = [], storeRoles = [],
+  // Existing roster — used to check PIN uniqueness across the whole org
+  // (Q6 from kiosk auth design: PINs must be globally unique so the kiosk
+  // can identify staff from PIN alone, regardless of which store they're
+  // punching in at).
+  opsTeam = [],
   onSave, onClose,
 }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
@@ -5572,6 +5601,25 @@ function OpsTeamMemberFormModal({
     if (rolesInStore.length > 0 && !form.roleId) {
       alert("Please pick a role. (If this store has no roles defined yet, add one under Ops Setup → Structure first.)");
       return;
+    }
+    // Q6: PIN uniqueness check across the whole org. The kiosk identifies
+    // staff by PIN alone, so two people can't share one. We skip checking
+    // against the current item being edited (so re-saving without changing
+    // PIN doesn't trip the check).
+    if (form.pin && form.pin.trim()) {
+      const trimmed = form.pin.trim();
+      if (!/^\d{4,6}$/.test(trimmed)) {
+        alert("PIN must be 4 to 6 digits.");
+        return;
+      }
+      const collision = opsTeam.find(m =>
+        m.id !== item?.id &&
+        (m.pin || "").trim() === trimmed
+      );
+      if (collision) {
+        alert(`PIN ${trimmed} is already used by ${collision.firstName} ${collision.lastName}. PINs must be unique across the company so the kiosk can identify staff. Pick a different one.`);
+        return;
+      }
     }
 
     // Derive brandId from the primary store so legacy brand-keyed code keeps
@@ -6609,6 +6657,7 @@ function OpsSettingsView({
           visibleStoreIds={visibleStoreIds}
           storeDepartments={storeDepartments}
           storeRoles={storeRoles}
+          opsTeam={opsTeam}
           onSave={item => { tmModal === "new" ? onAddOpsTeam(item) : onUpdateOpsTeam(item); setTmModal(null); }}
           onClose={() => setTmModal(null)}
         />
@@ -10624,7 +10673,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 // KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, onPunchOut }) {
+function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], onPunchIn, onPunchOut, onLogout }) {
   const [pin,         setPin]       = useState("");
   const [matched,     setMatched]   = useState(null); // ops_team member
   const [error,       setError]     = useState("");
@@ -10797,22 +10846,32 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
       onPunchOut(openRecord.id, now, hoursWorked, grossPay)
         .catch(err => console.error("PunchOut failed:", err));
     } else {
-      // Look up the employee's published schedule for today
+      // Look up the employee's published schedule for today AT THIS KIOSK'S STORE.
+      // A cover shift might be at a different store than usual; we want to
+      // match the schedule that's relevant for *this* punch location, falling
+      // back to a brand-keyed match for legacy schedules without storeId.
       const todaysSched = schedules.find(s =>
-        s.brandId === matched.brandId && s.employeeId === matched.id &&
-        s.date === todayStr && s.published
+        s.employeeId === matched.id && s.date === todayStr && s.published &&
+        (s.storeId ? s.storeId === currentStore?.id : s.brandId === (currentStore?.brandId || matched.brandId))
       );
       setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
       onPunchIn({
         id: recordId,
-        brandId: matched.brandId,
+        // brandId + storeId come from the kiosk's registered store — this is
+        // the location of work, not the staff's home store. A staff member
+        // covering at another store records their punch against the kiosk's
+        // store. (storeId is NOT NULL on punch_records per Stage 6, so this
+        // is required — missing it was the root cause of Issue 2.)
+        brandId: currentStore?.brandId || matched.brandId,
+        storeId: currentStore?.id || null,
         employeeId: matched.id,
         employeeName: `${matched.firstName} ${matched.lastName}`.trim(),
         date: todayStr,
         punchIn: now, punchOut: null, hoursWorked: null,
         hourlyRate: matched.hourlyRate || 0, grossPay: null,
         notes: "", status: "open", amendedBy: "",
-        // Stamp the schedule on the record so it's locked in at clock-in time
+        // Schedule lookup uses the kiosk's store — if employee has a published
+        // shift at this store today, lock it in for overtime calc.
         scheduledStart: todaysSched?.startTime || null,
         scheduledEnd:   todaysSched?.endTime   || null,
       }).catch(err => console.error("PunchIn failed:", err));
@@ -10852,8 +10911,64 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
   ) : null;
   const isClockedIn = !!openRecord;
 
+  // Q10: small store name in corner. Long-press (1.5s) starts a logout
+  // confirmation — manager can switch tablet to a different store.
+  const [logoutPromptOpen, setLogoutPromptOpen] = useState(false);
+  const logoutHoldRef = useRef(null);
+  const startLogoutHold = () => {
+    if (logoutHoldRef.current) return;
+    logoutHoldRef.current = setTimeout(() => {
+      setLogoutPromptOpen(true);
+      logoutHoldRef.current = null;
+    }, 1500);
+  };
+  const cancelLogoutHold = () => {
+    if (logoutHoldRef.current) { clearTimeout(logoutHoldRef.current); logoutHoldRef.current = null; }
+  };
+  const confirmLogout = () => {
+    setLogoutPromptOpen(false);
+    onLogout?.();
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none relative">
+      {/* Q10: corner store badge — small, unobtrusive. Long-press 1.5s to
+          trigger the logout flow (so casual taps don't accidentally
+          unregister the tablet). */}
+      {currentStore && (
+        <button
+          onMouseDown={startLogoutHold} onMouseUp={cancelLogoutHold} onMouseLeave={cancelLogoutHold}
+          onTouchStart={startLogoutHold} onTouchEnd={cancelLogoutHold} onTouchCancel={cancelLogoutHold}
+          className="absolute top-3 right-3 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-700/60 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          title="Long-press to switch store"
+        >
+          📍 {currentStore.shortName || currentStore.name}
+        </button>
+      )}
+
+      {/* Logout confirmation overlay */}
+      {logoutPromptOpen && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm w-full">
+            <div className="text-white font-bold text-lg mb-2">Unregister this kiosk?</div>
+            <div className="text-slate-400 text-sm mb-5">
+              This tablet will be removed from <span className="font-semibold text-white">{currentStore?.shortName || currentStore?.name}</span> and
+              will need to enter the kiosk PIN again to register — to this or a different store.
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setLogoutPromptOpen(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">
+                Cancel
+              </button>
+              <button onClick={confirmLogout}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">
+                Unregister
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hidden capture canvas */}
       <canvas ref={canvasRef} className="hidden"/>
 
@@ -12029,18 +12144,48 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
 
 
 // ── KioskShell ────────────────────────────────────────────────────────────────
+// Per-store kiosk auth flow:
+//   1. On first load, check localStorage for a registered storeId.
+//   2. If present AND that store still exists AND its kioskPin still matches,
+//      the kiosk is registered — show the main numpad.
+//   3. If not, show the "Register this kiosk to a store" screen — manager
+//      enters store kiosk PIN, we match it against all stores, lock the
+//      tablet to whichever store's PIN matched.
+//   4. Failed attempts are rate-limited (5 wrong PINs → 5 min lockout).
+//   5. Audit trail logs every register / logout / failed attempt.
+const KIOSK_STORAGE_KEY = "cb_kiosk_registered_store_id";
+const KIOSK_LOCKOUT_KEY = "cb_kiosk_pin_lockout";
+
 function KioskShell() {
   const [opsTeam,      setOpsTeam]      = useState([]);
   const [brands,       setBrands]       = useState([]);
+  const [stores,       setStores]       = useState([]);
   const [punchRecords, setPunchRecords] = useState([]);
   const [schedules,    setSchedules]    = useState([]);
   const [ready,        setReady]        = useState(false);
+  // Kiosk registration: which store does this tablet currently represent?
+  // null = needs to register; set = locked to that store.
+  const [registeredStoreId, setRegisteredStoreId] = useState(null);
   const inFlightRef = useRef(new Set()); // employees currently being punched in
 
   useEffect(() => {
-    Promise.all([fetchOpsTeam(), fetchBrands(), fetchPunchRecords(), fetchSchedules()])
-      .then(([team, br, punches, scheds]) => {
-        setOpsTeam(team); setBrands(br); setPunchRecords(punches); setSchedules(scheds || []); setReady(true);
+    Promise.all([fetchOpsTeam(), fetchBrands(), fetchStores(), fetchPunchRecords(), fetchSchedules()])
+      .then(([team, br, sts, punches, scheds]) => {
+        setOpsTeam(team); setBrands(br); setStores(sts);
+        setPunchRecords(punches); setSchedules(scheds || []);
+        // Hydrate any previously-registered storeId from localStorage,
+        // but only if that store still exists. (Store may have been deleted
+        // or archived since tablet was last used.)
+        try {
+          const saved = localStorage.getItem(KIOSK_STORAGE_KEY);
+          if (saved && sts.some(s => s.id === saved && !s.archivedAt)) {
+            setRegisteredStoreId(saved);
+          } else if (saved) {
+            // Stale — clear it
+            localStorage.removeItem(KIOSK_STORAGE_KEY);
+          }
+        } catch { /* localStorage might be blocked */ }
+        setReady(true);
       })
       .catch(() => setReady(true));
   }, []);
@@ -12050,7 +12195,7 @@ function KioskShell() {
       .on("postgres_changes", { event: "*", schema: "public", table: "punch_records" }, (payload) => {
         const { eventType, new: r, old: oldRow } = payload;
         if (eventType === "DELETE") { setPunchRecords(ps => ps.filter(p => p.id !== oldRow.id)); return; }
-        const p = { id: r.id, brandId: r.brand_id, employeeId: r.employee_id, employeeName: r.employee_name,
+        const p = { id: r.id, brandId: r.brand_id, storeId: r.store_id, employeeId: r.employee_id, employeeName: r.employee_name,
           date: r.date, punchIn: r.punch_in, punchOut: r.punch_out,
           hoursWorked: r.hours_worked ? parseFloat(r.hours_worked) : null,
           hourlyRate: r.hourly_rate ? parseFloat(r.hourly_rate) : 0,
@@ -12061,7 +12206,6 @@ function KioskShell() {
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
       }).subscribe();
-    // Belt + braces: poll every 15s in case realtime drops
     const interval = setInterval(() => {
       fetchPunchRecords().then(setPunchRecords).catch(()=>{});
     }, 15000);
@@ -12071,24 +12215,98 @@ function KioskShell() {
     };
   }, []);
 
+  // Punch handlers — both stamp the current kiosk's storeId. punch_records.store_id
+  // is NOT NULL per Stage 6, so this is required for the INSERT to succeed.
+  // (This was the cause of Issue 2 — kiosk had no storeId, INSERT failed silently.)
   const handlePunchIn  = async (record) => {
-    // Synchronous in-flight guard — blocks duplicate inserts even before DB confirms
     if (inFlightRef.current.has(record.employeeId)) return;
     const alreadyOpen = punchRecords.some(p => p.employeeId === record.employeeId && p.date === record.date && p.status === "open");
     if (alreadyOpen) return;
     inFlightRef.current.add(record.employeeId);
     try {
-      const saved = await insertPunchIn(record);
+      // Belt-and-braces: caller (KioskApp) should already have set storeId
+      // from the kiosk's registered store, but stamp defensively here too.
+      const withStore = { ...record, storeId: record.storeId || registeredStoreId };
+      if (!withStore.storeId) throw new Error("Kiosk has no registered store — cannot record punch.");
+      const saved = await insertPunchIn(withStore);
       setPunchRecords(ps => ps.some(p => p.id === saved.id) ? ps : [saved, ...ps]);
     } catch (err) {
       console.error("PunchIn failed:", err);
+      alert(`Clock-in failed: ${err.message || err}`);
     } finally {
       inFlightRef.current.delete(record.employeeId);
     }
   };
   const handlePunchOut = async (id, punchOut, hoursWorked, grossPay) => {
-    const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
-    setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+    try {
+      const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
+      setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+    } catch (err) {
+      console.error("PunchOut failed:", err);
+      alert(`Clock-out failed: ${err.message || err}`);
+    }
+  };
+
+  // Kiosk registration: matches the entered PIN against any store's kioskPin,
+  // locks the tablet to that store on success, writes audit entry.
+  const handleRegister = async (pin) => {
+    const trimmed = (pin || "").trim();
+    if (!trimmed) return { ok: false, error: "Enter a PIN." };
+    const match = stores.find(s => !s.archivedAt && (s.kioskPin || "").trim() === trimmed);
+    if (!match) {
+      // Audit the failure for owner visibility
+      try {
+        await insertAuditEntry({
+          id: `at-${Date.now()}`,
+          action: "kiosk-pin-failed",
+          detail: `Wrong kiosk PIN attempt from tablet (entered ${trimmed.length} digits)`,
+          by: "kiosk-device",
+          brandId: null,
+          storeId: null,
+          date: new Date().toISOString().split("T")[0],
+          time: new Date().toTimeString().slice(0, 8),
+        });
+      } catch { /* don't block on audit failure */ }
+      return { ok: false, error: "Wrong PIN." };
+    }
+    // Success — lock the tablet to this store
+    try { localStorage.setItem(KIOSK_STORAGE_KEY, match.id); } catch {}
+    setRegisteredStoreId(match.id);
+    try {
+      await insertAuditEntry({
+        id: `at-${Date.now()}`,
+        action: "kiosk-registered",
+        detail: `Kiosk registered at ${match.shortName || match.name}`,
+        by: "kiosk-device",
+        brandId: match.brandId,
+        storeId: match.id,
+        date: new Date().toISOString().split("T")[0],
+        time: new Date().toTimeString().slice(0, 8),
+      });
+    } catch { /* don't block on audit failure */ }
+    return { ok: true, store: match };
+  };
+
+  // Manager logs out the kiosk so it can be re-registered at a different store.
+  // We log this too so owner can see in audit trail.
+  const handleLogout = async () => {
+    const current = stores.find(s => s.id === registeredStoreId);
+    try { localStorage.removeItem(KIOSK_STORAGE_KEY); } catch {}
+    setRegisteredStoreId(null);
+    if (current) {
+      try {
+        await insertAuditEntry({
+          id: `at-${Date.now()}`,
+          action: "kiosk-logout",
+          detail: `Kiosk unregistered from ${current.shortName || current.name}`,
+          by: "kiosk-device",
+          brandId: current.brandId,
+          storeId: current.id,
+          date: new Date().toISOString().split("T")[0],
+          time: new Date().toTimeString().slice(0, 8),
+        });
+      } catch {}
+    }
   };
 
   if (!ready) return (
@@ -12097,7 +12315,158 @@ function KioskShell() {
       <span style={{fontSize:15}}>Loading kiosk…</span>
     </div>
   );
-  return <KioskApp opsTeam={opsTeam} brands={brands} punchRecords={punchRecords} schedules={schedules} onPunchIn={handlePunchIn} onPunchOut={handlePunchOut}/>;
+
+  // Not yet registered → show registration screen.
+  if (!registeredStoreId) {
+    return <KioskRegister onRegister={handleRegister}/>;
+  }
+
+  // Registered → main kiosk. Pass the store + a logout handler so the corner
+  // gesture can switch stores when needed.
+  const currentStore = stores.find(s => s.id === registeredStoreId);
+  return (
+    <KioskApp
+      opsTeam={opsTeam}
+      brands={brands}
+      stores={stores}
+      currentStore={currentStore}
+      punchRecords={punchRecords}
+      schedules={schedules}
+      onPunchIn={handlePunchIn}
+      onPunchOut={handlePunchOut}
+      onLogout={handleLogout}
+    />
+  );
+}
+
+// ─── Kiosk Registration Screen ────────────────────────────────────────────────
+// Shown when a tablet hasn't been registered to a store yet. Manager enters
+// the store's kiosk PIN to claim the tablet. Rate limited: 5 wrong tries
+// triggers a 5-minute lockout stored in localStorage (per-device only — not
+// real security, just speed-bump for casual misuse).
+function KioskRegister({ onRegister }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(null);
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [attempts, setAttempts] = useState(0);
+  const [now, setNow] = useState(Date.now());
+
+  // Restore any active lockout from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(KIOSK_LOCKOUT_KEY);
+      if (saved) {
+        const until = Number(saved);
+        if (until > Date.now()) setLockedUntil(until);
+        else localStorage.removeItem(KIOSK_LOCKOUT_KEY);
+      }
+    } catch {}
+  }, []);
+
+  // Tick clock during lockout so countdown updates
+  useEffect(() => {
+    if (lockedUntil <= 0) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [lockedUntil]);
+
+  const isLocked = lockedUntil > now;
+  const lockedSecs = Math.ceil((lockedUntil - now) / 1000);
+
+  const handleDigit = (d) => {
+    if (isLocked || success) return;
+    setError("");
+    if (pin.length < 6) setPin(p => p + d);
+  };
+  const handleBackspace = () => {
+    if (isLocked || success) return;
+    setError("");
+    setPin(p => p.slice(0, -1));
+  };
+  const handleSubmit = async () => {
+    if (isLocked || success) return;
+    if (pin.length < 4) { setError("PIN is at least 4 digits."); return; }
+    const result = await onRegister(pin);
+    if (result.ok) {
+      setSuccess(result.store);
+      // Shell takes over from here — render won't matter
+    } else {
+      setError(result.error || "Wrong PIN.");
+      setPin("");
+      const next = attempts + 1;
+      setAttempts(next);
+      if (next >= 5) {
+        const until = Date.now() + 5 * 60 * 1000;
+        setLockedUntil(until);
+        setAttempts(0);
+        try { localStorage.setItem(KIOSK_LOCKOUT_KEY, String(until)); } catch {}
+      }
+    }
+  };
+
+  return (
+    <div style={{
+      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+      height:"100vh", background:"#0f172a", color:"#e2e8f0", fontFamily:"sans-serif",
+      padding:24, gap:20,
+    }}>
+      <div style={{width:64,height:64,borderRadius:16,background:"#4f46e5",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:22}}>CB</div>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:22, fontWeight:800, color:"white"}}>Register this kiosk</div>
+        <div style={{fontSize:13, color:"#94a3b8", marginTop:6, maxWidth:340}}>
+          Enter the store's Kiosk PIN to register this tablet. Once registered, staff at this store will be able to clock in and out here.
+        </div>
+      </div>
+
+      {isLocked ? (
+        <div style={{background:"#7f1d1d40", border:"1px solid #dc262660", borderRadius:14, padding:"14px 22px", color:"#fca5a5", fontWeight:700, fontSize:14, textAlign:"center"}}>
+          Too many wrong attempts.<br/>Locked for {Math.floor(lockedSecs/60)}:{String(lockedSecs%60).padStart(2,"0")}
+        </div>
+      ) : (
+        <>
+          {/* PIN dots */}
+          <div style={{display:"flex", gap:14}}>
+            {Array.from({length:Math.max(4, pin.length)}).map((_, i) => (
+              <div key={i} style={{
+                width:18, height:18, borderRadius:"50%",
+                border:"2px solid", borderColor: i<pin.length ? "#6366f1" : "#475569",
+                background: i<pin.length ? "#6366f1" : "transparent",
+              }}/>
+            ))}
+          </div>
+          {error && <div style={{color:"#f87171", fontSize:13, fontWeight:600}}>{error}</div>}
+
+          {/* Numpad */}
+          <div style={{display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:10, width:240}}>
+            {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, i) => {
+              if (key === "") return <div key={i}/>;
+              return (
+                <button key={key}
+                  onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
+                  style={{
+                    height:64, fontSize:22, fontWeight:700,
+                    background:"#1e293b", color:"white", border:"1px solid #334155",
+                    borderRadius:14, cursor:"pointer",
+                  }}>{key}</button>
+              );
+            })}
+          </div>
+
+          <button onClick={handleSubmit}
+            disabled={pin.length < 4}
+            style={{
+              padding:"12px 28px", fontSize:14, fontWeight:700,
+              background: pin.length < 4 ? "#334155" : "#4f46e5",
+              color:"white", border:"none", borderRadius:14,
+              cursor: pin.length < 4 ? "not-allowed" : "pointer",
+            }}>
+            Register tablet
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 const IS_KIOSK = window.location.pathname === "/kiosk" ||

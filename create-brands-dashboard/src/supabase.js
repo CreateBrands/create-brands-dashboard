@@ -882,6 +882,7 @@ function dbStoreToApp(s) {
     updatedAt:        s.updated_at,
     archivedAt:       s.archived_at,
     kpiTargets:       s.kpi_targets || {},
+    kioskPin:         s.kiosk_pin || "",
   };
 }
 
@@ -963,6 +964,7 @@ function appStoreToDb(s) {
   if (s.email           !== undefined) row.email            = s.email || null;
   if (s.notes           !== undefined) row.notes            = s.notes || null;
   if (s.kpiTargets      !== undefined) row.kpi_targets      = s.kpiTargets || {};
+  if (s.kioskPin        !== undefined) row.kiosk_pin        = s.kioskPin || null;
   return row;
 }
 
