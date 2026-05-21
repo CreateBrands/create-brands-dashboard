@@ -1400,7 +1400,7 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
 
 // ─── Employee Shell ───────────────────────────────────────────────────────────
 // Restricted layout shown to employees — only ops-relevant views, no financial data.
-function EmployeeShell({ currentUser, brands, opsTeam, assignments, checklists, tempUnits,
+function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
@@ -7374,7 +7374,16 @@ function CommunicationView({
             : <ManagerAvailabilityView  brands={brands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={onUpdateAvailability} onAdd={onAddAvailability} onDelete={id => onUpdateAvailability({id, status:"rejected"})}/>
         )}
         {tab === "schedule" && !isEmployee && (
-          <ScheduleView brands={brands} opsTeam={opsTeam} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={onAddSchedule} onUpdate={onAddSchedule} onDelete={onDeleteSchedule} onPublish={onPublishWeek} onUpdateBrand={onUpdateBrand}/>
+          <ScheduleView
+            brands={brands}
+            stores={stores}
+            visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)}
+            opsTeam={opsTeam}
+            schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]}
+            punchRecords={punchRecords||[]} currentUser={currentUser}
+            onAdd={onAddSchedule} onUpdate={onAddSchedule} onDelete={onDeleteSchedule}
+            onPublish={onPublishWeek} onUpdateBrand={onUpdateBrand}
+          />
         )}
         {tab === "emp-schedule" && isEmployee && (
           <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]}/>
@@ -7490,7 +7499,7 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
 }
 
 // ── Shift Form Modal (uses custom presets) ────────────────────────────────────
-function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, schedules = [], currentUser, onSave, onDelete, onClose }) {
+function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, schedules = [], currentUser, onSave, onDelete, onClose }) {
   const isEdit = !!slot;
   const brandPresets = shiftPresets.filter(p => p.brandId === brandId);
 
@@ -7501,8 +7510,12 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
   const [notes,      setNotes]      = useState(slot?.notes || "");
   const [copyDays,   setCopyDays]   = useState(new Set());  // YYYY-MM-DD strings of additional days to clone to
 
+  // Members shown for assignment: scoped to the current store (multi-store
+  // staff included via store_ids array contains storeId), with brand fallback.
   const brandMembers = opsTeam.filter(m => {
-    if (m.brandId !== brandId) return false;
+    const ids = m.storeIds || [];
+    const inScope = ids.length > 0 ? (storeId && ids.includes(storeId)) : m.brandId === brandId;
+    if (!inScope) return false;
     if (filterDept && filterDept !== "all" && m.department !== filterDept) return false;
     if (filterRole && filterRole !== "all" && m.role !== filterRole) return false;
     return true;
@@ -7556,7 +7569,8 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
     const wsStr = [ws.getFullYear(),String(ws.getMonth()+1).padStart(2,"0"),String(ws.getDate()).padStart(2,"0")].join("-");
     const baseName = member ? `${member.firstName} ${member.lastName}`.trim() : memberName||"";
     const baseSlot = {
-      brandId, employeeId, employeeName: baseName,
+      brandId, storeId: storeId || (slot?.storeId || null),
+      employeeId, employeeName: baseName,
       shift, startTime, endTime,
       role: member?.role || filterRole || "",
       department: member?.department || filterDept || "",
@@ -7747,11 +7761,48 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
 // SCHEDULE VIEW — totals, costs, copy-week, conflicts, coverage, drag-resize,
 // auto-fill, forecasted SPLH, lock, multi-select bulk, mobile day view
 // ═══════════════════════════════════════════════════════════════════════════════
-function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand }) {
+function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
 
-  const [brandId,    setBrandId]    = useState(vb[0]?.id || "");
+  // Store-first scoping (the new pattern). We pick a SINGLE store for the
+  // schedule view — scheduling is inherently per-site, you don't run one
+  // rota across multiple stores. Owner/HQ can also use the ownership filter
+  // to narrow which stores appear in the picker.
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const sortedStores = useMemo(
+    () => [...visibleStores].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleStores]
+  );
+
+  // Selected store. Default to first alphabetically (per your earlier decision).
+  // For legacy brandId-keyed code below, we derive brandId from the picked store.
+  const [storeId, setStoreId] = useState("");
+  useEffect(() => {
+    if (!storeId && sortedStores[0]) setStoreId(sortedStores[0].id);
+    if (storeId && !sortedStores.some(s => s.id === storeId)) setStoreId(sortedStores[0]?.id || "");
+  }, [sortedStores, storeId]);
+
+  // Derived brandId for downstream code that's still brand-keyed.
+  // ScheduleView uses brandId everywhere — we keep that working by deriving
+  // it from the selected store. The hundreds of lines below don't need to
+  // change individually.
+  const selectedStore = sortedStores.find(s => s.id === storeId) || null;
+  const brandId = selectedStore?.brandId || "";
+
+  // Legacy variable name kept so downstream JSX referencing `vb` still works.
+  const vb = useMemo(
+    () => brands.filter(b => visibleStores.some(s => s.brandId === b.id)),
+    [brands, visibleStores]
+  );
+
   const [weekOffset, setWeekOffset] = useState(0);
   const [filterDept, setFilterDept] = useState("all");
   const [filterRole, setFilterRole] = useState("all");
@@ -7789,9 +7840,19 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
   const weekDayStrs = weekDays.map(d=>toLocalDateStr(d));
 
   // ── Membership / filters ───────────────────────────────────────────────────
-  const brandMembers = opsTeam.filter(m=>m.brandId===brandId);
+  // Members are filtered by store membership now (multi-store-staff supported
+  // via ops_team.store_ids text[]). Falls back to brandId match for any legacy
+  // ops_team row that doesn't yet have storeIds populated.
+  const brandMembers = opsTeam.filter(m => {
+    const ids = m.storeIds || [];
+    if (ids.length > 0) return ids.includes(storeId);
+    return m.brandId === brandId;  // legacy fallback
+  });
   const allDepts = [...new Set(brandMembers.map(m=>m.department).filter(Boolean))];
   const allRoles = [...new Set(brandMembers.map(m=>m.role).filter(Boolean))];
+  // Presets are still brand-scoped (a brand's shift templates apply to all its
+  // stores). If you want store-specific presets later, we'd add a per-store
+  // override layer here.
   const brandPresets = shiftPresets.filter(p=>p.brandId===brandId);
   const allShiftNames = [...new Set(brandPresets.map(p=>p.name))];
 
@@ -7802,13 +7863,20 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
   });
 
   // ── This week's schedules ──────────────────────────────────────────────────
+  // Match by storeId when the row has one (new), else by brandId (legacy).
+  // During the transition some schedules may still have brand_id only — they
+  // still show, attached to their brand's first store implicitly.
+  const matchesScope = (s) => {
+    if (s.storeId) return s.storeId === storeId;
+    return s.brandId === brandId;
+  };
   const weekSchedules = schedules.filter(s=>
-    s.brandId===brandId && weekDayStrs.includes(s.date) &&
+    matchesScope(s) && weekDayStrs.includes(s.date) &&
     (filterShift==="all" || s.shift===filterShift) &&
     (filterDept==="all" || s.department===filterDept) &&
     (filterRole==="all" || s.role===filterRole)
   );
-  const allWeekSlots = schedules.filter(s=>s.brandId===brandId && weekDayStrs.includes(s.date));
+  const allWeekSlots = schedules.filter(s=>matchesScope(s) && weekDayStrs.includes(s.date));
   const isWeekPublished = allWeekSlots.length > 0 && allWeekSlots.every(s=>s.published);
   const isDraft = allWeekSlots.length > 0 && !isWeekPublished;
   const editLocked = isWeekPublished && locked;
@@ -7872,7 +7940,11 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       });
     });
     let actualHours = 0, actualCost = 0;
-    punchRecords.filter(p => p.brandId === brandId && p.date === d && p.status !== "open").forEach(p => {
+    punchRecords.filter(p => {
+      // Match by store first, fall back to brand for legacy punches
+      const inScope = p.storeId ? p.storeId === storeId : p.brandId === brandId;
+      return inScope && p.date === d && p.status !== "open";
+    }).forEach(p => {
       actualHours += p.hoursWorked || 0;
       actualCost += p.grossPay || 0;
     });
@@ -7887,9 +7959,10 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
     totalShifts: allWeekSlots.filter(s => s.status !== "cancelled").length,
   };
 
-  // ── Sales forecast — stored on brand.kpiTargets.salesForecasts[date] ───────
+  // ── Sales forecast — now stored on selectedStore.kpiTargets.salesForecasts[date] ───
+  // Moved from brand-level since per-day targets are now per-store.
   const brand = brands.find(b => b.id === brandId);
-  const salesForecasts = brand?.kpiTargets?.salesForecasts || {};
+  const salesForecasts = selectedStore?.kpiTargets?.salesForecasts || {};
   const dailySales = weekDayStrs.map(d => parseFloat(salesForecasts[d]) || 0);
   const weekSalesForecast = dailySales.reduce((a,n) => a+n, 0);
   const splh = weekTotals.cost > 0 ? weekSalesForecast / weekTotals.cost : 0; // sales per £1 labour cost
@@ -7923,7 +7996,9 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
   // ── Actions ────────────────────────────────────────────────────────────────
   const handlePublish = async () => {
     setPublishing(true);
-    await onPublish(brandId, weekStartStr, !isWeekPublished);
+    // New shape: publish a single store's week, not the whole brand. Schedules
+    // outside this store aren't touched even if they share the brand.
+    await onPublish({ storeId, weekStart: weekStartStr, published: !isWeekPublished });
     setPublishing(false);
     if (!isWeekPublished) setLocked(true);
   };
@@ -8125,8 +8200,17 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       )}
 
       {/* ── Filters ──────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-2">
-        {vb.length > 1 && <LocationDropdown brands={vb} value={brandId} onChange={setBrandId} className="w-44"/>}
+      <div className="flex flex-wrap gap-2 items-center">
+        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+        {sortedStores.length > 1 && (
+          <SelectDropdown value={storeId} onChange={setStoreId} className="w-56">
+            {sortedStores.map(s => {
+              const b = brands.find(br => br.id === s.brandId);
+              const showBrand = new Set(sortedStores.map(x => x.brandId)).size > 1;
+              return <option key={s.id} value={s.id}>{showBrand && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+            })}
+          </SelectDropdown>
+        )}
         {allDepts.length > 0 && <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-36"><option value="all">All Depts</option>{allDepts.map(d=><option key={d}>{d}</option>)}</SelectDropdown>}
         {allRoles.length > 0 && <SelectDropdown value={filterRole} onChange={setFilterRole} className="w-36"><option value="all">All Roles</option>{allRoles.map(r=><option key={r}>{r}</option>)}</SelectDropdown>}
         {allShiftNames.length > 0 && <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-36"><option value="all">All Shifts</option>{allShiftNames.map(n=><option key={n}>{n}</option>)}</SelectDropdown>}
@@ -8487,7 +8571,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       {/* ── Modals ────────────────────────────────────────────────────────── */}
       {shiftModal && !editLocked && (
         <ShiftFormModal
-          date={shiftModal.date} slot={shiftModal.slot||null} brandId={brandId}
+          date={shiftModal.date} slot={shiftModal.slot||null} brandId={brandId} storeId={storeId}
           memberId={shiftModal.memberId||null} memberName={shiftModal.memberName||""}
           filterRole={filterRole!=="all"?filterRole:""} filterDept={filterDept!=="all"?filterDept:""}
           opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets} schedules={schedules} currentUser={currentUser}
@@ -8499,7 +8583,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       {deleteId && <OpsConfirmModal message="Delete this shift?" onConfirm={()=>{onDelete(deleteId);setDeleteId(null);}} onClose={()=>setDeleteId(null)}/>}
       {autofillModal && (
         <AutofillShiftsModal
-          weekDays={weekDays} weekDayStrs={weekDayStrs} brandId={brandId}
+          weekDays={weekDays} weekDayStrs={weekDayStrs} brandId={brandId} storeId={storeId}
           opsTeam={filteredMembers} availability={availability} shiftPresets={brandPresets}
           existingSchedules={weekSchedules}
           currentUser={currentUser}
@@ -8512,11 +8596,15 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
       )}
       {salesModal && (
         <SalesForecastModal
-          brand={brand} weekDays={weekDays} weekDayStrs={weekDayStrs}
+          brand={brand} store={selectedStore} weekDays={weekDays} weekDayStrs={weekDayStrs}
           onSave={async (forecasts) => {
-            if (!onUpdateBrand) return;
-            const newKpi = { ...(brand.kpiTargets || {}), salesForecasts: { ...(brand.kpiTargets?.salesForecasts || {}), ...forecasts } };
-            await onUpdateBrand({ ...brand, kpiTargets: newKpi });
+            // Sales forecasts now live on the store's kpi_targets, not brand's.
+            if (!onUpdateStore || !selectedStore) return;
+            const newKpi = {
+              ...(selectedStore.kpiTargets || {}),
+              salesForecasts: { ...(selectedStore.kpiTargets?.salesForecasts || {}), ...forecasts },
+            };
+            await onUpdateStore(selectedStore.id, { kpiTargets: newKpi });
             setSalesModal(false);
           }}
           onClose={()=>setSalesModal(false)}
@@ -8527,7 +8615,7 @@ function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, 
 }
 
 // ── Autofill Shifts Modal — proposes shifts based on availability ─────────────
-function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availability, shiftPresets, existingSchedules, currentUser, onApply, onClose }) {
+function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, storeId, opsTeam, availability, shiftPresets, existingSchedules, currentUser, onApply, onClose }) {
   const [presetId,    setPresetId]    = useState(shiftPresets[0]?.id || "");
   const [selectedDays, setSelectedDays] = useState(new Set(weekDayStrs));
   const [skipIfHasShift, setSkipIfHasShift] = useState(true);
@@ -8579,7 +8667,8 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
       const member = opsTeam.find(m => m.id === p.memberId);
       return {
         id: `sch-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
-        brandId, date: p.date, employeeId: p.memberId, employeeName: p.memberName,
+        brandId, storeId: storeId || null,
+        date: p.date, employeeId: p.memberId, employeeName: p.memberName,
         shift: p.preset.name, startTime: p.preset.startTime, endTime: p.preset.endTime,
         role: member?.role || "", department: member?.department || "",
         notes: "", status: "scheduled", published: false,
@@ -8683,8 +8772,10 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, opsTeam, availabi
 }
 
 // ── Sales Forecast Modal ──────────────────────────────────────────────────────
-function SalesForecastModal({ brand, weekDays, weekDayStrs, onSave, onClose }) {
-  const existing = brand?.kpiTargets?.salesForecasts || {};
+function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClose }) {
+  // Read existing forecasts from the store first (new home), brand as fallback
+  // for any legacy data still living on the brand.
+  const existing = store?.kpiTargets?.salesForecasts || brand?.kpiTargets?.salesForecasts || {};
   const [forecasts, setForecasts] = useState(() => {
     const out = {};
     weekDayStrs.forEach(d => { out[d] = existing[d] ? String(existing[d]) : ""; });
@@ -9301,9 +9392,46 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
 // TIME & ATTENDANCE — Manager view with approval + overtime comparison
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment }) {
+function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+
+  // Store-first scoping. Owner/HQ get the ownership filter (defaults to
+  // Owned). Managers/staff see only their assigned stores; no ownership
+  // filter applies because their scope is already correct.
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const [selStore, setSelStore] = useState("all");
+  useEffect(() => {
+    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleStores, selStore]);
+  const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
+  const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+
+  // Legacy vb kept for the schedule-lookup logic below — punches reference
+  // schedules by brandId, and during transition not every row has store_id.
+  const vb = useMemo(
+    () => brands.filter(b => visibleBrandIds.has(b.id) || isHqOrAbove(user.role) || user.brandIds?.includes(b.id)),
+    [brands, visibleBrandIds, user.role, user.brandIds]
+  );
+
+  // Common predicate for "is this record in the user's current scope?"
+  // Store-keyed rows win; legacy brand-keyed rows fall back to brand membership.
+  const inScope = (r) => {
+    if (r.storeId) {
+      if (selStore === "all") return inScopeStoreIds.has(r.storeId);
+      return r.storeId === selStore;
+    }
+    return vb.some(b => b.id === r.brandId);
+  };
 
   const toLocalDate = (d) => {
     const dt = d || new Date();
@@ -9354,7 +9482,6 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
   };
 
   const [weekOffset,     setWeekOffset]     = useState(0);
-  const [filterBrand,    setFilterBrand]    = useState(vb[0]?.id || "all");
   const [filterEmployee, setFilterEmployee] = useState("all");
   const [tab,            setTab]            = useState("records");
   const [amendModal,     setAmendModal]     = useState(null);
@@ -9367,15 +9494,14 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
   const { from, to } = getWeekBounds(weekOffset);
 
   const visible = punchRecords.filter(r => {
-    if (filterBrand    !== "all" && r.brandId    !== filterBrand)    return false;
+    if (!inScope(r)) return false;
     if (filterEmployee !== "all" && r.employeeId !== filterEmployee) return false;
     if (r.date < from || r.date > to) return false;
-    if (!vb.some(b => b.id === r.brandId)) return false;
     return true;
   }).sort((a, b) => new Date(b.punchIn) - new Date(a.punchIn));
 
   const employees = [...new Map(
-    punchRecords.filter(r => vb.some(b => b.id === r.brandId))
+    punchRecords.filter(r => inScope(r))
       .map(r => [r.employeeId, { id: r.employeeId, name: r.employeeName }])
   ).values()];
 
@@ -9482,7 +9608,8 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
-        {vb.length > 1 && <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>}
+        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+        <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         <SelectDropdown value={filterEmployee} onChange={setFilterEmployee} className="w-44">
           <option value="all">All Employees</option>
           {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
@@ -9508,6 +9635,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
           )}
           {enriched.map(r => {
             const brand  = brands.find(b => b.id === r.brandId);
+            const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
             const member = opsTeam.find(m => m.id === r.employeeId);
             const hasOT  = r.overtimeHrs > 0;
             const needsApproval = r.status === "closed" && !r.approved;
@@ -9533,6 +9661,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                     <div className="text-xs text-slate-500">
                       {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                       {brand && <> · <span style={{color:brand.color}}>{brand.name}</span></>}
+                      {store && <span className="text-slate-600"> · {store.shortName || store.name}</span>}
                     </div>
                   </div>
                   <div className="text-right">
@@ -9570,6 +9699,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
                       <div className="text-xs text-slate-600 mt-0.5">
                         {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                         {brand && <span className="ml-2"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle" style={{background:brand.color}}/>{brand.name}</span>}
+                        {store && <span className="ml-2 text-slate-700">· {store.shortName || store.name}</span>}
                       </div>
                     </div>
                   </div>
@@ -10746,15 +10876,26 @@ export default function App() {
   const deleteAvailability = useCallback(async id=>{await removeAvailability(id);setAvailability(av=>av.filter(x=>x.id!==id));}, []);
   const addSchedule    = useCallback(async s=>{const saved=await upsertSchedule(s);setSchedules(ss=>ss.some(x=>x.id===saved.id)?ss.map(x=>x.id===saved.id?saved:x):[saved,...ss]);}, []);
   const deleteSchedule = useCallback(async id=>{await removeSchedule(id);setSchedules(ss=>ss.filter(x=>x.id!==id));}, []);
-  const handlePublishWeek = useCallback(async(brandId,weekStart,published)=>{
+  const handlePublishWeek = useCallback(async (arg1, weekStart, published) => {
     try {
-      await publishWeekSchedules(brandId,weekStart,published);
-      const we=new Date(weekStart+"T00:00:00"); we.setDate(we.getDate()+6);
-      const weStr=[we.getFullYear(),String(we.getMonth()+1).padStart(2,"0"),String(we.getDate()).padStart(2,"0")].join("-");
-      setSchedules(ss=>ss.map(s=>s.brandId!==brandId?s:(s.date>=weekStart&&s.date<=weStr)?{...s,published}:s));
-      showToast(published?"Schedule published ✓":"Schedule unpublished");
-    } catch(err){showToast("Failed: "+err.message,"error");}
-  }, [showToast]);
+      // Two calling shapes supported:
+      //   new: handlePublishWeek({ storeId, weekStart, published })
+      //   legacy: handlePublishWeek(brandId, weekStart, published)
+      const opts = (typeof arg1 === "object" && arg1 !== null)
+        ? arg1
+        : { brandId: arg1, weekStart, published };
+      await publishWeekSchedules(opts);
+      const we = new Date(opts.weekStart + "T00:00:00");
+      we.setDate(we.getDate() + 6);
+      const weStr = [we.getFullYear(), String(we.getMonth() + 1).padStart(2, "0"), String(we.getDate()).padStart(2, "0")].join("-");
+      const inWeek = (s) => s.date >= opts.weekStart && s.date <= weStr;
+      const inScope = (s) => opts.storeId
+        ? (s.storeId === opts.storeId || (!s.storeId && s.brandId === brands.find(b => stores.some(st => st.id === opts.storeId && st.brandId === b.id))?.id))
+        : s.brandId === opts.brandId;
+      setSchedules(ss => ss.map(s => (inScope(s) && inWeek(s)) ? { ...s, published: opts.published } : s));
+      showToast(opts.published ? "Schedule published ✓" : "Schedule unpublished");
+    } catch (err) { showToast("Failed: " + err.message, "error"); }
+  }, [showToast, brands, stores]);
   const addShiftPreset    = useCallback(async p=>{try{const s=await upsertShiftPreset(p);setShiftPresets(ps=>[...ps,s]);showToast(`"${p.name}" added`);}catch(err){showToast(err.message,"error");}}, [showToast]);
   const updateShiftPreset = useCallback(async p=>{try{const s=await upsertShiftPreset(p);setShiftPresets(ps=>ps.map(x=>x.id===s.id?s:x));showToast("Updated");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
@@ -10822,7 +10963,7 @@ export default function App() {
     return (
       <AuthContext.Provider value={{ user: currentUser }}>
         <EmployeeShell
-          currentUser={currentUser} brands={myBrands} opsTeam={opsTeam}
+          currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
           cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
           tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
@@ -10990,7 +11131,7 @@ export default function App() {
               currentUser={currentUser}
             />}
             {effectiveActiveView === "time-attend"    && <TimeAttendanceView
-              brands={visibleBrands} opsTeam={opsTeam} schedules={schedules}
+              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
               punchRecords={punchRecords} currentUser={currentUser}
               onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
               onAddComment={handleAddPunchComment}
