@@ -4918,41 +4918,190 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
 }
 
 // ─── Compliance View ──────────────────────────────────────────────────────────
-function ComplianceView({ brands, assignments, auditTrail }) {
+function ComplianceView({ brands, stores, visibleStoreIds, assignments, auditTrail }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+
+  // Stores sorted alphabetically within their brand for stable display.
+  const sortedStores = useMemo(
+    () => [...visibleStores].sort((a, b) =>
+      (a.brandId || "").localeCompare(b.brandId || "") ||
+      (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleStores]
+  );
+
+  // For each store, find its in-scope assignments + completions.
+  //   - Store-keyed assignments are direct.
+  //   - Legacy assignments without store_id are counted against the BRAND
+  //     they belong to. That brand-level count gets divided evenly across
+  //     the brand's stores so the rolldown is at least consistent.
+  // The same logic applies to audit trail sign-off rows.
+  const rowFor = (store) => {
+    // Direct store assignments
+    const direct = assignments.filter(a => a.storeId === store.id && isActiveToday(a));
+    // Brand-fallback assignments (no store_id) — fairly split across brand stores
+    const brandStores = sortedStores.filter(s => s.brandId === store.brandId);
+    const legacyBrand = assignments.filter(a => !a.storeId && a.brandId === store.brandId && isActiveToday(a));
+    const legacyShare = brandStores.length > 0 ? legacyBrand.length / brandStores.length : 0;
+
+    const la = direct.length + Math.round(legacyShare);
+    const od = direct.filter(isOverdue).length;
+
+    const directDone = auditTrail.filter(t =>
+      t.storeId === store.id && t.date === getTodayStr() && t.action.includes("sign-off")
+    ).length;
+    const legacyDoneBrand = auditTrail.filter(t =>
+      !t.storeId && t.brandId === store.brandId && t.date === getTodayStr() && t.action.includes("sign-off")
+    ).length;
+    const done = directDone + Math.round(brandStores.length > 0 ? legacyDoneBrand / brandStores.length : 0);
+
+    const rate = la > 0 ? Math.round((done / la) * 100) : 0;
+    const rag = od > 0 ? "red" : (la > 0 && rate >= 80) ? "green" : "amber";
+    return { la, od, done, rate, rag };
+  };
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <CheckSquare size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+        <div className="text-xs text-slate-600">{sortedStores.length} store{sortedStores.length === 1 ? "" : "s"}</div>
+      </div>
       <AnalysisBlock title="Compliance Overview — Today">
-        <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Location","Assignments","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>)}</tr></thead><tbody>{vb.map(brand => {
-          const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
-          const od = la.filter(isOverdue);
-          const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
-          const rate = la.length ? Math.round((done / la.length) * 100) : 0;
-          const rag = od.length ? "red" : rate >= 80 ? "green" : "amber";
-          return <tr key={brand.id} className="border-b border-slate-800/60"><td className="px-3 py-3 font-semibold text-slate-200">{brand.name}</td><td className="px-3 py-3 text-slate-700">{la.length}</td><td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ 0" color="green"/>}</td><td className="px-3 py-3 text-slate-700">{done}</td><td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la.length ? rate+"%" : "—"}</span></td><td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={rag}/></td></tr>;
-        })}</tbody></table></div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-700">
+                {["Store","Brand","Assignments","Overdue","Completed","Rate","RAG"].map(h =>
+                  <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedStores.map(store => {
+                const brand = brands.find(b => b.id === store.brandId);
+                const { la, od, done, rate, rag } = rowFor(store);
+                return (
+                  <tr key={store.id} className="border-b border-slate-800/60">
+                    <td className="px-3 py-3 font-semibold text-slate-200">{store.shortName || store.name}</td>
+                    <td className="px-3 py-3 text-slate-500">{brand?.name || store.brandId}</td>
+                    <td className="px-3 py-3 text-slate-700">{la}</td>
+                    <td className="px-3 py-3">{od ? <Badge label={`⚠ ${od}`} color="red"/> : <Badge label="✓ 0" color="green"/>}</td>
+                    <td className="px-3 py-3 text-slate-700">{done}</td>
+                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la ? rate+"%" : "—"}</span></td>
+                    <td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={rag}/></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </AnalysisBlock>
     </div>
   );
 }
 
 // ─── Audit Trail View ─────────────────────────────────────────────────────────
-function AuditTrailView({ brands, auditTrail, onClear }) {
+function AuditTrailView({ brands, stores, visibleStoreIds, auditTrail, onClear }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const [filterBrand, setFilterBrand] = useState("all");
-  const visible = auditTrail.filter(t => filterBrand === "all" || t.brandId === filterBrand).sort((a,b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
-  const actionColor = action => action.includes("sign-off") || action.includes("completed") ? "text-emerald-400" : action.includes("breach") ? "text-red-400" : action.includes("logged") ? "text-amber-400" : "text-indigo-400";
+
+  // Standard store-scope pattern (same as every other refactored view).
+  // visibleStoreIds is HQ/owner = all, manager = their assigned stores.
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const [selStore, setSelStore] = useState("all");
+  useEffect(() => {
+    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+      setSelStore("all");
+    }
+  }, [visibleStores, selStore]);
+
+  const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
+  const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+
+  // Audit rows may or may not have storeId yet (older logs only had brandId).
+  // Store-keyed rows win; legacy rows fall back to brand membership.
+  const inScope = (t) => {
+    if (t.storeId) {
+      if (selStore === "all") return inScopeStoreIds.has(t.storeId);
+      return t.storeId === selStore;
+    }
+    if (isHqOrAbove(user.role)) return true;
+    return visibleBrandIds.has(t.brandId);
+  };
+
+  const visible = auditTrail
+    .filter(inScope)
+    .sort((a, b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
+
+  const actionColor = action =>
+    action.includes("sign-off") || action.includes("completed") ? "text-emerald-400"
+    : action.includes("breach")  ? "text-red-400"
+    : action.includes("logged")  ? "text-amber-400"
+    : "text-indigo-400";
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <ScrollText size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
+        <div className="flex items-center gap-2 flex-wrap">
+          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+        </div>
         {isHqOrAbove(user.role) && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
       </div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ScrollText size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No audit entries yet</div></div>}
       <AnalysisBlock title={`Audit Trail — ${visible.length} entries`}>
-        <div className="space-y-3">{visible.slice(0,100).map(t => { const brand = brands.find(b => b.id === t.brandId); return <div key={t.id} className="flex items-start gap-3 py-2.5 border-b border-slate-800/60 last:border-0"><div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 bg-indigo-400"/><div className="flex-1 min-w-0"><div className={`text-sm font-semibold ${actionColor(t.action)}`}>{t.action}{brand ? ` — ${brand.name}` : ""}</div><div className="text-xs text-slate-600 mt-0.5">{t.detail}</div><div className="text-xs text-slate-600 mt-0.5 font-mono">{t.date} {t.time} · By: {t.by}</div></div></div>; })}</div>
+        <div className="space-y-3">{visible.slice(0,100).map(t => {
+          const brand = brands.find(b => b.id === t.brandId);
+          const store = t.storeId ? stores?.find(s => s.id === t.storeId) : null;
+          return (
+            <div key={t.id} className="flex items-start gap-3 py-2.5 border-b border-slate-800/60 last:border-0">
+              <div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 bg-indigo-400"/>
+              <div className="flex-1 min-w-0">
+                <div className={`text-sm font-semibold ${actionColor(t.action)}`}>
+                  {t.action}
+                  {brand && ` — ${brand.name}`}
+                  {store && <span className="text-slate-500"> · {store.shortName || store.name}</span>}
+                </div>
+                <div className="text-xs text-slate-600 mt-0.5">{t.detail}</div>
+                <div className="text-xs text-slate-600 mt-0.5 font-mono">{t.date} {t.time} · By: {t.by}</div>
+              </div>
+            </div>
+          );
+        })}</div>
       </AnalysisBlock>
     </div>
   );
@@ -12046,8 +12195,8 @@ export default function App() {
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
-            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} assignments={assignments} auditTrail={auditTrail}/>}
-            {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} auditTrail={auditTrail} onClear={handleClearAudit}/>}
+            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
+            {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
