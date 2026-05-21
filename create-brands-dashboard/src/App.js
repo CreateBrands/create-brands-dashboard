@@ -10107,10 +10107,15 @@ export default function App() {
   const pendingAvail = availability.filter(a => visibleBrands.some(b=>b.id===a.brandId) && a.status==="pending").length;
   const commsBadge = inboxUnread + pendingAvail;
 
-  const NAV_GROUPS = [
+  // Nav items declared with optional `roles` array. If omitted, all roles see it.
+  // Hierarchy: owner > hq_staff > manager > staff.
+  // Filtering applied below so Sidebar only sees the items relevant to the
+  // current user. Impersonation flows through `currentUser`, so previewing as
+  // a manager hides Chain Performance / Admin from the sidebar correctly.
+  const NAV_GROUPS_RAW = [
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
-      { key: "chain",       label: "Chain Performance", icon: Globe },
+      { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
@@ -10134,9 +10139,34 @@ export default function App() {
     ]},
     { group: "SETUP", items: [
       { key: "ops-settings", label: "Ops Setup", icon: Settings },
-      ...(currentUser.role === "owner" ? [{ key: "admin", label: "Admin", icon: Users }] : []),
+      { key: "admin",        label: "Admin",     icon: Users, roles: ["owner"] },
     ]},
   ];
+
+  // Filter NAV by current user's role; drop empty groups so the sidebar
+  // doesn't render a header with nothing under it.
+  const NAV_GROUPS = useMemo(() => {
+    const role = currentUser?.role;
+    return NAV_GROUPS_RAW
+      .map(g => ({
+        ...g,
+        items: g.items.filter(item => !item.roles || item.roles.includes(role)),
+      }))
+      .filter(g => g.items.length > 0);
+    // NAV_GROUPS_RAW is intentionally excluded from deps — it's rebuilt every
+    // render anyway and depends on the same closure values as the filter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.role, commsBadge, openIssueCount]);
+
+  // Safety: if the user has switched (impersonation) into a role that no
+  // longer permits the current activeView, redirect to a permitted one.
+  useEffect(() => {
+    if (!currentUser) return;
+    const allKeys = NAV_GROUPS.flatMap(g => g.items.map(i => i.key));
+    if (!allKeys.includes(activeView) && allKeys.length > 0) {
+      setActiveView(allKeys[0]);
+    }
+  }, [currentUser?.role, activeView, NAV_GROUPS]);
 
   const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
@@ -10204,7 +10234,7 @@ export default function App() {
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
             {activeView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
-            {activeView === "chain"           && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
+            {activeView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {activeView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {activeView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
             {activeView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
