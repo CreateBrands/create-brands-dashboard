@@ -291,8 +291,13 @@ export async function clearAuditTrail() {
 }
 
 // ── SHAPE CONVERTERS ─────────────────────────────────────────────────────────
-function appBrandToDb(b) { return { id: b.id, name: b.name, icon_key: b.iconKey, color: b.color, address: b.address, kpi_targets: b.kpiTargets }; }
-function dbBrandToApp(b) { return { id: b.id, name: b.name, iconKey: b.icon_key, color: b.color, address: b.address, kpiTargets: b.kpi_targets }; }
+// Brand kpi_targets is deprecated — superseded by per-store kpi_targets.
+// We stop writing it from new code (no app form should be editing it any more);
+// the column on the DB is scheduled for drop. We keep reading it defensively
+// in case a deploy lands before the SQL drop — `?? null` keeps the field
+// present so older readers don't crash on undefined.
+function appBrandToDb(b) { return { id: b.id, name: b.name, icon_key: b.iconKey, color: b.color, address: b.address }; }
+function dbBrandToApp(b) { return { id: b.id, name: b.name, iconKey: b.icon_key, color: b.color, address: b.address, kpiTargets: b.kpi_targets ?? null }; }
 
 function appUserToDb(u) { return { id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, brand_ids: u.brandIds, store_ids: u.storeIds, avatar: u.avatar }; }
 function dbUserToApp(u) { return { id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, brandIds: u.brand_ids, storeIds: u.store_ids || [], avatar: u.avatar }; }
@@ -760,6 +765,7 @@ function dbStoreToApp(s) {
     createdAt:        s.created_at,
     updatedAt:        s.updated_at,
     archivedAt:       s.archived_at,
+    kpiTargets:       s.kpi_targets || {},
   };
 }
 
@@ -840,6 +846,7 @@ function appStoreToDb(s) {
   if (s.phone           !== undefined) row.phone            = s.phone || null;
   if (s.email           !== undefined) row.email            = s.email || null;
   if (s.notes           !== undefined) row.notes            = s.notes || null;
+  if (s.kpiTargets      !== undefined) row.kpi_targets      = s.kpiTargets || {};
   return row;
 }
 

@@ -3216,23 +3216,27 @@ function LocationEditorModal({ brand, onSave, onClose }) {
   const [address, setAddress] = useState(brand?.address||"");
   const [iconKey, setIconKey] = useState(brand?.iconKey||"Utensils");
   const [color, setColor] = useState(brand?.color||"#6366f1");
-  const [dailyRevenue, setDailyRevenue] = useState(brand?.kpiTargets?.dailyRevenue||3000);
   const icons = [{key:"Utensils",label:"Restaurant"},{key:"Moon",label:"Bar"},{key:"Coffee",label:"Café"},{key:"Building2",label:"Other"}];
   const colors = ["#6366f1","#10b981","#f59e0b","#ef4444","#ec4899","#14b8a6","#f97316","#8b5cf6"];
   const BIcon = ICON_MAP[iconKey]||Building2;
   const handleSave = () => {
     if (!name.trim()) return;
-    onSave({ id:brand?.id||`brand-${Date.now()}`, name:name.trim(), address, iconKey, color, kpiTargets:{...(brand?.kpiTargets||{primeCostMax:60,laborPctMax:30,cogsPctMax:32,netMarginMin:35,splhMin:45,avgStarMin:4.0,cashVarianceMax:25}),dailyRevenue:parseFloat(dailyRevenue)||3000} });
+    // Brand-level kpiTargets is deprecated — store-level targets replace it.
+    // We omit kpiTargets entirely from the save payload; appBrandToDb already
+    // stopped writing it. Existing brand records keep whatever's in the DB
+    // until that column is dropped.
+    onSave({ id:brand?.id||`brand-${Date.now()}`, name:name.trim(), address, iconKey, color });
     onClose();
   };
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">{isCreate?"Add Location":`Edit — ${brand.name}`}</h3>
+          <h3 className="font-bold text-white">{isCreate?"Add Brand":`Edit — ${brand.name}`}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
+          <div className="text-xs text-slate-600">A brand is a chain (e.g. Chocoberry). To add a physical store, use the Stores tab. KPI targets are set per-store in the KPI Targets tab.</div>
           <div><label className="text-xs text-slate-600 font-semibold mb-1.5 block">Name *</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
           <div><label className="text-xs text-slate-600 font-semibold mb-1.5 block">Address</label><input value={address} onChange={e=>setAddress(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
           <div>
@@ -3245,10 +3249,9 @@ function LocationEditorModal({ brand, onSave, onClose }) {
             <label className="text-xs text-slate-600 font-semibold mb-1.5 block">Colour</label>
             <div className="flex gap-2 flex-wrap">{colors.map(c=><button key={c} onClick={()=>setColor(c)} className={`w-8 h-8 rounded-xl border-2 transition-all ${color===c?"border-white scale-110":"border-transparent"}`} style={{background:c}}/>)}</div>
           </div>
-          <div><label className="text-xs text-slate-600 font-semibold mb-1.5 block">Daily Revenue Target (£)</label><input type="number" value={dailyRevenue} onChange={e=>setDailyRevenue(e.target.value)} step={100} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
           <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-3 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{background:color+"30"}}><BIcon size={16} style={{color}}/></div>
-            <div><div className="text-sm font-semibold text-white">{name||"Location Name"}</div><div className="text-xs text-slate-600">{address||"Address"}</div></div>
+            <div><div className="text-sm font-semibold text-white">{name||"Brand Name"}</div><div className="text-xs text-slate-600">{address||"Address"}</div></div>
           </div>
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
@@ -3260,21 +3263,67 @@ function LocationEditorModal({ brand, onSave, onClose }) {
   );
 }
 
-function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
+function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose }) {
   const isCreate = !editUser;
   const [name, setName] = useState(editUser?.name||"");
   const [email, setEmail] = useState(editUser?.email||"");
   const [password, setPassword] = useState(editUser?.password||"");
   const [showPass, setShowPass] = useState(false);
   const [role, setRole] = useState(editUser?.role||"manager");
-  const [brandIds, setBrandIds] = useState(editUser?.brandIds||[]);
+  const [storeIds, setStoreIds] = useState(editUser?.storeIds || []);
+  const [storeSearch, setStoreSearch] = useState("");
+
   const avatar = name.trim().split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)||"??";
-  const toggleBrand = id => setBrandIds(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]);
+
+  // Active stores grouped by brand for the picker. Archived stores excluded
+  // so managers can't be assigned to a store that's been retired.
+  const activeStores = useMemo(
+    () => stores.filter(s => !s.archivedAt),
+    [stores]
+  );
+  const storesByBrand = useMemo(() => {
+    const m = {};
+    activeStores.forEach(s => { (m[s.brandId] = m[s.brandId] || []).push(s); });
+    Object.values(m).forEach(arr => arr.sort((a, b) => (a.shortName || a.name).localeCompare(b.shortName || b.name)));
+    return m;
+  }, [activeStores]);
+  const matchesSearch = (s) => {
+    const q = storeSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (s.shortName || "").toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q);
+  };
+
+  const toggleStore = id => setStoreIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+  const toggleAllInBrand = (brandId, allSelected) => {
+    const idsInBrand = (storesByBrand[brandId] || []).map(s => s.id);
+    if (allSelected) {
+      setStoreIds(ids => ids.filter(x => !idsInBrand.includes(x)));
+    } else {
+      setStoreIds(ids => Array.from(new Set([...ids, ...idsInBrand])));
+    }
+  };
+
   const handleSave = () => {
-    if (!name.trim()||!email.trim()) return;
-    onSave({ id:editUser?.id||`u-${Date.now()}`, name:name.trim(), email:email.trim(), password, role, brandIds: isHqOrAbove(role) ? brands.map(b=>b.id) : brandIds, avatar });
+    if (!name.trim() || !email.trim()) return;
+    // For owner/HQ: brandIds = all brands (global). For manager: derive
+    // brandIds from selected storeIds (parent brand of each store) so legacy
+    // brand-level checks still work during transition.
+    const derivedBrandIds = isHqOrAbove(role)
+      ? brands.map(b => b.id)
+      : Array.from(new Set(storeIds.map(sid => stores.find(s => s.id === sid)?.brandId).filter(Boolean)));
+    onSave({
+      id: editUser?.id || `u-${Date.now()}`,
+      name: name.trim(),
+      email: email.trim(),
+      password,
+      role,
+      brandIds: derivedBrandIds,
+      storeIds: isHqOrAbove(role) ? [] : storeIds,   // HQ/owner are global; storeIds empty by convention
+      avatar,
+    });
     onClose();
   };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
@@ -3313,16 +3362,59 @@ function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
               {role==="manager" && "Access limited to assigned stores only."}
             </div>
           </div>
-          {role==="manager"&&(
+          {role==="manager" && (
             <div>
-              <label className="text-xs text-slate-600 font-semibold mb-1.5 block">Location Access</label>
-              <div className="space-y-2">
-                {brands.map(b=>(
-                  <button key={b.id} onClick={()=>toggleBrand(b.id)} className={`w-full flex items-center justify-between rounded-xl border px-3 py-2.5 transition-all ${brandIds.includes(b.id)?"bg-indigo-600/20 border-indigo-500/30":"bg-slate-950 border-slate-800/60 hover:bg-slate-700"}`}>
-                    <span className="text-sm text-slate-700">{b.name}</span>
-                    {brandIds.includes(b.id)&&<Check size={14} className="text-indigo-400"/>}
-                  </button>
-                ))}
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-slate-600 font-semibold block">Stores</label>
+                <span className="text-[10px] text-slate-600">{storeIds.length} selected</span>
+              </div>
+              <input
+                type="text"
+                value={storeSearch}
+                onChange={e => setStoreSearch(e.target.value)}
+                placeholder="Search stores…"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none mb-2"
+              />
+              <div className="space-y-3 max-h-72 overflow-y-auto">
+                {Object.entries(storesByBrand).map(([brandId, brandStores]) => {
+                  const brand = brands.find(b => b.id === brandId);
+                  const filtered = brandStores.filter(matchesSearch);
+                  if (filtered.length === 0) return null;
+                  const selectedInBrand = filtered.filter(s => storeIds.includes(s.id)).length;
+                  const allSelected = selectedInBrand === filtered.length;
+                  const partial = selectedInBrand > 0 && !allSelected;
+                  return (
+                    <div key={brandId}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          {brand && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{background: brand.color}}/>}
+                          <span className="text-[11px] uppercase tracking-widest font-bold text-slate-500">{brand?.name || brandId}</span>
+                          <span className="text-[10px] text-slate-600">{selectedInBrand}/{filtered.length}{partial ? " (partial)" : ""}</span>
+                        </div>
+                        <button onClick={() => toggleAllInBrand(brandId, allSelected)} className="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300">
+                          {allSelected ? "Clear all" : "Select all"}
+                        </button>
+                      </div>
+                      <div className="space-y-1">
+                        {filtered.map(s => {
+                          const checked = storeIds.includes(s.id);
+                          return (
+                            <button key={s.id} onClick={() => toggleStore(s.id)} className={`w-full flex items-center justify-between rounded-xl border px-3 py-2 transition-all ${checked?"bg-indigo-600/20 border-indigo-500/30":"bg-slate-950 border-slate-800/60 hover:bg-slate-800"}`}>
+                              <div className="flex items-center gap-2">
+                                <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?"bg-indigo-600 border-indigo-500":"border-slate-600"}`}>
+                                  {checked && <Check size={11} className="text-white"/>}
+                                </div>
+                                <span className="text-sm text-slate-200">{s.shortName || s.name}</span>
+                              </div>
+                              {s.ownershipModel && <span className="text-[10px] text-slate-600 uppercase">{s.ownershipModel === "joint_venture" ? "JV" : s.ownershipModel}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {activeStores.length === 0 && <div className="text-xs text-slate-600 text-center py-6">No stores exist yet. Add some in the Stores tab first.</div>}
               </div>
             </div>
           )}
@@ -3347,17 +3439,16 @@ function AdminPanelView({
   onUpdateKPITargets, onBulkImport
 }) {
   const [tab, setTab] = useState("locations");
-  const [kpiModal, setKpiModal] = useState(null);
   const [locModal, setLocModal] = useState(null);
   const [userModal, setUserModal] = useState(null);
   const [deleteModal, setDeleteModal] = useState(null);
   const [showImport, setShowImport] = useState(false);
 
   const tabs = [
-    {key:"locations",label:"Locations"},
-    {key:"stores",label:"Stores"},
-    {key:"managers",label:"Managers & Access"},
-    {key:"kpis",label:"KPI Targets"},
+    {key:"brands",   label:"Brands"},
+    {key:"stores",   label:"Stores"},
+    {key:"managers", label:"Managers & Access"},
+    {key:"kpis",     label:"KPI Targets"},
   ];
 
   return (
@@ -3371,22 +3462,25 @@ function AdminPanelView({
         </button>
       </div>
 
-      {tab==="locations"&&(
+      {tab==="brands"&&(
         <div className="space-y-4">
-          <div className="flex justify-end"><button onClick={()=>setLocModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/>Add Location</button></div>
+          <div className="text-xs text-slate-600 mb-2">
+            Brands are chains (e.g. Chocoberry, Tove). To add or edit individual physical stores like Evington Road or Cardiff, use the <strong className="text-slate-400">Stores</strong> tab.
+          </div>
+          <div className="flex justify-end"><button onClick={()=>setLocModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/>Add Brand</button></div>
           {brands.map(b=>{
             const BIcon=ICON_MAP[b.iconKey]||Building2;
-            const managerCount=users.filter(u=>u.role==="manager"&&u.brandIds.includes(b.id)).length;
+            const storeCount=stores.filter(s=>s.brandId===b.id && !s.archivedAt).length;
+            const managerCount=users.filter(u=>u.role==="manager"&&(u.storeIds||[]).some(sid=>stores.find(s=>s.id===sid)?.brandId===b.id)).length;
             return(
               <div key={b.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{background:b.color+"25"}}><BIcon size={18} style={{color:b.color}}/></div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-bold text-white">{b.name}</div>
                   <div className="text-xs text-slate-600">{b.address}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">Target: {fmtCurrency(b.kpiTargets.dailyRevenue)}/day · {managerCount} manager{managerCount!==1?"s":""}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{storeCount} store{storeCount!==1?"s":""} · {managerCount} manager{managerCount!==1?"s":""}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={()=>setKpiModal(b)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors">KPIs</button>
                   <button onClick={()=>setLocModal(b)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={14}/></button>
                   <button onClick={()=>setDeleteModal({msg:`Delete "${b.name}"? This cannot be undone.`,fn:()=>onDeleteBrand(b.id)})} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 transition-colors"><Trash2 size={14}/></button>
                 </div>
@@ -3420,7 +3514,19 @@ function AdminPanelView({
                 <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-bold text-white">{u.name}</span><RoleBadge role={u.role}/></div>
                 <div className="text-xs text-slate-600">{u.email}</div>
                 <div className="flex flex-wrap gap-1 mt-1.5">
-                  {isHqOrAbove(u.role)?<Badge label="All Locations" color={u.role==="owner"?"violet":"fuchsia"}/>:brands.filter(b=>u.brandIds.includes(b.id)).map(b=><Badge key={b.id} label={b.name} color="slate"/>)}
+                  {isHqOrAbove(u.role) ? (
+                    <Badge label="All Locations" color={u.role==="owner"?"violet":"fuchsia"}/>
+                  ) : (() => {
+                    const assigned = (u.storeIds || []).map(sid => stores.find(s => s.id === sid)).filter(Boolean);
+                    if (assigned.length === 0) return <Badge label="⚠ No stores assigned" color="amber"/>;
+                    // Up to 4 store chips, then "+N more"
+                    const shown = assigned.slice(0, 4);
+                    const rest = assigned.length - shown.length;
+                    return <>
+                      {shown.map(s => <Badge key={s.id} label={s.shortName || s.name} color="slate"/>)}
+                      {rest > 0 && <Badge label={`+${rest} more`} color="slate"/>}
+                    </>;
+                  })()}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -3433,36 +3539,19 @@ function AdminPanelView({
       )}
 
       {tab==="kpis"&&(
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 bg-amber-950/20 border border-amber-500/30 rounded-xl px-4 py-2.5">
-            <AlertTriangle size={14} className="text-amber-400 flex-shrink-0"/>
-            <span className="text-sm text-amber-300">Changes to KPI targets take effect immediately across all dashboards.</span>
-          </div>
-          {brands.map(b=>{
-            const t=b.kpiTargets;
-            return(
-              <div key={b.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="text-sm font-bold text-white">{b.name}</div>
-                  <button onClick={()=>setKpiModal(b)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors">Edit Targets</button>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {[{label:"Daily Revenue",value:fmtCurrency(t.dailyRevenue)},{label:"Prime Cost Max",value:`${t.primeCostMax}%`},{label:"Labour % Max",value:`${t.laborPctMax}%`},{label:"COGS % Max",value:`${t.cogsPctMax}%`},{label:"Net Margin Min",value:`${t.netMarginMin}%`},{label:"SPLH Min",value:`£${t.splhMin}`},{label:"Avg Star Min",value:`${t.avgStarMin}★`},{label:"Cash Variance Max",value:`£${t.cashVarianceMax}`}].map(item=>(
-                    <div key={item.label} className="bg-slate-950 rounded-xl p-3">
-                      <div className="text-xs text-slate-600 mb-1">{item.label}</div>
-                      <div className="text-sm font-bold text-white">{item.value}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <StoreKPIPanel
+          brands={brands}
+          stores={stores.filter(s => !s.archivedAt)}
+          onSaveStoreKPIs={async (storeId, kpiTargets) => {
+            // Calls the existing updateStore handler with just kpiTargets;
+            // appStoreToDb whitelists only what's set, so the rest is preserved.
+            return onUpdateStore(storeId, { kpiTargets });
+          }}
+        />
       )}
 
-      {kpiModal&&<KPITargetModal brand={kpiModal} onSave={onUpdateKPITargets} onClose={()=>setKpiModal(null)}/>}
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
-      {userModal&&<UserEditorModal user={userModal==="new"?null:userModal} brands={brands} onSave={userModal==="new"?onAddUser:onUpdateUser} onClose={()=>setUserModal(null)}/>}
+      {userModal&&<UserEditorModal user={userModal==="new"?null:userModal} brands={brands} stores={stores} onSave={userModal==="new"?onAddUser:onUpdateUser} onClose={()=>setUserModal(null)}/>}
       {deleteModal&&(
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
@@ -3473,6 +3562,277 @@ function AdminPanelView({
       )}
       {showImport&&<ExcelUploadModal brands={brands} entries={entries} onImport={async rows=>{ await onBulkImport(rows); }} onClose={()=>setShowImport(false)}/>}
     </div>
+  );
+}
+
+// ─── Per-Store KPI Panel (Admin → KPI Targets tab) ────────────────────────────
+// Replaces the old brand-level KPI editor. Each store now has its own targets
+// for the volume metrics (revenue, orders, hours) which vary by day of week,
+// plus a flat block of ratio targets (prime cost %, ATV, labour %) which don't.
+//
+// Storage shape (stores.kpi_targets jsonb):
+//   { monday: { revenue, orders, hours }, ..., sunday: {...},
+//     ratios: { primeCostMax, atvTarget, laborCostMax } }
+//
+// UI: filter by brand + ownership + search; edit-button opens a modal where
+// the whole week + ratios are edited at once.
+function StoreKPIPanel({ brands, stores, onSaveStoreKPIs }) {
+  const [brandFilter, setBrandFilter] = useState("all");
+  const [search, setSearch]           = useState("");
+  const [editing, setEditing]         = useState(null);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return stores
+      .filter(s => brandFilter === "all" || s.brandId === brandFilter)
+      .filter(s => !q || (s.shortName || "").toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q))
+      .sort((a, b) => (a.brandId || "").localeCompare(b.brandId || "") || (a.shortName || "").localeCompare(b.shortName || ""));
+  }, [stores, brandFilter, search]);
+
+  // Weekly summary numbers for the row — sum of per-day revenue & orders, used
+  // so you can see at a glance how each store's targets stack up.
+  const weeklyTotals = (kt) => {
+    const days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+    let rev = 0, ord = 0, hrs = 0;
+    days.forEach(d => {
+      const day = kt?.[d] || {};
+      rev += Number(day.revenue) || 0;
+      ord += Number(day.orders)  || 0;
+      hrs += Number(day.hours)   || 0;
+    });
+    return { rev, ord, hrs };
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 bg-amber-950/20 border border-amber-500/30 rounded-xl px-4 py-2.5">
+        <AlertTriangle size={14} className="text-amber-400 flex-shrink-0"/>
+        <span className="text-sm text-amber-300">Each store has its own targets. Volume targets (revenue, orders, hours) vary by day of week — weekends typically higher.</span>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <select
+          value={brandFilter}
+          onChange={e => setBrandFilter(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer"
+        >
+          <option value="all">All brands ({stores.length})</option>
+          {brands.map(b => (
+            <option key={b.id} value={b.id}>
+              {b.name} ({stores.filter(s => s.brandId === b.id).length})
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search store…"
+          className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 w-56"
+        />
+      </div>
+
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-900/60 border-b border-slate-800">
+            <tr>
+              <th className="text-left px-4 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Store</th>
+              <th className="text-left px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Brand</th>
+              <th className="text-right px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Weekly Revenue</th>
+              <th className="text-right px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Weekly Orders</th>
+              <th className="text-right px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Weekly Hours</th>
+              <th className="text-right px-3 py-2.5 text-slate-500 font-semibold uppercase tracking-widest">Prime Cost Max</th>
+              <th className="text-right px-4 py-2.5 text-slate-500 font-semibold uppercase tracking-widest"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} className="text-center py-8 text-slate-500">No stores match the current filter.</td></tr>
+            )}
+            {filtered.map(s => {
+              const brand = brands.find(b => b.id === s.brandId);
+              const totals = weeklyTotals(s.kpiTargets);
+              const ratios = s.kpiTargets?.ratios || {};
+              return (
+                <tr key={s.id} className="border-b border-slate-800/40 hover:bg-slate-800/30">
+                  <td className="px-4 py-2.5">
+                    <div className="text-sm text-white font-semibold">{s.shortName || s.name}</div>
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-300">{brand?.name || s.brandId}</td>
+                  <td className="px-3 py-2.5 text-right text-slate-200 tabular-nums">{fmtCurrency(totals.rev)}</td>
+                  <td className="px-3 py-2.5 text-right text-slate-200 tabular-nums">{totals.ord || "—"}</td>
+                  <td className="px-3 py-2.5 text-right text-slate-200 tabular-nums">{totals.hrs || "—"}</td>
+                  <td className="px-3 py-2.5 text-right text-slate-200 tabular-nums">{ratios.primeCostMax != null ? `${ratios.primeCostMax}%` : "—"}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      onClick={() => setEditing(s)}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
+                    >Edit Targets</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {editing && (
+        <StoreKPIModal
+          store={editing}
+          brand={brands.find(b => b.id === editing.brandId)}
+          onSave={async (kpiTargets) => {
+            await onSaveStoreKPIs(editing.id, kpiTargets);
+            setEditing(null);
+          }}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Store KPI Modal (edits one store's per-day targets at once) ──────────────
+function StoreKPIModal({ store, brand, onSave, onClose }) {
+  const DAYS = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+  const DAY_LABELS = { monday:"Mon", tuesday:"Tue", wednesday:"Wed", thursday:"Thu", friday:"Fri", saturday:"Sat", sunday:"Sun" };
+
+  // Seed form from current store targets, defaulting any missing day/ratio
+  // to zero so the inputs are controlled even on a brand-new store.
+  const seed = useMemo(() => {
+    const kt = store?.kpiTargets || {};
+    const days = {};
+    DAYS.forEach(d => {
+      days[d] = {
+        revenue: kt[d]?.revenue ?? 0,
+        orders:  kt[d]?.orders  ?? 0,
+        hours:   kt[d]?.hours   ?? 0,
+      };
+    });
+    return {
+      ...days,
+      ratios: {
+        primeCostMax:  kt.ratios?.primeCostMax  ?? 60,
+        atvTarget:     kt.ratios?.atvTarget     ?? 18,
+        laborCostMax:  kt.ratios?.laborCostMax  ?? 25,
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store?.id]);
+
+  const [form, setForm] = useState(seed);
+  const [saving, setSaving] = useState(false);
+
+  const setDay = (day, field, val) => setForm(f => ({ ...f, [day]: { ...f[day], [field]: val === "" ? 0 : Number(val) } }));
+  const setRatio = (field, val) => setForm(f => ({ ...f, ratios: { ...f.ratios, [field]: val === "" ? 0 : Number(val) } }));
+
+  const totals = useMemo(() => {
+    let rev = 0, ord = 0, hrs = 0;
+    DAYS.forEach(d => {
+      rev += Number(form[d]?.revenue) || 0;
+      ord += Number(form[d]?.orders)  || 0;
+      hrs += Number(form[d]?.hours)   || 0;
+    });
+    return { rev, ord, hrs };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form]);
+
+  // "Copy Mon to all days" — a sanity shortcut for stores where targets don't
+  // actually vary by day. Cheaper than typing the same 3 values 7 times.
+  const copyMondayToAll = () => {
+    setForm(f => {
+      const mon = f.monday;
+      const next = { ...f };
+      DAYS.forEach(d => { next[d] = { ...mon }; });
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try { await onSave(form); }
+    finally { setSaving(false); }
+  };
+
+  const cellCls = "w-full px-2 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-white text-right tabular-nums focus:outline-none focus:border-indigo-500";
+
+  return (
+    <Modal
+      title={`KPI Targets — ${store.shortName || store.name}${brand ? ` · ${brand.name}` : ""}`}
+      onClose={onClose}
+      maxW="max-w-3xl"
+      footer={
+        <div className="flex gap-2 w-full">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">{saving ? "Saving…" : "Save targets"}</button>
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-slate-500">Volume targets per day. Weekends usually higher.</div>
+          <button onClick={copyMondayToAll} className="text-xs font-semibold text-indigo-400 hover:text-indigo-300">Copy Mon → all days</button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-700">
+                <th className="text-left px-3 py-2 text-slate-500 font-semibold">Day</th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold">Revenue (£)</th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold">Orders</th>
+                <th className="text-right px-3 py-2 text-slate-500 font-semibold">Hours</th>
+              </tr>
+            </thead>
+            <tbody>
+              {DAYS.map(d => (
+                <tr key={d} className="border-b border-slate-800/50">
+                  <td className="px-3 py-1.5 text-slate-300 font-semibold">{DAY_LABELS[d]}</td>
+                  <td className="px-1 py-1.5">
+                    <input type="number" min="0" step="50" value={form[d]?.revenue ?? 0}
+                      onChange={e => setDay(d, "revenue", e.target.value)} className={cellCls}/>
+                  </td>
+                  <td className="px-1 py-1.5">
+                    <input type="number" min="0" step="1" value={form[d]?.orders ?? 0}
+                      onChange={e => setDay(d, "orders", e.target.value)} className={cellCls}/>
+                  </td>
+                  <td className="px-1 py-1.5">
+                    <input type="number" min="0" step="1" value={form[d]?.hours ?? 0}
+                      onChange={e => setDay(d, "hours", e.target.value)} className={cellCls}/>
+                  </td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-slate-700 bg-slate-900/40">
+                <td className="px-3 py-2 text-slate-200 font-semibold">Weekly total</td>
+                <td className="px-3 py-2 text-right text-slate-200 font-bold tabular-nums">{fmtCurrency(totals.rev)}</td>
+                <td className="px-3 py-2 text-right text-slate-200 font-bold tabular-nums">{totals.ord}</td>
+                <td className="px-3 py-2 text-right text-slate-200 font-bold tabular-nums">{totals.hrs}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <div className="text-xs text-slate-500 mb-2">Efficiency ratios. These apply across the whole week.</div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Prime Cost Max (%)</label>
+              <input type="number" min="0" max="100" step="1" value={form.ratios.primeCostMax}
+                onChange={e => setRatio("primeCostMax", e.target.value)} className={cellCls + " text-left"}/>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">ATV Target (£)</label>
+              <input type="number" min="0" step="0.5" value={form.ratios.atvTarget}
+                onChange={e => setRatio("atvTarget", e.target.value)} className={cellCls + " text-left"}/>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Labour % Max</label>
+              <input type="number" min="0" max="100" step="1" value={form.ratios.laborCostMax}
+                onChange={e => setRatio("laborCostMax", e.target.value)} className={cellCls + " text-left"}/>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
