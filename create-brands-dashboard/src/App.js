@@ -5105,7 +5105,12 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
         <SelectDropdown value={filter} onChange={setFilter} className="w-44">
           {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
         </SelectDropdown>
-        {isHqOrAbove(user.role) && <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>}
+        {/* Issue 1: Managers can CREATE assignments for their stores; only
+            HQ/owner can edit or delete existing ones. The store picker in
+            AssignmentFormModal already limits options to owned stores for
+            managers, so they can't create assignments at stores they don't
+            manage. */}
+        <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>
       </div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm">No assignments found</div></div>}
       <div className="space-y-3">{visible.map(a => {
@@ -10514,18 +10519,28 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 
   const ShiftCard = ({ shift, isMe }) => {
     const member = opsTeam.find(m => m.id === shift.employeeId);
+    // Issue 3: Other employees stay fully anonymous — role/badge color only,
+    // never name. If no role is set on the member or shift, fall back to a
+    // generic label rather than leaking the name.
     const displayName = isMe
       ? (myMember?.nickname || myMember?.firstName || shift.employeeName)
-      : (member?.role || shift.role || shift.employeeName);
+      : (member?.role || shift.role || "Team Member");
+    // Coloured badge dot to give visual variety without identity. Use the
+    // member's stored color when available so each role has a consistent hue.
+    const badgeColor = isMe
+      ? (myMember?.color || "#6366f1")
+      : (member?.color || "#64748b");
     return (
       <div className={`rounded-2xl border p-4 ${isMe ? "bg-indigo-950/30 border-indigo-500/30" : "bg-slate-900 border-slate-700"}`}>
         <div className="flex items-center gap-3">
-          {isMe && (
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
-              style={{background:(myMember?.color||"#6366f1")+"30",color:myMember?.color||"#6366f1"}}>
-              {(myMember?.firstName||"?")[0]}{myMember?.lastName?.[0]||""}
-            </div>
-          )}
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
+            style={{background:badgeColor+"30",color:badgeColor}}>
+            {/* Show initials only for self; show a role icon dot for others */}
+            {isMe
+              ? `${(myMember?.firstName||"?")[0]}${myMember?.lastName?.[0]||""}`
+              : <span className="w-2.5 h-2.5 rounded-full" style={{background:badgeColor}}/>
+            }
+          </div>
           <div className="flex-1 min-w-0">
             <div className={`text-sm font-bold ${isMe ? "text-indigo-300" : "text-slate-200"}`}>
               {isMe ? `${displayName} (You)` : displayName}
@@ -10533,7 +10548,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
             <div className="text-xs text-slate-600 mt-0.5">
               {shift.shift} · {shift.startTime} – {shift.endTime}
             </div>
-            {shift.notes && <div className="text-xs text-slate-500 italic mt-1">{shift.notes}</div>}
+            {shift.notes && isMe && <div className="text-xs text-slate-500 italic mt-1">{shift.notes}</div>}
           </div>
           <div className="text-right flex-shrink-0">
             <div className="text-sm font-bold text-white">{shift.startTime}</div>
@@ -10544,19 +10559,10 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
     );
   };
 
-  // Also show this week's upcoming shifts
-  const weekDates = Array.from({length:7}, (_,i) => {
-    const d = new Date(today); d.setDate(today.getDate() - (today.getDay()===0?6:today.getDay()-1) + i);
-    return toLocalDateStr(d);
-  });
-  const upcomingMyShifts = schedules.filter(s =>
-    s.brandId === myBrandId &&
-    weekDates.includes(s.date) &&
-    s.date > viewDate && // only future days this week
-    !!s.published &&
-    s.status !== "cancelled" &&
-    (s.employeeId === myId || s.employeeId === currentUser.id)
-  ).sort((a,b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+  // Issue 3: "Coming Up This Week" was removed per spec. Staff see only
+  // today/tomorrow. The Today/Tomorrow toggle above is enough — anything
+  // further out is operationally noise and surfacing the personal schedule
+  // a week ahead encourages staff to check in less often.
 
   return (
     <div className="space-y-5 max-w-xl">
@@ -10607,26 +10613,6 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
         <div>
           <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Also Working {viewLabel}</div>
           <div className="space-y-2">{otherDeptShifts.map(s=><ShiftCard key={s.id} shift={s} isMe={false}/>)}</div>
-        </div>
-      )}
-
-      {/* Upcoming shifts this week */}
-      {upcomingMyShifts.length > 0 && (
-        <div>
-          <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Coming Up This Week</div>
-          <div className="space-y-2">
-            {upcomingMyShifts.map(s => (
-              <div key={s.id} className="flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3">
-                <div className="text-xs font-bold text-slate-600 w-16 flex-shrink-0">
-                  {new Date(s.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white">{s.shift}</div>
-                  <div className="text-xs text-slate-600">{s.startTime} – {s.endTime}</div>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
     </div>
