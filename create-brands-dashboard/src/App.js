@@ -373,6 +373,36 @@ function LocationDropdown({ brands, value, onChange, allLabel = null, className 
   );
 }
 
+// Store-scope dropdown — used by every store-filtered operational view.
+// Value "all" means "merge all stores I can see"; otherwise it's a store id.
+//   stores  — the list the user can see (caller already passes visibleStores)
+//   brands  — for showing "Chocoberry · Cardiff" style labels when multi-brand
+// Returns null if there are 0 stores (caller renders an empty state).
+// Hidden entirely for single-store managers (no choice to make).
+function StoreScopeDropdown({ stores, brands, value, onChange, className = "" }) {
+  if (!stores || stores.length === 0) return null;
+  if (stores.length === 1) return null; // one store = nothing to pick
+  // For multi-brand contexts (owner/HQ seeing Chocoberry + Tove), prefix the
+  // brand. For single-brand contexts (Sumit only sees Chocoberry stores),
+  // just show the store name.
+  const brandsInScope = new Set(stores.map(s => s.brandId));
+  const showBrandPrefix = brandsInScope.size > 1;
+  const brandName = (id) => brands.find(b => b.id === id)?.name || id;
+  const sorted = [...stores].sort((a, b) =>
+    (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")
+  );
+  return (
+    <SelectDropdown value={value} onChange={onChange} className={className}>
+      <option value="all">All my stores ({stores.length})</option>
+      {sorted.map(s => (
+        <option key={s.id} value={s.id}>
+          {showBrandPrefix ? `${brandName(s.brandId)} · ${s.shortName || s.name}` : (s.shortName || s.name)}
+        </option>
+      ))}
+    </SelectDropdown>
+  );
+}
+
 // Period dropdown — collapses all the preset buttons into one <select>
 function PeriodFilterBar({ preset, onPreset, customFrom, customTo, onCustomFrom, onCustomTo }) {
   const presets = [
@@ -3896,13 +3926,45 @@ function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checkli
 }
 
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
-function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
+
+  // visibleStores = the stores this user can see (already filtered upstream
+  // via visibleStoreIds passed from App). For owner/HQ this is every active
+  // store; for managers it's just their assigned stores.
+  const visibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+
+  // The visible brands set follows from the stores in scope. We also
+  // continue to honour user.brandIds for any rows without a store_id yet
+  // (transitional: pre-Stage-5 inserts had brand_id only).
+  const visibleBrands = useMemo(() => {
+    const brandIdsInScope = new Set(visibleStores.map(s => s.brandId));
+    return (brands || []).filter(b => brandIdsInScope.has(b.id) || isHqOrAbove(user.role) || user.brandIds?.includes(b.id));
+  }, [brands, visibleStores, user.role, user.brandIds]);
+
+  const [selStore, setSelStore] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
-  const bAssigns = assignments.filter(a => a.brandId === selBrand && isActiveToday(a));
+
+  // Active assignments today, scoped to either the chosen store or all stores
+  // the user can see. Backward-compat: a row with no storeId falls back to a
+  // brandId match against the brands implied by visibleStores.
+  const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
+  const inScope = (a) => {
+    if (a.storeId) {
+      // Store-scoped row: must match the chosen store, OR be in scope when "all"
+      if (selStore === "all") return visibleStoreIds.includes(a.storeId);
+      return a.storeId === selStore;
+    }
+    // Legacy row without storeId: fall back to brand match. Only relevant
+    // until Stage 6 makes store_id NOT NULL.
+    return visibleBrandIds.has(a.brandId);
+  };
+  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a));
   const overdue = bAssigns.filter(isOverdue);
+
   const getTaskName = (type, taskId) => {
     if (type === "checklist") return checklists.find(c => c.id === taskId)?.name || taskId;
     if (type === "temp") return tempUnits.find(t => t.id === taskId)?.name || taskId;
@@ -3910,22 +3972,44 @@ function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks
     return "Delivery check";
   };
   const typeIcons = { checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" };
+
+  // Empty-state when the user has no assigned stores (only managers/staff
+  // can hit this — owner/HQ always have all stores in scope).
+  if (visibleStores.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <ClipboardList size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No stores assigned to your account.</div>
+          <div className="text-xs text-slate-600 mt-1">Ask an admin to assign you to one or more stores.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      <LocationDropdown brands={vb} value={selBrand} onChange={setSelBrand} className="w-48"/>
+      <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
       {overdue.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
-      {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments for this location today</div></div>}
+      {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments {selStore === "all" ? "across your stores" : "for this store"} today</div></div>}
       <div className="space-y-3">
         {bAssigns.map(a => {
           const od = isOverdue(a); const taskName = getTaskName(a.type, a.taskId);
           const cl = a.type === "checklist" ? checklists.find(c => c.id === a.taskId) : null;
           const doneToday = auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName));
-          const stateKey = `${a.brandId}||${a.taskId}||${getTodayStr()}`;
+          // Stable key — includes storeId when present so per-store checklist
+          // state doesn't collide across stores sharing a brand.
+          const stateKey = `${a.storeId || a.brandId}||${a.taskId}||${getTodayStr()}`;
           const clState = checklistStates[stateKey] || {};
           const totalItems = cl?.items?.length || 0;
           const doneItems = totalItems ? Object.values(clState).filter(Boolean).length : 0;
           const pct = totalItems ? Math.round((doneItems / totalItems) * 100) : 0;
           const isExp = expandedId === a.id;
+          // Show the store name on each task when the dropdown is on "all" so
+          // it's clear which store each item belongs to.
+          const storeBadge = selStore === "all" && a.storeId
+            ? (stores.find(s => s.id === a.storeId)?.shortName || null)
+            : null;
           return (
             <div key={a.id} className={`rounded-2xl border overflow-hidden ${od ? "border-red-500/30 bg-red-950/20/10" : doneToday ? "border-emerald-500/30 bg-emerald-950/20/10" : "border-slate-700 bg-slate-900"}`}>
               <div className="p-4">
@@ -3933,7 +4017,7 @@ function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks
                   <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-base flex-shrink-0">{typeIcons[a.type] || "📋"}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="text-sm font-bold text-white">{taskName}</div>
+                      <div className="text-sm font-bold text-white">{taskName}{storeBadge && <span className="ml-2 text-xs font-normal text-slate-500">· {storeBadge}</span>}</div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         {od && <Badge label="OVERDUE" color="red"/>}
                         {doneToday && <Badge label="✓ Complete" color="emerald"/>}
@@ -10251,7 +10335,7 @@ export default function App() {
             {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} onAddEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
+            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
