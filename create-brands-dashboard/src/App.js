@@ -9596,7 +9596,18 @@ const IS_KIOSK = window.location.pathname === "/kiosk" ||
                  window.location.search.includes("kiosk");
 
 // ── Sidebar Component ─────────────────────────────────────────────────────────
-function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed }) {
+function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed,
+                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false }) {
+  // Only an actual owner gets the view-as picker. Impersonated views never show it
+  // (avoid the "view as X → view as Y" rabbit hole).
+  const canImpersonate = actualUser?.role === "owner" && onImpersonate;
+  const impersonationTargets = canImpersonate
+    ? users.filter(u => u.id !== actualUser.id).sort((a, b) => {
+        const order = { hq_staff: 0, manager: 1, staff: 2, owner: 3 };
+        return (order[a.role] ?? 9) - (order[b.role] ?? 9) || (a.name || "").localeCompare(b.name || "");
+      })
+    : [];
+
   return (
     <div className={`flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
       {/* Logo */}
@@ -9629,6 +9640,26 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
           </div>
         ))}
       </nav>
+
+      {/* View-as picker (owner only, expanded sidebar only) */}
+      {canImpersonate && !collapsed && (
+        <div className="border-t border-slate-800/60 px-3 py-2">
+          <label className="block text-[10px] uppercase tracking-widest text-slate-600 font-semibold mb-1">View as</label>
+          <select
+            value={isImpersonating ? currentUser.id : ""}
+            onChange={e => onImpersonate(e.target.value || null)}
+            className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-indigo-500 cursor-pointer"
+          >
+            <option value="">— Myself (owner) —</option>
+            {impersonationTargets.map(u => (
+              <option key={u.id} value={u.id}>
+                {u.name} · {u.role === "hq_staff" ? "HQ" : u.role}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* User */}
       <div className="border-t border-slate-800/60 p-3">
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
@@ -9643,8 +9674,18 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => {
+  // actualUser = who really logged in (persisted to localStorage).
+  // impersonatedUserId = if set, owner is viewing the app AS another user.
+  // currentUser (consumed by every view below) is the *effective* user —
+  //   either actualUser, or the impersonated user object if owner is "viewing as".
+  // Only an actual owner can impersonate. Impersonation is client-side only:
+  //   Supabase queries still run as the actual user, so RLS isn't bypassed —
+  //   this is a UI preview, not a real auth swap.
+  const [actualUser, setActualUser] = useState(() => {
     try { const s = localStorage.getItem("cb_session"); return s ? JSON.parse(s) : null; } catch { return null; }
+  });
+  const [impersonatedUserId, setImpersonatedUserId] = useState(() => {
+    try { return localStorage.getItem("cb_impersonate") || null; } catch { return null; }
   });
   const [loginMode, setLoginMode] = useState("employee");
 
@@ -9800,8 +9841,64 @@ export default function App() {
     };
   }, [dbReady]);
 
-  const handleLogin  = useCallback(user => { setCurrentUser(user); localStorage.setItem("cb_session", JSON.stringify(user)); }, []);
-  const handleLogout = useCallback(() => { setCurrentUser(null); localStorage.removeItem("cb_session"); setLoginMode("employee"); }, []);
+  // ── Login / logout / impersonation ─────────────────────────────────────────
+  const handleLogin  = useCallback(user => {
+    setActualUser(user);
+    setImpersonatedUserId(null);
+    localStorage.setItem("cb_session", JSON.stringify(user));
+    localStorage.removeItem("cb_impersonate");
+  }, []);
+  const handleLogout = useCallback(() => {
+    setActualUser(null);
+    setImpersonatedUserId(null);
+    localStorage.removeItem("cb_session");
+    localStorage.removeItem("cb_impersonate");
+    setLoginMode("employee");
+  }, []);
+
+  // currentUser = the effective user (actual user, or impersonated if owner is "viewing as").
+  // Every existing view reads `currentUser` — we don't have to rename anything downstream.
+  const currentUser = useMemo(() => {
+    if (!actualUser) return null;
+    // Only an owner can impersonate. Anyone else: ignore impersonation state.
+    if (actualUser.role !== "owner") return actualUser;
+    if (!impersonatedUserId) return actualUser;
+    const target = users.find(u => u.id === impersonatedUserId);
+    return target || actualUser;   // fall back if the impersonated user vanishes
+  }, [actualUser, impersonatedUserId, users]);
+
+  const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
+
+  const handleImpersonate = useCallback(userId => {
+    if (!actualUser || actualUser.role !== "owner") return;
+    if (!userId || userId === actualUser.id) {
+      setImpersonatedUserId(null);
+      localStorage.removeItem("cb_impersonate");
+    } else {
+      setImpersonatedUserId(userId);
+      localStorage.setItem("cb_impersonate", userId);
+    }
+  }, [actualUser]);
+
+  // ── Role / access helpers (used by sidebar gating and view filters) ────────
+  const isOwner    = currentUser?.role === "owner";
+  const isHQ       = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+  const isManager  = currentUser?.role === "manager";
+  const isStaff    = currentUser?.role === "staff";
+
+  // visibleStores: which stores can the current user see?
+  //   Owner & HQ Staff → all non-archived stores
+  //   Manager & Staff  → only stores listed in their store_ids
+  const visibleStores = useMemo(() => {
+    if (!currentUser) return [];
+    const active = stores.filter(s => !s.archivedAt);
+    if (isHQ) return active;
+    const ids = currentUser.storeIds || [];
+    if (ids.length === 0) return [];
+    return active.filter(s => ids.includes(s.id));
+  }, [currentUser, stores, isHQ]);
+
+  const visibleStoreIds = useMemo(() => visibleStores.map(s => s.id), [visibleStores]);
 
   const addAudit = useCallback(async (action, detail, who, brandId) => {
     try { const e={id:`at-${Date.now()}`,action,detail,performedBy:who,brandId,timestamp:new Date().toISOString()}; await insertAuditEntry(e); setAuditTrail(at=>[e,...at]); } catch {}
@@ -10057,9 +10154,27 @@ export default function App() {
           navGroups={NAV_GROUPS} activeView={activeView} setActiveView={setActiveView}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
+          actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}
         />
         {/* Main */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Impersonation banner — visible when an owner is viewing as someone else */}
+          {isImpersonating && (
+            <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 flex items-center gap-3 text-amber-200">
+              <span className="text-sm">⚠</span>
+              <span className="text-xs font-semibold flex-1">
+                Viewing as <span className="text-amber-100">{currentUser.name}</span>
+                <span className="text-amber-200/60 font-normal"> · {currentUser.role === "hq_staff" ? "HQ Staff" : currentUser.role}</span>
+                <span className="text-amber-200/60 font-normal"> · UI preview only, writes still go through your owner account</span>
+              </span>
+              <button
+                onClick={() => handleImpersonate(null)}
+                className="text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 px-3 py-1 rounded-lg transition-colors"
+              >
+                Return to Owner
+              </button>
+            </div>
+          )}
           {/* Topbar */}
           <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
             <div>
