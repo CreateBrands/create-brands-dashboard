@@ -1523,7 +1523,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
 
           {activeView === "comms" && (
             <CommunicationView
-              currentUser={currentUser} brands={myBrands} opsTeam={opsTeam} users={[]}
+              currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={[]}
               messages={messages || []} onSend={onSendMessage} onMarkRead={onMarkRead}
               tickets={hdTickets || []} onAddTicket={onAddHdTicket} onUpdateTicket={onUpdateHdTicket} onDeleteTicket={() => {}}
               availability={availability || []} onAddAvailability={onAddAvailability} onUpdateAvailability={onUpdateAvailability}
@@ -7277,7 +7277,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
 // COMMUNICATION HUB — Chat + Help Desk in one panel
 // ═══════════════════════════════════════════════════════════════════════════════
 function CommunicationView({
-  currentUser, brands, opsTeam, users,
+  currentUser, brands, stores = [], opsTeam, users,
   messages, onSend, onMarkRead,
   tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
   availability, onAddAvailability, onUpdateAvailability,
@@ -11147,7 +11147,7 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {effectiveActiveView === "comms" && <CommunicationView
-              currentUser={currentUser} brands={visibleBrands} opsTeam={opsTeam} users={users}
+              currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
               availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
