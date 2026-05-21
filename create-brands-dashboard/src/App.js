@@ -1513,7 +1513,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
           )}
           {activeView === "ops-network" && (
             <OpsNetworkDashboard
-              brands={myBrands} assignments={assignments} auditTrail={auditTrail}
+              brands={myBrands}
+              stores={stores}
+              visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)}
+              assignments={assignments} auditTrail={auditTrail}
               opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits}
               cleaningTasks={cleaningTasks}
             />
@@ -4383,48 +4386,128 @@ function OpsConfirmModal({ message, onConfirm, onClose }) {
 }
 
 // ─── Ops Network Dashboard ────────────────────────────────────────────────────
-function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checklists = [], tempUnits = [], cleaningTasks = [] }) {
+function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, auditTrail, opsTeam, checklists = [], tempUnits = [], cleaningTasks = [] }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const todayA = assignments.filter(a => vb.some(b => b.id === a.brandId) && isActiveToday(a));
-  const overdue = todayA.filter(isOverdue);
-  const completed = auditTrail.filter(t => t.date === getTodayStr() && t.action.includes("sign-off") && vb.some(b => b.id === t.brandId)).length;
-  const ragFor = brand => {
-    const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
-    const od = la.filter(isOverdue);
-    const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
-    if (od.length) return "red";
-    if (done === la.length && la.length > 0) return "green";
-    return "amber";
+
+  // Same store-scope pattern as ComplianceView. Owner/HQ default to "owned".
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+
+  const sortedStores = useMemo(
+    () => [...visibleStores].sort((a, b) =>
+      (a.brandId || "").localeCompare(b.brandId || "") ||
+      (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleStores]
+  );
+
+  const todayStr = getTodayStr();
+
+  // Per-store metrics with the same legacy-split logic from ComplianceView.
+  // Legacy rows (no store_id) get distributed evenly across the brand's
+  // visible stores so the dashboard isn't dominated by zeros.
+  const rowFor = (store) => {
+    const direct = assignments.filter(a => a.storeId === store.id && isActiveToday(a));
+    const brandStoresInScope = sortedStores.filter(s => s.brandId === store.brandId);
+    const legacyBrand = assignments.filter(a => !a.storeId && a.brandId === store.brandId && isActiveToday(a));
+    const legacyShare = brandStoresInScope.length > 0 ? legacyBrand.length / brandStoresInScope.length : 0;
+
+    const la = direct.length + Math.round(legacyShare);
+    const od = direct.filter(isOverdue).length;
+
+    const directDone = auditTrail.filter(t =>
+      t.storeId === store.id && t.date === todayStr && t.action.includes("sign-off")
+    ).length;
+    const legacyDoneBrand = auditTrail.filter(t =>
+      !t.storeId && t.brandId === store.brandId && t.date === todayStr && t.action.includes("sign-off")
+    ).length;
+    const done = directDone + Math.round(brandStoresInScope.length > 0 ? legacyDoneBrand / brandStoresInScope.length : 0);
+
+    const rate = la > 0 ? Math.round((done / la) * 100) : 0;
+    const rag = od > 0 ? "red" : (la > 0 && done >= la) ? "green" : "amber";
+    return { la, od, done, rate, rag };
   };
+
+  // Aggregate top-line stats from the per-store rows so the cards and the
+  // table can't disagree.
+  const aggregates = useMemo(() => {
+    const rows = sortedStores.map(rowFor);
+    return {
+      totalScheduled: rows.reduce((a, r) => a + r.la, 0),
+      totalOverdue:   rows.reduce((a, r) => a + r.od, 0),
+      totalCompleted: rows.reduce((a, r) => a + r.done, 0),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedStores, assignments, auditTrail]);
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <MapPin size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {overdue.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={18} className="text-red-400 flex-shrink-0 mt-0.5"/><div><div className="text-sm font-bold text-red-400">{overdue.length} overdue assignment{overdue.length > 1 ? "s" : ""} require action</div></div></div>}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Locations" value={vb.length} sub="Active" icon={MapPin} accent="indigo"/>
-        <StatCard label="Assignments Today" value={todayA.length} sub="All sites" icon={ClipboardList} accent="indigo"/>
-        <StatCard label="Overdue" value={overdue.length} sub={overdue.length ? "Action needed" : "All on time"} icon={Clock} accent={overdue.length ? "red" : "emerald"} alert={overdue.length > 0}/>
-        <StatCard label="Completed Today" value={completed} sub="Sign-offs" icon={CheckCircle} accent="emerald"/>
+      <div className="flex items-center gap-2 flex-wrap">
+        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+        <div className="text-xs text-slate-600">{sortedStores.length} store{sortedStores.length === 1 ? "" : "s"}</div>
       </div>
-      <AnalysisBlock title="All Locations — Live Status">
+
+      {aggregates.totalOverdue > 0 && (
+        <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3">
+          <AlertTriangle size={18} className="text-red-400 flex-shrink-0 mt-0.5"/>
+          <div>
+            <div className="text-sm font-bold text-red-400">{aggregates.totalOverdue} overdue assignment{aggregates.totalOverdue > 1 ? "s" : ""} require action</div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Stores" value={sortedStores.length} sub="In view" icon={MapPin} accent="indigo"/>
+        <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub="All stores" icon={ClipboardList} accent="indigo"/>
+        <StatCard label="Overdue" value={aggregates.totalOverdue} sub={aggregates.totalOverdue ? "Action needed" : "All on time"} icon={Clock} accent={aggregates.totalOverdue ? "red" : "emerald"} alert={aggregates.totalOverdue > 0}/>
+        <StatCard label="Completed Today" value={aggregates.totalCompleted} sub="Sign-offs" icon={CheckCircle} accent="emerald"/>
+      </div>
+
+      <AnalysisBlock title="All Stores — Live Status">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
-            <thead><tr className="border-b border-slate-700">{["Location","Scheduled","Overdue","Completed","Rate","RAG"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>)}</tr></thead>
+            <thead>
+              <tr className="border-b border-slate-700">
+                {["Store","Brand","Scheduled","Overdue","Completed","Rate","RAG"].map(h =>
+                  <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>
+                )}
+              </tr>
+            </thead>
             <tbody>
-              {vb.map(brand => {
-                const la = assignments.filter(a => a.brandId === brand.id && isActiveToday(a));
-                const od = la.filter(isOverdue);
-                const done = auditTrail.filter(t => t.brandId === brand.id && t.date === getTodayStr() && t.action.includes("sign-off")).length;
-                const rate = la.length ? Math.round((done / la.length) * 100) : 0;
-                const rag = ragFor(brand);
+              {sortedStores.map(store => {
+                const brand = brands.find(b => b.id === store.brandId);
+                const { la, od, done, rate, rag } = rowFor(store);
                 const ragColors = { red: "red", green: "green", amber: "amber" };
                 return (
-                  <tr key={brand.id} className="border-b border-slate-800/60 hover:bg-slate-800/30">
-                    <td className="px-3 py-3"><div className="flex items-center gap-2"><div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: brand.color + "25", color: brand.color }}>{brand.name.slice(0,2)}</div><span className="font-semibold text-slate-200">{brand.name}</span></div></td>
-                    <td className="px-3 py-3 text-slate-700 font-semibold">{la.length}</td>
-                    <td className="px-3 py-3">{od.length ? <Badge label={`⚠ ${od.length}`} color="red"/> : <Badge label="✓ On time" color="green"/>}</td>
+                  <tr key={store.id} className="border-b border-slate-800/60 hover:bg-slate-800/30">
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: (brand?.color || "#6366f1") + "25", color: brand?.color || "#6366f1" }}>
+                          {(store.shortName || store.name || "?").slice(0, 2)}
+                        </div>
+                        <span className="font-semibold text-slate-200">{store.shortName || store.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-slate-500">{brand?.name || store.brandId}</td>
+                    <td className="px-3 py-3 text-slate-700 font-semibold">{la}</td>
+                    <td className="px-3 py-3">{od ? <Badge label={`⚠ ${od}`} color="red"/> : <Badge label="✓ On time" color="green"/>}</td>
                     <td className="px-3 py-3 text-slate-700">{done}</td>
-                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la.length ? rate+"%" : "—"}</span></td>
+                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la ? rate+"%" : "—"}</span></td>
                     <td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={ragColors[rag]}/></td>
                   </tr>
                 );
@@ -12194,7 +12277,7 @@ export default function App() {
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-            {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+            {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
