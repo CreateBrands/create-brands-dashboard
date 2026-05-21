@@ -977,10 +977,20 @@ export async function insertStore(store) {
 
 export async function updateStore(id, patch) {
   const row = appStoreToDb(patch);
+  // Drop .single() — under some Supabase configurations (stale schema cache,
+  // RLS policies that hide rows from SELECT after UPDATE), PostgREST returns
+  // PGRST116 "no rows" even when the UPDATE succeeded. Using a plain array
+  // response avoids the false error; we fall back to a fresh fetch if needed.
   const { data, error } = await supabase
-    .from("stores").update(row).eq("id", id).select().single();
+    .from("stores").update(row).eq("id", id).select();
   if (error) throw error;
-  return dbStoreToApp(data);
+  if (data && data.length > 0) return dbStoreToApp(data[0]);
+  // UPDATE succeeded but SELECT returned nothing (likely RLS) — refetch by id.
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("stores").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Store ${id} updated but could not be retrieved — check RLS policies.`);
+  return dbStoreToApp(fresh);
 }
 
 export async function deleteStore(id) {
