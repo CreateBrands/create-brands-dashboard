@@ -12012,8 +12012,22 @@ export default function App() {
 
   const visibleStoreIds = useMemo(() => visibleStores.map(s => s.id), [visibleStores]);
 
-  const addAudit = useCallback(async (action, detail, who, brandId) => {
-    try { const e={id:`at-${Date.now()}`,action,detail,performedBy:who,brandId,timestamp:new Date().toISOString()}; await insertAuditEntry(e); setAuditTrail(at=>[e,...at]); } catch {}
+  const addAudit = useCallback(async (action, detail, who, brandId, storeId) => {
+    try {
+      const now = new Date();
+      const e = {
+        id: `at-${Date.now()}`,
+        action, detail,
+        by: who,                 // matches appAuditToDb -> performed_by
+        brandId,
+        storeId: storeId || null,
+        date: now.toISOString().split("T")[0],
+        time: now.toTimeString().slice(0, 8),
+        timestamp: now.toISOString(),
+      };
+      await insertAuditEntry(e);
+      setAuditTrail(at => [e, ...at]);
+    } catch {}
   }, []);
 
   const addEntry     = useCallback(async e=>{const s=await upsertEntry(e);setEntries(es=>{const idx=es.findIndex(x=>x.id===s.id);return idx>=0?es.map((x,i)=>i===idx?s:x):[s,...es];});}, []);
@@ -12157,16 +12171,37 @@ export default function App() {
   const handleChecklistItemToggle = useCallback(async (stateKey,itemId,val)=>{
     const newState={...(checklistStates[stateKey]||{}),[itemId]:val};
     setChecklistStates(s=>({...s,[stateKey]:newState}));
-    const [brandId,checklistId,date]=stateKey.split("||");
-    await upsertChecklistState(brandId,checklistId,date,newState,"",null);
-  }, [checklistStates]);
+    // stateKey first segment is "store_id || brand_id" — set by the
+    // consumer at the call site. After Stage 6, that means it's a storeId
+    // for all NEW assignments (they're store-keyed via NOT NULL). Resolve
+    // which kind it is by checking the stores list, so legacy brand-scoped
+    // checklists still work.
+    const [scopeId,checklistId,date]=stateKey.split("||");
+    const matchingStore=stores.find(s=>s.id===scopeId);
+    if (!matchingStore) {
+      // Legacy/orphan path: scopeId is a brandId. Skip the write since
+      // checklist_states.store_id is now NOT NULL — we can't represent this
+      // record any more without a storeId. (In practice this branch is
+      // unreachable after Stage 6 since all assignments now require storeId.)
+      console.warn(`Skipping checklist toggle: no matching store for scope "${scopeId}". Assignment may pre-date Stage 5.`);
+      return;
+    }
+    await upsertChecklistState(matchingStore.id, matchingStore.brandId, checklistId, date, newState, "", null);
+  }, [checklistStates, stores]);
   const handleSignOff = useCallback(async(assignment)=>{
     try {
       const now=new Date().toISOString();
       const d=now.split("T")[0];
-      const stateKey=`${assignment.brandId}||${assignment.taskId}||${d}`;
-      await upsertChecklistState(assignment.brandId,assignment.taskId,d,checklistStates[stateKey]||{},currentUser?.name||"Manager",now);
-      await addAudit("sign-off",`${assignment.checklistName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId);
+      // Assignments are now NOT NULL on store_id, so this is always present
+      // for new rows. We still tolerate missing storeId on possible legacy
+      // assignments by warning rather than silently failing.
+      if (!assignment.storeId) {
+        showToast("Cannot sign off: assignment has no store linked. Re-create it.", "error");
+        return;
+      }
+      const stateKey=`${assignment.storeId}||${assignment.taskId}||${d}`;
+      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, checklistStates[stateKey]||{}, currentUser?.name||"Manager", now);
+      await addAudit("sign-off",`${assignment.checklistName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId);
       showToast("✓ Signed off");
     } catch(err){showToast(err.message,"error");}
   }, [checklistStates,currentUser,addAudit,showToast]);

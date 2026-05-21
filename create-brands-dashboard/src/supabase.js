@@ -259,16 +259,26 @@ export async function fetchChecklistStates() {
   if (error) throw error;
   const result = {};
   data.forEach(row => {
-    result[`${row.brand_id}||${row.checklist_id}||${row.date}`] = row.item_states || {};
+    // Key shape after Stage 6: storeId||checklistId||date (was brandId||...).
+    // Legacy rows with NULL store_id are still indexed under brand_id so
+    // they don't vanish from the UI; new rows are always store-keyed.
+    const scope = row.store_id || row.brand_id;
+    result[`${scope}||${row.checklist_id}||${row.date}`] = row.item_states || {};
   });
   return result;
 }
-export async function upsertChecklistState(brandId, checklistId, date, itemStates, signedOffBy, signedOffAt) {
+// Per-store checklist sign-off state. After Stage 6, the unique constraint
+// is (store_id, checklist_id, date) — each store signs off its own copy of
+// the checklist, even though the checklist template itself is chain-wide.
+// This matches real operations: Evington Road completing morning open says
+// nothing about whether Gipsy Lane has done theirs.
+export async function upsertChecklistState(storeId, brandId, checklistId, date, itemStates, signedOffBy, signedOffAt) {
+  if (!storeId) throw new Error("upsertChecklistState requires storeId");
   const { error } = await supabase.from("checklist_states").upsert({
-    brand_id: brandId, checklist_id: checklistId, date,
+    store_id: storeId, brand_id: brandId, checklist_id: checklistId, date,
     item_states: itemStates, signed_off_by: signedOffBy || "",
     signed_off_at: signedOffAt || null, updated_at: new Date().toISOString(),
-  }, { onConflict: "brand_id,checklist_id,date" });
+  }, { onConflict: "store_id,checklist_id,date" });
   if (error) throw error;
 }
 
@@ -359,8 +369,33 @@ function dbTempLogToApp(l) { return { id: l.id, brandId: l.brand_id, unitId: l.u
 function appDeliveryToDb(d) { return { id: d.id, brand_id: d.brandId, date: d.date, time: d.time, supplier: d.supplier, items: d.items || "", temp: d.temp ?? null, temp_ok: d.tempOk || "yes", condition: d.condition || "good", driver: d.driver || "", notes: d.notes || "", logged_by: d.loggedBy || "" }; }
 function dbDeliveryToApp(d) { return { id: d.id, brandId: d.brand_id, date: d.date, time: d.time, supplier: d.supplier, items: d.items, temp: d.temp, tempOk: d.temp_ok, condition: d.condition, driver: d.driver, notes: d.notes, loggedBy: d.logged_by, timestamp: d.created_at }; }
 
-function appAuditToDb(a) { return { brand_id: a.brandId || null, action: a.action, detail: a.detail || "", performed_by: a.by || "", date: a.date, time: a.time }; }
-function dbAuditToApp(a) { return { id: a.id, brandId: a.brand_id, action: a.action, detail: a.detail, by: a.performed_by, date: a.date, time: a.time, timestamp: a.created_at }; }
+function appAuditToDb(a) {
+  return {
+    brand_id: a.brandId || null,
+    // store_id is nullable on this table — chain-wide actions (e.g. brand
+    // creation, user impersonation) have no natural storeId and would force
+    // us to invent one. When the action IS store-specific, callers pass it.
+    store_id: a.storeId || null,
+    action: a.action,
+    detail: a.detail || "",
+    performed_by: a.by || "",
+    date: a.date,
+    time: a.time,
+  };
+}
+function dbAuditToApp(a) {
+  return {
+    id: a.id,
+    brandId: a.brand_id,
+    storeId: a.store_id || null,
+    action: a.action,
+    detail: a.detail,
+    by: a.performed_by,
+    date: a.date,
+    time: a.time,
+    timestamp: a.created_at,
+  };
+}
 
 // ── HELPDESK TICKETS ─────────────────────────────────────────────────────────
 
