@@ -1199,7 +1199,6 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
           <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="w-36">
             <option value="All">All Priorities</option>
@@ -2911,7 +2910,6 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
     <div className="space-y-6">
       {/* Top controls */}
       <div className="flex flex-wrap items-center gap-3">
-        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
         <select
           value={selectedStoreId}
           onChange={e => setSelectedStoreId(e.target.value)}
@@ -3165,7 +3163,6 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
           appear in Zone 1's picker. Default is "Owned". */}
       {isHqOrAbove(user.role) && allVisibleStores.length > 1 && (
         <div className="flex items-center gap-2">
-          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
           <div className="text-xs text-slate-600">Scope: <strong className="text-slate-300">{sortedStores.length}</strong> store{sortedStores.length === 1 ? "" : "s"}</div>
         </div>
       )}
@@ -4597,7 +4594,6 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 flex-wrap">
-        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
         <div className="text-xs text-slate-600">{sortedStores.length} store{sortedStores.length === 1 ? "" : "s"}</div>
       </div>
 
@@ -4742,7 +4738,6 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
-        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
         <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
       </div>
       {overdue.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
@@ -4868,7 +4863,6 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         </div>
         <button onClick={() => { setForm({ unitId: scopedUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
@@ -4967,7 +4961,6 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         </div>
         <button onClick={() => { setForm({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Delivery</button>
@@ -5203,7 +5196,6 @@ function ComplianceView({ brands, stores, visibleStoreIds, assignments, auditTra
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2 flex-wrap">
-        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
         <div className="text-xs text-slate-600">{sortedStores.length} store{sortedStores.length === 1 ? "" : "s"}</div>
       </div>
       <AnalysisBlock title="Compliance Overview — Today">
@@ -5299,7 +5291,6 @@ function AuditTrailView({ brands, stores, visibleStoreIds, auditTrail, onClear }
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         </div>
         {isHqOrAbove(user.role) && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
@@ -8224,9 +8215,6 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
             className="w-full bg-slate-950 border border-slate-700/50 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
           <div className="flex gap-2 flex-wrap">
-            {isHqOrAbove(user.role) && (
-              <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="flex-1 min-w-[120px]"/>
-            )}
             <StoreScopeDropdown stores={visibleScopedStores} brands={brands} value={selStore} onChange={setSelStore} className="flex-1 min-w-[140px]"/>
             <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="flex-1 min-w-[100px]">
               <option value="all">All Priorities</option>
@@ -9863,7 +9851,6 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
 
       {/* ── Filters ──────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap gap-2 items-center">
-        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
         {sortedStores.length > 1 && (
           <SelectDropdown value={storeId} onChange={setStoreId} className="w-56">
             {sortedStores.map(s => {
@@ -11270,7 +11257,6 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
-        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
         <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         <SelectDropdown value={filterEmployee} onChange={setFilterEmployee} className="w-44">
           <option value="all">All Employees</option>
