@@ -138,6 +138,15 @@ const PRIORITY_CONFIG = {
 function getMonday(d) { const dt = new Date(d); const day = dt.getDay(); dt.setDate(dt.getDate() + (day === 0 ? -6 : 1 - day)); return dt; }
 function fmtDate(d) { return d.toISOString().split("T")[0]; }
 
+// Role helpers (single source of truth used by every view).
+//   isOwnerRole — only the actual owner. Reserved for: system config (Admin),
+//     adding/removing HQ staff, owner-only destructive actions.
+//   isHqOrAbove — owner OR hq_staff. Used for: chain-wide visibility, edit
+//     access to operational data, and Chain Performance view.
+// Manager and Staff fall through both checks; they get store-scoped access.
+function isOwnerRole(role) { return role === "owner"; }
+function isHqOrAbove(role) { return role === "owner" || role === "hq_staff"; }
+
 function resolvePeriod(preset, customFrom, customTo) {
   const today = new Date(); today.setHours(0,0,0,0);
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
@@ -218,13 +227,17 @@ function Badge({ label, color = "slate" }) {
     slate: "bg-slate-700 text-slate-700 border border-slate-600",
     indigo: "bg-indigo-950/30 text-indigo-400 border border-indigo-500/30",
     violet: "bg-violet-500/20 text-violet-400 border border-violet-500/30",
+    fuchsia: "bg-fuchsia-500/20 text-fuchsia-400 border border-fuchsia-500/30",
     emerald: "bg-emerald-500/25 text-emerald-400 border border-emerald-500/30",
   };
   return <span className={`inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold ${colors[color] || colors.slate}`}>{label}</span>;
 }
 
 function RoleBadge({ role }) {
-  return role === "owner" ? <Badge label="Owner" color="violet" /> : <Badge label="Manager" color="indigo" />;
+  if (role === "owner")    return <Badge label="Owner"    color="violet" />;
+  if (role === "hq_staff") return <Badge label="HQ Staff" color="fuchsia" />;
+  if (role === "staff")    return <Badge label="Staff"    color="slate" />;
+  return <Badge label="Manager" color="indigo" />;
 }
 
 // ─── Reusable Empty State ─────────────────────────────────────────────────────
@@ -944,7 +957,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 // ─── Issues Tracker View ──────────────────────────────────────────────────────
 function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterBrand, setFilterBrand] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All");
@@ -1067,7 +1080,7 @@ function IssuesView({ brands, issues, users, currentUser, onAddIssue, onUpdateIs
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-700 hover:bg-slate-700 transition-colors">View</button>
                       <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
-                      {user.role === "owner" && (
+                      {isHqOrAbove(user.role) && (
                         <button onClick={() => setDeleteId(issue.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 transition-colors"><Trash2 size={13}/></button>
                       )}
                     </div>
@@ -2453,7 +2466,7 @@ function StoreDetailModal({ store, flipdishStores, flipdishSales, fromDate, toDa
 
 function DashboardView({ brands, entries, issues }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const today = new Date(); today.setHours(0,0,0,0);
   const todayStr = fmtDate(today);
   const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate()-6);
@@ -2567,7 +2580,7 @@ function DashboardView({ brands, entries, issues }) {
 // ─── Tactical Ops View ────────────────────────────────────────────────────────
 function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [selectedBrandId, setSelectedBrandId] = useState(visibleBrands[0]?.id || "");
   const [preset, setPreset] = useState("this_week");
   const [customFrom, setCustomFrom] = useState("");
@@ -2759,7 +2772,7 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
 // ─── EOD Form ─────────────────────────────────────────────────────────────────
 function EODFormView({ brands, onAddEntry }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [zone, setZone] = useState(0);
   const [success, setSuccess] = useState(false);
   const today = new Date().toISOString().split("T")[0];
@@ -3081,14 +3094,14 @@ function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
   const toggleBrand = id => setBrandIds(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]);
   const handleSave = () => {
     if (!name.trim()||!email.trim()) return;
-    onSave({ id:editUser?.id||`u-${Date.now()}`, name:name.trim(), email:email.trim(), password, role, brandIds:role==="owner"?brands.map(b=>b.id):brandIds, avatar });
+    onSave({ id:editUser?.id||`u-${Date.now()}`, name:name.trim(), email:email.trim(), password, role, brandIds: isHqOrAbove(role) ? brands.map(b=>b.id) : brandIds, avatar });
     onClose();
   };
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h3 className="font-bold text-white">{isCreate?"Add Manager":`Edit — ${editUser.name}`}</h3>
+          <h3 className="font-bold text-white">{isCreate?"Add User":`Edit — ${editUser.name}`}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
@@ -3107,8 +3120,19 @@ function UserEditorModal({ user: editUser, brands, onSave, onClose }) {
           </div>
           <div>
             <label className="text-xs text-slate-600 font-semibold mb-1.5 block">Role</label>
-            <div className="flex gap-2">
-              {["manager","owner"].map(r=><button key={r} onClick={()=>setRole(r)} className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all capitalize ${role===r?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 border-slate-700 text-slate-600 hover:bg-slate-700"}`}>{r}</button>)}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                {key:"manager",  label:"Manager"},
+                {key:"hq_staff", label:"HQ Staff"},
+                {key:"owner",    label:"Owner"},
+              ].map(r => (
+                <button key={r.key} onClick={()=>setRole(r.key)} className={`py-2 rounded-xl text-xs font-semibold border transition-all ${role===r.key?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"}`}>{r.label}</button>
+              ))}
+            </div>
+            <div className="text-[10px] text-slate-600 mt-1.5">
+              {role==="owner"   && "Full system access. Can add/remove HQ staff."}
+              {role==="hq_staff"&& "Global access to all brands and stores. No system config."}
+              {role==="manager" && "Access limited to assigned stores only."}
             </div>
           </div>
           {role==="manager"&&(
@@ -3218,7 +3242,7 @@ function AdminPanelView({
                 <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-bold text-white">{u.name}</span><RoleBadge role={u.role}/></div>
                 <div className="text-xs text-slate-600">{u.email}</div>
                 <div className="flex flex-wrap gap-1 mt-1.5">
-                  {u.role==="owner"?<Badge label="All Locations" color="violet"/>:brands.filter(b=>u.brandIds.includes(b.id)).map(b=><Badge key={b.id} label={b.name} color="slate"/>)}
+                  {isHqOrAbove(u.role)?<Badge label="All Locations" color={u.role==="owner"?"violet":"fuchsia"}/>:brands.filter(b=>u.brandIds.includes(b.id)).map(b=><Badge key={b.id} label={b.name} color="slate"/>)}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -3819,7 +3843,7 @@ function OpsConfirmModal({ message, onConfirm, onClose }) {
 // ─── Ops Network Dashboard ────────────────────────────────────────────────────
 function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checklists = [], tempUnits = [], cleaningTasks = [] }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const todayA = assignments.filter(a => vb.some(b => b.id === a.brandId) && isActiveToday(a));
   const overdue = todayA.filter(isOverdue);
   const completed = auditTrail.filter(t => t.date === getTodayStr() && t.action.includes("sign-off") && vb.some(b => b.id === t.brandId)).length;
@@ -3874,7 +3898,7 @@ function OpsNetworkDashboard({ brands, assignments, auditTrail, opsTeam, checkli
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
 function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
   const [expandedId, setExpandedId] = useState(null);
   const bAssigns = assignments.filter(a => a.brandId === selBrand && isActiveToday(a));
@@ -3946,7 +3970,7 @@ function TodaysTasks({ brands, assignments, checklists, tempUnits, cleaningTasks
 // ─── Temperature Log ──────────────────────────────────────────────────────────
 function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ unitId: "", value: "", notes: "", time: nowTimeStr() });
@@ -3995,7 +4019,7 @@ function TemperatureLog({ brands, tempUnits, tempLogs, onLog }) {
 // ─── Deliveries View ──────────────────────────────────────────────────────────
 function DeliveriesView({ brands, deliveries, onAdd }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [selBrand, setSelBrand] = useState(vb[0]?.id || "");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() });
@@ -4055,7 +4079,7 @@ function AssignmentFormModal({ brands, checklists, tempUnits, cleaningTasks, ite
 
 function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningTasks, opsTeam, auditTrail, onAdd, onEdit, onDelete }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filter, setFilter] = useState("all");
   const [showForm, setShowForm] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -4080,7 +4104,7 @@ function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningT
         <SelectDropdown value={filter} onChange={setFilter} className="w-44">
           {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
         </SelectDropdown>
-        {user.role === "owner" && <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>}
+        {isHqOrAbove(user.role) && <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>}
       </div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm">No assignments found</div></div>}
       <div className="space-y-3">{visible.map(a => {
@@ -4094,7 +4118,7 @@ function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningT
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div><div className="text-sm font-bold text-white">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">Window: {a.winStart}–{a.winEnd}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
-                  {user.role === "owner" && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button></div>}
+                  {isHqOrAbove(user.role) && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button></div>}
                 </div>
               </div>
             </div>
@@ -4110,7 +4134,7 @@ function AssignmentsView({ brands, assignments, checklists, tempUnits, cleaningT
 // ─── Compliance View ──────────────────────────────────────────────────────────
 function ComplianceView({ brands, assignments, auditTrail }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   return (
     <div className="space-y-5">
       <AnalysisBlock title="Compliance Overview — Today">
@@ -4130,7 +4154,7 @@ function ComplianceView({ brands, assignments, auditTrail }) {
 // ─── Audit Trail View ─────────────────────────────────────────────────────────
 function AuditTrailView({ brands, auditTrail, onClear }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filterBrand, setFilterBrand] = useState("all");
   const visible = auditTrail.filter(t => filterBrand === "all" || t.brandId === filterBrand).sort((a,b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
   const actionColor = action => action.includes("sign-off") || action.includes("completed") ? "text-emerald-400" : action.includes("breach") ? "text-red-400" : action.includes("logged") ? "text-amber-400" : "text-indigo-400";
@@ -4138,7 +4162,7 @@ function AuditTrailView({ brands, auditTrail, onClear }) {
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-44"/>
-        {user.role === "owner" && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
+        {isHqOrAbove(user.role) && <button onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Clear all entries</button>}
       </div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ScrollText size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No audit entries yet</div></div>}
       <AnalysisBlock title={`Audit Trail — ${visible.length} entries`}>
@@ -4797,7 +4821,7 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
   const [comment, setComment]     = useState("");
   const [localItem, setLocalItem] = useState(item);
   const [showResubmit, setShowResubmit] = useState(false);
-  const isManager = currentUser.role === "manager" || currentUser.role === "owner";
+  const isManager = currentUser.role === "manager" || isHqOrAbove(currentUser.role);
   const isRejected = localItem.status === "rejected";
   const bottomRef = useRef(null);
 
@@ -5257,7 +5281,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
 // ── Manager: Availability Tracker ─────────────────────────────────────────────
 function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filterBrand,    setFilterBrand]    = useState("all");
   const [filterStatus,   setFilterStatus]   = useState("pending");
   const [filterType,     setFilterType]     = useState("all");
@@ -5784,7 +5808,7 @@ function NewTicketForm({ brands, currentUser, onSubmit, onCancel }) {
 // ── Manager Helpdesk ──────────────────────────────────────────────────────────
 function HelpdeskManagerView({ brands, tickets, opsTeam, users, currentUser, onUpdate, onDelete }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filterStatus,   setFilterStatus]   = useState("all");
   const [filterBrand,    setFilterBrand]    = useState("all");
   const [filterPriority, setFilterPriority] = useState("all");
@@ -6096,7 +6120,7 @@ function avatarFor(name = "", color = "") {
 // ── New Chat / Compose ────────────────────────────────────────────────────────
 function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose }) {
   const [search, setSearch] = useState("");
-  const isOwner   = currentUser.role === "owner";
+  const isOwner   = isHqOrAbove(currentUser.role);
   const myBrands  = brands.filter(b => currentUser.brandIds.includes(b.id));
 
   // All people I can message
@@ -6654,7 +6678,7 @@ const PRESET_COLORS = ["#f59e0b","#6366f1","#10b981","#8b5cf6","#ef4444","#ec489
 
 // ── Shift Preset Manager (lives inside Ops Settings) ──────────────────────────
 function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, currentUser }) {
-  const vb = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const [brandId, setBrandId] = useState(vb[0]?.id || "");
   const [editing, setEditing] = useState(null); // null | "new" | preset object
   const [form, setFormState] = useState({ name:"", startTime:"08:00", endTime:"16:00", color: PRESET_COLORS[0] });
@@ -7004,7 +7028,7 @@ function ShiftFormModal({ date, slot, brandId, memberId, memberName, filterRole,
 // ═══════════════════════════════════════════════════════════════════════════════
 function ScheduleView({ brands, opsTeam, schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
 
   const [brandId,    setBrandId]    = useState(vb[0]?.id || "");
   const [weekOffset, setWeekOffset] = useState(0);
@@ -8558,7 +8582,7 @@ function KioskApp({ opsTeam, brands, punchRecords, schedules = [], onPunchIn, on
 
 function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment }) {
   const { user } = useAuth();
-  const vb = brands.filter(b => user.role === "owner" || user.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
 
   const toLocalDate = (d) => {
     const dt = d || new Date();
@@ -9209,7 +9233,7 @@ function OvertimeConversation({ record, currentUser, isEmployee, onAddComment, c
 }
 
 function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) {
-  const vb = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
+  const vb = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const [brandId,   setBrandId]   = useState(vb[0]?.id || "");
   const [empId,     setEmpId]     = useState("");
   const [date,      setDate]      = useState("");
@@ -10095,7 +10119,7 @@ export default function App() {
   }
 
   // Manager / Owner
-  const visibleBrands = brands.filter(b => currentUser.role === "owner" || currentUser.brandIds.includes(b.id));
+  const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
   const inboxUnread = messages.filter(m => {
     if (m.fromId===currentUser.id) return false;
