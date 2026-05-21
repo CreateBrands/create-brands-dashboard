@@ -209,6 +209,60 @@ function aggregateEntries(filtered) {
   return { netSales, laborCost, cogsCost, totalHours, totalOrders, primeCost, netMargin, splh, laborPct, cogsPct, atv };
 }
 
+// ─── Per-day-of-week target math ──────────────────────────────────────────────
+// Store kpiTargets shape (from Stage 4b migration):
+//   { monday:    { revenue, orders, hours },
+//     tuesday:   { revenue, orders, hours }, ...
+//     sunday:    { revenue, orders, hours },
+//     ratios:    { primeCostMax, atvTarget, laborCostMax } }
+//
+// For a date range, the expected target is the SUM of each date's day-of-week
+// target. E.g. a Mon–Sun period sums all 7 days' targets, a single Saturday
+// returns just Saturday's value, a "this week so far" period sums only the
+// days that have actually happened.
+const DOW_KEYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+
+// Iterate dates in [from, to] inclusive. Returns an array of ISO date strings.
+// from/to are "YYYY-MM-DD". Naive: no DST concerns since we're not crossing
+// timezones, just day-counting in UTC.
+function datesInRange(from, to) {
+  if (!from || !to) return [];
+  const out = [];
+  // Parse as UTC midnight to avoid the off-by-one from local timezones near
+  // UTC boundaries (this dashboard runs in BST/GMT, but we keep it timezone-safe).
+  const d = new Date(from + "T00:00:00Z");
+  const end = new Date(to + "T00:00:00Z");
+  while (d <= end) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+// Returns { revenue, orders, hours } summed across all dates in [from, to]
+// for the given store's per-day targets. Returns null if no kpiTargets set
+// (so calling code can show graceful "—" instead of zeros that look like a
+// failure to hit target).
+function sumStoreTargetsForPeriod(storeKpiTargets, from, to) {
+  if (!storeKpiTargets || typeof storeKpiTargets !== "object") return null;
+  // Quick sanity: does this object have ANY day-of-week keys populated?
+  const anyDayPresent = DOW_KEYS.some(k => storeKpiTargets[k]);
+  if (!anyDayPresent) return null;
+
+  let revenue = 0, orders = 0, hours = 0, daysWithTargets = 0;
+  datesInRange(from, to).forEach(dateStr => {
+    const dow = new Date(dateStr + "T00:00:00Z").getUTCDay();  // 0=Sun..6=Sat
+    const dayTarget = storeKpiTargets[DOW_KEYS[dow]];
+    if (dayTarget) {
+      revenue += Number(dayTarget.revenue) || 0;
+      orders  += Number(dayTarget.orders)  || 0;
+      hours   += Number(dayTarget.hours)   || 0;
+      daysWithTargets++;
+    }
+  });
+  return daysWithTargets > 0 ? { revenue, orders, hours, daysWithTargets } : null;
+}
+
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const fmtCurrency = v => v == null ? "—" : `£${Math.round(v).toLocaleString()}`;
 const fmtPct = v => v == null ? "—" : `${v.toFixed(1)}%`;
@@ -2705,10 +2759,44 @@ function DashboardView({ brands, entries, issues }) {
 }
 
 // ─── Tactical Ops View ────────────────────────────────────────────────────────
-function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateIssue, onDeleteIssue }) {
+// Single-store performance deep-dive. Replaces the old single-brand view.
+// KPIs are computed against the SELECTED STORE's per-day-of-week targets:
+// the period target is the sum of each day's day-of-week target across the
+// actual dates in the range — so e.g. a "this week" target on a 7-day window
+// is Mon+Tue+Wed+Thu+Fri+Sat+Sun targets summed, while "today" only counts
+// today's day-of-week.
+//
+// Sales entries (EOD reports) are looked up by storeId, with brand fallback
+// for legacy rows that don't have storeId set yet.
+function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, users, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const [selectedBrandId, setSelectedBrandId] = useState(visibleBrands[0]?.id || "");
+
+  // Standard store-scope pattern. Owner/HQ default to Owned ownership.
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const visibleScopedStores = useMemo(
+    () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
+    [allVisibleStores, ownership, user.role]
+  );
+  const sortedStores = useMemo(
+    () => [...visibleScopedStores].sort((a, b) =>
+      (a.brandId || "").localeCompare(b.brandId || "") ||
+      (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleScopedStores]
+  );
+
+  const [selectedStoreId, setSelectedStoreId] = useState(sortedStores[0]?.id || "");
+  useEffect(() => {
+    // Auto-pick or auto-reset when the scope changes
+    if (!selectedStoreId && sortedStores[0]) setSelectedStoreId(sortedStores[0].id);
+    if (selectedStoreId && !sortedStores.some(s => s.id === selectedStoreId)) {
+      setSelectedStoreId(sortedStores[0]?.id || "");
+    }
+  }, [sortedStores, selectedStoreId]);
+
   const [preset, setPreset] = useState("this_week");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -2718,26 +2806,49 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
   const [detailTicket, setDetailTicket] = useState(null);
   const [editTicket, setEditTicket] = useState(null);
 
-  // Derive maintenance tickets from issues prop (same source of truth as Issues & Maintenance page)
-  useEffect(() => {
-    if (!selectedBrandId || !issues) return;
-    const brandMaintenance = issues
-      .filter(i => i.brandId === selectedBrandId && (i.type || "Issue") === "Maintenance")
-      .map(i => ({ id: i.id, brandId: i.brandId, text: i.title, priority: i.priority, done: ["Resolved","Closed"].includes(i.status), createdAt: i.createdAt, _issueRef: i }));
-    setTickets(t => ({ ...t, [selectedBrandId]: brandMaintenance }));
-  }, [selectedBrandId, issues]);
+  const selectedStore = sortedStores.find(s => s.id === selectedStoreId) || null;
+  const selectedBrand = selectedStore ? brands.find(b => b.id === selectedStore.brandId) : null;
 
-  const selectedBrand = visibleBrands.find(b => b.id === selectedBrandId);
+  // Derive maintenance tickets from issues prop.
+  // Store-keyed issues match by storeId; legacy ones (no storeId) fall back
+  // to brand-matching so old issues still appear in their natural place.
+  useEffect(() => {
+    if (!selectedStore || !issues) return;
+    const storeMaintenance = issues
+      .filter(i => (i.type || "Issue") === "Maintenance")
+      .filter(i => i.storeId
+        ? i.storeId === selectedStore.id
+        : i.brandId === selectedStore.brandId)
+      .map(i => ({ id: i.id, brandId: i.brandId, storeId: i.storeId, text: i.title, priority: i.priority, done: ["Resolved","Closed"].includes(i.status), createdAt: i.createdAt, _issueRef: i }));
+    setTickets(t => ({ ...t, [selectedStore.id]: storeMaintenance }));
+  }, [selectedStore, issues]);
+
   const period = resolvePeriod(preset, customFrom, customTo);
   const prevPeriod = resolvePrevPeriod(preset, customFrom, customTo);
-  const brandEntries = entries.filter(e => e.brandId === selectedBrandId);
-  const curFiltered = filterEntries(brandEntries, period.from, period.to);
-  const prevFiltered = prevPeriod ? filterEntries(brandEntries, prevPeriod.from, prevPeriod.to) : [];
+
+  // EOD entries scoped to the selected store. Legacy entries (no storeId)
+  // fall back to brand-matching so historical data still shows up.
+  const storeEntries = useMemo(() => {
+    if (!selectedStore) return [];
+    return entries.filter(e => e.storeId
+      ? e.storeId === selectedStore.id
+      : e.brandId === selectedStore.brandId);
+  }, [entries, selectedStore]);
+
+  const curFiltered = filterEntries(storeEntries, period.from, period.to);
+  const prevFiltered = prevPeriod ? filterEntries(storeEntries, prevPeriod.from, prevPeriod.to) : [];
   const cur = aggregateEntries(curFiltered);
   const prev = aggregateEntries(prevFiltered);
   const dayCount = curFiltered.length;
-  const target = selectedBrand?.kpiTargets;
-  const totalTarget = target ? target.dailyRevenue * dayCount : 0;
+
+  // Per-day-of-week target math. If the store has no kpiTargets, both
+  // periodTargets and ratios are null and the UI gracefully degrades.
+  const ratios = selectedStore?.kpiTargets?.ratios || null;
+  const periodTargets = useMemo(
+    () => selectedStore ? sumStoreTargetsForPeriod(selectedStore.kpiTargets, period.from, period.to) : null,
+    [selectedStore, period.from, period.to]
+  );
+  const totalTarget = periodTargets?.revenue || 0;
   const targetProgress = totalTarget > 0 && cur ? (cur.netSales / totalTarget) * 100 : 0;
 
   const chartData = useMemo(() => {
@@ -2748,15 +2859,16 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
   }, [curFiltered, prevFiltered]);
 
   const primeCostDays = curFiltered.map(e => ({ date: e.date.slice(5), primeCost: ((e.laborCost+e.cogsCost)/(e.netSales||1))*100 }));
-  const brandTickets = tickets[selectedBrandId] || [];
-  const brand = selectedBrand;
+  const storeTickets = tickets[selectedStoreId] || [];
 
   const addTicket = async (text, priority) => {
+    if (!selectedStore) return;
     const now = new Date().toISOString();
     const issue = {
       id: `maint-${Date.now()}`,
-      brandId: selectedBrandId,
-      brandName: brand?.name || "",
+      brandId: selectedStore.brandId,
+      brandName: selectedBrand?.name || "",
+      storeId: selectedStore.id,
       type: "Maintenance",
       title: text,
       description: "",
@@ -2770,43 +2882,70 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
       updatedAt: now,
     };
     await onAddIssue(issue);
-    // tickets state will auto-update via the useEffect watching issues prop
+    // tickets state updates via the useEffect watching issues prop
   };
 
   const toggleTicket = async (id) => {
-    const ticket = brandTickets.find(tk => tk.id === id);
+    const ticket = storeTickets.find(tk => tk.id === id);
     if (!ticket) return;
     const newStatus = ticket.done ? "Open" : "Resolved";
     await onUpdateIssue({ ...ticket._issueRef, status: newStatus, updatedAt: new Date().toISOString() });
-    // tickets state will auto-update via the useEffect watching issues prop
   };
 
   const deleteTicket = async (id) => {
     await onDeleteIssue(id);
-    // tickets state will auto-update via the useEffect watching issues prop
   };
+
+  if (allVisibleStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+        <BarChart2 size={32} className="mb-3 text-slate-700"/>
+        <div className="text-sm font-semibold">No stores assigned to your account.</div>
+      </div>
+    );
+  }
+
+  const showBrandPrefix = new Set(sortedStores.map(s => s.brandId)).size > 1;
 
   return (
     <div className="space-y-6">
+      {/* Top controls */}
       <div className="flex flex-wrap items-center gap-3">
-        <LocationDropdown brands={visibleBrands} value={selectedBrandId} onChange={setSelectedBrandId} className="w-44"/>
+        <OwnershipFilterDropdown stores={allVisibleStores} value={ownership} onChange={setOwnership} role={user.role} className="w-44"/>
+        <select
+          value={selectedStoreId}
+          onChange={e => setSelectedStoreId(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer min-w-[200px]"
+        >
+          {sortedStores.length === 0 && <option value="">No stores</option>}
+          {sortedStores.map(s => {
+            const b = brands.find(br => br.id === s.brandId);
+            return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+          })}
+        </select>
         <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo}/>
       </div>
 
-      {selectedBrand && (
+      {selectedStore && (
         <div className="bg-slate-950 border border-slate-700 rounded-2xl px-5 py-3 flex flex-wrap items-center gap-4">
           <span className="text-sm font-bold text-white">{period.label}</span>
           <span className="text-xs text-slate-500">{period.from} → {period.to}</span>
           <span className="text-xs text-slate-600">{dayCount} reports</span>
-          {target && <span className="text-xs text-slate-600">Daily target: {fmtCurrency(target.dailyRevenue)}</span>}
+          {periodTargets ? (
+            <span className="text-xs text-slate-600">Period target: {fmtCurrency(periodTargets.revenue)} over {periodTargets.daysWithTargets} day{periodTargets.daysWithTargets !== 1 ? "s" : ""}</span>
+          ) : (
+            <span className="text-xs text-amber-400">No targets set — <a className="underline" href="#admin">edit in Admin → KPI Targets</a></span>
+          )}
           {!prevFiltered.length && <Badge label="No prior data" color="amber" />}
         </div>
       )}
 
+      {/* KPI cards. Target Progress and Prime Cost % gracefully show "—" when
+          targets are missing, so the page is still useful without them. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard label="Net Revenue" current={cur?.netSales} previous={prev?.netSales} format="currency" icon={DollarSign} prevLabel={prevPeriod?.label} />
-        <ComparisonKPICard label="Target Progress" current={targetProgress||null} previous={null} format="percent" icon={Target} alert={targetProgress>0&&targetProgress<80} />
-        <ComparisonKPICard label="Prime Cost %" current={cur?.primeCost} previous={prev?.primeCost} format="percent" icon={Activity} invertDelta alert={cur&&target&&cur.primeCost>target.primeCostMax} prevLabel={prevPeriod?.label} />
+        <ComparisonKPICard label="Target Progress" current={periodTargets ? (targetProgress || null) : null} previous={null} format="percent" icon={Target} alert={periodTargets && targetProgress>0 && targetProgress<80} />
+        <ComparisonKPICard label="Prime Cost %" current={cur?.primeCost} previous={prev?.primeCost} format="percent" icon={Activity} invertDelta alert={cur && ratios && cur.primeCost > ratios.primeCostMax} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="SPLH" current={cur?.splh} previous={prev?.splh} format="splh" icon={Zap} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="Net Margin" current={cur?.netMargin} previous={prev?.netMargin} format="percent" icon={TrendingUp} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="Labour Cost" current={cur?.laborCost} previous={prev?.laborCost} format="currency" icon={Users} invertDelta subCurrent={cur?`${cur.laborPct.toFixed(1)}% of sales`:undefined} prevLabel={prevPeriod?.label} />
@@ -2854,16 +2993,16 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
               <XAxis dataKey="date" tick={{fill:"#64748b",fontSize:10}}/>
               <YAxis tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`${v.toFixed(0)}%`}/>
               <Tooltip content={<ChartTooltip/>}/>
-              {target && <ReferenceLine y={target.primeCostMax} stroke="#ef4444" strokeDasharray="4 2" label={{value:`Max ${target.primeCostMax}%`,fill:"#ef4444",fontSize:10}}/>}
+              {ratios && <ReferenceLine y={ratios.primeCostMax} stroke="#ef4444" strokeDasharray="4 2" label={{value:`Max ${ratios.primeCostMax}%`,fill:"#ef4444",fontSize:10}}/>}
               <Bar dataKey="primeCost" name="Prime Cost %" radius={[3,3,0,0]}>
-                {primeCostDays.map((d,i) => <Cell key={i} fill={target&&d.primeCost>target.primeCostMax?"#ef4444":"#6366f1"}/>)}
+                {primeCostDays.map((d,i) => <Cell key={i} fill={ratios && d.primeCost > ratios.primeCostMax ? "#ef4444" : "#6366f1"}/>)}
               </Bar>
             </ComposedChart>
           </ResponsiveContainer>
         </AnalysisBlock>
       )}
 
-      <AnalysisBlock title="Maintenance Ticketing Desk" action={<Badge label={selectedBrand?.name||""} color="slate"/>}>
+      <AnalysisBlock title="Maintenance Ticketing Desk" action={<Badge label={selectedStore ? `${selectedBrand?.name || ""}${selectedBrand ? " · " : ""}${selectedStore.shortName || selectedStore.name}` : ""} color="slate"/>}>
         <div className="flex gap-2 mb-4 flex-wrap">
           <input value={ticketText} onChange={e=>setTicketText(e.target.value)} placeholder="Describe the issue…" className="flex-1 min-w-48 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
           <select value={ticketPriority} onChange={e=>setTicketPriority(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
@@ -2871,9 +3010,9 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
           </select>
           <button onClick={()=>{if(ticketText.trim()){addTicket(ticketText.trim(),ticketPriority);setTicketText("");}}} className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"><Plus size={14}/>Add</button>
         </div>
-        {brandTickets.length===0&&<div className="text-slate-500 text-sm text-center py-4">No tickets raised</div>}
+        {storeTickets.length===0&&<div className="text-slate-500 text-sm text-center py-4">No tickets raised</div>}
         <div className="space-y-2">
-          {brandTickets.map(tk=>(
+          {storeTickets.map(tk=>(
             <div key={tk.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-all ${tk.done?"bg-slate-900/20 border-slate-700/30 opacity-50":"bg-slate-900 border-slate-700"}`}>
               <button onClick={()=>toggleTicket(tk.id)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border transition-colors ${tk.done?"bg-emerald-600 border-emerald-500":"border-slate-600 hover:border-emerald-500"}`}>{tk.done&&<Check size={12} className="text-white"/>}</button>
               <span className={`flex-1 text-sm ${tk.done?"line-through text-slate-500":"text-slate-700"}`}>{tk.text}</span>
@@ -2891,7 +3030,7 @@ function TacticalOpsView({ brands, entries, issues, users, onAddIssue, onUpdateI
 
       {/* Modals */}
       {detailTicket && <IssueDetailModal issue={detailTicket} brands={brands} users={users} currentUser={user} onUpdate={updated => { onUpdateIssue(updated); setDetailTicket(updated); }} onClose={() => setDetailTicket(null)} />}
-      {editTicket && <IssueFormModal issue={editTicket} brands={brands} users={users} currentUser={user} visibleBrands={visibleBrands} onSave={updated => { onUpdateIssue(updated); setEditTicket(null); }} onClose={() => setEditTicket(null)} />}
+      {editTicket && <IssueFormModal issue={editTicket} brands={brands} users={users} currentUser={user} visibleBrands={brands} onSave={updated => { onUpdateIssue(updated); setEditTicket(null); }} onClose={() => setEditTicket(null)} />}
     </div>
   );
 }
@@ -12271,7 +12410,7 @@ export default function App() {
           <main className="flex-1 overflow-y-auto p-6">
             {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
-            {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
