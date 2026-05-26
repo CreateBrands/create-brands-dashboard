@@ -1469,38 +1469,47 @@ function dbApplicationToApp(a) {
 }
 
 function appApplicationToDb(a) {
-  const row = {
-    id:                   a.id,
-    brand_id:             a.brandId,
-    store_id:             a.storeId,
-    first_name:           a.firstName,
-    last_name:            a.lastName || null,
-    email:                a.email || null,
-    phone:                a.phone || null,
-    position:             a.position || null,
-    source:               a.source || "manager_capture",
-    availability_notes:   a.availabilityNotes || null,
-    applicant_notes:      a.applicantNotes || null,
-    status:               a.status || "applied",
-    rejection_reason:     a.rejectionReason || null,
-    ops_team_id:          a.opsTeamId || null,
-    created_by:           a.createdBy || null,
-    rtw_verified:         !!a.rtwVerified,
-    rtw_verified_by:      a.rtwVerifiedBy || null,
-    rtw_verified_at:      a.rtwVerifiedAt || null,
-    // ── Slice 3 fields ────────────────────────────────────────────────────
-    // All optional in the DB (nullable). The /apply form enforces required-ness
-    // on the client; manager-captured walk-ins may legitimately leave some
-    // blank if the manager doesn't have the info yet.
-    date_of_birth:        a.dateOfBirth || null,
-    legal_status:         a.legalStatus || null,
-    address:              a.address || null,
-    relevant_experience:  a.relevantExperience || null,
-    resume_text:          a.resumeText || null,
-    photo_url:            a.photoUrl || null,
-    photo_path:           a.photoPath || null,
-    is_minor:             !!a.isMinor,
-  };
+  // ⚠ CRITICAL: This mapper must produce a PARTIAL row that includes only
+  // fields actually present in the input `a`. The old version always wrote
+  // every column with `a.foo || null` defaults — which meant a status-only
+  // update like updateApplication(id, { status: "in_training" }) sent
+  // UPDATE ... SET email=null, phone=null, position=null, source='manager_capture', ...
+  // ...wiping every field the caller didn't explicitly mention.
+  //
+  // The fix: each field is conditionally added based on whether the caller
+  // included it in their input. Status transitions only touch status.
+  // Full inserts still include every field because the caller (insertApplication)
+  // passes a complete object.
+  const row = {};
+  if (a.id            !== undefined) row.id                   = a.id;
+  if (a.brandId       !== undefined) row.brand_id             = a.brandId;
+  if (a.storeId       !== undefined) row.store_id             = a.storeId;
+  if (a.firstName     !== undefined) row.first_name           = a.firstName;
+  if (a.lastName      !== undefined) row.last_name            = a.lastName || null;
+  if (a.email         !== undefined) row.email                = a.email || null;
+  if (a.phone         !== undefined) row.phone                = a.phone || null;
+  if (a.position      !== undefined) row.position             = a.position || null;
+  if (a.source        !== undefined) row.source               = a.source || "manager_capture";
+  if (a.availabilityNotes !== undefined) row.availability_notes = a.availabilityNotes || null;
+  if (a.applicantNotes!== undefined) row.applicant_notes      = a.applicantNotes || null;
+  if (a.status        !== undefined) row.status               = a.status || "applied";
+  if (a.rejectionReason !== undefined) row.rejection_reason   = a.rejectionReason || null;
+  if (a.opsTeamId     !== undefined) row.ops_team_id          = a.opsTeamId || null;
+  if (a.createdBy     !== undefined) row.created_by           = a.createdBy || null;
+  if (a.rtwVerified   !== undefined) row.rtw_verified         = !!a.rtwVerified;
+  if (a.rtwVerifiedBy !== undefined) row.rtw_verified_by      = a.rtwVerifiedBy || null;
+  if (a.rtwVerifiedAt !== undefined) row.rtw_verified_at      = a.rtwVerifiedAt || null;
+  // Slice 3
+  if (a.dateOfBirth       !== undefined) row.date_of_birth       = a.dateOfBirth || null;
+  if (a.legalStatus       !== undefined) row.legal_status        = a.legalStatus || null;
+  if (a.address           !== undefined) row.address             = a.address || null;
+  if (a.relevantExperience!== undefined) row.relevant_experience = a.relevantExperience || null;
+  if (a.resumeText        !== undefined) row.resume_text         = a.resumeText || null;
+  if (a.photoUrl          !== undefined) row.photo_url           = a.photoUrl || null;
+  if (a.photoPath         !== undefined) row.photo_path          = a.photoPath || null;
+  if (a.isMinor           !== undefined) row.is_minor            = !!a.isMinor;
+  // Slice 5
+  if (a.archivedAt        !== undefined) row.archived_at         = a.archivedAt;
   return row;
 }
 
