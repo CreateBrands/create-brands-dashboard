@@ -1075,29 +1075,34 @@ function appStoreDepartmentToDb(d) {
 
 function dbStoreRoleToApp(r) {
   return {
-    id:            r.id,
-    storeId:       r.store_id,
-    departmentId:  r.department_id,
-    name:          r.name,
-    hourlyRate:    r.hourly_rate != null ? Number(r.hourly_rate) : null,
-    isManagement:  r.is_management ?? false,
-    sortOrder:     r.sort_order ?? 0,
-    createdAt:     r.created_at,
-    updatedAt:     r.updated_at,
-    archivedAt:    r.archived_at,
+    id:                   r.id,
+    storeId:              r.store_id,
+    departmentId:         r.department_id,
+    name:                 r.name,
+    hourlyRate:           r.hourly_rate != null ? Number(r.hourly_rate) : null,
+    isManagement:         r.is_management ?? false,
+    sortOrder:            r.sort_order ?? 0,
+    createdAt:            r.created_at,
+    updatedAt:            r.updated_at,
+    archivedAt:           r.archived_at,
+    // When true, this role appears in the /apply form's position dropdown
+    // for its store. Default false — roles aren't "open positions" by
+    // definition; HQ explicitly opts in when actively recruiting.
+    advertiseForHiring:   r.advertise_for_hiring ?? false,
   };
 }
 
 function appStoreRoleToDb(r) {
   const row = {};
-  if (r.id            !== undefined) row.id            = r.id;
-  if (r.storeId       !== undefined) row.store_id      = r.storeId;
-  if (r.departmentId  !== undefined) row.department_id = r.departmentId || null;
-  if (r.name          !== undefined) row.name          = r.name;
-  if (r.hourlyRate    !== undefined) row.hourly_rate   = r.hourlyRate === "" || r.hourlyRate == null ? null : Number(r.hourlyRate);
-  if (r.isManagement  !== undefined) row.is_management = !!r.isManagement;
-  if (r.sortOrder     !== undefined) row.sort_order    = r.sortOrder;
-  if (r.archivedAt    !== undefined) row.archived_at   = r.archivedAt;
+  if (r.id                  !== undefined) row.id                   = r.id;
+  if (r.storeId             !== undefined) row.store_id             = r.storeId;
+  if (r.departmentId        !== undefined) row.department_id        = r.departmentId || null;
+  if (r.name                !== undefined) row.name                 = r.name;
+  if (r.hourlyRate          !== undefined) row.hourly_rate          = r.hourlyRate === "" || r.hourlyRate == null ? null : Number(r.hourlyRate);
+  if (r.isManagement        !== undefined) row.is_management        = !!r.isManagement;
+  if (r.sortOrder           !== undefined) row.sort_order           = r.sortOrder;
+  if (r.archivedAt          !== undefined) row.archived_at          = r.archivedAt;
+  if (r.advertiseForHiring  !== undefined) row.advertise_for_hiring = !!r.advertiseForHiring;
   return row;
 }
 
@@ -1380,49 +1385,70 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
 
 function dbApplicationToApp(a) {
   return {
-    id:                a.id,
-    brandId:           a.brand_id,
-    storeId:           a.store_id,
-    firstName:         a.first_name,
-    lastName:          a.last_name || "",
-    email:             a.email || "",
-    phone:             a.phone || "",
-    position:          a.position || "",
-    source:            a.source || "manager_capture",
-    availabilityNotes: a.availability_notes || "",
-    applicantNotes:    a.applicant_notes || "",
-    status:            a.status,
-    rejectionReason:   a.rejection_reason || "",
-    opsTeamId:         a.ops_team_id || null,
-    createdAt:         a.created_at,
-    updatedAt:         a.updated_at,
-    createdBy:         a.created_by || null,
-    rtwVerified:       !!a.rtw_verified,
-    rtwVerifiedBy:     a.rtw_verified_by || null,
-    rtwVerifiedAt:     a.rtw_verified_at || null,
+    id:                  a.id,
+    brandId:             a.brand_id,
+    storeId:             a.store_id,
+    firstName:           a.first_name,
+    lastName:            a.last_name || "",
+    email:               a.email || "",
+    phone:               a.phone || "",
+    position:            a.position || "",
+    source:              a.source || "manager_capture",
+    availabilityNotes:   a.availability_notes || "",
+    applicantNotes:      a.applicant_notes || "",
+    status:              a.status,
+    rejectionReason:     a.rejection_reason || "",
+    opsTeamId:           a.ops_team_id || null,
+    createdAt:           a.created_at,
+    updatedAt:           a.updated_at,
+    createdBy:           a.created_by || null,
+    rtwVerified:         !!a.rtw_verified,
+    rtwVerifiedBy:       a.rtw_verified_by || null,
+    rtwVerifiedAt:       a.rtw_verified_at || null,
+    // ── Slice 3 fields ────────────────────────────────────────────────────
+    dateOfBirth:         a.date_of_birth || null,           // YYYY-MM-DD or null
+    legalStatus:         a.legal_status || "",              // dropdown enum value
+    address:             a.address || "",                   // single-line address
+    relevantExperience:  a.relevant_experience || "",
+    resumeText:          a.resume_text || "",
+    photoUrl:            a.photo_url || null,               // public URL for display
+    photoPath:           a.photo_path || null,              // storage path for deletion
+    isMinor:             !!a.is_minor,                      // computed at submit time
   };
 }
 
 function appApplicationToDb(a) {
   const row = {
-    id:                 a.id,
-    brand_id:           a.brandId,
-    store_id:           a.storeId,
-    first_name:         a.firstName,
-    last_name:          a.lastName || null,
-    email:              a.email || null,
-    phone:              a.phone || null,
-    position:           a.position || null,
-    source:             a.source || "manager_capture",
-    availability_notes: a.availabilityNotes || null,
-    applicant_notes:    a.applicantNotes || null,
-    status:             a.status || "applied",
-    rejection_reason:   a.rejectionReason || null,
-    ops_team_id:        a.opsTeamId || null,
-    created_by:         a.createdBy || null,
-    rtw_verified:       !!a.rtwVerified,
-    rtw_verified_by:    a.rtwVerifiedBy || null,
-    rtw_verified_at:    a.rtwVerifiedAt || null,
+    id:                   a.id,
+    brand_id:             a.brandId,
+    store_id:             a.storeId,
+    first_name:           a.firstName,
+    last_name:            a.lastName || null,
+    email:                a.email || null,
+    phone:                a.phone || null,
+    position:             a.position || null,
+    source:               a.source || "manager_capture",
+    availability_notes:   a.availabilityNotes || null,
+    applicant_notes:      a.applicantNotes || null,
+    status:               a.status || "applied",
+    rejection_reason:     a.rejectionReason || null,
+    ops_team_id:          a.opsTeamId || null,
+    created_by:           a.createdBy || null,
+    rtw_verified:         !!a.rtwVerified,
+    rtw_verified_by:      a.rtwVerifiedBy || null,
+    rtw_verified_at:      a.rtwVerifiedAt || null,
+    // ── Slice 3 fields ────────────────────────────────────────────────────
+    // All optional in the DB (nullable). The /apply form enforces required-ness
+    // on the client; manager-captured walk-ins may legitimately leave some
+    // blank if the manager doesn't have the info yet.
+    date_of_birth:        a.dateOfBirth || null,
+    legal_status:         a.legalStatus || null,
+    address:              a.address || null,
+    relevant_experience:  a.relevantExperience || null,
+    resume_text:          a.resumeText || null,
+    photo_url:            a.photoUrl || null,
+    photo_path:           a.photoPath || null,
+    is_minor:             !!a.isMinor,
   };
   return row;
 }
@@ -1496,4 +1522,76 @@ export async function fetchApplicationStatusHistory(applicationId) {
     changedAt:     r.changed_at,
     note:          r.note || "",
   }));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// APPLICANT PHOTO UPLOAD (slice 3)
+// ════════════════════════════════════════════════════════════════════════════
+// Uploads a candidate's photo to the "applicant-photos" Supabase Storage
+// bucket. The bucket is public-read but write requires either anonymous
+// INSERT (covered by our RLS policy for the bucket) or an authenticated user.
+//
+// Returns: { url, path } where:
+//   - url is the public URL we store in job_applications.photo_url
+//   - path is the storage path we store in job_applications.photo_path
+//     (used later for GDPR-driven deletion when a candidate is rejected
+//     or asks for their data to be removed)
+//
+// File path includes a random token + timestamp so URLs are not enumerable
+// — someone can't guess "/applicant-photos/0001.jpg" to find other
+// candidates' photos.
+
+export async function uploadApplicantPhoto(file) {
+  if (!file) throw new Error("No file provided");
+  if (!(file instanceof File || file instanceof Blob)) throw new Error("Invalid file");
+
+  // Pick a safe extension based on the actual content type. Some browsers
+  // give "image/jpeg" for both .jpg and .jpeg uploads; we always store as .jpg.
+  const extByType = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+  const ext = extByType[file.type] || "jpg";
+
+  // 5 MB limit also enforced by bucket config; check client-side to fail fast
+  // with a useful message rather than getting a cryptic storage error.
+  const MAX_BYTES = 5 * 1024 * 1024;
+  if (file.size > MAX_BYTES) {
+    throw new Error(`Photo is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 5 MB.`);
+  }
+  if (!extByType[file.type]) {
+    throw new Error("Only JPG, PNG, and WEBP images are accepted.");
+  }
+
+  // Path: applicants/{yyyy-mm}/{random}.ext
+  // The yyyy-mm prefix lets us see at a glance when each photo was uploaded
+  // and makes manual cleanup (e.g. "delete everything older than 12 months")
+  // easy in Supabase Studio.
+  const now    = new Date();
+  const yyyyMm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const token  = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const path   = `applicants/${yyyyMm}/${token}.${ext}`;
+
+  const { error: upErr } = await supabase.storage
+    .from("applicant-photos")
+    .upload(path, file, {
+      contentType: file.type,
+      cacheControl: "31536000",   // 1 year — photos don't change
+      upsert: false,
+    });
+  if (upErr) throw upErr;
+
+  // Public URL — derived deterministically from path; doesn't require a network call
+  const { data: { publicUrl } } = supabase.storage
+    .from("applicant-photos")
+    .getPublicUrl(path);
+
+  return { url: publicUrl, path };
+}
+
+// Deletes an applicant photo by storage path. Used when an application is
+// deleted or when a candidate requests their data removed under GDPR.
+// Quietly tolerates missing files since the photo may already have been
+// purged manually from Supabase Studio.
+export async function deleteApplicantPhoto(path) {
+  if (!path) return;
+  const { error } = await supabase.storage.from("applicant-photos").remove([path]);
+  if (error && error.message && !/not.found/i.test(error.message)) throw error;
 }

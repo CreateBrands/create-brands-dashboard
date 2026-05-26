@@ -30,6 +30,8 @@ import {
   // Hiring / Onboarding (slice 1)
   fetchApplications, insertApplication, updateApplication, deleteApplication,
   changeApplicationStatus, fetchApplicationStatusHistory,
+  // Slice 3: photo upload + delete
+  uploadApplicantPhoto, deleteApplicantPhoto,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5228,6 +5230,36 @@ const APPLICATION_TRANSITIONS = {
   withdrawn:         [],
 };
 
+// UK-specific legal status options for the application form. Hardcoded per
+// product spec — these are sufficient for current UK hospitality hiring.
+// If the list needs to change (e.g. T2 Visa rebranded to Skilled Worker),
+// edit this constant and redeploy. The values are stored as strings in
+// job_applications.legal_status so we don't need a DB migration on changes.
+const LEGAL_STATUS_OPTIONS = [
+  { value: "international_student",      label: "International student" },
+  { value: "post_graduate_work_permit",  label: "Post graduate work permit" },
+  { value: "british",                    label: "British citizen" },
+  { value: "eu_national",                label: "EU national (settled/pre-settled)" },
+  { value: "t2_work_permit",             label: "T2 work permit" },
+];
+
+// Returns true if a YYYY-MM-DD date string represents someone under 18.
+// Used at submission time to set the is_minor flag (UK employment law has
+// restricted hours for 16-17 year olds; under-16 employment is illegal in
+// hospitality). Returns false for invalid/missing dates — the form's
+// required validation handles the missing case.
+function isUnder18(dobString) {
+  if (!dobString) return false;
+  const dob = new Date(dobString);
+  if (isNaN(dob.getTime())) return false;
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const m = now.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
+  return age < 18;
+}
+
+
 function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications, currentUser, onAdd, onUpdate, onSetStatus, onDelete }) {
   const [showForm, setShowForm]   = useState(false);
   const [editItem, setEditItem]   = useState(null);
@@ -5385,16 +5417,53 @@ function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications,
                 {/* Expanded section */}
                 {isExpanded && (
                   <div className="border-t border-slate-800 p-4 space-y-4 bg-slate-950/40">
-                    {/* Details */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-                      <DetailField label="Position"    value={app.position || "—"}/>
-                      <DetailField label="Source"      value={app.source || "—"}/>
-                      <DetailField label="Email"       value={app.email || "—"}/>
-                      <DetailField label="Phone"       value={app.phone || "—"}/>
-                      <DetailField label="RTW Verified" value={app.rtwVerified ? "✓ Yes" : "✗ No"}/>
-                      <DetailField label="Applied On"  value={new Date(app.createdAt).toLocaleDateString("en-GB")}/>
+                    {/* Top row: photo (if uploaded) + key details */}
+                    <div className="flex items-start gap-4">
+                      {app.photoUrl && (
+                        <a
+                          href={app.photoUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="flex-shrink-0 block"
+                          title="Click to view full size"
+                        >
+                          <img
+                            src={app.photoUrl}
+                            alt={`${app.firstName} ${app.lastName}`}
+                            className="w-24 h-24 object-cover rounded-xl border border-slate-700"
+                          />
+                        </a>
+                      )}
+                      <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                        <DetailField label="Position"    value={app.position || "—"}/>
+                        <DetailField label="Source"      value={app.source || "—"}/>
+                        <DetailField label="Email"       value={app.email || "—"}/>
+                        <DetailField label="Phone"       value={app.phone || "—"}/>
+                        <DetailField label="Date of Birth"
+                          value={app.dateOfBirth
+                            ? `${new Date(app.dateOfBirth).toLocaleDateString("en-GB")}${app.isMinor ? " ⚠ UNDER 18" : ""}`
+                            : "—"
+                          }
+                        />
+                        <DetailField label="Legal Status"
+                          value={LEGAL_STATUS_OPTIONS.find(o => o.value === app.legalStatus)?.label || app.legalStatus || "—"}
+                        />
+                        <DetailField label="RTW Verified" value={app.rtwVerified ? "✓ Yes" : "✗ No"}/>
+                        <DetailField label="Applied On"  value={new Date(app.createdAt).toLocaleDateString("en-GB")}/>
+                      </div>
                     </div>
-                    {app.availabilityNotes && <DetailField label="Availability" value={app.availabilityNotes} full/>}
+
+                    {/* Wider fields full-width below */}
+                    {app.address              && <DetailField label="Address"              value={app.address} full/>}
+                    {app.availabilityNotes    && <DetailField label="Availability"         value={app.availabilityNotes} full/>}
+                    {app.relevantExperience   && <DetailField label="Relevant Experience"  value={app.relevantExperience} full/>}
+                    {app.resumeText && (
+                      <div className="col-span-full">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1.5">Resume / CV</div>
+                        <pre className="text-xs text-slate-200 bg-slate-950 border border-slate-800 rounded-xl p-3 max-h-64 overflow-y-auto whitespace-pre-wrap font-mono">{app.resumeText}</pre>
+                      </div>
+                    )}
                     {app.applicantNotes    && <DetailField label="Notes"        value={app.applicantNotes}    full/>}
                     {app.status === "rejected" && app.rejectionReason &&
                       <DetailField label="Rejection Reason" value={app.rejectionReason} full/>
@@ -5507,9 +5576,10 @@ function FilterChip({ active, onClick, label }) {
 // ─── Application Form Modal ───────────────────────────────────────────────────
 function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClose }) {
   // Decide initial positionChoice for edits. If the existing position string
-  // exactly matches one of the current store's role names, pre-select that
-  // role. Otherwise treat it as a free-text "Other" value so the manager can
-  // continue editing it inline.
+  // exactly matches one of the current store's advertised role names,
+  // pre-select that role. If it matches a role that's NOT advertised
+  // (e.g. captured before advertising was toggled), still pre-select it
+  // so we don't lose the data. If no match, treat as "Other"-style free text.
   const initialChoice = (() => {
     if (!item?.position) return "";
     const matchingRole = (storeRoles || []).find(r =>
@@ -5519,24 +5589,32 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
   })();
 
   const [form, setForm] = useState({
-    firstName:         item?.firstName         || "",
-    lastName:          item?.lastName          || "",
-    email:             item?.email             || "",
-    phone:             item?.phone             || "",
-    position:          item?.position          || "",
-    positionChoice:    initialChoice,
-    storeId:           item?.storeId           || stores[0]?.id || "",
-    availabilityNotes: item?.availabilityNotes || "",
-    applicantNotes:    item?.applicantNotes    || "",
-    rtwVerified:       item?.rtwVerified       || false,
-    source:            item?.source            || "manager_capture",
+    firstName:           item?.firstName           || "",
+    lastName:            item?.lastName            || "",
+    email:               item?.email               || "",
+    phone:               item?.phone               || "",
+    position:            item?.position            || "",
+    positionChoice:      initialChoice,
+    storeId:             item?.storeId             || stores[0]?.id || "",
+    availabilityNotes:   item?.availabilityNotes   || "",
+    applicantNotes:      item?.applicantNotes      || "",
+    rtwVerified:         item?.rtwVerified         || false,
+    source:              item?.source              || "manager_capture",
+    // ── Slice 3 fields (all optional in this modal — manager fills what they can) ──
+    dateOfBirth:         item?.dateOfBirth         || "",
+    legalStatus:         item?.legalStatus         || "",
+    address:             item?.address             || "",
+    relevantExperience:  item?.relevantExperience  || "",
+    resumeText:          item?.resumeText          || "",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const showBrandPrefix = new Set(stores.map(s => s.brandId)).size > 1;
 
-  // Roles for the currently-selected store. Same shape/filter as the public
-  // ApplyShell so behaviour is consistent (manager-side and candidate-side
-  // see the same set of options).
+  // Roles for the currently-selected store. Internal modal shows ALL active
+  // roles regardless of advertise_for_hiring (since the manager is capturing
+  // a walk-in, not picking from a public listing). This matches existing
+  // behaviour and avoids breaking the manager's flow when they want to
+  // capture a candidate for a role that isn't publicly advertised yet.
   const availableRoles = useMemo(
     () => (storeRoles || []).filter(r => r.storeId === form.storeId && !r.archivedAt),
     [storeRoles, form.storeId]
@@ -5560,19 +5638,29 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
     if (!form.storeId)          { alert("Please pick a store."); return; }
     const store = stores.find(s => s.id === form.storeId);
     onSave({
-      id:                item?.id || `app-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
-      brandId:           store?.brandId || item?.brandId,
-      storeId:           form.storeId,
-      firstName:         form.firstName.trim(),
-      lastName:          form.lastName.trim(),
-      email:             form.email.trim(),
-      phone:             form.phone.trim(),
-      position:          form.position.trim(),
-      availabilityNotes: form.availabilityNotes.trim(),
-      applicantNotes:    form.applicantNotes.trim(),
-      source:            form.source,
-      rtwVerified:       form.rtwVerified,
-      status:            item?.status || "applied",
+      id:                  item?.id || `app-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+      brandId:             store?.brandId || item?.brandId,
+      storeId:             form.storeId,
+      firstName:           form.firstName.trim(),
+      lastName:            form.lastName.trim(),
+      email:               form.email.trim(),
+      phone:               form.phone.trim(),
+      position:            form.position.trim(),
+      availabilityNotes:   form.availabilityNotes.trim(),
+      applicantNotes:      form.applicantNotes.trim(),
+      source:              form.source,
+      rtwVerified:         form.rtwVerified,
+      status:              item?.status || "applied",
+      // Slice 3 — pass through (server-side null-tolerates blanks)
+      dateOfBirth:         form.dateOfBirth || null,
+      legalStatus:         form.legalStatus || "",
+      address:             form.address.trim(),
+      relevantExperience:  form.relevantExperience.trim(),
+      resumeText:          form.resumeText.trim(),
+      isMinor:             isUnder18(form.dateOfBirth),
+      // Preserve photo if editing — modal doesn't upload, so keep existing URL
+      photoUrl:            item?.photoUrl || null,
+      photoPath:           item?.photoPath || null,
     });
   };
 
@@ -5657,6 +5745,45 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
           <label className={labelCls}>Availability</label>
           <input value={form.availabilityNotes} onChange={e => set("availabilityNotes", e.target.value)} placeholder="e.g. Weekends only, full-time, mornings…" className={inputCls}/>
         </div>
+        {/* Slice 3 — extra candidate info. All optional in this internal
+            modal: manager captures what they have, candidate can fill in
+            the rest via the upcoming candidate portal. */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Date of Birth</label>
+            <input
+              type="date"
+              value={form.dateOfBirth}
+              onChange={e => set("dateOfBirth", e.target.value)}
+              max={new Date().toISOString().slice(0, 10)}
+              className={inputCls}
+            />
+            {form.dateOfBirth && isUnder18(form.dateOfBirth) && (
+              <div className="text-[11px] text-amber-400 mt-1">⚠ Applicant under 18 — restricted hours apply.</div>
+            )}
+          </div>
+          <div>
+            <label className={labelCls}>Legal Status</label>
+            <select value={form.legalStatus} onChange={e => set("legalStatus", e.target.value)} className={inputCls}>
+              <option value="">— Not set —</option>
+              {LEGAL_STATUS_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Address</label>
+          <input value={form.address} onChange={e => set("address", e.target.value)} placeholder="Street, town, postcode" className={inputCls}/>
+        </div>
+        <div>
+          <label className={labelCls}>Relevant Experience</label>
+          <textarea value={form.relevantExperience} onChange={e => set("relevantExperience", e.target.value)} rows={3} placeholder="Previous hospitality / customer-service experience…" className={`${inputCls} resize-none`}/>
+        </div>
+        <div>
+          <label className={labelCls}>Resume / CV (paste)</label>
+          <textarea value={form.resumeText} onChange={e => set("resumeText", e.target.value)} rows={5} placeholder="Optional — paste resume text here if available." className={`${inputCls} resize-none font-mono text-xs`}/>
+        </div>
         <div>
           <label className={labelCls}>Notes</label>
           <textarea value={form.applicantNotes} onChange={e => set("applicantNotes", e.target.value)} rows={2} placeholder="Anything else relevant…" className={`${inputCls} resize-none`}/>
@@ -5665,7 +5792,7 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
           <input type="checkbox" id="rtw-verified" checked={form.rtwVerified} onChange={e => set("rtwVerified", e.target.checked)} className="mt-0.5"/>
           <label htmlFor="rtw-verified" className="flex-1 cursor-pointer">
             <div className="text-sm font-semibold text-slate-200">Right-to-work verified</div>
-            <div className="text-[11px] text-slate-500 mt-0.5">Tick if you've seen and recorded valid RTW documents. Required before any paid work, including trial shifts. (Slice 2 will add document upload — for now this is a manual confirmation.)</div>
+            <div className="text-[11px] text-slate-500 mt-0.5">Tick if you've seen and recorded valid RTW documents. Required before any paid work, including trial shifts.</div>
           </label>
         </div>
       </div>
@@ -6551,6 +6678,7 @@ function StructureSection({
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="text-sm text-white truncate">{role.name}</div>
                           {role.isManagement && <Badge label="Management" color="indigo"/>}
+                          {role.advertiseForHiring && !role.archivedAt && <Badge label="Hiring" color="green"/>}
                           {role.archivedAt && <Badge label="Archived" color="slate"/>}
                           {role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">£{role.hourlyRate.toFixed(2)}/hr</span>}
                           {staffCount > 0 && <span className="text-xs text-slate-600">· {staffCount} staff</span>}
@@ -6725,6 +6853,10 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
   const [hourlyRate, setRate]     = useState(role?.hourlyRate != null ? String(role.hourlyRate) : "");
   const [isManagement, setMgmt]   = useState(role?.isManagement || false);
   const [sortOrder, setSortOrder] = useState(role?.sortOrder ?? 0);
+  // Slice 3 — whether this role appears in /apply form's position dropdown
+  // for this store. Default off for both new and existing roles (existing
+  // roles that haven't been opted in get false from the DB default).
+  const [advertiseForHiring, setAdvertise] = useState(!!role?.advertiseForHiring);
   const [saving, setSaving]       = useState(false);
 
   const handleSave = async () => {
@@ -6739,6 +6871,7 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
         hourlyRate: hourlyRate === "" ? null : Number(hourlyRate),
         isManagement,
         sortOrder: Number(sortOrder) || 0,
+        advertiseForHiring,
       });
     } finally { setSaving(false); }
   };
@@ -6783,6 +6916,17 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
             <span className="text-sm text-slate-300">Management role</span>
           </label>
           <div className="text-[10px] text-slate-600 mt-0.5 ml-6">Used for permission checks and shift authority.</div>
+        </div>
+        <div className="bg-indigo-950/30 border border-indigo-900/50 rounded-xl p-3">
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" checked={advertiseForHiring} onChange={e => setAdvertise(e.target.checked)} className="rounded mt-0.5"/>
+            <div className="flex-1">
+              <span className="text-sm text-slate-200 font-semibold">Advertise on /apply form</span>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                When ticked, this role appears in the public job application form's position dropdown for this store. Untick once the position is filled to stop accepting applications for it.
+              </div>
+            </div>
+          </label>
         </div>
       </div>
     </Modal>
@@ -13048,6 +13192,13 @@ function ApplyShell() {
     applicantNotes:    "",
     rtwDeclaration:    "",   // "yes" / "no" — declaration only, not verification
     honeypot:          "",   // bots fill this; humans don't
+    // ── Slice 3 fields ────────────────────────────────────────────────────
+    dateOfBirth:        "",   // YYYY-MM-DD from <input type="date">
+    legalStatus:        "",   // matches a value from LEGAL_STATUS_OPTIONS
+    address:            "",
+    relevantExperience: "",
+    resumeText:         "",
+    photoFile:          null, // File object pending upload; replaced with URL on submit
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -13100,16 +13251,24 @@ function ApplyShell() {
   // Multi-brand prefix in dropdown
   const showBrandPrefix = new Set(availableStores.map(s => s.brandId)).size > 1;
 
-  // Roles available for the currently-selected store. Used to populate the
-  // position dropdown. If the store has no active roles defined, we fall
-  // through to a plain text input below.
+  // Roles available for the currently-selected store, filtered to those
+  // explicitly flagged for hiring. This is the public form — we deliberately
+  // don't expose every operational role (someone in scheduling shouldn't
+  // unintentionally show up as a vacancy). HQ/managers toggle the
+  // advertise_for_hiring checkbox in Ops Setup → Structure to control what's
+  // open for applications.
   const availableRoles = useMemo(
-    () => (storeRoles || []).filter(r => r.storeId === form.storeId && !r.archivedAt),
+    () => (storeRoles || []).filter(r =>
+      r.storeId === form.storeId &&
+      !r.archivedAt &&
+      r.advertiseForHiring === true
+    ),
     [storeRoles, form.storeId]
   );
-  // Whether to render the position field as a dropdown vs free text input.
-  // - Store selected with at least one role available → dropdown (with "Other (specify)" fallback)
-  // - Otherwise → free text
+  // Whether to render the position field as a dropdown vs an empty state.
+  // Slice 3: per spec, there's no "Other (specify)" fallback — if no role
+  // is advertised for this store, candidate cannot apply for an arbitrary
+  // position. They'd see an empty-state message and pick a different store.
   const useRoleDropdown = !!form.storeId && availableRoles.length > 0;
 
   // When the user changes store, their previously-chosen role no longer makes
@@ -13121,16 +13280,29 @@ function ApplyShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.storeId]);
 
-  // Validate form
+  // Validate form. All slice 3 fields are required for public submissions per
+  // product spec; the only optional field on the public form is the existing
+  // free-form "tell us about yourself" applicantNotes.
   const validate = () => {
     if (!form.firstName.trim())          return "Please enter your first name.";
     if (!form.lastName.trim())           return "Please enter your last name.";
     if (!form.email.trim())              return "Please enter your email address.";
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return "That doesn't look like a valid email address.";
     if (!form.phone.trim())              return "Please enter your phone number.";
+    if (!form.dateOfBirth)               return "Please enter your date of birth.";
+    // Sanity-check DOB — reject anything ridiculous (after today, before 1900)
+    const dobDate = new Date(form.dateOfBirth);
+    if (isNaN(dobDate.getTime()))        return "That doesn't look like a valid date.";
+    if (dobDate > new Date())            return "Date of birth can't be in the future.";
+    if (dobDate.getFullYear() < 1900)    return "Please check your date of birth.";
+    if (!form.legalStatus)               return "Please select your legal status.";
+    if (!form.address.trim())            return "Please enter your address.";
     if (!form.storeId)                   return "Please pick a store you'd like to work at.";
-    if (!form.position.trim())           return "Please tell us what position you're applying for.";
+    if (!form.position.trim())           return "Please pick a position to apply for.";
     if (!form.availabilityNotes.trim())  return "Please tell us when you're available to work.";
+    if (!form.relevantExperience.trim()) return "Please share any relevant experience.";
+    if (!form.resumeText.trim())         return "Please paste your CV / resume into the box.";
+    if (!form.photoFile)                 return "Please upload a photo.";
     if (!form.rtwDeclaration)            return "Please confirm your right to work in the UK.";
     return null;
   };
@@ -13173,36 +13345,61 @@ function ApplyShell() {
       if (!proceed) return;
     }
 
-    // Build & insert
+    // Build & insert. We upload the photo FIRST so that if anything goes
+    // wrong with photo upload, we haven't inserted a half-broken application
+    // record that needs cleaning up. If photo upload succeeds but DB insert
+    // fails, we have a stray photo in storage — a minor cost (manually
+    // cleanable from Supabase Studio) compared to having a DB row pointing
+    // at a non-existent image.
     const store = availableStores.find(s => s.id === form.storeId);
     setSubmitting(true);
     try {
+      let photoUrl = null;
+      let photoPath = null;
+      if (form.photoFile) {
+        const { url, path } = await uploadApplicantPhoto(form.photoFile);
+        photoUrl  = url;
+        photoPath = path;
+      }
+
       await insertApplication({
-        id:                `app-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
-        brandId:           store?.brandId,
-        storeId:           form.storeId,
-        firstName:         form.firstName.trim(),
-        lastName:          form.lastName.trim(),
-        email:             form.email.trim(),
-        phone:             form.phone.trim(),
-        position:          form.position.trim(),
-        availabilityNotes: form.availabilityNotes.trim(),
+        id:                  `app-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+        brandId:             store?.brandId,
+        storeId:             form.storeId,
+        firstName:           form.firstName.trim(),
+        lastName:            form.lastName.trim(),
+        email:               form.email.trim(),
+        phone:               form.phone.trim(),
+        position:            form.position.trim(),
+        availabilityNotes:   form.availabilityNotes.trim(),
         // Combine RTW declaration with any free-form notes for managers to see at a glance
-        applicantNotes:    [
+        applicantNotes:      [
           `Right to work in UK: ${form.rtwDeclaration === "yes" ? "Yes" : "No (will provide supporting docs)"}`,
           form.applicantNotes.trim() && `\n${form.applicantNotes.trim()}`,
         ].filter(Boolean).join(""),
-        source:            "public_form",
-        status:            "applied",
-        rtwVerified:       false,   // declaration ≠ verification; manager confirms later
-        createdBy:         null,    // anonymous submission
+        source:              "public_form",
+        status:              "applied",
+        rtwVerified:         false,   // declaration ≠ verification; manager confirms later
+        createdBy:           null,    // anonymous submission
+        // Slice 3 fields
+        dateOfBirth:         form.dateOfBirth,
+        legalStatus:         form.legalStatus,
+        address:             form.address.trim(),
+        relevantExperience:  form.relevantExperience.trim(),
+        resumeText:          form.resumeText.trim(),
+        photoUrl:            photoUrl,
+        photoPath:           photoPath,
+        isMinor:             isUnder18(form.dateOfBirth),
       });
 
       try { localStorage.setItem(APPLY_RATE_LIMIT_KEY, String(Date.now())); } catch {}
       setSubmitted(true);
     } catch (err) {
       console.error("Application submit failed:", err);
-      setSubmitError("Something went wrong saving your application. Please try again, or contact the store directly if the problem continues.");
+      setSubmitError(err?.message
+        ? `Something went wrong: ${err.message}`
+        : "Something went wrong saving your application. Please try again, or contact the store directly if the problem continues."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -13330,54 +13527,135 @@ function ApplyShell() {
           <ApplyField
             label="Position you're applying for *"
             hint={useRoleDropdown
-              ? "Pick the closest match. Choose 'Other' if your role isn't listed."
-              : "e.g. Barista, Kitchen Porter, Shift Leader"
+              ? "Pick the role you'd like to apply for."
+              : "No open positions at this store right now. Try another store."
             }
           >
             {useRoleDropdown ? (
-              <>
-                <select
-                  style={applyInputStyle}
-                  value={form.positionChoice}
-                  onChange={e => {
-                    const v = e.target.value;
-                    // If user picks a real role, mirror it into `position` (the saved field).
-                    // If they pick "Other", clear `position` so they can type freely below.
-                    if (v === "__other__") {
-                      setForm(f => ({ ...f, positionChoice: v, position: "" }));
-                    } else {
-                      setForm(f => ({ ...f, positionChoice: v, position: v }));
-                    }
-                  }}
-                >
-                  <option value="">— Choose a position —</option>
-                  {availableRoles.map(r => (
-                    <option key={r.id} value={r.name}>{r.name}</option>
-                  ))}
-                  <option value="__other__">Other (specify below)</option>
-                </select>
-                {form.positionChoice === "__other__" && (
-                  <input
-                    style={{ ...applyInputStyle, marginTop: 8 }}
-                    value={form.position}
-                    onChange={e => set("position", e.target.value)}
-                    placeholder="Type the position you're applying for"
-                    maxLength={60}
-                  />
-                )}
-              </>
-            ) : (
-              <input
+              <select
                 style={applyInputStyle}
-                value={form.position}
-                onChange={e => set("position", e.target.value)}
-                maxLength={60}
-              />
+                value={form.positionChoice}
+                onChange={e => {
+                  // Slice 3: positionChoice and position always mirror — no
+                  // "Other" fallback. Candidate can only apply for advertised
+                  // roles. If their role isn't listed, they pick a different
+                  // store or wait until it's advertised.
+                  const v = e.target.value;
+                  setForm(f => ({ ...f, positionChoice: v, position: v }));
+                }}
+              >
+                <option value="">— Choose a position —</option>
+                {availableRoles.map(r => (
+                  <option key={r.id} value={r.name}>{r.name}</option>
+                ))}
+              </select>
+            ) : (
+              <div style={{
+                padding: "12px 14px", borderRadius: 10,
+                background: "#1e293b", border: "1px solid #334155",
+                color: "#94a3b8", fontSize: 13,
+              }}>
+                {form.storeId
+                  ? "No open positions at this store right now. Please pick a different store."
+                  : "Pick a store first to see available positions."
+                }
+              </div>
             )}
+          </ApplyField>
+
+          <ApplyField label="Date of birth *" hint="DD/MM/YYYY">
+            <input
+              style={applyInputStyle}
+              type="date"
+              value={form.dateOfBirth}
+              onChange={e => set("dateOfBirth", e.target.value)}
+              max={new Date().toISOString().slice(0, 10)}
+            />
+            {form.dateOfBirth && isUnder18(form.dateOfBirth) && (
+              <div style={{ marginTop: 6, fontSize: 11, color: "#fbbf24" }}>
+                Note: applicants under 18 have legally restricted working hours.
+                Manager will discuss this with you.
+              </div>
+            )}
+          </ApplyField>
+
+          <ApplyField label="Legal status in the UK *" hint="Choose the option that best describes your current immigration status.">
+            <select
+              style={applyInputStyle}
+              value={form.legalStatus}
+              onChange={e => set("legalStatus", e.target.value)}
+            >
+              <option value="">— Choose your status —</option>
+              {LEGAL_STATUS_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </ApplyField>
+
+          <ApplyField label="Your address *" hint="Street, town, postcode — all on one line is fine.">
+            <input
+              style={applyInputStyle}
+              value={form.address}
+              onChange={e => set("address", e.target.value)}
+              maxLength={200}
+              placeholder="e.g. 12 Main Street, Leicester, LE5 6DN"
+            />
           </ApplyField>
 
           <ApplyField label="When are you available to work? *" hint="e.g. Weekends only, Full-time Mon–Fri, Evenings after 5pm">
             <input style={applyInputStyle} value={form.availabilityNotes} onChange={e => set("availabilityNotes", e.target.value)} maxLength={200}/>
+          </ApplyField>
+
+          <ApplyField label="Relevant experience *" hint="Briefly tell us about your hospitality / customer service experience.">
+            <textarea
+              style={{ ...applyInputStyle, minHeight: 100, resize: "vertical" }}
+              value={form.relevantExperience}
+              onChange={e => set("relevantExperience", e.target.value)}
+              maxLength={2000}
+              placeholder="e.g. 2 years as a barista at X, 1 year waiting tables at Y…"
+            />
+          </ApplyField>
+
+          <ApplyField label="Paste your CV / resume *" hint="Plain text only. Paste from a Word doc or notepad.">
+            <textarea
+              style={{ ...applyInputStyle, minHeight: 180, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 12 }}
+              value={form.resumeText}
+              onChange={e => set("resumeText", e.target.value)}
+              maxLength={20000}
+              placeholder="Education, work history, skills, references…"
+            />
+          </ApplyField>
+
+          <ApplyField label="Upload a photo *" hint="Headshot or clear photo of yourself. Max 5 MB. JPG, PNG, or WEBP.">
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (!f) { set("photoFile", null); return; }
+                if (f.size > 5 * 1024 * 1024) {
+                  setSubmitError(`Photo is too large (${(f.size / 1024 / 1024).toFixed(1)} MB). Max 5 MB.`);
+                  e.target.value = "";   // reset the input so they can re-pick
+                  return;
+                }
+                setSubmitError(null);
+                set("photoFile", f);
+              }}
+              style={{ ...applyInputStyle, padding: "8px 10px", color: "#94a3b8" }}
+            />
+            {form.photoFile && (
+              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
+                {/* Live preview using object URL — revoked when form unmounts naturally */}
+                <img
+                  src={URL.createObjectURL(form.photoFile)}
+                  alt="Preview"
+                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "1px solid #334155" }}
+                />
+                <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                  {form.photoFile.name} · {(form.photoFile.size / 1024).toFixed(0)} KB
+                </div>
+              </div>
+            )}
           </ApplyField>
 
           <ApplyField label="Do you have the right to work in the UK? *">
@@ -13400,8 +13678,8 @@ function ApplyShell() {
             </div>
           </ApplyField>
 
-          <ApplyField label="Tell us a bit about yourself" hint="Optional — previous experience, why you want to work with us, anything else relevant.">
-            <textarea style={{ ...applyInputStyle, minHeight: 90, resize: "vertical" }} value={form.applicantNotes} onChange={e => set("applicantNotes", e.target.value)} maxLength={1000}/>
+          <ApplyField label="Anything else you'd like to share?" hint="Optional — anything that doesn't fit elsewhere.">
+            <textarea style={{ ...applyInputStyle, minHeight: 70, resize: "vertical" }} value={form.applicantNotes} onChange={e => set("applicantNotes", e.target.value)} maxLength={1000}/>
           </ApplyField>
 
           {submitError && (
