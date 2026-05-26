@@ -27,6 +27,9 @@ import {
   copyStoreStructure,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
   fetchInboxMessages, insertInboxMessage, markMessageRead,
+  // Hiring / Onboarding (slice 1)
+  fetchApplications, insertApplication, updateApplication, deleteApplication,
+  changeApplicationStatus, fetchApplicationStatusHistory,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5158,6 +5161,419 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
       {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
       {deleteId && <OpsConfirmModal message="Delete this assignment?" onConfirm={() => onDelete(deleteId)} onClose={() => setDeleteId(null)}/>}
     </div>
+  );
+}
+
+// ─── Hiring View ──────────────────────────────────────────────────────────────
+// Slice 1 of the staff onboarding pipeline. Lets managers + HQ + owner:
+//   - Capture candidates manually (walk-ins, referrals, phone enquiries)
+//   - Move them through the workflow: applied → reviewing → in_training → hired
+//   - Reject/withdraw at any stage
+//   - See timeline of status changes per candidate
+//
+// Phases 2+ will add: public application form, document uploads, magic-link
+// trainee/employee portal, per-employee profile, salary/asset/disciplinary
+// records. The schema is forward-compatible — slice 1 just doesn't expose
+// those fields yet.
+//
+// Visibility rules:
+//   - Managers see only applications at their stores
+//   - HQ + owner see everything (with the store-scope filter dropdown to focus)
+//
+// The CRUD is intentionally permissive — slice 1 doesn't gate by ownership
+// or block transitions. Managers + HQ + owner can all do all transitions.
+// The application's store_id determines which store it belongs to, and
+// scope filtering handles "what should I see".
+
+const APPLICATION_STATUSES = [
+  { key: "applied",            label: "Applied",          color: "slate"   },
+  { key: "manager_reviewing",  label: "Reviewing",        color: "amber"   },
+  { key: "in_training",        label: "In Training",      color: "indigo"  },
+  { key: "hired",              label: "Hired",            color: "green"   },
+  { key: "rejected",           label: "Rejected",         color: "red"     },
+  { key: "withdrawn",          label: "Withdrawn",        color: "slate"   },
+];
+
+// Valid next-states from each state. Drives the "Move to..." buttons.
+// Terminal states (hired, rejected, withdrawn) have no forward transitions.
+const APPLICATION_TRANSITIONS = {
+  applied:           ["manager_reviewing", "rejected", "withdrawn"],
+  manager_reviewing: ["in_training", "rejected", "withdrawn"],
+  in_training:       ["hired", "rejected", "withdrawn"],
+  hired:             [],
+  rejected:          [],
+  withdrawn:         [],
+};
+
+function HiringView({ brands, stores, visibleStoreIds, applications, currentUser, onAdd, onUpdate, onSetStatus, onDelete }) {
+  const [showForm, setShowForm]   = useState(false);
+  const [editItem, setEditItem]   = useState(null);
+  const [deleteId, setDeleteId]   = useState(null);
+  const [storeScope, setStoreScope] = useState("all");   // "all" or a specific store id
+  const [statusFilter, setStatusFilter] = useState("active");   // "active" (non-terminal) | "all" | specific status
+  const [expandedId, setExpandedId] = useState(null);
+  const [statusHistory, setStatusHistory] = useState({});   // { applicationId: [...] }
+
+  // Visible applications: filtered by user scope + UI filters.
+  // For managers, only their stores count. For HQ/owner, all visible stores.
+  const visible = useMemo(() => {
+    return applications.filter(app => {
+      // Scope: must be at a store the user can see
+      if (!visibleStoreIds?.includes(app.storeId)) return false;
+      // Store scope dropdown
+      if (storeScope !== "all" && app.storeId !== storeScope) return false;
+      // Status filter
+      if (statusFilter === "active") {
+        return !["hired", "rejected", "withdrawn"].includes(app.status);
+      }
+      if (statusFilter !== "all") {
+        return app.status === statusFilter;
+      }
+      return true;
+    });
+  }, [applications, visibleStoreIds, storeScope, statusFilter]);
+
+  // Counts per status for the filter chips
+  const statusCounts = useMemo(() => {
+    const scoped = applications.filter(a => visibleStoreIds?.includes(a.storeId));
+    const out = { all: scoped.length };
+    out.active = scoped.filter(a => !["hired", "rejected", "withdrawn"].includes(a.status)).length;
+    for (const s of APPLICATION_STATUSES) out[s.key] = scoped.filter(a => a.status === s.key).length;
+    return out;
+  }, [applications, visibleStoreIds]);
+
+  // Lazy-load status history when a row is expanded
+  const handleExpand = async (app) => {
+    if (expandedId === app.id) { setExpandedId(null); return; }
+    setExpandedId(app.id);
+    if (!statusHistory[app.id]) {
+      try {
+        const history = await fetchApplicationStatusHistory(app.id);
+        setStatusHistory(prev => ({ ...prev, [app.id]: history }));
+      } catch (err) {
+        console.error("Failed to load status history:", err);
+      }
+    }
+  };
+
+  const handleTransition = async (app, newStatus) => {
+    if (newStatus === "rejected") {
+      const reason = prompt(`Reason for rejecting ${app.firstName} ${app.lastName || ""}? (Optional but recommended for audit)`);
+      if (reason === null) return;   // user hit Cancel
+      await onSetStatus(app.id, newStatus, { rejectionReason: reason || "(no reason given)" });
+    } else {
+      await onSetStatus(app.id, newStatus);
+    }
+    // Refresh history if expanded
+    if (expandedId === app.id) {
+      const history = await fetchApplicationStatusHistory(app.id);
+      setStatusHistory(prev => ({ ...prev, [app.id]: history }));
+    }
+  };
+
+  const allowedStores = useMemo(
+    () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]
+  );
+  const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Hiring</h1>
+          <p className="text-sm text-slate-500">
+            {isHqOrAbove(currentUser?.role)
+              ? "All candidate applications across the chain."
+              : "Candidates applying to your stores."}
+          </p>
+        </div>
+        <button onClick={() => { setEditItem(null); setShowForm(true); }}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold">
+          <Plus size={14}/> Add Candidate
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3">
+        {allowedStores.length > 1 && (
+          <select value={storeScope} onChange={e => setStoreScope(e.target.value)}
+            className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500 min-w-[180px]">
+            <option value="all">All my stores ({allowedStores.length})</option>
+            {allowedStores.map(s => {
+              const b = brands.find(br => br.id === s.brandId);
+              return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+            })}
+          </select>
+        )}
+        {/* Status filter chips */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <FilterChip active={statusFilter === "active"}    onClick={() => setStatusFilter("active")}   label={`Active (${statusCounts.active})`}/>
+          <FilterChip active={statusFilter === "all"}       onClick={() => setStatusFilter("all")}      label={`All (${statusCounts.all})`}/>
+          {APPLICATION_STATUSES.map(s => statusCounts[s.key] > 0 && (
+            <FilterChip key={s.key} active={statusFilter === s.key} onClick={() => setStatusFilter(s.key)}
+              label={`${s.label} (${statusCounts[s.key]})`}/>
+          ))}
+        </div>
+      </div>
+
+      {/* List */}
+      {visible.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl">
+          <UserPlus size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">No applications match these filters</div>
+          <div className="text-xs text-slate-600 mt-1">Click "Add Candidate" to capture a new application.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visible.map(app => {
+            const store  = stores.find(s => s.id === app.storeId);
+            const brand  = brands.find(b => b.id === app.brandId);
+            const status = APPLICATION_STATUSES.find(s => s.key === app.status) || { label: app.status, color: "slate" };
+            const transitions = APPLICATION_TRANSITIONS[app.status] || [];
+            const isExpanded = expandedId === app.id;
+            const history = statusHistory[app.id] || [];
+
+            return (
+              <div key={app.id} className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden">
+                {/* Summary row — click to expand */}
+                <div onClick={() => handleExpand(app)}
+                  className="flex items-center gap-3 p-4 cursor-pointer hover:bg-slate-800/50 transition-colors">
+                  {/* Avatar (initials) */}
+                  <div className="w-10 h-10 rounded-xl bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-sm flex-shrink-0">
+                    {(app.firstName?.[0] || "?")}{app.lastName?.[0] || ""}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="text-sm font-bold text-white">{app.firstName} {app.lastName}</div>
+                      <Badge label={status.label} color={status.color}/>
+                      {app.position && <span className="text-xs text-slate-500">· {app.position}</span>}
+                    </div>
+                    <div className="text-xs text-slate-600 mt-0.5">
+                      {showBrandPrefix && brand ? `${brand.name} · ` : ""}{store?.shortName || store?.name || app.storeId}
+                      {app.email && ` · ${app.email}`}
+                      {app.phone && ` · ${app.phone}`}
+                    </div>
+                  </div>
+                  <ChevronDownIcon size={16} className={`text-slate-500 transition-transform flex-shrink-0 ${isExpanded ? "rotate-180" : ""}`}/>
+                </div>
+
+                {/* Expanded section */}
+                {isExpanded && (
+                  <div className="border-t border-slate-800 p-4 space-y-4 bg-slate-950/40">
+                    {/* Details */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                      <DetailField label="Position"    value={app.position || "—"}/>
+                      <DetailField label="Source"      value={app.source || "—"}/>
+                      <DetailField label="Email"       value={app.email || "—"}/>
+                      <DetailField label="Phone"       value={app.phone || "—"}/>
+                      <DetailField label="RTW Verified" value={app.rtwVerified ? "✓ Yes" : "✗ No"}/>
+                      <DetailField label="Applied On"  value={new Date(app.createdAt).toLocaleDateString("en-GB")}/>
+                    </div>
+                    {app.availabilityNotes && <DetailField label="Availability" value={app.availabilityNotes} full/>}
+                    {app.applicantNotes    && <DetailField label="Notes"        value={app.applicantNotes}    full/>}
+                    {app.status === "rejected" && app.rejectionReason &&
+                      <DetailField label="Rejection Reason" value={app.rejectionReason} full/>
+                    }
+
+                    {/* Status transition buttons */}
+                    {transitions.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 pt-2">
+                        <span className="text-xs text-slate-500">Move to:</span>
+                        {transitions.map(t => {
+                          const tinfo = APPLICATION_STATUSES.find(s => s.key === t);
+                          const isReject = t === "rejected" || t === "withdrawn";
+                          return (
+                            <button key={t} onClick={(e) => { e.stopPropagation(); handleTransition(app, t); }}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                isReject
+                                  ? "bg-slate-800 text-slate-400 hover:bg-red-950/40 hover:text-red-300"
+                                  : "bg-indigo-950/40 text-indigo-300 hover:bg-indigo-600 hover:text-white"
+                              }`}>
+                              {tinfo?.label || t}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Edit / Delete */}
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={(e) => { e.stopPropagation(); setEditItem(app); setShowForm(true); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">
+                        <Edit size={11}/> Edit details
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); setDeleteId(app.id); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-500 text-xs font-semibold hover:bg-red-950/40 hover:text-red-300">
+                        <Trash2 size={11}/> Delete
+                      </button>
+                    </div>
+
+                    {/* Status timeline */}
+                    {history.length > 0 && (
+                      <div className="pt-3 border-t border-slate-800">
+                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Timeline</div>
+                        <div className="space-y-1.5">
+                          {history.map(h => (
+                            <div key={h.id} className="flex items-start gap-2 text-xs">
+                              <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 flex-shrink-0"/>
+                              <div className="flex-1">
+                                <div className="text-slate-300">
+                                  {h.fromStatus
+                                    ? <>Moved from <span className="font-semibold">{APPLICATION_STATUSES.find(s=>s.key===h.fromStatus)?.label || h.fromStatus}</span> to <span className="font-semibold">{APPLICATION_STATUSES.find(s=>s.key===h.toStatus)?.label || h.toStatus}</span></>
+                                    : <>Application created with status <span className="font-semibold">{APPLICATION_STATUSES.find(s=>s.key===h.toStatus)?.label || h.toStatus}</span></>
+                                  }
+                                </div>
+                                <div className="text-slate-600">{new Date(h.changedAt).toLocaleString("en-GB")}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showForm && <ApplicationFormModal
+        brands={brands} stores={allowedStores} item={editItem}
+        onSave={async (data) => {
+          if (editItem) { await onUpdate(editItem.id, data); }
+          else          { await onAdd(data); }
+          setShowForm(false); setEditItem(null);
+        }}
+        onClose={() => { setShowForm(false); setEditItem(null); }}
+      />}
+
+      {deleteId && <OpsConfirmModal
+        message="Delete this application? This permanently removes the record and its history."
+        onConfirm={async () => { await onDelete(deleteId); setDeleteId(null); }}
+        onClose={() => setDeleteId(null)}
+      />}
+    </div>
+  );
+}
+
+// Small key/value pair used inside the expanded row
+function DetailField({ label, value, full }) {
+  return (
+    <div className={full ? "col-span-2 md:col-span-3" : ""}>
+      <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-0.5">{label}</div>
+      <div className="text-xs text-slate-200">{value}</div>
+    </div>
+  );
+}
+
+// Filter chip — clickable pill, highlighted when active
+function FilterChip({ active, onClick, label }) {
+  return (
+    <button onClick={onClick}
+      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+        active ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 border border-slate-700 hover:text-slate-200"
+      }`}>
+      {label}
+    </button>
+  );
+}
+
+// ─── Application Form Modal ───────────────────────────────────────────────────
+function ApplicationFormModal({ brands, stores, item, onSave, onClose }) {
+  const [form, setForm] = useState({
+    firstName:         item?.firstName         || "",
+    lastName:          item?.lastName          || "",
+    email:             item?.email             || "",
+    phone:             item?.phone             || "",
+    position:          item?.position          || "",
+    storeId:           item?.storeId           || stores[0]?.id || "",
+    availabilityNotes: item?.availabilityNotes || "",
+    applicantNotes:    item?.applicantNotes    || "",
+    rtwVerified:       item?.rtwVerified       || false,
+    source:            item?.source            || "manager_capture",
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const showBrandPrefix = new Set(stores.map(s => s.brandId)).size > 1;
+
+  const handleSave = () => {
+    if (!form.firstName.trim()) { alert("First name is required."); return; }
+    if (!form.storeId)          { alert("Please pick a store."); return; }
+    const store = stores.find(s => s.id === form.storeId);
+    onSave({
+      id:                item?.id || `app-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+      brandId:           store?.brandId || item?.brandId,
+      storeId:           form.storeId,
+      firstName:         form.firstName.trim(),
+      lastName:          form.lastName.trim(),
+      email:             form.email.trim(),
+      phone:             form.phone.trim(),
+      position:          form.position.trim(),
+      availabilityNotes: form.availabilityNotes.trim(),
+      applicantNotes:    form.applicantNotes.trim(),
+      source:            form.source,
+      rtwVerified:       form.rtwVerified,
+      status:            item?.status || "applied",
+    });
+  };
+
+  return (
+    <Modal title={item ? `Edit Application — ${item.firstName} ${item.lastName || ""}` : "New Application"} onClose={onClose} maxW="max-w-2xl"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button>
+      </>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e => set("firstName", e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Last Name</label><input value={form.lastName} onChange={e => set("lastName", e.target.value)} className={inputCls}/></div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Email</label><input type="email" value={form.email} onChange={e => set("email", e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Phone</label><input value={form.phone} onChange={e => set("phone", e.target.value)} className={inputCls}/></div>
+        </div>
+        <div>
+          <label className={labelCls}>Store *</label>
+          <select value={form.storeId} onChange={e => set("storeId", e.target.value)} className={inputCls}>
+            <option value="">— Pick a store —</option>
+            {stores.map(s => {
+              const b = brands.find(br => br.id === s.brandId);
+              return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+            })}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className={labelCls}>Position</label><input value={form.position} onChange={e => set("position", e.target.value)} placeholder="Barista, Manager…" className={inputCls}/></div>
+          <div>
+            <label className={labelCls}>Source</label>
+            <select value={form.source} onChange={e => set("source", e.target.value)} className={inputCls}>
+              <option value="manager_capture">Manager captured</option>
+              <option value="referral">Referral</option>
+              <option value="walk_in">Walk-in</option>
+              <option value="public_form">Public form</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Availability</label>
+          <input value={form.availabilityNotes} onChange={e => set("availabilityNotes", e.target.value)} placeholder="e.g. Weekends only, full-time, mornings…" className={inputCls}/>
+        </div>
+        <div>
+          <label className={labelCls}>Notes</label>
+          <textarea value={form.applicantNotes} onChange={e => set("applicantNotes", e.target.value)} rows={2} placeholder="Anything else relevant…" className={`${inputCls} resize-none`}/>
+        </div>
+        <div className="flex items-start gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3">
+          <input type="checkbox" id="rtw-verified" checked={form.rtwVerified} onChange={e => set("rtwVerified", e.target.checked)} className="mt-0.5"/>
+          <label htmlFor="rtw-verified" className="flex-1 cursor-pointer">
+            <div className="text-sm font-semibold text-slate-200">Right-to-work verified</div>
+            <div className="text-[11px] text-slate-500 mt-0.5">Tick if you've seen and recorded valid RTW documents. Required before any paid work, including trial shifts. (Slice 2 will add document upload — for now this is a manual confirmation.)</div>
+          </label>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -12588,6 +13004,8 @@ export default function App() {
   const [schedules,       setSchedules]      = useState([]);
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
+  // Hiring / Onboarding (slice 1)
+  const [applications,    setApplications]   = useState([]);
   const [stores,            setStores]            = useState([]);
   const [storeDepartments,  setStoreDepartments]  = useState([]);
   const [storeRoles,        setStoreRoles]        = useState([]);
@@ -12619,11 +13037,12 @@ export default function App() {
       fetchAvailability(), fetchSchedules(), fetchShiftPresets(), fetchPunchRecords(),
       fetchStores(), fetchFlipdishStores(), fetchFlipdishSyncLog(),
       fetchStoreDepartments(), fetchStoreRoles(),
+      fetchApplications(),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -12632,6 +13051,7 @@ export default function App() {
       setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
       setStores(st); setFlipdishStores(fs); setFlipdishSyncLog(fsl);
       setStoreDepartments(sdepts || []); setStoreRoles(sroles || []);
+      setApplications(apps || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -12804,6 +13224,33 @@ export default function App() {
   const addIssue     = useCallback(async i=>{const s=await insertIssue(i);setIssues(is=>[s,...is]);}, []);
   const updateIssue  = useCallback(async i=>{const s=await upsertIssue(i);setIssues(is=>is.map(x=>x.id===s.id?s:x));}, []);
   const deleteIssue  = useCallback(async id=>{await removeIssue(id);setIssues(is=>is.filter(x=>x.id!==id));}, []);
+  // ── Hiring / Applications CRUD ────────────────────────────────────────────
+  // Slice 1: managers + HQ + owner can all add, edit, change status of
+  // applications. Server-side schema validates the status enum, so bad
+  // values get rejected at write time. Status changes are auto-logged
+  // by the DB trigger — no app-side audit calls needed.
+  const addApplication = useCallback(async app => {
+    const saved = await insertApplication({ ...app, createdBy: currentUser?.id });
+    setApplications(prev => [saved, ...prev]);
+    showToast("Application added");
+    return saved;
+  }, [currentUser?.id, showToast]);
+  const updateApplicationRow = useCallback(async (id, patch) => {
+    const saved = await updateApplication(id, patch);
+    setApplications(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Application updated");
+    return saved;
+  }, [showToast]);
+  const setApplicationStatus = useCallback(async (id, newStatus, extraPatch = {}) => {
+    const saved = await changeApplicationStatus(id, newStatus, extraPatch);
+    setApplications(prev => prev.map(x => x.id === id ? saved : x));
+    return saved;
+  }, []);
+  const deleteApplicationRow = useCallback(async id => {
+    await deleteApplication(id);
+    setApplications(prev => prev.filter(x => x.id !== id));
+    showToast("Application deleted");
+  }, [showToast]);
   const addBrand     = useCallback(async b=>{const s=await insertBrand(b);setBrands(bs=>[...bs,s]);showToast("Brand added");}, [showToast]);
   const updateBrand  = useCallback(async b=>{const s=await upsertBrand(b);setBrands(bs=>bs.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteBrand  = useCallback(async id=>{await removeBrand(id);setBrands(bs=>bs.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
@@ -13098,6 +13545,17 @@ export default function App() {
   const pendingAvail = availability.filter(a => visibleBrands.some(b=>b.id===a.brandId) && a.status==="pending").length;
   const commsBadge = inboxUnread + pendingAvail;
 
+  // Hiring badge: count applications in active (non-terminal) states that
+  // are relevant to the current user's scope. For managers, only their stores;
+  // for HQ/owner, everywhere. We only count "needs action" states — applied
+  // and manager_reviewing — so the badge represents "things waiting for me",
+  // not just "stuff in pipeline".
+  const hiringBadge = applications.filter(a => {
+    if (!["applied", "manager_reviewing"].includes(a.status)) return false;
+    if (isHqOrAbove(currentUser.role)) return true;
+    return (currentUser.storeIds || []).includes(a.storeId);
+  }).length;
+
   // Nav items declared with optional `roles` array. If omitted, all roles see it.
   // Filtered by current user's role; empty groups dropped so the sidebar doesn't
   // render an orphan header. Recomputed every render — cheap, no hook needed.
@@ -13118,6 +13576,7 @@ export default function App() {
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
+      { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null },
     ]},
     { group: "MAINTENANCE", items: [
       { key: "issues",  label: "Issues",  icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
@@ -13225,6 +13684,12 @@ export default function App() {
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {effectiveActiveView === "hiring"         && <HiringView
+              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+              applications={applications} currentUser={currentUser}
+              onAdd={addApplication} onUpdate={updateApplicationRow}
+              onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
+            />}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}

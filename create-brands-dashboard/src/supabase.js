@@ -1365,3 +1365,129 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
 
   return out.map(dbFlipdishSaleToApp);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// HIRING / ONBOARDING (slice 1)
+// ════════════════════════════════════════════════════════════════════════════
+// One row per candidate per application. Status transitions are logged via a
+// DB trigger into application_status_history — no app-side logging needed.
+
+function dbApplicationToApp(a) {
+  return {
+    id:                a.id,
+    brandId:           a.brand_id,
+    storeId:           a.store_id,
+    firstName:         a.first_name,
+    lastName:          a.last_name || "",
+    email:             a.email || "",
+    phone:             a.phone || "",
+    position:          a.position || "",
+    source:            a.source || "manager_capture",
+    availabilityNotes: a.availability_notes || "",
+    applicantNotes:    a.applicant_notes || "",
+    status:            a.status,
+    rejectionReason:   a.rejection_reason || "",
+    opsTeamId:         a.ops_team_id || null,
+    createdAt:         a.created_at,
+    updatedAt:         a.updated_at,
+    createdBy:         a.created_by || null,
+    rtwVerified:       !!a.rtw_verified,
+    rtwVerifiedBy:     a.rtw_verified_by || null,
+    rtwVerifiedAt:     a.rtw_verified_at || null,
+  };
+}
+
+function appApplicationToDb(a) {
+  const row = {
+    id:                 a.id,
+    brand_id:           a.brandId,
+    store_id:           a.storeId,
+    first_name:         a.firstName,
+    last_name:          a.lastName || null,
+    email:              a.email || null,
+    phone:              a.phone || null,
+    position:           a.position || null,
+    source:             a.source || "manager_capture",
+    availability_notes: a.availabilityNotes || null,
+    applicant_notes:    a.applicantNotes || null,
+    status:             a.status || "applied",
+    rejection_reason:   a.rejectionReason || null,
+    ops_team_id:        a.opsTeamId || null,
+    created_by:         a.createdBy || null,
+    rtw_verified:       !!a.rtwVerified,
+    rtw_verified_by:    a.rtwVerifiedBy || null,
+    rtw_verified_at:    a.rtwVerifiedAt || null,
+  };
+  return row;
+}
+
+export async function fetchApplications() {
+  const { data, error } = await supabase
+    .from("job_applications")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbApplicationToApp);
+}
+
+export async function insertApplication(application) {
+  const { data, error } = await supabase
+    .from("job_applications")
+    .insert(appApplicationToDb(application))
+    .select()
+    .single();
+  if (error) throw error;
+  return dbApplicationToApp(data);
+}
+
+// Updates an application. Pass only the fields you want to change; everything
+// else is left untouched. Uses the RLS-tolerant pattern: drops .single() so
+// stale schema cache or RLS quirks don't cause PGRST116 false positives.
+export async function updateApplication(id, patch) {
+  const row = appApplicationToDb({ id, ...patch });
+  delete row.id;  // Don't try to UPDATE the primary key itself
+  const { data, error } = await supabase
+    .from("job_applications")
+    .update(row)
+    .eq("id", id)
+    .select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbApplicationToApp(data[0]);
+  // UPDATE worked but SELECT returned nothing — refetch defensively
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("job_applications")
+    .select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Application ${id} updated but could not be retrieved.`);
+  return dbApplicationToApp(fresh);
+}
+
+export async function deleteApplication(id) {
+  const { error } = await supabase.from("job_applications").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Convenience helper for status transitions. Wraps updateApplication with a
+// status-only patch — keeps call sites readable: changeApplicationStatus(id, "in_training")
+export async function changeApplicationStatus(id, newStatus, extraPatch = {}) {
+  return updateApplication(id, { status: newStatus, ...extraPatch });
+}
+
+// Status history — for the timeline panel on each application
+export async function fetchApplicationStatusHistory(applicationId) {
+  const { data, error } = await supabase
+    .from("application_status_history")
+    .select("*")
+    .eq("application_id", applicationId)
+    .order("changed_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id:            r.id,
+    applicationId: r.application_id,
+    fromStatus:    r.from_status,
+    toStatus:      r.to_status,
+    changedBy:     r.changed_by,
+    changedAt:     r.changed_at,
+    note:          r.note || "",
+  }));
+}
