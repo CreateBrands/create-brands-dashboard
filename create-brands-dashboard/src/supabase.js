@@ -1142,12 +1142,18 @@ export async function insertStoreDepartment(dept) {
 }
 
 export async function updateStoreDepartment(id, patch) {
+  // updated_at intentionally NOT written here — trigger handles it.
   const row = appStoreDepartmentToDb({ ...patch, updatedAt: undefined });
-  row.updated_at = new Date().toISOString();
+  // Same RLS-tolerant pattern as updateStoreRole — see explanation there.
   const { data, error } = await supabase
-    .from("store_departments").update(row).eq("id", id).select().single();
+    .from("store_departments").update(row).eq("id", id).select();
   if (error) throw error;
-  return dbStoreDepartmentToApp(data);
+  if (data && data.length > 0) return dbStoreDepartmentToApp(data[0]);
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("store_departments").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Department ${id} updated but could not be retrieved.`);
+  return dbStoreDepartmentToApp(fresh);
 }
 
 export async function archiveStoreDepartment(id) {
@@ -1171,8 +1177,10 @@ export async function insertStoreRole(role) {
 }
 
 export async function updateStoreRole(id, patch) {
+  // updated_at intentionally NOT written here — a DB trigger (added in
+  // fix_store_roles_updated_at.sql) handles it server-side. Writing it
+  // explicitly would also work but would race with the trigger's value.
   const row = appStoreRoleToDb({ ...patch, updatedAt: undefined });
-  row.updated_at = new Date().toISOString();
   // Same RLS-tolerant pattern as updateStore. Dropping .single() avoids
   // false PGRST116 errors when PostgREST's schema cache is stale or RLS
   // policies hide the row from SELECT-after-UPDATE. If the response array
