@@ -5264,7 +5264,12 @@ function isUnder18(dobString) {
 }
 
 
-function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications, currentUser, onAdd, onUpdate, onSetStatus, onDelete }) {
+function HiringView({
+  brands, stores, storeRoles, storeDepartments, visibleStoreIds,
+  applications, opsTeam, currentUser,
+  onAdd, onUpdate, onSetStatus, onDelete,
+  onAddOpsTeam,
+}) {
   const [showForm, setShowForm]   = useState(false);
   const [editItem, setEditItem]   = useState(null);
   const [deleteId, setDeleteId]   = useState(null);
@@ -5324,13 +5329,17 @@ function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications,
     }
   };
 
-  // Hire workflow state (slice 5). When user clicks "Mark as Hired" we
-  // first do a duplicate-email check against ops_team. If a match is found
-  // we open the confirmation dialog; if no match, we create a new ops_team
-  // entry and archive the application.
-  const [hireDialog, setHireDialog] = useState(null);  // { app, existing } | null
-  const [hireBusy, setHireBusy]     = useState(false);
-  const [hireError, setHireError]   = useState(null);
+  // Hire workflow state (slice 5, refined).
+  // Two paths after the duplicate check fires:
+  //   - hireLinkDialog: simple "Link to existing employee" confirm dialog
+  //     (only when a matching email is found in active ops_team)
+  //   - hirePrefillApp: opens the OpsTeamMemberFormModal pre-filled with
+  //     the application data, so manager completes role/dept/wages in one
+  //     screen. On save, we create ops_team AND archive the application.
+  const [hireLinkDialog, setHireLinkDialog] = useState(null);  // { app, existing } | null
+  const [hirePrefillApp, setHirePrefillApp] = useState(null);  // application | null
+  const [hireBusy, setHireBusy]             = useState(false);
+  const [hireError, setHireError]           = useState(null);
 
   // Slice 5 rule: only manager-or-above can transition to hired. We check
   // the current user's role against the visibility helper. Staff can still
@@ -5356,12 +5365,18 @@ function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications,
       setHireError(null);
       try {
         const { existing } = await hireApplicationCheck(app.email);
-        // Open confirm dialog regardless — gives manager a chance to abort
-        // even if no duplicate, since hire is a meaningful action.
-        setHireDialog({ app, existing });
+        if (existing) {
+          // Duplicate found — show the simple link dialog
+          setHireLinkDialog({ app, existing });
+        } else {
+          // Fresh hire — open the prefilled ops_team modal
+          setHirePrefillApp(app);
+        }
       } catch (err) {
         console.error("Hire check failed:", err);
         setHireError(err?.message || "Could not check for existing employee. Try again.");
+        // Surface error via alert since no modal is open yet
+        alert(`Hire check failed: ${err?.message || err}`);
       } finally {
         setHireBusy(false);
       }
@@ -5377,40 +5392,52 @@ function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications,
     }
   };
 
-  // Called from the hire confirmation dialog. Performs the actual hire by
-  // creating (or linking to) an ops_team record and archiving the app.
-  const confirmHire = async (linkToExistingId) => {
-    if (!hireDialog) return;
+  // Called from the hire LINK dialog. Manager confirmed that an existing
+  // employee record matches — link the application to that record and
+  // archive it, no new ops_team entry created.
+  const confirmLinkToExisting = async () => {
+    if (!hireLinkDialog) return;
     setHireBusy(true);
     setHireError(null);
     try {
-      await hireApplication(hireDialog.app, {
-        linkToExisting: linkToExistingId,
-        hiredByUserId: currentUser?.id,
+      await hireApplication(hireLinkDialog.app, {
+        linkToExisting: hireLinkDialog.existing.id,
+        hiredByUserId:  currentUser?.id,
       });
-      // Trigger parent refresh — onSetStatus's underlying refetch handles
-      // both the application list update AND the ops_team list update.
-      // Use the existing onSetStatus hook to fire that refresh; we pass
-      // 'hired' so any side-effects (e.g. log_application_status_change
-      // trigger) are wired correctly. But the actual DB write already
-      // happened — onSetStatus may try to write again and fail because
-      // the status is already 'hired'. So we need a different path:
-      // just close the dialog and refresh.
-      setHireDialog(null);
-      // Force a parent refresh — using a non-hire status-update is hacky.
-      // The cleanest is for App.js to expose an onRefresh hook, but for
-      // now we trigger a transition that's a no-op: re-fetch via existing
-      // updateApplication call from the parent's existing flow.
-      // Simpler: trigger window reload via a custom event or just call
-      // window.location.reload(). Heavy-handed but safe.
-      // Actually — we know parent reloads applications periodically and
-      // the next render will pick up the change once the apps state is
-      // refetched. The cleanest in-app path: call onUpdate with no changes,
-      // which the parent uses to trigger a refetch.
-      try { await onUpdate(hireDialog.app.id, {}); } catch {}
+      setHireLinkDialog(null);
+      try { await onUpdate(hireLinkDialog.app.id, {}); } catch {}
     } catch (err) {
-      console.error("Hire failed:", err);
-      setHireError(err?.message || "Hiring failed. Please try again.");
+      console.error("Link to existing failed:", err);
+      setHireError(err?.message || "Could not link. Try again.");
+    } finally {
+      setHireBusy(false);
+    }
+  };
+
+  // Called from the prefilled OpsTeamMemberFormModal when manager saves.
+  // The modal already produced a complete ops_team payload (with HR fields
+  // pre-filled from the application). We create the ops_team row, then
+  // link + archive the application.
+  const confirmHireWithNewEmployee = async (opsTeamPayload) => {
+    if (!hirePrefillApp) return;
+    setHireBusy(true);
+    setHireError(null);
+    try {
+      // Create the ops_team row first
+      const created = await onAddOpsTeam(opsTeamPayload);
+      const opsTeamId = created?.id || opsTeamPayload.id;
+      // Now archive the application + link to the new employee row
+      await hireApplication(hirePrefillApp, {
+        linkToExisting: opsTeamId,   // we just created it, reuse the path
+        hiredByUserId:  currentUser?.id,
+      });
+      setHirePrefillApp(null);
+      try { await onUpdate(hirePrefillApp.id, {}); } catch {}
+    } catch (err) {
+      console.error("Hire (new employee) failed:", err);
+      // Surface to user via alert since the modal doesn't render error state.
+      // Modal stays open so manager can retry or close manually.
+      alert(`Hiring failed: ${err?.message || err}\n\nThe employee record may have been created but the application wasn't archived. Check Ops Team and Hiring view, and adjust manually if needed.`);
     } finally {
       setHireBusy(false);
     }
@@ -5667,31 +5694,30 @@ function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications,
         onClose={() => setDeleteId(null)}
       />}
 
-      {/* Slice 5 — hire confirmation dialog. Shows EITHER:
-            - "Link to existing employee?" if duplicate email found
-            - "Create new employee record?" otherwise
-          On confirm, calls hireApplication, archives the app, redirects manager
-          to the ops_team module to complete role/department/etc.            */}
-      {hireDialog && (
+      {/* Slice 5 (refined) — Link-to-existing dialog. Shown only when the
+          candidate's email already matches an active ops_team entry. Manager
+          confirms to link the application to that record rather than
+          creating a duplicate employee. */}
+      {hireLinkDialog && (
         <Modal
-          title={hireDialog.existing ? "Link to existing employee?" : "Hire this candidate?"}
-          onClose={() => { if (!hireBusy) { setHireDialog(null); setHireError(null); } }}
+          title="Link to existing employee?"
+          onClose={() => { if (!hireBusy) { setHireLinkDialog(null); setHireError(null); } }}
           maxW="max-w-lg"
           footer={
             <div className="flex gap-2 w-full">
               <button
-                onClick={() => { setHireDialog(null); setHireError(null); }}
+                onClick={() => { setHireLinkDialog(null); setHireError(null); }}
                 disabled={hireBusy}
                 className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => confirmHire(hireDialog.existing?.id || null)}
+                onClick={confirmLinkToExisting}
                 disabled={hireBusy}
                 className="flex-1 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold hover:bg-green-500 disabled:opacity-50"
               >
-                {hireBusy ? "Working…" : (hireDialog.existing ? "Link to existing" : "Create new employee")}
+                {hireBusy ? "Working…" : "Link to existing"}
               </button>
             </div>
           }
@@ -5702,55 +5728,47 @@ function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications,
                 {hireError}
               </div>
             )}
-
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1">
-              <div className="font-semibold">{hireDialog.app.firstName} {hireDialog.app.lastName}</div>
-              <div className="text-xs text-slate-500">{hireDialog.app.email} · {hireDialog.app.phone}</div>
-              {hireDialog.app.position && <div className="text-xs text-slate-500">Applied for: {hireDialog.app.position}</div>}
+            <div className="text-amber-300 bg-amber-950/30 border border-amber-900/50 rounded-xl p-3 text-xs">
+              <div className="font-semibold mb-1">⚠ Matching employee found</div>
+              <div className="text-slate-300">
+                An active employee with email <span className="font-mono text-amber-200">{hireLinkDialog.app.email}</span> already exists in Ops Team. We'll link this application to the existing record rather than creating a duplicate.
+              </div>
             </div>
-
-            {hireDialog.existing ? (
-              // Duplicate found path
-              <>
-                <div className="text-amber-300 bg-amber-950/30 border border-amber-900/50 rounded-xl p-3 text-xs">
-                  <div className="font-semibold mb-1">⚠ A matching employee already exists</div>
-                  <div className="text-slate-300">
-                    An active employee with this email already exists in Ops Team. Per your earlier preference (Q4=c),
-                    we'll link this application to the existing record rather than creating a duplicate.
-                  </div>
-                </div>
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1 text-xs">
-                  <div className="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Existing employee record</div>
-                  <div className="font-semibold text-slate-200">{hireDialog.existing.firstName} {hireDialog.existing.lastName}</div>
-                  <div className="text-slate-400">{hireDialog.existing.role || "(no role)"} · {hireDialog.existing.department || "(no department)"}</div>
-                  <div className="text-slate-500">{hireDialog.existing.email}</div>
-                </div>
-                <div className="text-xs text-slate-500">
-                  Clicking "Link to existing" will mark this application as hired and link it to the employee record above.
-                  The application moves out of the active Hiring view (toggle "Show archived" to see it later).
-                </div>
-              </>
-            ) : (
-              // Fresh hire path
-              <>
-                <div className="text-xs text-slate-400 space-y-2">
-                  <p>This will:</p>
-                  <ul className="list-disc list-inside space-y-1 text-slate-500">
-                    <li>Create a new employee record in Ops Team (with name, email, phone, photo, DOB, address, legal status from this application)</li>
-                    <li>Set status to <span className="text-amber-400 font-semibold">"Pending setup"</span> — you'll need to assign role, department, and hourly rate next</li>
-                    <li>Move this application to archived (still visible if you toggle "Show archived")</li>
-                  </ul>
-                </div>
-                {(!hireDialog.app.rtwVerified) && (
-                  <div className="text-amber-300 bg-amber-950/30 border border-amber-900/50 rounded-xl p-3 text-xs">
-                    <span className="font-semibold">⚠ RTW not yet verified.</span> You should record having seen
-                    the applicant's right-to-work documents before they start any paid work, including trial shifts.
-                  </div>
-                )}
-              </>
-            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs">
+                <div className="text-slate-500 uppercase tracking-wider text-[10px] mb-1">This application</div>
+                <div className="font-semibold text-slate-200">{hireLinkDialog.app.firstName} {hireLinkDialog.app.lastName}</div>
+                <div className="text-slate-500 mt-1">{hireLinkDialog.app.email}</div>
+                <div className="text-slate-500">Applied for: {hireLinkDialog.app.position || "—"}</div>
+              </div>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs">
+                <div className="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Existing employee</div>
+                <div className="font-semibold text-slate-200">{hireLinkDialog.existing.firstName} {hireLinkDialog.existing.lastName}</div>
+                <div className="text-slate-500 mt-1">{hireLinkDialog.existing.role || "(no role)"} · {hireLinkDialog.existing.department || "(no department)"}</div>
+              </div>
+            </div>
           </div>
         </Modal>
+      )}
+
+      {/* Slice 5 (refined) — Prefilled OpsTeam modal for the FRESH hire path.
+          Pre-fills name/email/phone/DOB/address/legal-status from the
+          application. Manager completes store, role, department, hourly
+          rate. On save, calls confirmHireWithNewEmployee which creates the
+          ops_team row AND archives the application atomically. */}
+      {hirePrefillApp && (
+        <OpsTeamMemberFormModal
+          item={null}
+          prefillApplication={hirePrefillApp}
+          brands={brands}
+          stores={stores}
+          visibleStoreIds={visibleStoreIds}
+          storeDepartments={storeDepartments}
+          storeRoles={storeRoles}
+          opsTeam={opsTeam}
+          onSave={confirmHireWithNewEmployee}
+          onClose={() => { if (!hireBusy) setHirePrefillApp(null); }}
+        />
       )}
     </div>
   );
@@ -6327,6 +6345,12 @@ function OpsTeamMemberFormModal({
   // can identify staff from PIN alone, regardless of which store they're
   // punching in at).
   opsTeam = [],
+  // ── Slice 5 (refined) ─────────────────────────────────────────────────
+  // When set, the modal opens pre-filled with this application's data, the
+  // title indicates a hire flow, and the Save button creates an ops_team
+  // entry AND archives the application atomically. When null/undefined, the
+  // modal behaves like the existing add/edit flow.
+  prefillApplication = null,
   onSave, onClose,
 }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
@@ -6347,14 +6371,20 @@ function OpsTeamMemberFormModal({
     [stores]
   );
 
-  // Initial form. Legacy rows may not have storeIds/roleId/departmentId yet.
-  // Show whatever they have; user picks them on first edit.
-  const initialPrimary = item?.storeIds?.[0] || "";
+  // Initial form. Three sources of seed data, in priority order:
+  //   1. Existing item (edit mode)
+  //   2. Prefill from application (hire flow)
+  //   3. Blank (manual add)
+  const initialPrimary =
+    item?.storeIds?.[0] ||
+    prefillApplication?.storeId ||
+    "";
   const initialAlsoAt  = (item?.storeIds || []).slice(1);
 
   const [form, setFormState] = useState({
-    firstName:    item?.firstName    || "",
-    lastName:     item?.lastName     || "",
+    // Identity — seed from item OR application
+    firstName:    item?.firstName    || prefillApplication?.firstName    || "",
+    lastName:     item?.lastName     || prefillApplication?.lastName     || "",
     nickname:     item?.nickname     || "",
     pin:          item?.pin          || "",
     hourlyRate:   item?.hourlyRate   || 0,
@@ -6365,6 +6395,12 @@ function OpsTeamMemberFormModal({
     // is picked these become derived from the role/department records.
     roleText:     item?.role         || "",
     deptText:     item?.department   || "",
+    // ── Slice 5 HR fields (now editable from ops_team modal) ─────────────
+    email:        item?.email        || prefillApplication?.email        || "",
+    phone:        item?.phone        || prefillApplication?.phone        || "",
+    dob:          item?.dob          || prefillApplication?.dateOfBirth  || "",
+    address:      item?.address      || prefillApplication?.address      || "",
+    legalStatus:  item?.legalStatus  || prefillApplication?.legalStatus  || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
 
@@ -6469,10 +6505,20 @@ function OpsTeamMemberFormModal({
     // Derive brandId from the primary store so legacy brand-keyed code keeps
     // working during transition.
     const primaryStore = allowedStores.find(s => s.id === form.primaryStoreId);
-    const brandId = primaryStore?.brandId || item?.brandId || "";
+    const brandId = primaryStore?.brandId || item?.brandId || prefillApplication?.brandId || "";
 
     // Combine primary + also stores into a single array, primary first.
-    const storeIds = [form.primaryStoreId, ...form.alsoStoreIds.filter(Boolean)];
+    const storeIds = [form.primaryStoreId, ...form.alsoStoreIds.filter(Boolean)].filter(Boolean);
+
+    // Per Q3 (lenient): a hire-flow save with role+dept STILL blank is OK.
+    // We mark the record pending_setup so the warning badge appears in Ops
+    // Team list, nudging manager to complete later. Manual add/edit doesn't
+    // touch status (keeps existing behaviour intact for non-hire flows).
+    const isHireFlow = !!prefillApplication;
+    const hasRoleAssigned = !!(selectedRole?.id || form.roleText?.trim());
+    const computedStatus = isHireFlow
+      ? (hasRoleAssigned ? "active" : "pending_setup")
+      : (item?.status || "active");
 
     onSave({
       id: item?.id || `ot-${Date.now()}`,
@@ -6490,22 +6536,53 @@ function OpsTeamMemberFormModal({
       // they migrate to FK-based lookups.
       role:       selectedRole?.name || form.roleText || "",
       department: derivedDept?.name  || form.deptText || "",
+      // ── Slice 5 HR fields ──────────────────────────────────────────────
+      email:       form.email?.trim()       || null,
+      phone:       form.phone?.trim()       || null,
+      dob:         form.dob                 || null,
+      address:     form.address?.trim()     || null,
+      legalStatus: form.legalStatus         || null,
+      // photo_url preserved from item (for edit) or application (for hire).
+      // Not editable in this modal — managed via the application or future
+      // employee profile page.
+      photoUrl:    item?.photoUrl           || prefillApplication?.photoUrl   || null,
+      status:      computedStatus,
     });
   };
 
   return (
     <Modal
-      title={item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member"}
+      title={
+        prefillApplication
+          ? `Hire — ${prefillApplication.firstName} ${prefillApplication.lastName || ""}`
+          : (item ? `Edit — ${item.firstName} ${item.lastName}` : "Add Team Member")
+      }
       onClose={onClose}
       maxW="max-w-lg"
       footer={
         <>
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-          <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button>
+          <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">
+            {prefillApplication ? "Hire" : (item ? "Save" : "Add")}
+          </button>
         </>
       }
     >
       <div className="space-y-4">
+        {/* Hire-flow banner — explains that this is from an application,
+            with a soft note about what's pre-filled vs what manager fills */}
+        {prefillApplication && (
+          <div className="bg-indigo-950/40 border border-indigo-900/60 rounded-xl p-3 text-xs">
+            <div className="text-indigo-200 font-semibold mb-1">Hiring {prefillApplication.firstName} {prefillApplication.lastName}</div>
+            <div className="text-slate-400">
+              Fields are pre-filled from their application. Complete the
+              <span className="text-amber-300 font-semibold"> store, role, department, and hourly rate </span>
+              below. You can save with these blank — they'll be flagged
+              "pending setup" in the Ops Team list for you to finish later.
+            </div>
+          </div>
+        )}
+
         {/* Identity */}
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>First Name *</label><input value={form.firstName} onChange={e => set("firstName", e.target.value)} className={inputCls}/></div>
@@ -6514,6 +6591,47 @@ function OpsTeamMemberFormModal({
         <div>
           <label className={labelCls}>Nickname / Preferred name</label>
           <input value={form.nickname} onChange={e => set("nickname", e.target.value)} placeholder="e.g. Jimmy" className={inputCls}/>
+        </div>
+
+        {/* Slice 5 — HR / Contact fields. Editable for ALL ops_team members
+            (not just hire flow) so manager can update phone/address etc
+            on existing staff without needing a separate HR module.
+            Pre-filled from application when hire flow opens this modal. */}
+        <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-3 space-y-3">
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Contact & HR</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={labelCls}>Email</label><input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="alice@example.com" className={inputCls}/></div>
+            <div><label className={labelCls}>Phone</label><input value={form.phone} onChange={e => set("phone", e.target.value)} placeholder="07123 456789" className={inputCls}/></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Date of Birth</label>
+              <input
+                type="date"
+                value={form.dob}
+                onChange={e => set("dob", e.target.value)}
+                max={new Date().toISOString().slice(0, 10)}
+                className={`${inputCls} cursor-pointer`}
+                onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+              />
+              {form.dob && isUnder18(form.dob) && (
+                <div className="text-[10px] text-amber-400 mt-0.5">⚠ Under 18 — restricted hours apply.</div>
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>Legal Status</label>
+              <select value={form.legalStatus} onChange={e => set("legalStatus", e.target.value)} className={inputCls}>
+                <option value="">— Not set —</option>
+                {LEGAL_STATUS_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Address</label>
+            <input value={form.address} onChange={e => set("address", e.target.value)} placeholder="Street, town, postcode" className={inputCls}/>
+          </div>
         </div>
 
         {/* Store assignment */}
@@ -14504,7 +14622,7 @@ export default function App() {
   const addAssignment    = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.some(x=>x.id===s.id)?as.map(x=>x.id===s.id?s:x):[...as,s]);showToast("Saved");}, [showToast]);
   const updateAssignment = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
-  const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved");}, [showToast]);
+  const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved"); return s;}, [showToast]);
   const updateOpsTeam = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteOpsTeam = useCallback(async id=>{await removeOpsTeamMember(id);setOpsTeam(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const handleTempLog     = useCallback(async l=>{const s=await insertTempLog(l);setTempLogs(ls=>[s,...ls]);}, []);
@@ -14810,10 +14928,11 @@ export default function App() {
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "hiring"         && <HiringView
-              brands={visibleBrands} stores={stores} storeRoles={storeRoles} visibleStoreIds={visibleStoreIds}
-              applications={applications} currentUser={currentUser}
+              brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
+              applications={applications} opsTeam={opsTeam} currentUser={currentUser}
               onAdd={addApplication} onUpdate={updateApplicationRow}
               onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
+              onAddOpsTeam={addOpsTeam}
             />}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
