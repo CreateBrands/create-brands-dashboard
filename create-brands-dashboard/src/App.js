@@ -51,7 +51,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign,
-  Globe, FileText, ChefHat, PoundSterling
+  Globe, FileText, ChefHat, PoundSterling, Search
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -5285,8 +5285,33 @@ function HiringView({
   // archives applications on hire so the active Hiring view stays clean.
   const [showArchived, setShowArchived] = useState(false);
 
+  // Slice 6 — manager-side filtering UI state.
+  //
+  //   searchRaw     : raw text the user has typed (renders the input)
+  //   searchTerm    : debounced lowercase version used for actual filtering
+  //                   (kept separate so typing doesn't re-render on every key)
+  //   sortMode      : "newest" / "oldest" / "name" — drives the sort order
+  //   showEmailFailed: when true, only applications with email_link_status="failed"
+  //   showMinorsOnly : when true, only applications flagged is_minor=true
+  //
+  // All four filters are AND-combined with the existing store/status/archived
+  // filters. None of them affect the source data — purely client-side view.
+  const [searchRaw,       setSearchRaw]       = useState("");
+  const [searchTerm,      setSearchTerm]      = useState("");
+  const [sortMode,        setSortMode]        = useState("newest");
+  const [showEmailFailed, setShowEmailFailed] = useState(false);
+  const [showMinorsOnly,  setShowMinorsOnly]  = useState(false);
+
+  // Debounce search input. 200ms delay so the list doesn't re-filter on
+  // every keystroke when the user is typing fast. Long enough to feel
+  // responsive, short enough not to feel laggy.
+  useEffect(() => {
+    const t = setTimeout(() => setSearchTerm(searchRaw.trim().toLowerCase()), 200);
+    return () => clearTimeout(t);
+  }, [searchRaw]);
+
   const visible = useMemo(() => {
-    return applications.filter(app => {
+    const filtered = applications.filter(app => {
       // Scope: must be at a store the user can see
       if (!visibleStoreIds?.includes(app.storeId)) return false;
       // Store scope dropdown
@@ -5296,14 +5321,58 @@ function HiringView({
       if (app.archivedAt && !showArchived && statusFilter !== "hired") return false;
       // Status filter
       if (statusFilter === "active") {
-        return !["hired", "rejected", "withdrawn"].includes(app.status);
+        if (["hired", "rejected", "withdrawn"].includes(app.status)) return false;
+      } else if (statusFilter !== "all") {
+        if (app.status !== statusFilter) return false;
       }
-      if (statusFilter !== "all") {
-        return app.status === statusFilter;
+      // Slice 6 chip filters
+      if (showEmailFailed && app.emailLinkStatus !== "failed") return false;
+      if (showMinorsOnly  && !app.isMinor) return false;
+      // Slice 6 text search — across name, email, phone, position
+      if (searchTerm) {
+        const haystack = [
+          app.firstName, app.lastName,
+          app.email, app.phone, app.position,
+        ].filter(Boolean).join(" ").toLowerCase();
+        if (!haystack.includes(searchTerm)) return false;
       }
       return true;
     });
-  }, [applications, visibleStoreIds, storeScope, statusFilter, showArchived]);
+    // Slice 6 — sort. Done after filter so we sort the smallest list possible.
+    // Stable sort: same-timestamp rows keep their relative order from the
+    // source applications array (which is itself ordered by created_at desc
+    // from the supabase fetch).
+    const sorted = [...filtered];
+    if (sortMode === "oldest") {
+      sorted.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    } else if (sortMode === "name") {
+      sorted.sort((a, b) =>
+        `${a.firstName || ""} ${a.lastName || ""}`.trim().toLowerCase()
+        .localeCompare(`${b.firstName || ""} ${b.lastName || ""}`.trim().toLowerCase())
+      );
+    } else {
+      // "newest" — array already comes in newest-first from fetchApplications.
+      // Sort defensively in case state was mutated by edits.
+      sorted.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+    return sorted;
+  }, [applications, visibleStoreIds, storeScope, statusFilter, showArchived,
+      searchTerm, sortMode, showEmailFailed, showMinorsOnly]);
+
+  // Counts for the chip filters — show "(N)" next to each option so manager
+  // sees how many would match before clicking. Scoped to the user's visible
+  // stores so counts match what they could see anyway. Doesn't apply the
+  // search/sort/other-chip filters — the count reflects "if I click this
+  // chip alone".
+  const chipCounts = useMemo(() => {
+    const scoped = applications.filter(a =>
+      visibleStoreIds?.includes(a.storeId) && (!a.archivedAt || showArchived)
+    );
+    return {
+      emailFailed: scoped.filter(a => a.emailLinkStatus === "failed").length,
+      minors:      scoped.filter(a => a.isMinor).length,
+    };
+  }, [applications, visibleStoreIds, showArchived]);
 
   // Counts per status for the filter chips. Archived applications count
   // towards their original status (e.g. a hired+archived row counts under "hired").
@@ -5467,6 +5536,33 @@ function HiringView({
         </button>
       </div>
 
+      {/* Slice 6 — search + sort row. Sits above the existing scope/status
+          row so it's the first thing manager interacts with. Search is the
+          most common workflow ("find Sarah's application"); sort matters
+          when application volume builds up. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex-1 min-w-[200px] relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none"/>
+          <input
+            type="search"
+            value={searchRaw}
+            onChange={e => setSearchRaw(e.target.value)}
+            placeholder="Search by name, email, phone, or position…"
+            className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-sm focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+          />
+        </div>
+        <select
+          value={sortMode}
+          onChange={e => setSortMode(e.target.value)}
+          className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500"
+          title="Sort applications"
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="name">Name A–Z</option>
+        </select>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         {allowedStores.length > 1 && (
@@ -5487,6 +5583,23 @@ function HiringView({
             <FilterChip key={s.key} active={statusFilter === s.key} onClick={() => setStatusFilter(s.key)}
               label={`${s.label} (${statusCounts[s.key]})`}/>
           ))}
+          {/* Slice 6 — flag chips. Only render if there are matching rows
+              so the chip doesn't sit there showing "(0)" for chains that
+              never hit these edge cases. */}
+          {chipCounts.emailFailed > 0 && (
+            <FilterChip
+              active={showEmailFailed}
+              onClick={() => setShowEmailFailed(v => !v)}
+              label={`✉ Email failed (${chipCounts.emailFailed})`}
+            />
+          )}
+          {chipCounts.minors > 0 && (
+            <FilterChip
+              active={showMinorsOnly}
+              onClick={() => setShowMinorsOnly(v => !v)}
+              label={`⚠ Under 18 (${chipCounts.minors})`}
+            />
+          )}
           {/* Slice 5 — toggle archived visibility. Hidden by default. */}
           <label className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
             <input
@@ -5504,8 +5617,19 @@ function HiringView({
       {visible.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl">
           <UserPlus size={32} className="mb-3 text-slate-700"/>
-          <div className="text-sm font-semibold">No applications match these filters</div>
-          <div className="text-xs text-slate-600 mt-1">Click "Add Candidate" to capture a new application.</div>
+          {searchTerm || showEmailFailed || showMinorsOnly ? (
+            <>
+              <div className="text-sm font-semibold">No applications match these filters</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Try clearing the search box{(showEmailFailed || showMinorsOnly) && " or chip filters"} above.
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm font-semibold">No applications yet</div>
+              <div className="text-xs text-slate-600 mt-1">Click "Add Candidate" to capture a new application.</div>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
