@@ -6850,14 +6850,19 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
   const isCreate = !role;
   const [name, setName]           = useState(role?.name || "");
   const [departmentId, setDeptId] = useState(role?.departmentId || presetDeptId || "");
-  const [hourlyRate, setRate]     = useState(role?.hourlyRate != null ? String(role.hourlyRate) : "");
   const [isManagement, setMgmt]   = useState(role?.isManagement || false);
-  const [sortOrder, setSortOrder] = useState(role?.sortOrder ?? 0);
   // Slice 3 — whether this role appears in /apply form's position dropdown
   // for this store. Default off for both new and existing roles (existing
   // roles that haven't been opted in get false from the DB default).
   const [advertiseForHiring, setAdvertise] = useState(!!role?.advertiseForHiring);
   const [saving, setSaving]       = useState(false);
+
+  // hourlyRate and sortOrder are no longer editable from this modal per
+  // user request. We still preserve the existing values on save so we don't
+  // accidentally null out data that's used by scheduling / payroll reports.
+  // New roles get hourlyRate=null and sortOrder=0 by default (matching DB).
+  const preservedHourlyRate = role?.hourlyRate ?? null;
+  const preservedSortOrder  = role?.sortOrder ?? 0;
 
   const handleSave = async () => {
     if (!name.trim()) return;
@@ -6868,9 +6873,9 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
         storeId,
         departmentId: departmentId || null,
         name: name.trim(),
-        hourlyRate: hourlyRate === "" ? null : Number(hourlyRate),
+        hourlyRate: preservedHourlyRate,
         isManagement,
-        sortOrder: Number(sortOrder) || 0,
+        sortOrder: preservedSortOrder,
         advertiseForHiring,
       });
     } finally { setSaving(false); }
@@ -6899,16 +6904,6 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
             <option value="">— None —</option>
             {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Hourly rate (£)</label>
-            <input type="number" step="0.25" value={hourlyRate} onChange={e => setRate(e.target.value)} placeholder="Optional" className={fieldCls}/>
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Sort order</label>
-            <input type="number" value={sortOrder} onChange={e => setSortOrder(e.target.value)} className={fieldCls}/>
-          </div>
         </div>
         <div>
           <label className="flex items-center gap-2 cursor-pointer">
@@ -13188,11 +13183,14 @@ function ApplyShell() {
     storeId:           lockedStoreId || "",
     position:          "",
     positionChoice:    "",
-    availabilityNotes: "",
     applicantNotes:    "",
-    rtwDeclaration:    "",   // "yes" / "no" — declaration only, not verification
     honeypot:          "",   // bots fill this; humans don't
     // ── Slice 3 fields ────────────────────────────────────────────────────
+    // Note: availabilityNotes and rtwDeclaration removed from the public form
+    // per spec — legal_status now covers RTW context, and we ask candidates
+    // about availability in the interview rather than the form. Both fields
+    // still exist on the DB schema (nullable) and in the internal modal so
+    // managers can capture them for walk-ins if useful.
     dateOfBirth:        "",   // YYYY-MM-DD from <input type="date">
     legalStatus:        "",   // matches a value from LEGAL_STATUS_OPTIONS
     address:            "",
@@ -13299,11 +13297,9 @@ function ApplyShell() {
     if (!form.address.trim())            return "Please enter your address.";
     if (!form.storeId)                   return "Please pick a store you'd like to work at.";
     if (!form.position.trim())           return "Please pick a position to apply for.";
-    if (!form.availabilityNotes.trim())  return "Please tell us when you're available to work.";
     if (!form.relevantExperience.trim()) return "Please share any relevant experience.";
     if (!form.resumeText.trim())         return "Please paste your CV / resume into the box.";
     if (!form.photoFile)                 return "Please upload a photo.";
-    if (!form.rtwDeclaration)            return "Please confirm your right to work in the UK.";
     return null;
   };
 
@@ -13371,15 +13367,15 @@ function ApplyShell() {
         email:               form.email.trim(),
         phone:               form.phone.trim(),
         position:            form.position.trim(),
-        availabilityNotes:   form.availabilityNotes.trim(),
-        // Combine RTW declaration with any free-form notes for managers to see at a glance
-        applicantNotes:      [
-          `Right to work in UK: ${form.rtwDeclaration === "yes" ? "Yes" : "No (will provide supporting docs)"}`,
-          form.applicantNotes.trim() && `\n${form.applicantNotes.trim()}`,
-        ].filter(Boolean).join(""),
+        // availabilityNotes intentionally omitted — public form no longer
+        // asks for it; managers capture availability in the interview.
+        applicantNotes:      form.applicantNotes.trim(),
         source:              "public_form",
         status:              "applied",
-        rtwVerified:         false,   // declaration ≠ verification; manager confirms later
+        // rtwVerified stays false at submission — manager confirms after seeing
+        // documents. We get RTW signal from legal_status now instead of a
+        // separate yes/no question.
+        rtwVerified:         false,
         createdBy:           null,    // anonymous submission
         // Slice 3 fields
         dateOfBirth:         form.dateOfBirth,
@@ -13563,13 +13559,19 @@ function ApplyShell() {
             )}
           </ApplyField>
 
-          <ApplyField label="Date of birth *" hint="DD/MM/YYYY">
+          <ApplyField label="Date of birth *" hint="Click anywhere on the field to open the date picker.">
             <input
-              style={applyInputStyle}
+              style={{ ...applyInputStyle, cursor: "pointer" }}
               type="date"
               value={form.dateOfBirth}
               onChange={e => set("dateOfBirth", e.target.value)}
               max={new Date().toISOString().slice(0, 10)}
+              // Click anywhere on the input opens the native picker (Chrome /
+              // Edge / Firefox 119+). Older browsers fall back to the default
+              // calendar-icon-only behaviour. showPicker may throw if it
+              // doesn't have user-activation context, so guard with ?.()
+              onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+              onFocus={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
             />
             {form.dateOfBirth && isUnder18(form.dateOfBirth) && (
               <div style={{ marginTop: 6, fontSize: 11, color: "#fbbf24" }}>
@@ -13600,10 +13602,6 @@ function ApplyShell() {
               maxLength={200}
               placeholder="e.g. 12 Main Street, Leicester, LE5 6DN"
             />
-          </ApplyField>
-
-          <ApplyField label="When are you available to work? *" hint="e.g. Weekends only, Full-time Mon–Fri, Evenings after 5pm">
-            <input style={applyInputStyle} value={form.availabilityNotes} onChange={e => set("availabilityNotes", e.target.value)} maxLength={200}/>
           </ApplyField>
 
           <ApplyField label="Relevant experience *" hint="Briefly tell us about your hospitality / customer service experience.">
@@ -13656,26 +13654,6 @@ function ApplyShell() {
                 </div>
               </div>
             )}
-          </ApplyField>
-
-          <ApplyField label="Do you have the right to work in the UK? *">
-            <div style={{ display: "flex", gap: 8 }}>
-              {[
-                { value: "yes", label: "Yes" },
-                { value: "no",  label: "No / will provide visa documents" },
-              ].map(opt => (
-                <label key={opt.value} style={{
-                  flex: 1, display: "flex", alignItems: "center", gap: 8,
-                  padding: "10px 12px", borderRadius: 10,
-                  background: form.rtwDeclaration === opt.value ? "#312e8160" : "#0f172a",
-                  border: `1px solid ${form.rtwDeclaration === opt.value ? "#6366f1" : "#334155"}`,
-                  cursor: "pointer", fontSize: 13, color: "#e2e8f0",
-                }}>
-                  <input type="radio" name="rtw" value={opt.value} checked={form.rtwDeclaration === opt.value} onChange={e => set("rtwDeclaration", e.target.value)}/>
-                  {opt.label}
-                </label>
-              ))}
-            </div>
           </ApplyField>
 
           <ApplyField label="Anything else you'd like to share?" hint="Optional — anything that doesn't fit elsewhere.">
