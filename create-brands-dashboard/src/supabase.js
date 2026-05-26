@@ -361,32 +361,36 @@ function appAssignmentToDb(a) { return { id: a.id, brand_id: a.brandId, store_id
 function dbAssignmentToApp(a) { return { id: a.id, brandId: a.brand_id, storeId: a.store_id || null, type: a.type, taskId: a.task_id, role: a.role, personId: a.person_id, freq: a.freq, weekday: a.weekday, date: a.once_date, customDays: a.custom_days || [], winStart: a.win_start, winEnd: a.win_end, priority: a.priority, notes: a.notes }; }
 
 function appOpsTeamToDb(m) {
-  const row = {
-    id: m.id, brand_id: m.brandId,
-    first_name: m.firstName, last_name: m.lastName || "",
-    nickname: m.nickname || "", department: m.department || "",
-    role: m.role, pin: m.pin || "", color: m.color || "#6366f1",
-    hourly_rate: m.hourlyRate || 0,
-    // New store-aware fields. store_ids: text[] — a staff member may work at
-    // several stores (the floating-barista case). role_id/department_id are
-    // optional references into store_roles/store_departments.
-    store_ids: m.storeIds || [],
-    role_id: m.roleId || null,
-    department_id: m.departmentId || null,
-    updated_at: new Date().toISOString(),
-  };
-  // Slice 5 — HR-style fields (added so hired applicants don't lose data).
-  // All optional; only included if explicitly passed so existing callers
-  // (that don't know about these fields) don't accidentally wipe them.
-  if (m.email        !== undefined) row.email         = m.email || null;
-  if (m.phone        !== undefined) row.phone         = m.phone || null;
-  if (m.dob          !== undefined) row.dob           = m.dob || null;
-  if (m.address      !== undefined) row.address       = m.address || null;
-  if (m.legalStatus  !== undefined) row.legal_status  = m.legalStatus || null;
-  if (m.photoUrl     !== undefined) row.photo_url     = m.photoUrl || null;
-  if (m.hrNotes      !== undefined) row.hr_notes      = m.hrNotes || null;
-  if (m.status       !== undefined) row.status        = m.status || "active";
-  if (m.archivedAt   !== undefined) row.archived_at   = m.archivedAt;
+  // ⚠ Partial-aware mapper. Same shape as appApplicationToDb after the
+  // slice 5 critical fix. Only writes fields the caller explicitly provided.
+  // Stops partial updates (e.g. a future "rename role" quick action) from
+  // wiping unrelated fields.
+  //
+  // updated_at is always set — that's a server-side concern, not user data.
+  const row = { updated_at: new Date().toISOString() };
+  if (m.id            !== undefined) row.id            = m.id;
+  if (m.brandId       !== undefined) row.brand_id      = m.brandId;
+  if (m.firstName     !== undefined) row.first_name    = m.firstName;
+  if (m.lastName      !== undefined) row.last_name     = m.lastName || "";
+  if (m.nickname      !== undefined) row.nickname      = m.nickname || "";
+  if (m.department    !== undefined) row.department    = m.department || "";
+  if (m.role          !== undefined) row.role          = m.role;
+  if (m.pin           !== undefined) row.pin           = m.pin || "";
+  if (m.color         !== undefined) row.color         = m.color || "#6366f1";
+  if (m.hourlyRate    !== undefined) row.hourly_rate   = m.hourlyRate || 0;
+  if (m.storeIds      !== undefined) row.store_ids     = m.storeIds || [];
+  if (m.roleId        !== undefined) row.role_id       = m.roleId || null;
+  if (m.departmentId  !== undefined) row.department_id = m.departmentId || null;
+  // Slice 5 — HR fields, also partial-aware
+  if (m.email         !== undefined) row.email         = m.email || null;
+  if (m.phone         !== undefined) row.phone         = m.phone || null;
+  if (m.dob           !== undefined) row.dob           = m.dob || null;
+  if (m.address       !== undefined) row.address       = m.address || null;
+  if (m.legalStatus   !== undefined) row.legal_status  = m.legalStatus || null;
+  if (m.photoUrl      !== undefined) row.photo_url     = m.photoUrl || null;
+  if (m.hrNotes       !== undefined) row.hr_notes      = m.hrNotes || null;
+  if (m.status        !== undefined) row.status        = m.status || "active";
+  if (m.archivedAt    !== undefined) row.archived_at   = m.archivedAt;
   return row;
 }
 function dbOpsTeamToApp(m) {
