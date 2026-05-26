@@ -12889,6 +12889,439 @@ const IS_KIOSK = window.location.pathname === "/kiosk" ||
                  window.location.hash === "#kiosk" ||
                  window.location.search.includes("kiosk");
 
+// Public job application form — anyone with the URL can submit. No auth.
+// Like kiosk, runs as a separate shell that doesn't load the dashboard JS
+// for authenticated users. Detected the same way.
+const IS_APPLY = window.location.pathname === "/apply" ||
+                 window.location.pathname === "/apply/" ||
+                 window.location.hash === "#apply";
+
+// ── ApplyShell — Public Job Application Form ─────────────────────────────────
+// Renders at /apply for anonymous users. Optionally pre-locks the store
+// via ?store=store-id URL parameter — useful for store-specific job ads
+// that should only accept applications for one location.
+//
+// Fields collected (per slice 2 spec):
+//   - firstName, lastName, email, phone (all required)
+//   - store (required — pre-locked if URL param present)
+//   - position (required, free text)
+//   - availability (required, free text)
+//   - right to work declaration (required, yes/no — manager verifies later)
+//   - tell us about yourself (optional)
+//
+// Anti-spam:
+//   - Honeypot field (hidden, bots fill it, humans don't)
+//   - Rate limit via localStorage (1 submission per browser per 5 minutes)
+//   - Soft duplicate detection (if email matches existing app in same store
+//     in last 30 days, warn user before submission — they can override)
+//
+// On submit: insert directly into job_applications via the supabase client.
+// Source is hard-coded to "public_form" so managers can distinguish from
+// manually-captured walk-ins.
+
+const APPLY_RATE_LIMIT_KEY = "cb_apply_last_submit";
+const APPLY_RATE_LIMIT_MS  = 5 * 60 * 1000;   // 5 minutes between submissions
+
+function ApplyShell() {
+  const [stores,      setStores]      = useState([]);
+  const [brands,      setBrands]      = useState([]);
+  const [existingApps, setExistingApps] = useState([]);  // for duplicate detection
+  const [ready,       setReady]       = useState(false);
+  const [loadError,   setLoadError]   = useState(null);
+  const [submitted,   setSubmitted]   = useState(false);
+  const [submitting,  setSubmitting]  = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+
+  // Pre-locked store from URL (e.g. /apply?store=store-evington-road)
+  const urlParams = new URLSearchParams(window.location.search);
+  const lockedStoreId = urlParams.get("store");
+
+  // Form state
+  const [form, setForm] = useState({
+    firstName:         "",
+    lastName:          "",
+    email:             "",
+    phone:             "",
+    storeId:           lockedStoreId || "",
+    position:          "",
+    availabilityNotes: "",
+    applicantNotes:    "",
+    rtwDeclaration:    "",   // "yes" / "no" — declaration only, not verification
+    honeypot:          "",   // bots fill this; humans don't
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    // Load stores + brands + existing applications (last 60 days) for
+    // duplicate detection. Anonymous reads from these tables are fine
+    // since they're public data (just store names) and applications are
+    // only used for email-match checks, never displayed back.
+    Promise.all([
+      fetchStores(),
+      fetchBrands(),
+      fetchApplications().catch(() => []),   // best-effort; duplicate check is nice-to-have
+    ]).then(([sts, brs, apps]) => {
+      setStores(sts || []);
+      setBrands(brs || []);
+      // Only keep recent applications to limit memory + irrelevant matches
+      const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
+      setExistingApps((apps || []).filter(a => new Date(a.createdAt).getTime() > cutoff));
+      setReady(true);
+    }).catch(err => {
+      setLoadError(err.message || "Could not load form.");
+      setReady(true);
+    });
+  }, []);
+
+  // Only show stores that are operational, owned, not archived, and currently hiring.
+  // For slice 2 we don't have a "currently hiring" flag yet — fall back to all
+  // operational owned stores. Phase 6+ can add a hiring toggle per store.
+  const availableStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
+
+  // If URL pre-locked a store, verify it's a valid choice. If not, fall back to free pick.
+  const lockedStore = lockedStoreId && availableStores.find(s => s.id === lockedStoreId);
+  const isLocked    = !!lockedStore;
+
+  // Multi-brand prefix in dropdown
+  const showBrandPrefix = new Set(availableStores.map(s => s.brandId)).size > 1;
+
+  // Validate form
+  const validate = () => {
+    if (!form.firstName.trim())          return "Please enter your first name.";
+    if (!form.lastName.trim())           return "Please enter your last name.";
+    if (!form.email.trim())              return "Please enter your email address.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return "That doesn't look like a valid email address.";
+    if (!form.phone.trim())              return "Please enter your phone number.";
+    if (!form.storeId)                   return "Please pick a store you'd like to work at.";
+    if (!form.position.trim())           return "Please tell us what position you're applying for.";
+    if (!form.availabilityNotes.trim())  return "Please tell us when you're available to work.";
+    if (!form.rtwDeclaration)            return "Please confirm your right to work in the UK.";
+    return null;
+  };
+
+  const handleSubmit = async (e) => {
+    e?.preventDefault();
+    setSubmitError(null);
+
+    // Honeypot — if bot filled this hidden field, silently "succeed" without inserting
+    if (form.honeypot) {
+      console.warn("Honeypot triggered — likely bot submission.");
+      setSubmitted(true);   // show success page anyway so bot thinks it worked
+      return;
+    }
+
+    // Rate limit (per browser)
+    try {
+      const last = Number(localStorage.getItem(APPLY_RATE_LIMIT_KEY) || 0);
+      if (last && Date.now() - last < APPLY_RATE_LIMIT_MS) {
+        const waitSec = Math.ceil((APPLY_RATE_LIMIT_MS - (Date.now() - last)) / 1000);
+        setSubmitError(`Please wait ${Math.ceil(waitSec/60)} minute(s) before submitting another application.`);
+        return;
+      }
+    } catch { /* localStorage blocked — proceed */ }
+
+    const validationError = validate();
+    if (validationError) { setSubmitError(validationError); return; }
+
+    // Soft duplicate detection — warn user, let them proceed if they confirm
+    const emailLower = form.email.trim().toLowerCase();
+    const dupe = existingApps.find(a =>
+      (a.email || "").toLowerCase() === emailLower &&
+      a.storeId === form.storeId &&
+      !["rejected", "withdrawn"].includes(a.status)
+    );
+    if (dupe) {
+      const proceed = window.confirm(
+        "It looks like you've already applied to this store recently. Submitting again will create a new application. Continue?"
+      );
+      if (!proceed) return;
+    }
+
+    // Build & insert
+    const store = availableStores.find(s => s.id === form.storeId);
+    setSubmitting(true);
+    try {
+      await insertApplication({
+        id:                `app-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+        brandId:           store?.brandId,
+        storeId:           form.storeId,
+        firstName:         form.firstName.trim(),
+        lastName:          form.lastName.trim(),
+        email:             form.email.trim(),
+        phone:             form.phone.trim(),
+        position:          form.position.trim(),
+        availabilityNotes: form.availabilityNotes.trim(),
+        // Combine RTW declaration with any free-form notes for managers to see at a glance
+        applicantNotes:    [
+          `Right to work in UK: ${form.rtwDeclaration === "yes" ? "Yes" : "No (will provide supporting docs)"}`,
+          form.applicantNotes.trim() && `\n${form.applicantNotes.trim()}`,
+        ].filter(Boolean).join(""),
+        source:            "public_form",
+        status:            "applied",
+        rtwVerified:       false,   // declaration ≠ verification; manager confirms later
+        createdBy:         null,    // anonymous submission
+      });
+
+      try { localStorage.setItem(APPLY_RATE_LIMIT_KEY, String(Date.now())); } catch {}
+      setSubmitted(true);
+    } catch (err) {
+      console.error("Application submit failed:", err);
+      setSubmitError("Something went wrong saving your application. Please try again, or contact the store directly if the problem continues.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ─── Render: loading ────────────────────────────────────────────────────────
+  if (!ready) {
+    return (
+      <div style={applyContainerStyle}>
+        <div style={{ color: "#94a3b8", fontSize: 14 }}>Loading…</div>
+      </div>
+    );
+  }
+
+  // ─── Render: load error (DB unreachable) ────────────────────────────────────
+  if (loadError) {
+    return (
+      <div style={applyContainerStyle}>
+        <ApplyCard>
+          <h1 style={applyHeadingStyle}>Application form unavailable</h1>
+          <p style={applyTextStyle}>
+            We couldn't load the form right now. Please try again later, or contact the store directly.
+          </p>
+          <code style={{ fontSize: 11, color: "#64748b", marginTop: 12, display: "block" }}>{loadError}</code>
+        </ApplyCard>
+      </div>
+    );
+  }
+
+  // ─── Render: success state ──────────────────────────────────────────────────
+  if (submitted) {
+    return (
+      <div style={applyContainerStyle}>
+        <ApplyCard>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>✓</div>
+          <h1 style={applyHeadingStyle}>Thanks, {form.firstName}!</h1>
+          <p style={applyTextStyle}>
+            We've received your application. The store team will be in touch soon — usually within a few days.
+          </p>
+          <p style={{ ...applyTextStyle, fontSize: 13, color: "#64748b", marginTop: 20 }}>
+            Please keep an eye on your email ({form.email}) and phone for our response.
+          </p>
+        </ApplyCard>
+      </div>
+    );
+  }
+
+  // ─── Render: no operational stores ──────────────────────────────────────────
+  if (availableStores.length === 0) {
+    return (
+      <div style={applyContainerStyle}>
+        <ApplyCard>
+          <h1 style={applyHeadingStyle}>Not accepting applications right now</h1>
+          <p style={applyTextStyle}>
+            We're not accepting new applications at this time. Please check back later.
+          </p>
+        </ApplyCard>
+      </div>
+    );
+  }
+
+  // ─── Render: form ───────────────────────────────────────────────────────────
+  return (
+    <div style={applyContainerStyle}>
+      <ApplyCard wide>
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "#4f46e5", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 800, fontSize: 14 }}>CB</div>
+            <span style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase" }}>Job Application</span>
+          </div>
+          <h1 style={applyHeadingStyle}>Join the team</h1>
+          <p style={applyTextStyle}>
+            {isLocked
+              ? <>Applying to <strong style={{ color: "white" }}>{lockedStore.shortName || lockedStore.name}</strong>. Fill in the form below and we'll be in touch.</>
+              : "Fill in the form below and we'll be in touch. All fields marked * are required."
+            }
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* Honeypot — hidden via CSS, bots fill it, humans don't */}
+          <input
+            type="text"
+            name="website"
+            value={form.honeypot}
+            onChange={e => set("honeypot", e.target.value)}
+            tabIndex={-1}
+            autoComplete="off"
+            style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+            aria-hidden="true"
+          />
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <ApplyField label="First name *">
+              <input style={applyInputStyle} value={form.firstName} onChange={e => set("firstName", e.target.value)} maxLength={50}/>
+            </ApplyField>
+            <ApplyField label="Last name *">
+              <input style={applyInputStyle} value={form.lastName} onChange={e => set("lastName", e.target.value)} maxLength={50}/>
+            </ApplyField>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <ApplyField label="Email *">
+              <input style={applyInputStyle} type="email" value={form.email} onChange={e => set("email", e.target.value)} maxLength={100} autoComplete="email"/>
+            </ApplyField>
+            <ApplyField label="Phone *">
+              <input style={applyInputStyle} type="tel" value={form.phone} onChange={e => set("phone", e.target.value)} maxLength={20} autoComplete="tel"/>
+            </ApplyField>
+          </div>
+
+          <ApplyField label="Which store would you like to work at? *">
+            {isLocked ? (
+              <input style={{ ...applyInputStyle, color: "#94a3b8", cursor: "not-allowed" }} value={lockedStore.shortName || lockedStore.name} disabled/>
+            ) : (
+              <select style={applyInputStyle} value={form.storeId} onChange={e => set("storeId", e.target.value)}>
+                <option value="">— Choose a store —</option>
+                {availableStores.map(s => {
+                  const b = brands.find(br => br.id === s.brandId);
+                  return <option key={s.id} value={s.id}>{showBrandPrefix && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+                })}
+              </select>
+            )}
+          </ApplyField>
+
+          <ApplyField label="Position you're applying for *" hint="e.g. Barista, Kitchen Porter, Shift Leader">
+            <input style={applyInputStyle} value={form.position} onChange={e => set("position", e.target.value)} maxLength={60}/>
+          </ApplyField>
+
+          <ApplyField label="When are you available to work? *" hint="e.g. Weekends only, Full-time Mon–Fri, Evenings after 5pm">
+            <input style={applyInputStyle} value={form.availabilityNotes} onChange={e => set("availabilityNotes", e.target.value)} maxLength={200}/>
+          </ApplyField>
+
+          <ApplyField label="Do you have the right to work in the UK? *">
+            <div style={{ display: "flex", gap: 8 }}>
+              {[
+                { value: "yes", label: "Yes" },
+                { value: "no",  label: "No / will provide visa documents" },
+              ].map(opt => (
+                <label key={opt.value} style={{
+                  flex: 1, display: "flex", alignItems: "center", gap: 8,
+                  padding: "10px 12px", borderRadius: 10,
+                  background: form.rtwDeclaration === opt.value ? "#312e8160" : "#0f172a",
+                  border: `1px solid ${form.rtwDeclaration === opt.value ? "#6366f1" : "#334155"}`,
+                  cursor: "pointer", fontSize: 13, color: "#e2e8f0",
+                }}>
+                  <input type="radio" name="rtw" value={opt.value} checked={form.rtwDeclaration === opt.value} onChange={e => set("rtwDeclaration", e.target.value)}/>
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+          </ApplyField>
+
+          <ApplyField label="Tell us a bit about yourself" hint="Optional — previous experience, why you want to work with us, anything else relevant.">
+            <textarea style={{ ...applyInputStyle, minHeight: 90, resize: "vertical" }} value={form.applicantNotes} onChange={e => set("applicantNotes", e.target.value)} maxLength={1000}/>
+          </ApplyField>
+
+          {submitError && (
+            <div style={{ background: "#7f1d1d40", border: "1px solid #dc262660", color: "#fca5a5", padding: "10px 14px", borderRadius: 10, fontSize: 13 }}>
+              {submitError}
+            </div>
+          )}
+
+          <button type="submit" disabled={submitting} style={{
+            marginTop: 8, padding: "14px 20px", borderRadius: 12,
+            background: submitting ? "#334155" : "#4f46e5", color: "white",
+            border: "none", fontSize: 15, fontWeight: 700,
+            cursor: submitting ? "not-allowed" : "pointer",
+            transition: "background 0.15s",
+          }}>
+            {submitting ? "Submitting…" : "Submit application"}
+          </button>
+
+          <p style={{ fontSize: 11, color: "#64748b", textAlign: "center", marginTop: 4 }}>
+            By submitting, you agree to us storing your information for recruitment purposes.
+          </p>
+        </form>
+      </ApplyCard>
+    </div>
+  );
+}
+
+// ─── ApplyShell helper components (inline styles to avoid Tailwind dependency) ─
+// The apply page uses inline styles instead of Tailwind classes because it
+// runs as a separate shell and we want it self-contained — if someone screws
+// up Tailwind purging later, this page should still look correct.
+
+const applyContainerStyle = {
+  minHeight: "100vh",
+  background: "#0f172a",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+  fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+};
+
+const applyHeadingStyle = {
+  color: "white",
+  fontSize: 24,
+  fontWeight: 800,
+  margin: 0,
+  marginBottom: 8,
+};
+
+const applyTextStyle = {
+  color: "#94a3b8",
+  fontSize: 14,
+  lineHeight: 1.5,
+  margin: 0,
+};
+
+const applyInputStyle = {
+  width: "100%",
+  padding: "10px 14px",
+  borderRadius: 10,
+  background: "#0f172a",
+  border: "1px solid #334155",
+  color: "white",
+  fontSize: 14,
+  fontFamily: "inherit",
+  outline: "none",
+  boxSizing: "border-box",
+};
+
+function ApplyCard({ children, wide }) {
+  return (
+    <div style={{
+      background: "#1e293b",
+      border: "1px solid #334155",
+      borderRadius: 16,
+      padding: 32,
+      maxWidth: wide ? 560 : 440,
+      width: "100%",
+      boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function ApplyField({ label, hint, children }) {
+  return (
+    <div>
+      <label style={{ display: "block", color: "#cbd5e1", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+        {label}
+      </label>
+      {children}
+      {hint && <div style={{ color: "#64748b", fontSize: 11, marginTop: 4 }}>{hint}</div>}
+    </div>
+  );
+}
+
 // ── Sidebar Component ─────────────────────────────────────────────────────────
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed,
                     actualUser = null, users = [], onImpersonate = null, isImpersonating = false }) {
@@ -13483,6 +13916,7 @@ export default function App() {
   const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...(m.readBy||[]),userId]}:m));}, []);
 
   // Kiosk guard — all hooks ran above
+  if (IS_APPLY) return <ApplyShell />;
   if (IS_KIOSK) return <KioskShell />;
 
   if (dbError) return (
