@@ -361,7 +361,7 @@ function appAssignmentToDb(a) { return { id: a.id, brand_id: a.brandId, store_id
 function dbAssignmentToApp(a) { return { id: a.id, brandId: a.brand_id, storeId: a.store_id || null, type: a.type, taskId: a.task_id, role: a.role, personId: a.person_id, freq: a.freq, weekday: a.weekday, date: a.once_date, customDays: a.custom_days || [], winStart: a.win_start, winEnd: a.win_end, priority: a.priority, notes: a.notes }; }
 
 function appOpsTeamToDb(m) {
-  return {
+  const row = {
     id: m.id, brand_id: m.brandId,
     first_name: m.firstName, last_name: m.lastName || "",
     nickname: m.nickname || "", department: m.department || "",
@@ -375,6 +375,19 @@ function appOpsTeamToDb(m) {
     department_id: m.departmentId || null,
     updated_at: new Date().toISOString(),
   };
+  // Slice 5 — HR-style fields (added so hired applicants don't lose data).
+  // All optional; only included if explicitly passed so existing callers
+  // (that don't know about these fields) don't accidentally wipe them.
+  if (m.email        !== undefined) row.email         = m.email || null;
+  if (m.phone        !== undefined) row.phone         = m.phone || null;
+  if (m.dob          !== undefined) row.dob           = m.dob || null;
+  if (m.address      !== undefined) row.address       = m.address || null;
+  if (m.legalStatus  !== undefined) row.legal_status  = m.legalStatus || null;
+  if (m.photoUrl     !== undefined) row.photo_url     = m.photoUrl || null;
+  if (m.hrNotes      !== undefined) row.hr_notes      = m.hrNotes || null;
+  if (m.status       !== undefined) row.status        = m.status || "active";
+  if (m.archivedAt   !== undefined) row.archived_at   = m.archivedAt;
+  return row;
 }
 function dbOpsTeamToApp(m) {
   return {
@@ -386,6 +399,16 @@ function dbOpsTeamToApp(m) {
     storeIds: m.store_ids || [],
     roleId: m.role_id || null,
     departmentId: m.department_id || null,
+    // Slice 5 — HR fields
+    email:       m.email || "",
+    phone:       m.phone || "",
+    dob:         m.dob || null,
+    address:     m.address || "",
+    legalStatus: m.legal_status || "",
+    photoUrl:    m.photo_url || null,
+    hrNotes:     m.hr_notes || "",
+    status:      m.status || "active",
+    archivedAt:  m.archived_at || null,
   };
 }
 
@@ -1432,6 +1455,16 @@ function dbApplicationToApp(a) {
     photoUrl:            a.photo_url || null,               // public URL for display
     photoPath:           a.photo_path || null,              // storage path for deletion
     isMinor:             !!a.is_minor,                      // computed at submit time
+    // ── Slice 4 fields ────────────────────────────────────────────────────
+    // Track magic-link email delivery. Default 'pending' until /apply handler
+    // calls setApplicationEmailStatus(). Manager surfaces this in dashboard.
+    emailLinkStatus:     a.email_link_status || "pending",
+    emailLinkSentAt:     a.email_link_sent_at || null,
+    emailLinkError:      a.email_link_error || null,
+    // ── Slice 5 ────────────────────────────────────────────────────────────
+    // Soft-delete from active Hiring view. Set when application is hired
+    // (linked to ops_team) or otherwise resolved. Preserved for audit.
+    archivedAt:          a.archived_at || null,
   };
 }
 
@@ -1612,4 +1645,312 @@ export async function deleteApplicantPhoto(path) {
   if (!path) return;
   const { error } = await supabase.storage.from("applicant-photos").remove([path]);
   if (error && error.message && !/not.found/i.test(error.message)) throw error;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MAGIC LINK / CANDIDATE PORTAL AUTH (slice 4 session A)
+// ════════════════════════════════════════════════════════════════════════════
+// Wires up the candidate-facing magic-link flow:
+//   - sendCandidateMagicLink() — call after /apply submission
+//   - fetchMyApplications()    — for the candidate portal, returns only the
+//                                 logged-in user's applications (RLS enforces)
+//   - candidateSignOut()       — log out from portal
+//
+// Important: these are CANDIDATE-facing functions. They use Supabase Auth's
+// magic-link OTP flow, which creates a Supabase user account at the
+// candidate's email. Same email → same account → sees all their applications.
+
+// Send a magic link to the candidate. Idempotent — if they already have an
+// account, this just sends them a fresh login link. If they don't, creates
+// one and sends.
+//
+// Failure handling: Supabase's default email service rate-limits at ~3
+// emails/hour. Hitting that limit returns a 429 with code 'over_email_send_rate_limit'.
+// We catch it and return { ok: false, retryable: true } so the caller can
+// retry later or surface to manager.
+//
+// The shouldCreateUser:false flag would let us send only to existing users,
+// but for /apply we DO want to create new accounts. Set true.
+export async function sendCandidateMagicLink(email, redirectTo) {
+  if (!email) return { ok: false, retryable: false, error: "No email provided" };
+
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: {
+        // After clicking the email link, Supabase redirects to this URL
+        // with the auth tokens. Should be the /candidate route on our app.
+        emailRedirectTo: redirectTo || `${window.location.origin}/candidate`,
+        // Create the user if they don't already have an account
+        shouldCreateUser: true,
+      },
+    });
+
+    if (error) {
+      // Check if it's a rate-limit error (retryable later)
+      const msg = (error.message || "").toLowerCase();
+      const code = (error.code || error.status || "").toString();
+      const isRateLimit =
+        msg.includes("rate limit") ||
+        msg.includes("too many") ||
+        code.includes("429") ||
+        code.includes("over_email_send_rate_limit");
+      return {
+        ok: false,
+        retryable: isRateLimit,
+        error: error.message || "Failed to send magic link",
+      };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    // Network error or unexpected — treat as retryable
+    return {
+      ok: false,
+      retryable: true,
+      error: err?.message || String(err),
+    };
+  }
+}
+
+// Marks an application's email_link_status. Used by app code after calling
+// sendCandidateMagicLink — if successful, update to 'sent'; if failed,
+// update to 'failed' with the error so manager sees it in the dashboard.
+//
+// Errors here are swallowed silently — failure to update this status
+// shouldn't break the /apply submission. The manager will just see
+// 'pending' indefinitely, which is a known signal to follow up manually.
+export async function setApplicationEmailStatus(applicationId, status, errorMessage) {
+  if (!applicationId) return;
+  if (!["pending", "sent", "failed", "delivered"].includes(status)) return;
+
+  try {
+    const row = {
+      email_link_status: status,
+      email_link_error:  status === "failed" ? (errorMessage || null) : null,
+    };
+    if (status === "sent" || status === "delivered") {
+      row.email_link_sent_at = new Date().toISOString();
+    }
+    await supabase.from("job_applications").update(row).eq("id", applicationId);
+  } catch (err) {
+    // Log to console but don't propagate — the application itself is saved,
+    // this is just metadata.
+    console.warn("Failed to update email_link_status:", err);
+  }
+}
+
+// Fetch the currently-authenticated candidate's application(s). RLS on the
+// table ensures we only see rows matching the JWT email — so this query
+// returns just their data without any explicit filter.
+//
+// Returns ALL of their applications (they could have applied to multiple
+// stores or applied multiple times). UI sorts/picks accordingly.
+export async function fetchMyApplications() {
+  const { data, error } = await supabase
+    .from("job_applications")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbApplicationToApp);
+}
+
+// Same as fetchApplicationStatusHistory but called from the candidate portal.
+// RLS on application_status_history ensures only history rows for their own
+// applications come back.
+export async function fetchMyApplicationStatusHistory(applicationId) {
+  return fetchApplicationStatusHistory(applicationId);
+}
+
+// Candidate-side update: lets them change their own fields. App code
+// enforces which fields are editable (two-tier rules). RLS at the DB level
+// ensures they can only update their own row anyway.
+export async function updateMyApplication(id, patch) {
+  // Use the same updateApplication helper since RLS gates access. But we
+  // strip fields the candidate can never edit at any time — defence in
+  // depth in case app code forgets.
+  const safe = { ...patch };
+  delete safe.status;           // only manager
+  delete safe.opsTeamId;        // only manager
+  delete safe.rtwVerified;      // only manager
+  delete safe.rtwVerifiedBy;
+  delete safe.rtwVerifiedAt;
+  delete safe.brandId;          // derived from storeId
+  delete safe.source;           // immutable post-creation
+  delete safe.createdAt;
+  delete safe.createdBy;
+  delete safe.emailLinkStatus;  // only system
+  delete safe.emailLinkSentAt;
+  delete safe.emailLinkError;
+  return updateApplication(id, safe);
+}
+
+// Sign out from the candidate portal. Cleans up the session.
+export async function candidateSignOut() {
+  await supabase.auth.signOut();
+}
+
+// Subscribe to auth state changes. The portal uses this to detect when
+// the magic-link callback completes (Supabase auto-detects the tokens in
+// the URL fragment and fires onAuthStateChange).
+export function onCandidateAuthChange(callback) {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    callback({ event, session });
+  });
+  return () => subscription.unsubscribe();
+}
+
+// One-shot getter for current session — useful at mount time to check if
+// the user is already logged in (returning from a magic link click).
+export async function getCandidateSession() {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HIRE WORKFLOW (slice 5)
+// ════════════════════════════════════════════════════════════════════════════
+// Atomic-ish "hire this candidate" operation. Multiple things happen:
+//   1. Look up existing ops_team entry by email (Q4 duplicate check)
+//      - If found AND not archived → return { existing: true, opsTeam } so
+//        UI can prompt manager: "link to existing employee?"
+//      - If not found → create new ops_team entry from application data
+//   2. Link application.ops_team_id → ops_team.id
+//   3. Update application status to 'hired' + set archived_at = NOW
+//      (hides it from active Hiring view but preserves the record)
+//   4. Trigger logs the status change to application_status_history
+//      (existing log_application_status_change trigger handles this)
+//
+// NOT atomic at the DB level — we don't have transactions in supabase-js
+// for cross-table operations like this. If step 2 or 3 fails after step 1
+// succeeded, we'd have an orphan ops_team entry. We mitigate by ordering:
+// create ops_team LAST after archive + link, then update.
+// Actually the cleanest sequence is:
+//   A. Check duplicate (read-only)
+//   B. Create ops_team (writes a row, but harmless if subsequent steps fail)
+//   C. Update application: set ops_team_id, status='hired', archived_at=NOW
+//   D. If C fails, the ops_team row is orphaned — but the application is
+//      still in 'applied' or wherever it was, so manager can retry.
+//      Orphan ops_team is detectable: no application points to it.
+//
+// Returns: { ok, opsTeam, application, existing } or throws.
+//   - existing=true means the candidate's email already matched an active
+//     employee and we LINKED rather than created. Manager should be told.
+//   - existing=false means a fresh ops_team entry was created.
+
+export async function hireApplicationCheck(applicationEmail) {
+  // Pre-flight check: is there already an active employee with this email?
+  // Used by app code BEFORE the actual hire to show the manager a confirm
+  // dialog. Returns { existing: ops_team_row | null }.
+  if (!applicationEmail) return { existing: null };
+  const { data, error } = await supabase
+    .from("ops_team")
+    .select("*")
+    .ilike("email", applicationEmail.trim())
+    .is("archived_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return { existing: data ? dbOpsTeamToApp(data) : null };
+}
+
+export async function hireApplication(application, options = {}) {
+  // options:
+  //   linkToExisting: ops_team_id  — manager confirmed to reuse existing
+  //                                   employee record. Skip create.
+  //   hiredByUserId:  text          — user id of the person doing the hire,
+  //                                   for audit purposes in status_history
+  if (!application?.id) throw new Error("Application required");
+  if (!application.email?.trim()) {
+    throw new Error("Email is required before hiring. Edit the application to add an email address.");
+  }
+
+  let opsTeamId;
+  let opsTeam;
+  let existing = false;
+
+  if (options.linkToExisting) {
+    // Manager already confirmed they want to reuse an existing employee
+    // record. Skip the create — just use the provided ID.
+    opsTeamId = options.linkToExisting;
+    existing = true;
+    // Fetch the existing record so we can return it to the caller
+    const { data, error } = await supabase
+      .from("ops_team").select("*").eq("id", opsTeamId).maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error("Linked employee record no longer exists.");
+    opsTeam = dbOpsTeamToApp(data);
+  } else {
+    // Create a fresh ops_team entry from the application data. Per
+    // Q6 decision: status='pending_setup' so the UI warns manager to
+    // complete role/dept/hourly_rate assignment.
+    //
+    // Q2 explicit user decision: do NOT auto-assign role/department/etc.
+    // Manager fills these later. We only copy candidate-provided data.
+    opsTeamId = `emp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+    const newOpsTeam = {
+      id:           opsTeamId,
+      brandId:      application.brandId,
+      firstName:    application.firstName,
+      lastName:     application.lastName,
+      nickname:     "",
+      department:   "",           // unset — manager assigns
+      role:         "",           // unset — manager assigns
+      pin:          "",           // unset — manager creates when staff member starts on POS
+      color:        "#6366f1",    // default; manager can change
+      hourlyRate:   0,            // unset — manager fills
+      storeIds:     application.storeId ? [application.storeId] : [],
+      roleId:       null,         // unset
+      departmentId: null,         // unset
+      // ── Slice 5 HR fields, copied from application ─────────────────────
+      email:        application.email?.trim() || null,
+      phone:        application.phone || null,
+      dob:          application.dateOfBirth || null,
+      address:      application.address || null,
+      legalStatus:  application.legalStatus || null,
+      photoUrl:     application.photoUrl || null,
+      hrNotes:      "",
+      status:       "pending_setup",  // ← key flag for the warning badge
+    };
+    const { data, error } = await supabase
+      .from("ops_team")
+      .insert(appOpsTeamToDb(newOpsTeam))
+      .select()
+      .maybeSingle();
+    if (error) {
+      // Specifically detect the unique-email-violation, which means another
+      // hire raced us OR an existing row matched but our pre-check missed it.
+      if (error.code === "23505" || /duplicate key/i.test(error.message || "")) {
+        throw new Error(
+          "An employee with this email already exists. Please use 'Link to existing employee' instead of 'Hire as new'."
+        );
+      }
+      throw error;
+    }
+    opsTeam = data ? dbOpsTeamToApp(data) : newOpsTeam;
+  }
+
+  // Now update the application: link, status, archive
+  const { error: updErr } = await supabase
+    .from("job_applications")
+    .update({
+      ops_team_id:   opsTeamId,
+      status:        "hired",
+      archived_at:   new Date().toISOString(),
+      updated_at:    new Date().toISOString(),
+    })
+    .eq("id", application.id);
+  if (updErr) {
+    // If linking fails AND we created a fresh ops_team row above, we have
+    // an orphan. Try to roll back. If the rollback fails too, surface a
+    // clear message — manager can manually delete the orphan ops_team row.
+    if (!existing) {
+      try {
+        await supabase.from("ops_team").delete().eq("id", opsTeamId);
+      } catch {}
+    }
+    throw updErr;
+  }
+
+  return { ok: true, opsTeam, application: { ...application, opsTeamId, status: "hired", archivedAt: new Date().toISOString() }, existing };
 }
