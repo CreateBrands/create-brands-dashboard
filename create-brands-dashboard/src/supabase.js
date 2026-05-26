@@ -391,6 +391,9 @@ function appOpsTeamToDb(m) {
   if (m.hrNotes       !== undefined) row.hr_notes      = m.hrNotes || null;
   if (m.status        !== undefined) row.status        = m.status || "active";
   if (m.archivedAt    !== undefined) row.archived_at   = m.archivedAt;
+  // Slice 6 — explicit hire date. Manager can override; default-derived
+  // from linked job_application.archived_at in the profile UI.
+  if (m.hireDate      !== undefined) row.hire_date     = m.hireDate || null;
   return row;
 }
 function dbOpsTeamToApp(m) {
@@ -413,6 +416,7 @@ function dbOpsTeamToApp(m) {
     hrNotes:     m.hr_notes || "",
     status:      m.status || "active",
     archivedAt:  m.archived_at || null,
+    hireDate:    m.hire_date || null,
   };
 }
 
@@ -1966,4 +1970,71 @@ export async function hireApplication(application, options = {}) {
   }
 
   return { ok: true, opsTeam, application: { ...application, opsTeamId, status: "hired", archivedAt: new Date().toISOString() }, existing };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE NOTES (slice 6)
+// ════════════════════════════════════════════════════════════════════════════
+// Append-only HR notes per employee. No update/delete from app — if a note
+// needs correction, manager adds a new note saying "ignore prior, X is
+// actually Y". This matches real HR audit-trail practice.
+//
+// author_name is snapshotted at write time so renaming a user later doesn't
+// change historical attribution. author_id is also stored (soft ref) for
+// future "show all notes by user X" reporting.
+
+function dbEmployeeNoteToApp(n) {
+  return {
+    id:          n.id,
+    employeeId:  n.employee_id,
+    content:     n.content,
+    authorId:    n.author_id || null,
+    authorName:  n.author_name || "Unknown",
+    createdAt:   n.created_at,
+  };
+}
+
+export async function fetchEmployeeNotes(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_notes")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbEmployeeNoteToApp);
+}
+
+export async function addEmployeeNote({ employeeId, content, authorId, authorName }) {
+  if (!employeeId) throw new Error("employeeId required");
+  if (!content?.trim()) throw new Error("Note content cannot be empty");
+  const row = {
+    id:           `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id:  employeeId,
+    content:      content.trim(),
+    author_id:    authorId || null,
+    author_name:  authorName || "Unknown",
+  };
+  const { data, error } = await supabase
+    .from("employee_notes")
+    .insert(row)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data ? dbEmployeeNoteToApp(data) : dbEmployeeNoteToApp(row);
+}
+
+// Fetch the job_application linked to an employee, if any. Returns null
+// for legacy/manual employees with no application history.
+export async function fetchLinkedApplication(employeeId) {
+  if (!employeeId) return null;
+  const { data, error } = await supabase
+    .from("job_applications")
+    .select("*")
+    .eq("ops_team_id", employeeId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? dbApplicationToApp(data) : null;
 }

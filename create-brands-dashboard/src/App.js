@@ -36,6 +36,8 @@ import {
   sendCandidateMagicLink, setApplicationEmailStatus,
   // Slice 5: hire workflow
   hireApplication, hireApplicationCheck,
+  // Slice 6: employee profile
+  fetchEmployeeNotes, addEmployeeNote, fetchLinkedApplication,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5268,7 +5270,7 @@ function HiringView({
   brands, stores, storeRoles, storeDepartments, visibleStoreIds,
   applications, opsTeam, currentUser,
   onAdd, onUpdate, onSetStatus, onDelete,
-  onAddOpsTeam,
+  onAddOpsTeam, onOpenEmployeeProfile,
 }) {
   const [showForm, setShowForm]   = useState(false);
   const [editItem, setEditItem]   = useState(null);
@@ -5502,10 +5504,14 @@ function HiringView({
       });
       setHirePrefillApp(null);
       try { await onUpdate(hirePrefillApp.id, {}); } catch {}
+      // Slice 6 — jump straight to the new employee's profile so manager
+      // can immediately add notes, verify details, etc. Skip if the navigation
+      // helper isn't provided (defensive — shouldn't happen in production).
+      if (onOpenEmployeeProfile) {
+        onOpenEmployeeProfile(opsTeamId);
+      }
     } catch (err) {
       console.error("Hire (new employee) failed:", err);
-      // Surface to user via alert since the modal doesn't render error state.
-      // Modal stays open so manager can retry or close manually.
       alert(`Hiring failed: ${err?.message || err}\n\nThe employee record may have been created but the application wasn't archived. Check Ops Team and Hiring view, and adjust manually if needed.`);
     } finally {
       setHireBusy(false);
@@ -5917,6 +5923,427 @@ function FilterChip({ active, onClick, label }) {
       }`}>
       {label}
     </button>
+  );
+}
+
+// ─── Employee Profile View (slice 6) ──────────────────────────────────────────
+// Per-employee detail page with three tabs: Personal & HR, Linked Application,
+// Notes. Reached by clicking an employee row in Ops Team list, or via the
+// URL hash #employee/{id}. Closes back to Ops Team via the X / back button.
+//
+// Scope notes:
+//   - Edits to hire_date and HR fields go through onUpdateEmployee (same
+//     path as the existing edit modal — re-uses the partial-update mapper)
+//   - Notes are append-only — no edit/delete from this UI
+//   - Linked Application is read-only — if the manager wants to edit the
+//     original application, they navigate back to Hiring view
+//   - For legacy employees with no linked application, the tab shows an
+//     empty state explaining "added manually, no application history"
+function EmployeeProfileView({
+  employeeId, brands, stores, storeRoles, storeDepartments,
+  opsTeam, currentUser, onUpdateEmployee, onClose,
+}) {
+  const employee = useMemo(
+    () => opsTeam.find(m => m.id === employeeId),
+    [opsTeam, employeeId]
+  );
+
+  const [tab, setTab] = useState("personal");
+  const [linkedApp, setLinkedApp] = useState(null);
+  const [linkedAppLoading, setLinkedAppLoading] = useState(true);
+  const [notes, setNotes] = useState([]);
+  const [notesLoading, setNotesLoading] = useState(true);
+
+  // Edit state for hire date + HR fields. Lifted out of individual inputs so
+  // the manager can edit several fields and Save once. Initialised from
+  // employee record; reset when employee changes (e.g. navigated to another).
+  const [editHr, setEditHr] = useState(null);
+  const [savingHr, setSavingHr] = useState(false);
+
+  useEffect(() => {
+    if (!employee) return;
+    setEditHr({
+      hireDate:    employee.hireDate    || "",
+      email:       employee.email       || "",
+      phone:       employee.phone       || "",
+      dob:         employee.dob         || "",
+      address:     employee.address     || "",
+      legalStatus: employee.legalStatus || "",
+      hrNotes:     employee.hrNotes     || "",
+    });
+  }, [employee?.id]);  // re-init on employee swap, not on every prop tick
+
+  // Load linked application + notes when employee changes
+  useEffect(() => {
+    let cancelled = false;
+    if (!employeeId) return;
+    setLinkedAppLoading(true);
+    setNotesLoading(true);
+    fetchLinkedApplication(employeeId)
+      .then(app => { if (!cancelled) setLinkedApp(app); })
+      .catch(err => { console.error("Linked app load failed:", err); })
+      .finally(() => { if (!cancelled) setLinkedAppLoading(false); });
+    fetchEmployeeNotes(employeeId)
+      .then(ns => { if (!cancelled) setNotes(ns); })
+      .catch(err => { console.error("Notes load failed:", err); })
+      .finally(() => { if (!cancelled) setNotesLoading(false); });
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  // Derived hire date display: explicit override > linked application's
+  // archived_at (the actual hire moment) > nothing
+  const derivedHireDate = employee?.hireDate || linkedApp?.archivedAt?.slice(0, 10) || null;
+
+  if (!employee) {
+    return (
+      <div className="space-y-4">
+        <button onClick={onClose} className="text-sm text-slate-400 hover:text-white flex items-center gap-2">
+          <ChevronLeft size={16}/> Back to Ops Team
+        </button>
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl">
+          <AlertCircle size={32} className="mb-3 text-slate-700"/>
+          <div className="text-sm font-semibold">Employee not found</div>
+          <div className="text-xs text-slate-600 mt-1">They may have been deleted or you don't have access.</div>
+        </div>
+      </div>
+    );
+  }
+
+  const primaryStore = stores.find(s => s.id === employee.storeIds?.[0]);
+  const brand        = brands.find(b => b.id === employee.brandId);
+  const roleLabel    = storeRoles.find(r => r.id === employee.roleId)?.name || employee.role || "";
+  const deptLabel    = storeDepartments.find(d => d.id === employee.departmentId)?.name || employee.department || "";
+
+  const handleSaveHr = async () => {
+    if (!editHr) return;
+    setSavingHr(true);
+    try {
+      // Use partial update — only the HR fields. Other fields (role, pin,
+      // storeIds, etc.) untouched thanks to the partial-aware mapper.
+      await onUpdateEmployee({
+        id:          employee.id,
+        hireDate:    editHr.hireDate    || null,
+        email:       editHr.email       || null,
+        phone:       editHr.phone       || null,
+        dob:         editHr.dob         || null,
+        address:     editHr.address     || null,
+        legalStatus: editHr.legalStatus || null,
+        hrNotes:     editHr.hrNotes     || null,
+      });
+    } catch (err) {
+      console.error("HR save failed:", err);
+      alert(`Could not save: ${err?.message || err}`);
+    } finally {
+      setSavingHr(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Back button */}
+      <button onClick={onClose} className="text-sm text-slate-400 hover:text-white flex items-center gap-2">
+        <ChevronLeft size={16}/> Back to Ops Team
+      </button>
+
+      {/* Header card */}
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5">
+        <div className="flex items-start gap-4">
+          {/* Photo or initials */}
+          {employee.photoUrl ? (
+            <img
+              src={employee.photoUrl}
+              alt={`${employee.firstName} ${employee.lastName}`}
+              className="w-20 h-20 rounded-xl object-cover border border-slate-700 flex-shrink-0"
+            />
+          ) : (
+            <div
+              className="w-20 h-20 rounded-xl flex items-center justify-center text-2xl font-bold flex-shrink-0"
+              style={{ background: (employee.color || "#6366f1") + "30", color: employee.color || "#6366f1" }}
+            >
+              {employee.firstName[0]}{employee.lastName?.[0] || ""}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <h1 className="text-2xl font-bold text-white">{employee.firstName} {employee.lastName}</h1>
+              {employee.status === "pending_setup" && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">
+                  ⚠ Pending setup
+                </span>
+              )}
+              {employee.archivedAt && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-semibold">
+                  Archived
+                </span>
+              )}
+            </div>
+            {employee.nickname && <div className="text-sm text-slate-500 mb-2">"{employee.nickname}"</div>}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Role</div><div className="text-slate-200 mt-0.5">{roleLabel || "—"}</div></div>
+              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Department</div><div className="text-slate-200 mt-0.5">{deptLabel || "—"}</div></div>
+              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Store</div><div className="text-slate-200 mt-0.5">{primaryStore ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}` : "—"}</div></div>
+              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Hourly Rate</div><div className="text-slate-200 mt-0.5">{employee.hourlyRate > 0 ? `£${employee.hourlyRate.toFixed(2)}` : "—"}</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-slate-800">
+        {[
+          { key: "personal",    label: "Personal & HR" },
+          { key: "application", label: linkedApp ? "Linked Application" : "Linked Application (none)" },
+          { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
+              tab === t.key
+                ? "text-white border-indigo-500"
+                : "text-slate-500 border-transparent hover:text-slate-300"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {tab === "personal" && editHr && (
+        <PersonalHrTab
+          editHr={editHr} setEditHr={setEditHr}
+          derivedHireDate={derivedHireDate}
+          linkedApp={linkedApp}
+          onSave={handleSaveHr} saving={savingHr}
+        />
+      )}
+
+      {tab === "application" && (
+        <LinkedApplicationTab
+          linkedApp={linkedApp}
+          loading={linkedAppLoading}
+          stores={stores}
+        />
+      )}
+
+      {tab === "notes" && (
+        <NotesTab
+          employeeId={employeeId}
+          notes={notes} setNotes={setNotes}
+          loading={notesLoading}
+          currentUser={currentUser}
+        />
+      )}
+    </div>
+  );
+}
+
+// Tab 1 — Personal & HR
+function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, saving }) {
+  const set = (k, v) => setEditHr(s => ({ ...s, [k]: v }));
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  // Show whether hire date is overridden or derived. If editHr.hireDate
+  // matches the derived value, it's not really "overridden".
+  const isExplicitOverride = !!editHr.hireDate && editHr.hireDate !== (derivedHireDate || "");
+
+  return (
+    <div className="space-y-4 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div>
+        <label className={labelCls}>Hire date</label>
+        <input
+          type="date"
+          value={editHr.hireDate}
+          onChange={e => set("hireDate", e.target.value)}
+          max={new Date().toISOString().slice(0, 10)}
+          className={`${inputCls} cursor-pointer`}
+          onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+        />
+        <div className="text-[10px] text-slate-600 mt-1">
+          {linkedApp
+            ? <>Default: {derivedHireDate ? new Date(derivedHireDate).toLocaleDateString("en-GB") : "—"} (from linked application's hire date). Override above if different.{isExplicitOverride && <span className="text-amber-400"> · Override active</span>}</>
+            : <>No linked application — set this manually.</>
+          }
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div><label className={labelCls}>Email</label><input type="email" value={editHr.email} onChange={e => set("email", e.target.value)} className={inputCls}/></div>
+        <div><label className={labelCls}>Phone</label><input value={editHr.phone} onChange={e => set("phone", e.target.value)} className={inputCls}/></div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Date of birth</label>
+          <input
+            type="date"
+            value={editHr.dob}
+            onChange={e => set("dob", e.target.value)}
+            max={new Date().toISOString().slice(0, 10)}
+            className={`${inputCls} cursor-pointer`}
+            onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+          />
+          {editHr.dob && isUnder18(editHr.dob) && (
+            <div className="text-[10px] text-amber-400 mt-0.5">⚠ Under 18 — restricted hours apply.</div>
+          )}
+        </div>
+        <div>
+          <label className={labelCls}>Legal status</label>
+          <select value={editHr.legalStatus} onChange={e => set("legalStatus", e.target.value)} className={inputCls}>
+            <option value="">— Not set —</option>
+            {LEGAL_STATUS_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>Address</label>
+        <input value={editHr.address} onChange={e => set("address", e.target.value)} className={inputCls} placeholder="Street, town, postcode"/>
+      </div>
+
+      <div>
+        <label className={labelCls}>HR notes</label>
+        <textarea
+          value={editHr.hrNotes}
+          onChange={e => set("hrNotes", e.target.value)}
+          rows={3}
+          placeholder="Internal HR notes about this employee (e.g. preferred contact times, visa expiry date). Different from the Notes tab which is append-only."
+          className={`${inputCls} resize-none`}
+        />
+        <div className="text-[10px] text-slate-600 mt-1">
+          One-line free-form notes editable any time. For dated, append-only entries, use the Notes tab.
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Tab 2 — Linked Application (read-only)
+function LinkedApplicationTab({ linkedApp, loading, stores }) {
+  if (loading) {
+    return (
+      <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
+        Loading linked application…
+      </div>
+    );
+  }
+  if (!linkedApp) {
+    return (
+      <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center space-y-2">
+        <div className="font-semibold text-slate-400">No linked application</div>
+        <div className="text-xs text-slate-600">This employee was added manually rather than through the hiring workflow.</div>
+      </div>
+    );
+  }
+  const store = stores.find(s => s.id === linkedApp.storeId);
+  return (
+    <div className="space-y-4 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+        <DetailField label="Applied for"  value={linkedApp.position || "—"}/>
+        <DetailField label="Applied via"  value={linkedApp.source === "public_form" ? "Public /apply form" : "Manager capture"}/>
+        <DetailField label="Applied on"   value={new Date(linkedApp.createdAt).toLocaleDateString("en-GB")}/>
+        <DetailField label="Hired on"     value={linkedApp.archivedAt ? new Date(linkedApp.archivedAt).toLocaleDateString("en-GB") : "—"}/>
+        <DetailField label="Store"        value={store?.shortName || store?.name || "—"}/>
+        <DetailField label="Status"       value={linkedApp.status || "—"}/>
+      </div>
+      {linkedApp.relevantExperience && <DetailField label="Relevant experience" value={linkedApp.relevantExperience} full/>}
+      {linkedApp.resumeText && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1.5">Resume / CV at time of application</div>
+          <pre className="text-xs text-slate-200 bg-slate-950 border border-slate-800 rounded-xl p-3 max-h-64 overflow-y-auto whitespace-pre-wrap font-mono">{linkedApp.resumeText}</pre>
+        </div>
+      )}
+      <div className="text-[10px] text-slate-600 italic">
+        Read-only snapshot. The current employee record (Personal & HR tab) may have been updated since.
+      </div>
+    </div>
+  );
+}
+
+// Tab 3 — Notes (append-only)
+function NotesTab({ employeeId, notes, setNotes, loading, currentUser }) {
+  const [draft, setDraft] = useState("");
+  const [posting, setPosting] = useState(false);
+
+  const handlePost = async () => {
+    if (!draft.trim()) return;
+    setPosting(true);
+    try {
+      const newNote = await addEmployeeNote({
+        employeeId,
+        content:    draft,
+        authorId:   currentUser?.id,
+        authorName: currentUser?.name || currentUser?.email || "Unknown",
+      });
+      setNotes(prev => [newNote, ...prev]);
+      setDraft("");
+    } catch (err) {
+      console.error("Note post failed:", err);
+      alert(`Could not save note: ${err?.message || err}`);
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* New note composer */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          placeholder="Add a note about this employee… (e.g. trained on espresso machine today; agreed to swap shifts with Alice next Friday)"
+          rows={3}
+          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none"
+        />
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] text-slate-600">
+            Notes are append-only. To correct an old note, add a new one referencing it.
+          </div>
+          <button
+            onClick={handlePost}
+            disabled={posting || !draft.trim()}
+            className="px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {posting ? "Posting…" : "Add note"}
+          </button>
+        </div>
+      </div>
+
+      {/* Notes list */}
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-6">Loading notes…</div>
+      ) : notes.length === 0 ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
+          No notes yet. Add the first one above.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {notes.map(n => (
+            <div key={n.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="text-sm text-slate-200 whitespace-pre-wrap">{n.content}</div>
+              <div className="text-[10px] text-slate-600 mt-2">
+                {n.authorName} · {new Date(n.createdAt).toLocaleString("en-GB")}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -6671,6 +7098,13 @@ function OpsTeamMemberFormModal({
       // employee profile page.
       photoUrl:    item?.photoUrl           || prefillApplication?.photoUrl   || null,
       status:      computedStatus,
+      // Slice 6 — set hireDate to today for hire-flow saves so the
+      // employee profile shows a sensible default. Manager can override
+      // later in the profile UI. For edits (no prefillApplication, item exists),
+      // preserve whatever's already set.
+      hireDate:    isHireFlow
+                     ? new Date().toISOString().slice(0, 10)
+                     : (item?.hireDate || undefined),
     });
   };
 
@@ -7603,6 +8037,7 @@ function OpsSettingsView({
   onAddStoreDepartment, onUpdateStoreDepartment, onArchiveStoreDepartment, onUnarchiveStoreDepartment,
   onAddStoreRole, onUpdateStoreRole, onArchiveStoreRole, onUnarchiveStoreRole,
   onCopyStoreStructure,
+  onOpenEmployeeProfile,         // slice 6 — open profile drill-down from team row
   currentUser
 }) {
   const [tab, setTab] = useState("structure");
@@ -7717,7 +8152,12 @@ function OpsSettingsView({
               ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}${extraStoreCount > 0 ? ` +${extraStoreCount}` : ""}`
               : (brand?.name || "");
             return (
-              <div key={m.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
+              <div
+                key={m.id}
+                className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4 hover:border-slate-600 transition-colors cursor-pointer"
+                onClick={() => onOpenEmployeeProfile?.(m.id)}
+                title="Click to open profile"
+              >
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -7731,14 +8171,16 @@ function OpsSettingsView({
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-slate-600">{[roleLabel, deptLabel, locationLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click edit to complete setup (role, department, hourly rate)" : "")}</div>
+                  <div className="text-xs text-slate-600">{[roleLabel, deptLabel, locationLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click to open profile and complete setup (role, department, hourly rate)" : "")}</div>
                   {!primaryStore && (m.storeIds?.length || 0) === 0 && (
-                    <div className="text-[10px] text-amber-500 mt-0.5">⚠ Not yet linked to a store — edit to set</div>
+                    <div className="text-[10px] text-amber-500 mt-0.5">⚠ Not yet linked to a store — click to set</div>
                   )}
                 </div>
-                <div className="flex gap-1.5">
-                  <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                  <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                {/* stopPropagation on action buttons so clicking edit/delete
+                    doesn't ALSO open the profile (the row-click handler) */}
+                <div className="flex gap-1.5" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700" title="Edit basic details"><Edit size={13}/></button>
+                  <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20" title="Delete"><Trash2 size={13}/></button>
                 </div>
               </div>
             );
@@ -14383,6 +14825,51 @@ export default function App() {
   const [activeView,      setActiveView]     = useState("dashboard");
   const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
 
+  // Slice 6 — employee profile view. When a manager clicks an employee in
+  // Ops Team, we set selectedEmployeeId and switch activeView to
+  // "employee-profile". URL hash (#employee/emp-id) is synced for back-button
+  // support without restructuring the whole app to URL routing.
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+
+  // Sync hash → state on mount AND on browser back/forward. Allows direct
+  // links like https://create-brands-dashboard.vercel.app/#employee/emp-xyz
+  useEffect(() => {
+    const applyHash = () => {
+      const m = window.location.hash.match(/^#employee\/(.+)$/);
+      if (m) {
+        setSelectedEmployeeId(m[1]);
+        setActiveView("employee-profile");
+      }
+    };
+    applyHash();   // initial
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, []);
+
+  // Open an employee profile from anywhere (typically Ops Team list).
+  // Updates state AND hash so the user can use back button.
+  const openEmployeeProfile = useCallback(id => {
+    setSelectedEmployeeId(id);
+    setActiveView("employee-profile");
+    // Use replaceState if we're already in a profile view (avoids stacking
+    // history entries); pushState otherwise so back button works.
+    const newHash = `#employee/${id}`;
+    if (window.location.hash.startsWith("#employee/")) {
+      window.history.replaceState(null, "", newHash);
+    } else {
+      window.history.pushState(null, "", newHash);
+    }
+  }, []);
+
+  // Close the profile and return to Ops Team list.
+  const closeEmployeeProfile = useCallback(() => {
+    setSelectedEmployeeId(null);
+    setActiveView("ops-settings");   // closest existing view for ops/team admin
+    if (window.location.hash.startsWith("#employee/")) {
+      window.history.pushState(null, "", window.location.pathname);
+    }
+  }, []);
+
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type }); setTimeout(() => setToast(null), 3500);
   }, []);
@@ -14971,6 +15458,10 @@ export default function App() {
     const allowedKeys = NAV_GROUPS.flatMap(g => g.items.map(i => i.key));
     if (allowedKeys.length === 0) return activeView;
     if (allowedKeys.includes(activeView)) return activeView;
+    // Slice 6 — employee-profile is a "drill-down" view, not in the sidebar
+    // nav. Allow it through if the user landed on it from Ops Team or a deep
+    // link, even though no sidebar nav matches it.
+    if (activeView === "employee-profile") return activeView;
     return allowedKeys[0];
   })();
 
@@ -14978,7 +15469,8 @@ export default function App() {
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
     "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
-    admin:"Admin", comms:"Communication", "time-attend":"Time & Attendance" };
+    admin:"Admin", comms:"Communication", "time-attend":"Time & Attendance",
+    "employee-profile":"Employee Profile", hiring:"Hiring" };
 
   const currentUser_ctx = currentUser;
 
@@ -15057,6 +15549,15 @@ export default function App() {
               onAdd={addApplication} onUpdate={updateApplicationRow}
               onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
               onAddOpsTeam={addOpsTeam}
+              onOpenEmployeeProfile={openEmployeeProfile}
+            />}
+            {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
+              employeeId={selectedEmployeeId}
+              brands={visibleBrands} stores={stores}
+              storeRoles={storeRoles} storeDepartments={storeDepartments}
+              opsTeam={opsTeam} currentUser={currentUser}
+              onUpdateEmployee={updateOpsTeam}
+              onClose={closeEmployeeProfile}
             />}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
@@ -15067,6 +15568,7 @@ export default function App() {
               onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit}
               onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask}
               onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+              onOpenEmployeeProfile={openEmployeeProfile}
               onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
               onAddStoreDepartment={addStoreDepartment} onUpdateStoreDepartment={updateStoreDepartmentRow}
               onArchiveStoreDepartment={archiveStoreDepartmentRow} onUnarchiveStoreDepartment={unarchiveStoreDepartmentRow}
