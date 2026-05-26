@@ -4215,6 +4215,11 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
     // themselves. Owner/HQ + the store's manager can set/change it. Empty
     // means kiosk login is disabled for this store.
     kioskPin:        store?.kioskPin        || "",
+    // Whether this store accepts applications on the public /apply form.
+    // Default true for new stores; preserve existing value for edits.
+    // Setting false hides the store from the public dropdown immediately —
+    // useful for pausing applications when fully staffed.
+    isHiring:        store?.isHiring !== undefined ? store.isHiring : true,
   });
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -4347,6 +4352,24 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
             Changing it invalidates any tablets currently registered — they'll need to re-enter the new PIN.
             Leave blank to disable kiosk login for this store.
           </div>
+        </Field>
+        <Field label="Accepting applications" full>
+          <label className="flex items-start gap-3 px-3 py-2.5 rounded-lg bg-slate-800/40 border border-slate-700 cursor-pointer hover:bg-slate-800/70">
+            <input
+              type="checkbox"
+              checked={!!form.isHiring}
+              onChange={e => setForm(f => ({ ...f, isHiring: e.target.checked }))}
+              className="mt-0.5"
+            />
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-slate-200">
+                {form.isHiring ? "Visible on /apply" : "Hidden from /apply"}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                When ticked, this store appears in the public job application form dropdown. Untick to pause new applications when fully staffed.
+              </div>
+            </div>
+          </label>
         </Field>
         <Field label="Notes" full>
           <textarea value={form.notes} onChange={set("notes")} className={fieldCls + " min-h-[60px]"} rows={2} />
@@ -5205,7 +5228,7 @@ const APPLICATION_TRANSITIONS = {
   withdrawn:         [],
 };
 
-function HiringView({ brands, stores, visibleStoreIds, applications, currentUser, onAdd, onUpdate, onSetStatus, onDelete }) {
+function HiringView({ brands, stores, storeRoles, visibleStoreIds, applications, currentUser, onAdd, onUpdate, onSetStatus, onDelete }) {
   const [showForm, setShowForm]   = useState(false);
   const [editItem, setEditItem]   = useState(null);
   const [deleteId, setDeleteId]   = useState(null);
@@ -5441,7 +5464,7 @@ function HiringView({ brands, stores, visibleStoreIds, applications, currentUser
       )}
 
       {showForm && <ApplicationFormModal
-        brands={brands} stores={allowedStores} item={editItem}
+        brands={brands} stores={allowedStores} storeRoles={storeRoles} item={editItem}
         onSave={async (data) => {
           if (editItem) { await onUpdate(editItem.id, data); }
           else          { await onAdd(data); }
@@ -5482,13 +5505,26 @@ function FilterChip({ active, onClick, label }) {
 }
 
 // ─── Application Form Modal ───────────────────────────────────────────────────
-function ApplicationFormModal({ brands, stores, item, onSave, onClose }) {
+function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClose }) {
+  // Decide initial positionChoice for edits. If the existing position string
+  // exactly matches one of the current store's role names, pre-select that
+  // role. Otherwise treat it as a free-text "Other" value so the manager can
+  // continue editing it inline.
+  const initialChoice = (() => {
+    if (!item?.position) return "";
+    const matchingRole = (storeRoles || []).find(r =>
+      r.storeId === item.storeId && !r.archivedAt && r.name === item.position
+    );
+    return matchingRole ? item.position : "__other__";
+  })();
+
   const [form, setForm] = useState({
     firstName:         item?.firstName         || "",
     lastName:          item?.lastName          || "",
     email:             item?.email             || "",
     phone:             item?.phone             || "",
     position:          item?.position          || "",
+    positionChoice:    initialChoice,
     storeId:           item?.storeId           || stores[0]?.id || "",
     availabilityNotes: item?.availabilityNotes || "",
     applicantNotes:    item?.applicantNotes    || "",
@@ -5497,6 +5533,27 @@ function ApplicationFormModal({ brands, stores, item, onSave, onClose }) {
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const showBrandPrefix = new Set(stores.map(s => s.brandId)).size > 1;
+
+  // Roles for the currently-selected store. Same shape/filter as the public
+  // ApplyShell so behaviour is consistent (manager-side and candidate-side
+  // see the same set of options).
+  const availableRoles = useMemo(
+    () => (storeRoles || []).filter(r => r.storeId === form.storeId && !r.archivedAt),
+    [storeRoles, form.storeId]
+  );
+  const useRoleDropdown = !!form.storeId && availableRoles.length > 0;
+
+  // If the manager changes the store, the previously-chosen role may not
+  // exist at the new store. Reset positionChoice; keep position text only
+  // if they were typing it freely ("__other__"), otherwise clear it too.
+  useEffect(() => {
+    setForm(f => ({
+      ...f,
+      positionChoice: "",
+      position: f.positionChoice === "__other__" ? f.position : "",
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.storeId]);
 
   const handleSave = () => {
     if (!form.firstName.trim()) { alert("First name is required."); return; }
@@ -5545,7 +5602,46 @@ function ApplicationFormModal({ brands, stores, item, onSave, onClose }) {
           </select>
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <div><label className={labelCls}>Position</label><input value={form.position} onChange={e => set("position", e.target.value)} placeholder="Barista, Manager…" className={inputCls}/></div>
+          <div>
+            <label className={labelCls}>Position</label>
+            {useRoleDropdown ? (
+              <>
+                <select
+                  value={form.positionChoice}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v === "__other__") {
+                      setForm(f => ({ ...f, positionChoice: v, position: "" }));
+                    } else {
+                      setForm(f => ({ ...f, positionChoice: v, position: v }));
+                    }
+                  }}
+                  className={inputCls}
+                >
+                  <option value="">— Pick a role —</option>
+                  {availableRoles.map(r => (
+                    <option key={r.id} value={r.name}>{r.name}</option>
+                  ))}
+                  <option value="__other__">Other (specify)</option>
+                </select>
+                {form.positionChoice === "__other__" && (
+                  <input
+                    value={form.position}
+                    onChange={e => set("position", e.target.value)}
+                    placeholder="Type the position"
+                    className={`${inputCls} mt-2`}
+                  />
+                )}
+              </>
+            ) : (
+              <input
+                value={form.position}
+                onChange={e => set("position", e.target.value)}
+                placeholder={form.storeId ? "No roles defined for this store yet" : "Pick a store first"}
+                className={inputCls}
+              />
+            )}
+          </div>
           <div>
             <label className={labelCls}>Source</label>
             <select value={form.source} onChange={e => set("source", e.target.value)} className={inputCls}>
@@ -12925,6 +13021,7 @@ const APPLY_RATE_LIMIT_MS  = 5 * 60 * 1000;   // 5 minutes between submissions
 function ApplyShell() {
   const [stores,      setStores]      = useState([]);
   const [brands,      setBrands]      = useState([]);
+  const [storeRoles,  setStoreRoles]  = useState([]);   // per-store roles, used to populate the position dropdown
   const [existingApps, setExistingApps] = useState([]);  // for duplicate detection
   const [ready,       setReady]       = useState(false);
   const [loadError,   setLoadError]   = useState(null);
@@ -12936,7 +13033,9 @@ function ApplyShell() {
   const urlParams = new URLSearchParams(window.location.search);
   const lockedStoreId = urlParams.get("store");
 
-  // Form state
+  // Form state. `position` is the saved value (whatever ends up in the DB);
+  // `positionChoice` is the dropdown selection — either a real role name or
+  // the literal "__other__" sentinel which means "show free-text input below".
   const [form, setForm] = useState({
     firstName:         "",
     lastName:          "",
@@ -12944,6 +13043,7 @@ function ApplyShell() {
     phone:             "",
     storeId:           lockedStoreId || "",
     position:          "",
+    positionChoice:    "",
     availabilityNotes: "",
     applicantNotes:    "",
     rtwDeclaration:    "",   // "yes" / "no" — declaration only, not verification
@@ -12952,17 +13052,19 @@ function ApplyShell() {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => {
-    // Load stores + brands + existing applications (last 60 days) for
-    // duplicate detection. Anonymous reads from these tables are fine
-    // since they're public data (just store names) and applications are
-    // only used for email-match checks, never displayed back.
+    // Load stores + brands + roles + existing applications. Anonymous reads
+    // are fine since RLS is off and these tables don't contain PII (the
+    // existing-apps fetch is the only one that does, but we only use it
+    // for email-match duplicate detection — never display it back).
     Promise.all([
       fetchStores(),
       fetchBrands(),
-      fetchApplications().catch(() => []),   // best-effort; duplicate check is nice-to-have
-    ]).then(([sts, brs, apps]) => {
+      fetchStoreRoles().catch(() => []),
+      fetchApplications().catch(() => []),
+    ]).then(([sts, brs, roles, apps]) => {
       setStores(sts || []);
       setBrands(brs || []);
+      setStoreRoles(roles || []);
       // Only keep recent applications to limit memory + irrelevant matches
       const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
       setExistingApps((apps || []).filter(a => new Date(a.createdAt).getTime() > cutoff));
@@ -12973,11 +13075,21 @@ function ApplyShell() {
     });
   }, []);
 
-  // Only show stores that are operational, owned, not archived, and currently hiring.
-  // For slice 2 we don't have a "currently hiring" flag yet — fall back to all
-  // operational owned stores. Phase 6+ can add a hiring toggle per store.
+  // Stores the public form can apply to: operational, owned, not archived,
+  // and currently flagged as hiring. Managers/HQ toggle is_hiring on each
+  // store via the admin StoreEditModal to pause new applications when fully
+  // staffed.
+  //
+  // Note: a manager who pre-locks a store via ?store=X but that store has
+  // is_hiring=false will fall through to the "no stores accepting" empty
+  // state below — by design, so links to closed stores stop accepting
+  // applications immediately.
   const availableStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s =>
+      !s.archivedAt &&
+      s.ownershipModel === "owned" &&
+      s.isHiring !== false   // accept true OR null (defensive vs schema-cache lag)
+    ),
     [stores]
   );
 
@@ -12987,6 +13099,27 @@ function ApplyShell() {
 
   // Multi-brand prefix in dropdown
   const showBrandPrefix = new Set(availableStores.map(s => s.brandId)).size > 1;
+
+  // Roles available for the currently-selected store. Used to populate the
+  // position dropdown. If the store has no active roles defined, we fall
+  // through to a plain text input below.
+  const availableRoles = useMemo(
+    () => (storeRoles || []).filter(r => r.storeId === form.storeId && !r.archivedAt),
+    [storeRoles, form.storeId]
+  );
+  // Whether to render the position field as a dropdown vs free text input.
+  // - Store selected with at least one role available → dropdown (with "Other (specify)" fallback)
+  // - Otherwise → free text
+  const useRoleDropdown = !!form.storeId && availableRoles.length > 0;
+
+  // When the user changes store, their previously-chosen role no longer makes
+  // sense (it belonged to a different store). Reset the position choice so
+  // they pick again. Cheap to do reactively rather than threading through
+  // every store-change handler.
+  useEffect(() => {
+    setForm(f => ({ ...f, positionChoice: "", position: f.positionChoice === "__other__" ? f.position : "" }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.storeId]);
 
   // Validate form
   const validate = () => {
@@ -13194,8 +13327,53 @@ function ApplyShell() {
             )}
           </ApplyField>
 
-          <ApplyField label="Position you're applying for *" hint="e.g. Barista, Kitchen Porter, Shift Leader">
-            <input style={applyInputStyle} value={form.position} onChange={e => set("position", e.target.value)} maxLength={60}/>
+          <ApplyField
+            label="Position you're applying for *"
+            hint={useRoleDropdown
+              ? "Pick the closest match. Choose 'Other' if your role isn't listed."
+              : "e.g. Barista, Kitchen Porter, Shift Leader"
+            }
+          >
+            {useRoleDropdown ? (
+              <>
+                <select
+                  style={applyInputStyle}
+                  value={form.positionChoice}
+                  onChange={e => {
+                    const v = e.target.value;
+                    // If user picks a real role, mirror it into `position` (the saved field).
+                    // If they pick "Other", clear `position` so they can type freely below.
+                    if (v === "__other__") {
+                      setForm(f => ({ ...f, positionChoice: v, position: "" }));
+                    } else {
+                      setForm(f => ({ ...f, positionChoice: v, position: v }));
+                    }
+                  }}
+                >
+                  <option value="">— Choose a position —</option>
+                  {availableRoles.map(r => (
+                    <option key={r.id} value={r.name}>{r.name}</option>
+                  ))}
+                  <option value="__other__">Other (specify below)</option>
+                </select>
+                {form.positionChoice === "__other__" && (
+                  <input
+                    style={{ ...applyInputStyle, marginTop: 8 }}
+                    value={form.position}
+                    onChange={e => set("position", e.target.value)}
+                    placeholder="Type the position you're applying for"
+                    maxLength={60}
+                  />
+                )}
+              </>
+            ) : (
+              <input
+                style={applyInputStyle}
+                value={form.position}
+                onChange={e => set("position", e.target.value)}
+                maxLength={60}
+              />
+            )}
           </ApplyField>
 
           <ApplyField label="When are you available to work? *" hint="e.g. Weekends only, Full-time Mon–Fri, Evenings after 5pm">
@@ -14119,7 +14297,7 @@ export default function App() {
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "hiring"         && <HiringView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+              brands={visibleBrands} stores={stores} storeRoles={storeRoles} visibleStoreIds={visibleStoreIds}
               applications={applications} currentUser={currentUser}
               onAdd={addApplication} onUpdate={updateApplicationRow}
               onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
