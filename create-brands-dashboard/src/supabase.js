@@ -1173,10 +1173,20 @@ export async function insertStoreRole(role) {
 export async function updateStoreRole(id, patch) {
   const row = appStoreRoleToDb({ ...patch, updatedAt: undefined });
   row.updated_at = new Date().toISOString();
+  // Same RLS-tolerant pattern as updateStore. Dropping .single() avoids
+  // false PGRST116 errors when PostgREST's schema cache is stale or RLS
+  // policies hide the row from SELECT-after-UPDATE. If the response array
+  // is empty, we refetch defensively before declaring failure.
   const { data, error } = await supabase
-    .from("store_roles").update(row).eq("id", id).select().single();
+    .from("store_roles").update(row).eq("id", id).select();
   if (error) throw error;
-  return dbStoreRoleToApp(data);
+  if (data && data.length > 0) return dbStoreRoleToApp(data[0]);
+  // UPDATE worked but SELECT returned nothing — fetch fresh
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("store_roles").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Role ${id} updated but could not be retrieved.`);
+  return dbStoreRoleToApp(fresh);
 }
 
 export async function archiveStoreRole(id) {

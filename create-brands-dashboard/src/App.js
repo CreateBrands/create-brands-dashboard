@@ -6856,6 +6856,7 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
   // roles that haven't been opted in get false from the DB default).
   const [advertiseForHiring, setAdvertise] = useState(!!role?.advertiseForHiring);
   const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState(null);
 
   // hourlyRate and sortOrder are no longer editable from this modal per
   // user request. We still preserve the existing values on save so we don't
@@ -6866,6 +6867,7 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
 
   const handleSave = async () => {
     if (!name.trim()) return;
+    setError(null);
     setSaving(true);
     try {
       await onSave({
@@ -6878,7 +6880,17 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
         sortOrder: preservedSortOrder,
         advertiseForHiring,
       });
-    } finally { setSaving(false); }
+    } catch (err) {
+      // Surface the error visibly. Without this, the modal silently stays
+      // open with no indication of what went wrong — the exact "Save button
+      // doesn't work" symptom that was reported. Now we show a clear message
+      // and keep the form filled so the user can retry without re-entering.
+      console.error("Role save failed:", err);
+      setError(err?.message || "Could not save. Try again.");
+      setSaving(false);
+      return;   // don't fall through to finally → keep saving=false above
+    }
+    setSaving(false);
   };
 
   return (
@@ -6894,6 +6906,11 @@ function RoleEditorModal({ role, storeId, presetDeptId, departments, onSave, onC
       }
     >
       <div className="space-y-4">
+        {error && (
+          <div className="px-3 py-2 rounded-lg bg-red-950/40 border border-red-900 text-red-300 text-xs">
+            {error}
+          </div>
+        )}
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Role name *</label>
           <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Head Chef, Barista, Server" className={fieldCls}/>
