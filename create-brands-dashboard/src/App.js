@@ -6092,6 +6092,7 @@ function EmployeeProfileView({
       <div className="flex gap-1 border-b border-slate-800">
         {[
           { key: "personal",    label: "Personal & HR" },
+          { key: "job",         label: "Job Assignment" },
           { key: "application", label: linkedApp ? "Linked Application" : "Linked Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
         ].map(t => (
@@ -6116,6 +6117,17 @@ function EmployeeProfileView({
           derivedHireDate={derivedHireDate}
           linkedApp={linkedApp}
           onSave={handleSaveHr} saving={savingHr}
+        />
+      )}
+
+      {tab === "job" && (
+        <JobAssignmentTab
+          employee={employee}
+          stores={stores}
+          storeRoles={storeRoles}
+          storeDepartments={storeDepartments}
+          opsTeam={opsTeam}
+          onUpdateEmployee={onUpdateEmployee}
         />
       )}
 
@@ -6223,6 +6235,273 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
         <button
           onClick={onSave}
           disabled={saving}
+          className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Tab 1.5 — Job Assignment (slice 6 follow-up).
+// Edits the "operational" fields: which store(s) the employee works at,
+// their role within the store's structure, derived department, hourly rate,
+// management flag, kiosk PIN, and avatar colour. Lifted out of the existing
+// edit modal so the employee profile becomes the canonical view.
+//
+// PIN uniqueness check: PINs must be globally unique across the org so the
+// kiosk can identify staff from PIN alone (Q6 from kiosk auth design).
+// Validated here with a soft warning rather than a hard block — the save
+// will fail with a DB-level uniqueness error if the user persists.
+function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsTeam, onUpdateEmployee }) {
+  const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
+
+  // Only owned, non-archived stores — same rule as the edit modal.
+  // Franchise / JV stores excluded; if you ever need staff there, separate
+  // workflow.
+  const allowedStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    [stores]
+  );
+
+  const [form, setFormState] = useState({
+    primaryStoreId: employee.storeIds?.[0] || "",
+    alsoStoreIds:   (employee.storeIds || []).slice(1),
+    roleId:         employee.roleId || "",
+    roleText:       employee.role || "",      // free-text fallback if no roleId match
+    deptText:       employee.department || "",
+    hourlyRate:     employee.hourlyRate || 0,
+    pin:            employee.pin || "",
+    color:          employee.color || COLORS[0],
+    // We don't expose isManagement here because it's derived from the role
+    // (store_roles.is_management) — editing it on the employee record would
+    // diverge from the source of truth. If a manager wants to change someone
+    // to a management role, they pick a different role.
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const [saving, setSaving] = useState(false);
+
+  // Reset form when the employee changes (e.g. navigating between profiles)
+  useEffect(() => {
+    setFormState({
+      primaryStoreId: employee.storeIds?.[0] || "",
+      alsoStoreIds:   (employee.storeIds || []).slice(1),
+      roleId:         employee.roleId || "",
+      roleText:       employee.role || "",
+      deptText:       employee.department || "",
+      hourlyRate:     employee.hourlyRate || 0,
+      pin:            employee.pin || "",
+      color:          employee.color || COLORS[0],
+    });
+  }, [employee?.id]);
+
+  // Roles available for the primary store. We filter by store so manager
+  // doesn't accidentally assign a role from a different store's structure.
+  const rolesForStore = useMemo(
+    () => (storeRoles || []).filter(r => r.storeId === form.primaryStoreId && !r.archivedAt),
+    [storeRoles, form.primaryStoreId]
+  );
+
+  // When role is picked, auto-fill department from the role's department_id.
+  const selectedRole = rolesForStore.find(r => r.id === form.roleId);
+  const derivedDept  = selectedRole
+    ? storeDepartments.find(d => d.id === selectedRole.departmentId)
+    : null;
+
+  // PIN duplicate check across the whole org (excluding self).
+  // Surfaced as a warning, not a hard block — the DB-level uniqueness
+  // constraint (if any) will catch genuine attempts to duplicate.
+  const pinConflict = form.pin && (opsTeam || []).find(
+    m => m.id !== employee.id && m.pin && m.pin === form.pin
+  );
+
+  const handleSave = async () => {
+    if (!form.primaryStoreId) {
+      alert("Please pick a primary store.");
+      return;
+    }
+    setSaving(true);
+    try {
+      // Combine primary + also stores. De-duplicate in case manager picked
+      // the primary in the "also" list too.
+      const allStoreIds = [
+        form.primaryStoreId,
+        ...form.alsoStoreIds.filter(id => id && id !== form.primaryStoreId),
+      ];
+
+      // Status logic: if this employee was "pending_setup" and now has a
+      // role assigned, flip to "active". If they had a role and we're just
+      // updating other fields, keep current status. Don't touch archived.
+      const willHaveRole = !!(selectedRole?.id || form.roleText.trim());
+      const newStatus = employee.status === "pending_setup" && willHaveRole
+        ? "active"
+        : undefined;  // undefined = "don't change" via partial mapper
+
+      // Derive brandId from primary store (legacy field still used in some
+      // brand-keyed reports).
+      const primary = allowedStores.find(s => s.id === form.primaryStoreId);
+      const newBrandId = primary?.brandId || employee.brandId;
+
+      await onUpdateEmployee({
+        id:           employee.id,
+        brandId:      newBrandId,
+        storeIds:     allStoreIds,
+        roleId:       selectedRole?.id || null,
+        departmentId: derivedDept?.id || null,
+        role:         selectedRole?.name || form.roleText.trim() || "",
+        department:   derivedDept?.name || form.deptText.trim() || "",
+        hourlyRate:   parseFloat(form.hourlyRate) || 0,
+        pin:          form.pin || "",
+        color:        form.color,
+        ...(newStatus ? { status: newStatus } : {}),
+      });
+    } catch (err) {
+      console.error("Job assignment save failed:", err);
+      alert(`Could not save: ${err?.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-4 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      {employee.status === "pending_setup" && (
+        <div className="bg-amber-950/30 border border-amber-900/50 rounded-xl px-3 py-2 text-xs text-amber-300">
+          <span className="font-semibold">⚠ Pending setup.</span> Fill in role and hourly rate, then save — status will flip to active.
+        </div>
+      )}
+
+      <div>
+        <label className={labelCls}>Primary store *</label>
+        <select value={form.primaryStoreId} onChange={e => set("primaryStoreId", e.target.value)} className={inputCls}>
+          <option value="">— Pick a store —</option>
+          {allowedStores.map(s => (
+            <option key={s.id} value={s.id}>{s.shortName || s.name}</option>
+          ))}
+        </select>
+        <div className="text-[10px] text-slate-600 mt-1">
+          The store this employee is primarily based at. Changing this also changes which roles are available below.
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>Also works at</label>
+        <div className="space-y-1.5">
+          {allowedStores
+            .filter(s => s.id !== form.primaryStoreId)
+            .map(s => (
+              <label key={s.id} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.alsoStoreIds.includes(s.id)}
+                  onChange={e => {
+                    if (e.target.checked) {
+                      set("alsoStoreIds", [...form.alsoStoreIds, s.id]);
+                    } else {
+                      set("alsoStoreIds", form.alsoStoreIds.filter(id => id !== s.id));
+                    }
+                  }}
+                  className="rounded"
+                />
+                {s.shortName || s.name}
+              </label>
+            ))}
+        </div>
+        {allowedStores.length <= 1 && (
+          <div className="text-[10px] text-slate-600 mt-1">Only one store available — this employee can't be a floater.</div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Role *</label>
+          {rolesForStore.length === 0 ? (
+            <input
+              value={form.roleText}
+              onChange={e => set("roleText", e.target.value)}
+              placeholder="e.g. Barista"
+              className={inputCls}
+            />
+          ) : (
+            <select
+              value={form.roleId}
+              onChange={e => set("roleId", e.target.value)}
+              className={inputCls}
+            >
+              <option value="">— Pick a role —</option>
+              {rolesForStore.map(r => (
+                <option key={r.id} value={r.id}>{r.name}{r.isManagement ? " (mgmt)" : ""}</option>
+              ))}
+            </select>
+          )}
+          {rolesForStore.length === 0 && form.primaryStoreId && (
+            <div className="text-[10px] text-amber-400 mt-1">⚠ No roles defined for this store. Add roles in Structure tab first.</div>
+          )}
+        </div>
+        <div>
+          <label className={labelCls}>Department</label>
+          <div className={`${inputCls} text-slate-500`}>
+            {derivedDept?.name || form.deptText || "— Auto-set from role —"}
+          </div>
+          <div className="text-[10px] text-slate-600 mt-1">Derived from role's department.</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Hourly rate (£)</label>
+          <input
+            type="number"
+            step="0.25"
+            min="0"
+            value={form.hourlyRate}
+            onChange={e => set("hourlyRate", e.target.value)}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Kiosk PIN</label>
+          <input
+            value={form.pin}
+            onChange={e => set("pin", e.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="4–6 digits"
+            inputMode="numeric"
+            className={inputCls}
+          />
+          {pinConflict && (
+            <div className="text-[10px] text-amber-400 mt-1">
+              ⚠ This PIN is already used by {pinConflict.firstName} {pinConflict.lastName}. PINs must be unique.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>Avatar colour</label>
+        <div className="flex gap-2">
+          {COLORS.map(c => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => set("color", c)}
+              className={`w-8 h-8 rounded-lg border-2 transition-all ${
+                form.color === c ? "border-white scale-110" : "border-transparent opacity-70 hover:opacity-100"
+              }`}
+              style={{ background: c }}
+              title={c}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="flex justify-end pt-2">
+        <button
+          onClick={handleSave}
+          disabled={saving || !form.primaryStoreId}
           className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save changes"}
