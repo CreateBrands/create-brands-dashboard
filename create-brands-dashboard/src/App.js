@@ -10,7 +10,7 @@ import {
   fetchTempUnits, upsertTempUnit, removeTempUnit,
   fetchCleaningTasks, upsertCleaningTask, removeCleaningTask,
   fetchAssignments, upsertAssignment, removeAssignment,
-  fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember,
+  fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember, updateOpsTeamMember,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -15562,6 +15562,16 @@ export default function App() {
   const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved"); return s;}, [showToast]);
   const updateOpsTeam = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  // Slice 6 follow-up — true partial update for the profile-page tabs.
+  // The profile passes only the fields it wants to change; this preserves
+  // everything else (brand_id, role, storeIds, etc.) instead of failing
+  // NOT NULL constraints like the upsert path would.
+  const patchOpsTeam = useCallback(async (id, patch) => {
+    const s = await updateOpsTeamMember(id, patch);
+    setOpsTeam(ts => ts.map(x => x.id === s.id ? s : x));
+    showToast("Updated");
+    return s;
+  }, [showToast]);
   const deleteOpsTeam = useCallback(async id=>{await removeOpsTeamMember(id);setOpsTeam(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const handleTempLog     = useCallback(async l=>{const s=await insertTempLog(l);setTempLogs(ls=>[s,...ls]);}, []);
   const handleDeliveryAdd = useCallback(async d=>{const s=await insertDelivery(d);setDeliveries(ds=>[s,...ds]);}, []);
@@ -15901,7 +15911,7 @@ export default function App() {
               brands={visibleBrands} stores={stores}
               storeRoles={storeRoles} storeDepartments={storeDepartments}
               opsTeam={opsTeam} currentUser={currentUser}
-              onUpdateEmployee={updateOpsTeam}
+              onUpdateEmployee={patchOpsTeam}
               onClose={closeEmployeeProfile}
             />}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView

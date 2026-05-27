@@ -225,6 +225,38 @@ export async function upsertOpsTeamMember(m) {
   if (error) throw error;
   return dbOpsTeamToApp(data);
 }
+
+// True partial-update for existing employees. Used by the slice 6 profile
+// page tabs (Personal & HR, Job Assignment) which only want to touch
+// SOME columns and leave others alone.
+//
+// Why not use upsertOpsTeamMember? Supabase's upsert enforces all NOT NULL
+// constraints because it doesn't know in advance whether the row exists.
+// Sending a partial payload like { hire_date, email, phone } without
+// brand_id would fail because brand_id is NOT NULL — even though we're
+// really updating an existing row that already has a brand_id.
+//
+// Uses the same RLS-tolerant pattern as updateStoreRole / updateApplication
+// (drops .single(), refetches if SELECT-after-UPDATE returns empty).
+export async function updateOpsTeamMember(id, patch) {
+  if (!id) throw new Error("id required");
+  const row = appOpsTeamToDb({ ...patch });
+  // Don't try to UPDATE the primary key itself
+  delete row.id;
+  const { data, error } = await supabase
+    .from("ops_team")
+    .update(row)
+    .eq("id", id)
+    .select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbOpsTeamToApp(data[0]);
+  // UPDATE worked but SELECT returned nothing — refetch defensively
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("ops_team").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Employee ${id} updated but could not be retrieved.`);
+  return dbOpsTeamToApp(fresh);
+}
 export async function removeOpsTeamMember(id) {
   const { error } = await supabase.from("ops_team").delete().eq("id", id);
   if (error) throw error;
