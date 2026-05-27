@@ -15566,7 +15566,16 @@ export default function App() {
   // The profile passes only the fields it wants to change; this preserves
   // everything else (brand_id, role, storeIds, etc.) instead of failing
   // NOT NULL constraints like the upsert path would.
-  const patchOpsTeam = useCallback(async (id, patch) => {
+  //
+  // Accepts EITHER (id, patch) or a single object with .id — callers in
+  // PersonalHrTab and JobAssignmentTab already use the single-object form.
+  const patchOpsTeam = useCallback(async (idOrObj, maybePatch) => {
+    const id    = typeof idOrObj === "string" ? idOrObj : idOrObj?.id;
+    const patch = typeof idOrObj === "string" ? maybePatch : (() => {
+      const { id: _strip, ...rest } = idOrObj || {};
+      return rest;
+    })();
+    if (!id) throw new Error("patchOpsTeam: missing id");
     const s = await updateOpsTeamMember(id, patch);
     setOpsTeam(ts => ts.map(x => x.id === s.id ? s : x));
     showToast("Updated");
