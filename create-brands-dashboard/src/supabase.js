@@ -426,6 +426,9 @@ function appOpsTeamToDb(m) {
   // Slice 6 — explicit hire date. Manager can override; default-derived
   // from linked job_application.archived_at in the profile UI.
   if (m.hireDate      !== undefined) row.hire_date     = m.hireDate || null;
+  // Slice 6 follow-up — pay type. The hourly_rate column is reused as the
+  // "amount" regardless of type, so no separate "pay_amount" column.
+  if (m.payType       !== undefined) row.pay_type      = m.payType || "hourly";
   return row;
 }
 function dbOpsTeamToApp(m) {
@@ -449,6 +452,7 @@ function dbOpsTeamToApp(m) {
     status:      m.status || "active",
     archivedAt:  m.archived_at || null,
     hireDate:    m.hire_date || null,
+    payType:     m.pay_type || "hourly",
   };
 }
 

@@ -5265,6 +5265,56 @@ function isUnder18(dobString) {
   return age < 18;
 }
 
+// Slice 6 follow-up — pay type metadata. Used by the Job Assignment tab,
+// edit modal, and any display that needs to render an employee's pay.
+//
+// `unitLabel` is what shows in the rate input ("£/hour", "£/month").
+// `suffix` shows when displaying a current rate ("£15.00/hour", "£3,000/month").
+// Amounts are still stored in the hourly_rate column regardless of type;
+// the column is "amount in whatever unit pay_type says".
+const PAY_TYPE_OPTIONS = [
+  { value: "hourly",  label: "Hourly",          unitLabel: "£/hour",  suffix: "/hour",  step: "0.25", placeholder: "e.g. 12.50" },
+  { value: "monthly", label: "Monthly salary",  unitLabel: "£/month", suffix: "/month", step: "50",   placeholder: "e.g. 2500"  },
+  { value: "annual",  label: "Annual salary",   unitLabel: "£/year",  suffix: "/year",  step: "500",  placeholder: "e.g. 32000" },
+];
+
+function getPayTypeMeta(payType) {
+  return PAY_TYPE_OPTIONS.find(o => o.value === payType) || PAY_TYPE_OPTIONS[0];
+}
+
+// Format an employee's pay for display. e.g. £12.50/hour, £2,500/month, —
+function formatPayDisplay(amount, payType) {
+  if (!amount || amount <= 0) return "—";
+  const meta = getPayTypeMeta(payType);
+  // Hourly shows 2 decimals; salary uses thousands separator
+  const formatted = payType === "hourly"
+    ? `£${amount.toFixed(2)}`
+    : `£${amount.toLocaleString("en-GB", { maximumFractionDigits: 0 })}`;
+  return `${formatted}${meta.suffix}`;
+}
+
+// For schedule cost calculations: returns a per-hour cost figure regardless
+// of how the employee is paid. Hourly = the rate directly. Monthly =
+// approximate per-hour cost assuming UK standard ~173 hours/month (40h × 52w / 12m).
+// Annual = same but ÷ 12 first.
+//
+// IMPORTANT: this is for ESTIMATION only. Actual labour cost for a salaried
+// employee is fixed regardless of hours; this approximation is what they
+// COST PER HOUR ON AVERAGE so the schedule view's "cost" totals remain
+// useful. UI should be clear that for salaried staff this is an estimate.
+const HOURS_PER_MONTH_APPROX = 173;  // UK standard FTE
+function effectiveHourlyRate(member) {
+  if (!member) return 0;
+  const amount = member.hourlyRate || 0;
+  if (amount <= 0) return 0;
+  switch (member.payType) {
+    case "monthly": return amount / HOURS_PER_MONTH_APPROX;
+    case "annual":  return amount / 12 / HOURS_PER_MONTH_APPROX;
+    case "hourly":
+    default:        return amount;
+  }
+}
+
 
 function HiringView({
   brands, stores, storeRoles, storeDepartments, visibleStoreIds,
@@ -6082,7 +6132,7 @@ function EmployeeProfileView({
               <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Role</div><div className="text-slate-200 mt-0.5">{roleLabel || "—"}</div></div>
               <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Department</div><div className="text-slate-200 mt-0.5">{deptLabel || "—"}</div></div>
               <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Store</div><div className="text-slate-200 mt-0.5">{primaryStore ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}` : "—"}</div></div>
-              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Hourly Rate</div><div className="text-slate-200 mt-0.5">{employee.hourlyRate > 0 ? `£${employee.hourlyRate.toFixed(2)}` : "—"}</div></div>
+              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Pay</div><div className="text-slate-200 mt-0.5">{formatPayDisplay(employee.hourlyRate, employee.payType)}</div></div>
             </div>
           </div>
         </div>
@@ -6271,6 +6321,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
     roleId:         employee.roleId || "",
     roleText:       employee.role || "",      // free-text fallback if no roleId match
     deptText:       employee.department || "",
+    payType:        employee.payType || "hourly",
     hourlyRate:     employee.hourlyRate || 0,
     pin:            employee.pin || "",
     color:          employee.color || COLORS[0],
@@ -6290,6 +6341,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
       roleId:         employee.roleId || "",
       roleText:       employee.role || "",
       deptText:       employee.department || "",
+      payType:        employee.payType || "hourly",
       hourlyRate:     employee.hourlyRate || 0,
       pin:            employee.pin || "",
       color:          employee.color || COLORS[0],
@@ -6351,6 +6403,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
         departmentId: derivedDept?.id || null,
         role:         selectedRole?.name || form.roleText.trim() || "",
         department:   derivedDept?.name || form.deptText.trim() || "",
+        payType:      form.payType,
         hourlyRate:   parseFloat(form.hourlyRate) || 0,
         pin:          form.pin || "",
         color:        form.color,
@@ -6453,16 +6506,37 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={labelCls}>Hourly rate (£)</label>
+          <label className={labelCls}>Pay type</label>
+          <select
+            value={form.payType}
+            onChange={e => set("payType", e.target.value)}
+            className={inputCls}
+          >
+            {PAY_TYPE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <div className="text-[10px] text-slate-600 mt-1">
+            {form.payType === "hourly"
+              ? "Paid per hour worked. Standard for shift staff."
+              : "Fixed pay regardless of hours. Standard for salaried managers."}
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Amount ({getPayTypeMeta(form.payType).unitLabel})</label>
           <input
             type="number"
-            step="0.25"
+            step={getPayTypeMeta(form.payType).step}
             min="0"
             value={form.hourlyRate}
             onChange={e => set("hourlyRate", e.target.value)}
+            placeholder={getPayTypeMeta(form.payType).placeholder}
             className={inputCls}
           />
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={labelCls}>Kiosk PIN</label>
           <input
@@ -6477,6 +6551,9 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
               ⚠ This PIN is already used by {pinConflict.firstName} {pinConflict.lastName}. PINs must be unique.
             </div>
           )}
+        </div>
+        <div>
+          {/* Empty cell to keep grid balanced (formerly held hourly rate) */}
         </div>
       </div>
 
@@ -7217,6 +7294,7 @@ function OpsTeamMemberFormModal({
     lastName:     item?.lastName     || prefillApplication?.lastName     || "",
     nickname:     item?.nickname     || "",
     pin:          item?.pin          || "",
+    payType:      item?.payType      || "hourly",
     hourlyRate:   item?.hourlyRate   || 0,
     primaryStoreId: initialPrimary,
     alsoStoreIds:   initialAlsoAt,
@@ -7356,6 +7434,7 @@ function OpsTeamMemberFormModal({
       lastName:  form.lastName.trim(),
       nickname:  form.nickname.trim(),
       pin:       form.pin,
+      payType:   form.payType || "hourly",
       hourlyRate: parseFloat(form.hourlyRate) || 0,
       color:     item?.color || COLORS[Math.floor(Math.random() * COLORS.length)],
       brandId,
@@ -7553,20 +7632,40 @@ function OpsTeamMemberFormModal({
           </div>
         )}
 
-        {/* PIN + rate */}
+        {/* PIN + pay type + rate */}
         <div className="grid grid-cols-2 gap-4">
           <div><label className={labelCls}>PIN (4–6 digits)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="e.g. 1234" className={inputCls}/></div>
           <div>
-            <label className={labelCls}>Hourly Rate (£)</label>
-            <input type="number" step="0.01" min="0" value={form.hourlyRate} onChange={e => set("hourlyRate", e.target.value)} placeholder="e.g. 11.44" className={inputCls}/>
-            {selectedRole?.hourlyRate != null && Number(form.hourlyRate) !== Number(selectedRole.hourlyRate) && (
-              <div className="text-[10px] text-slate-600 mt-1">
-                Role default: £{selectedRole.hourlyRate.toFixed(2)}/hr
-                {" — "}
-                <button onClick={() => set("hourlyRate", selectedRole.hourlyRate)} className="text-indigo-400 hover:text-indigo-300 underline">use role default</button>
-              </div>
-            )}
+            <label className={labelCls}>Pay type</label>
+            <select
+              value={form.payType}
+              onChange={e => set("payType", e.target.value)}
+              className={inputCls}
+            >
+              {PAY_TYPE_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
+        </div>
+        <div>
+          <label className={labelCls}>Amount ({getPayTypeMeta(form.payType).unitLabel})</label>
+          <input
+            type="number"
+            step={getPayTypeMeta(form.payType).step}
+            min="0"
+            value={form.hourlyRate}
+            onChange={e => set("hourlyRate", e.target.value)}
+            placeholder={getPayTypeMeta(form.payType).placeholder}
+            className={inputCls}
+          />
+          {form.payType === "hourly" && selectedRole?.hourlyRate != null && Number(form.hourlyRate) !== Number(selectedRole.hourlyRate) && (
+            <div className="text-[10px] text-slate-600 mt-1">
+              Role default: £{selectedRole.hourlyRate.toFixed(2)}/hr
+              {" — "}
+              <button onClick={() => set("hourlyRate", selectedRole.hourlyRate)} className="text-indigo-400 hover:text-indigo-300 underline">use role default</button>
+            </div>
+          )}
         </div>
       </div>
     </Modal>
@@ -11520,7 +11619,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
       slots.forEach(s => {
         const h = calcShiftHours(s.startTime, s.endTime);
         hours += h;
-        cost += h * (member.hourlyRate || 0);
+        cost += h * effectiveHourlyRate(member);
       });
     });
     return { member, hours, cost };
@@ -11534,7 +11633,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
       slots.forEach(s => {
         const h = calcShiftHours(s.startTime, s.endTime);
         hours += h;
-        cost += h * (m.hourlyRate || 0);
+        cost += h * effectiveHourlyRate(m);
       });
     });
     let actualHours = 0, actualCost = 0;
@@ -11902,7 +12001,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
                           </div>
                           <div className="text-xs text-slate-600">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h</div>
                           {conflict && <div className="text-xs text-red-400 font-semibold mt-1">⚠ {conflict==="unavailable"?"Employee unavailable":"Outside availability"}</div>}
-                          {showCosts && member?.hourlyRate > 0 && <div className="text-xs text-emerald-400 font-semibold mt-1">{fmtMoney(hrs * member.hourlyRate)}</div>}
+                          {showCosts && member?.hourlyRate > 0 && <div className="text-xs text-emerald-400 font-semibold mt-1">{fmtMoney(hrs * effectiveHourlyRate(member))}</div>}
                         </div>
                       );
                     })
@@ -12103,7 +12202,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
                               {s.notes&&<div className="text-xs text-slate-500 italic mt-0.5">{s.notes}</div>}
                             </div>
                             {showCosts && member?.hourlyRate > 0 && (
-                              <div className="text-xs text-emerald-400 font-semibold flex-shrink-0">{fmtMoney(hrs * member.hourlyRate)}</div>
+                              <div className="text-xs text-emerald-400 font-semibold flex-shrink-0">{fmtMoney(hrs * effectiveHourlyRate(member))}</div>
                             )}
                             {!editLocked && (
                               <div className="flex items-center gap-1.5 flex-shrink-0">
