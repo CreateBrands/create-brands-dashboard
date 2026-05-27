@@ -8046,6 +8046,10 @@ function OpsSettingsView({
   const [ctModal, setCtModal] = useState(null);
   const [tmModal, setTmModal] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
+  // Slice 6 follow-up — filter the team list to only employees needing
+  // setup completion. Toggleable banner. Default off so list shows everyone.
+  // Auto-enabled if user navigated here via the sidebar badge (deep-link).
+  const [showOnlyPending, setShowOnlyPending] = useState(false);
   // "Structure" combines departments + roles in one screen since roles belong
   // to departments. Listed first because it's the per-store identity that
   // everything else hangs off of.
@@ -8136,8 +8140,52 @@ function OpsSettingsView({
             currentUser={currentUser}
           />
           <div className="border-t border-slate-700 pt-4 space-y-4">
+
+          {/* Slice 6 follow-up — pending-setup banner.
+              Counts only employees the current user can affect (matches
+              the scope used for the sidebar badge in App.js). Shows nothing
+              when zero pending — silent good state. */}
+          {(() => {
+            const isHq = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+            const pending = opsTeam.filter(m => {
+              if (m.status !== "pending_setup" || m.archivedAt) return false;
+              if (isHq) return true;
+              const primary = m.storeIds?.[0];
+              return primary && (currentUser?.storeIds || []).includes(primary);
+            });
+            if (pending.length === 0) return null;
+            return (
+              <div className="bg-amber-950/30 border border-amber-900/50 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <AlertCircle size={18} className="text-amber-400 flex-shrink-0"/>
+                  <div className="min-w-0">
+                    <div className="text-sm text-amber-200 font-semibold">
+                      {pending.length} {pending.length === 1 ? "employee needs" : "employees need"} setup completion
+                    </div>
+                    <div className="text-[11px] text-amber-300/70 mt-0.5">
+                      Hired but missing role, department, or hourly rate. Click to complete each one.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowOnlyPending(v => !v)}
+                  className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    showOnlyPending
+                      ? "bg-amber-700 text-amber-100 hover:bg-amber-600"
+                      : "bg-amber-900/50 text-amber-200 hover:bg-amber-900 border border-amber-800"
+                  }`}
+                >
+                  {showOnlyPending ? "Show all" : "Show only pending"}
+                </button>
+              </div>
+            );
+          })()}
+
           <div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>
-          {opsTeam.map(m => {
+          {(showOnlyPending
+            ? opsTeam.filter(m => m.status === "pending_setup" && !m.archivedAt)
+            : opsTeam
+          ).map(m => {
             const brand = brands.find(b => b.id === m.brandId);
             // Prefer the per-store assignment if present; fall back to brand
             // for legacy rows.
@@ -15410,6 +15458,24 @@ export default function App() {
     return (currentUser.storeIds || []).includes(a.storeId);
   }).length;
 
+  // Slice 6 follow-up — pending-setup count. Employees hired through the
+  // slice 5 flow without role/dept/wages assigned get status="pending_setup"
+  // (set by OpsTeamMemberFormModal when hire-flow save has blank role).
+  // Surface this so manager remembers to complete setup; without surfacing
+  // these employees can sit indefinitely in incomplete state.
+  //
+  // Scope rules match hiring badge: HQ/owner sees all; manager sees only
+  // employees primarily based at one of their stores. We check the FIRST
+  // store in storeIds (the "primary" per modal save logic) so floater staff
+  // assigned to a manager's store as secondary don't trigger their badge.
+  const pendingSetupCount = opsTeam.filter(m => {
+    if (m.status !== "pending_setup") return false;
+    if (m.archivedAt) return false;
+    if (isHqOrAbove(currentUser.role)) return true;
+    const primary = m.storeIds?.[0];
+    return primary && (currentUser.storeIds || []).includes(primary);
+  }).length;
+
   // Nav items declared with optional `roles` array. If omitted, all roles see it.
   // Filtered by current user's role; empty groups dropped so the sidebar doesn't
   // render an orphan header. Recomputed every render — cheap, no hook needed.
@@ -15440,7 +15506,7 @@ export default function App() {
       { key: "ops-audit",      label: "Audit Trail", icon: ScrollText },
     ]},
     { group: "SETUP", items: [
-      { key: "ops-settings", label: "Ops Setup", icon: Settings },
+      { key: "ops-settings", label: "Ops Setup", icon: Settings, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
       { key: "admin",        label: "Admin",     icon: Users, roles: ["owner"] },
     ]},
   ];
