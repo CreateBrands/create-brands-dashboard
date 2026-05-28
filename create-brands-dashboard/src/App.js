@@ -40,6 +40,9 @@ import {
   fetchEmployeeNotes, addEmployeeNote, fetchLinkedApplication,
   // Slice 6 follow-up: pay history
   fetchPayHistory, addPayHistory,
+  // Slice 6 follow-up: certifications
+  fetchEmployeeCertifications, addEmployeeCertification,
+  updateEmployeeCertification, archiveEmployeeCertification,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5317,6 +5320,49 @@ function effectiveHourlyRate(member) {
   }
 }
 
+// Slice 6 follow-up — common UK hospitality certifications.
+// Q3 = (a): hardcoded list. Manager picks from these; the cert_type is the
+// stable identifier in the DB, the label is what's shown.
+//
+// Expanding the list later doesn't break old records — each saved
+// certification snapshots its `name` so even if we rename or remove types,
+// historical entries keep displaying correctly.
+//
+// `defaultValidityMonths` is an optional default — when manager picks a
+// type, we auto-fill the expires_date to obtained_date + this many months.
+// They can override before saving.
+const CERTIFICATION_TYPES = [
+  { value: "food_hygiene_lvl_1", label: "Food Hygiene Level 1",          defaultValidityMonths: 36 },
+  { value: "food_hygiene_lvl_2", label: "Food Hygiene Level 2",          defaultValidityMonths: 36 },
+  { value: "food_hygiene_lvl_3", label: "Food Hygiene Level 3",          defaultValidityMonths: 36 },
+  { value: "allergens",          label: "Allergens Training",            defaultValidityMonths: 36 },
+  { value: "first_aid_work",     label: "First Aid at Work",             defaultValidityMonths: 36 },
+  { value: "first_aid_emerg",    label: "Emergency First Aid at Work",   defaultValidityMonths: 36 },
+  { value: "personal_license",   label: "Personal License (Alcohol)",    defaultValidityMonths: null  /* generally lifetime in UK */ },
+  { value: "manual_handling",    label: "Manual Handling",               defaultValidityMonths: 12 },
+  { value: "fire_safety",        label: "Fire Safety / Fire Marshal",    defaultValidityMonths: 12 },
+  { value: "health_safety",      label: "Health & Safety General",       defaultValidityMonths: 36 },
+  { value: "haccp",              label: "HACCP",                         defaultValidityMonths: 36 },
+  { value: "other",              label: "Other (specify in name)",       defaultValidityMonths: null },
+];
+
+function getCertTypeMeta(typeValue) {
+  return CERTIFICATION_TYPES.find(t => t.value === typeValue) || CERTIFICATION_TYPES[CERTIFICATION_TYPES.length - 1];
+}
+
+// Returns "valid" / "expiring" (within 30 days) / "expired" / "no_expiry"
+// for a certification. Drives the color badge in the cert list.
+function getCertExpiryStatus(expiresDate) {
+  if (!expiresDate) return "no_expiry";
+  const exp = new Date(expiresDate);
+  if (isNaN(exp.getTime())) return "no_expiry";
+  const now = new Date();
+  const daysUntil = Math.floor((exp - now) / (1000 * 60 * 60 * 24));
+  if (daysUntil < 0) return "expired";
+  if (daysUntil <= 30) return "expiring";
+  return "valid";
+}
+
 
 function HiringView({
   brands, stores, storeRoles, storeDepartments, visibleStoreIds,
@@ -5464,6 +5510,15 @@ function HiringView({
   const [hireBusy, setHireBusy]             = useState(false);
   const [hireError, setHireError]           = useState(null);
 
+  // Slice 6 follow-up — magic-link retry state. We track which application
+  // is currently being retried so we can disable just THAT button (not all
+  // of them) and show a short-lived "Sent" / "Failed" indicator inline.
+  //   retryingId: id of the app currently in-flight (string | null)
+  //   retryResult: { id, ok, message } for the last completed retry, shown
+  //                briefly next to the button as feedback
+  const [retryingId,  setRetryingId]  = useState(null);
+  const [retryResult, setRetryResult] = useState(null);  // { id, ok, message } | null
+
   // Slice 5 rule: only manager-or-above can transition to hired. We check
   // the current user's role against the visibility helper. Staff can still
   // do other transitions (reviewing, in_training, reject, withdraw).
@@ -5569,6 +5624,45 @@ function HiringView({
       setHireBusy(false);
     }
   };
+
+  // Slice 6 follow-up — retry sending the candidate's magic-link email.
+  // Same code path as the initial send during /apply submission. If the
+  // initial send failed (typically Supabase free-tier rate limit), the
+  // manager can click "Retry" to attempt again.
+  //
+  // Behavior:
+  //   - Disables only THIS application's button while in-flight
+  //   - Updates email_link_status in DB (sent / failed)
+  //   - Shows a short-lived inline result ("Sent" / "Failed: rate limit")
+  //   - Triggers parent refetch so the badge updates on success
+  const handleRetryLink = useCallback(async (app) => {
+    if (!app?.email) {
+      alert("Cannot retry — application has no email address.");
+      return;
+    }
+    setRetryingId(app.id);
+    setRetryResult(null);
+    try {
+      const result = await sendCandidateMagicLink(app.email);
+      if (result.ok) {
+        await setApplicationEmailStatus(app.id, "sent");
+        setRetryResult({ id: app.id, ok: true, message: "Sent" });
+      } else {
+        await setApplicationEmailStatus(app.id, "failed", result.error);
+        setRetryResult({ id: app.id, ok: false, message: result.error || "Failed" });
+      }
+      // Trigger parent refresh so the badge updates
+      try { await onUpdate(app.id, {}); } catch {}
+    } catch (err) {
+      console.error("Retry link unexpected error:", err);
+      setRetryResult({ id: app.id, ok: false, message: err?.message || "Unexpected error" });
+    } finally {
+      setRetryingId(null);
+      // Clear the result indicator after a few seconds so it doesn't
+      // linger and look like the next click also failed
+      setTimeout(() => setRetryResult(r => r?.id === app.id ? null : r), 4000);
+    }
+  }, [onUpdate]);
 
   const allowedStores = useMemo(
     () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
@@ -5818,8 +5912,8 @@ function HiringView({
                       </div>
                     )}
 
-                    {/* Edit / Delete */}
-                    <div className="flex gap-2 pt-1">
+                    {/* Edit / Delete / Retry link */}
+                    <div className="flex flex-wrap gap-2 pt-1">
                       <button onClick={(e) => { e.stopPropagation(); setEditItem(app); setShowForm(true); }}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">
                         <Edit size={11}/> Edit details
@@ -5828,6 +5922,40 @@ function HiringView({
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-500 text-xs font-semibold hover:bg-red-950/40 hover:text-red-300">
                         <Trash2 size={11}/> Delete
                       </button>
+                      {/* Slice 6 follow-up — retry magic link.
+                          Shown for applications with an email regardless of
+                          status (per Q2=a: hired candidates may still want
+                          portal access). Only useful when status is "failed"
+                          OR "pending" stale — but we don't restrict, since
+                          a manager might want to "re-send" a link for any
+                          reason (e.g. candidate lost the email). */}
+                      {app.email && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRetryLink(app); }}
+                          disabled={retryingId === app.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50"
+                          title={app.emailLinkStatus === "failed"
+                            ? `Last attempt failed: ${app.emailLinkError || "unknown reason"}. Click to retry.`
+                            : "Re-send the candidate's portal login link."}
+                        >
+                          {retryingId === app.id
+                            ? "Sending…"
+                            : app.emailLinkStatus === "failed"
+                              ? <>✉ Retry link</>
+                              : <>✉ Re-send link</>
+                          }
+                        </button>
+                      )}
+                      {/* Inline result indicator. Auto-clears after 4s. */}
+                      {retryResult?.id === app.id && (
+                        <span className={`flex items-center px-2 py-1 rounded-lg text-xs font-semibold ${
+                          retryResult.ok
+                            ? "bg-emerald-950/40 text-emerald-300"
+                            : "bg-amber-950/40 text-amber-300"
+                        }`}>
+                          {retryResult.ok ? "✓ Sent" : `✗ ${retryResult.message}`}
+                        </span>
+                      )}
                     </div>
 
                     {/* Status timeline */}
@@ -6141,11 +6269,12 @@ function EmployeeProfileView({
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-slate-800">
+      <div className="flex gap-1 border-b border-slate-800 flex-wrap">
         {[
           { key: "personal",    label: "Personal & HR" },
           { key: "job",         label: "Job Assignment" },
           { key: "pay",         label: "Pay History" },
+          { key: "certs",       label: "Certifications" },
           { key: "application", label: linkedApp ? "Linked Application" : "Linked Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
         ].map(t => (
@@ -6189,6 +6318,13 @@ function EmployeeProfileView({
         <PayHistoryTab
           employeeId={employeeId}
           employee={employee}
+          currentUser={currentUser}
+        />
+      )}
+
+      {tab === "certs" && (
+        <CertificationsTab
+          employeeId={employeeId}
           currentUser={currentUser}
         />
       )}
@@ -6864,6 +7000,358 @@ function PayHistoryTab({ employeeId, employee, currentUser }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Tab 1.7 — Certifications (slice 6 follow-up).
+// Compliance training records. Each cert has type, name, obtained date,
+// expiry date, certificate number, issuing body. Color-coded by expiry
+// status: green (valid), amber (expiring within 30 days), red (expired).
+//
+// Edit allowed for typos (Q5=b). Soft delete (archive) restricted to
+// HQ/owner in this UI — enforced in app code, not at DB level.
+function CertificationsTab({ employeeId, currentUser }) {
+  const [certs, setCerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editingCert, setEditingCert] = useState(null);  // cert object | "new" | null
+  const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!employeeId) return;
+    setLoading(true);
+    fetchEmployeeCertifications(employeeId)
+      .then(rows => { if (!cancelled) setCerts(rows); })
+      .catch(err => { console.error("Certs load failed:", err); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  const handleSave = async (cert) => {
+    try {
+      if (cert.id) {
+        const updated = await updateEmployeeCertification(cert.id, cert);
+        setCerts(prev => prev.map(c => c.id === updated.id ? updated : c));
+      } else {
+        const created = await addEmployeeCertification({
+          employeeId,
+          certType:          cert.certType,
+          name:              cert.name,
+          obtainedDate:      cert.obtainedDate,
+          expiresDate:       cert.expiresDate,
+          certificateNumber: cert.certificateNumber,
+          issuingBody:       cert.issuingBody,
+          notes:             cert.notes,
+          createdById:       currentUser?.id,
+          createdByName:     currentUser?.name || currentUser?.email || "Unknown",
+        });
+        setCerts(prev => [created, ...prev]);
+      }
+      setEditingCert(null);
+    } catch (err) {
+      console.error("Cert save failed:", err);
+      alert(`Could not save: ${err?.message || err}`);
+    }
+  };
+
+  const handleArchive = async (cert) => {
+    if (!isHqOrOwner) {
+      alert("Only HQ and owners can archive certifications. Edit instead if you need to fix a typo.");
+      return;
+    }
+    if (!confirm(`Archive "${cert.name}"?\n\nThis hides the certification from the active list. The record is preserved in the database for compliance.`)) return;
+    try {
+      await archiveEmployeeCertification(cert.id);
+      setCerts(prev => prev.filter(c => c.id !== cert.id));
+    } catch (err) {
+      console.error("Cert archive failed:", err);
+      alert(`Could not archive: ${err?.message || err}`);
+    }
+  };
+
+  // Summary: count of expiring + expired so manager sees at a glance
+  const summary = useMemo(() => {
+    let expiring = 0, expired = 0;
+    certs.forEach(c => {
+      const s = getCertExpiryStatus(c.expiresDate);
+      if (s === "expiring") expiring++;
+      else if (s === "expired") expired++;
+    });
+    return { expiring, expired };
+  }, [certs]);
+
+  return (
+    <div className="space-y-4">
+      {/* Header + summary + add */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="text-xs text-slate-500">
+          Compliance training records. {certs.length === 0 ? "No certifications recorded yet." : `${certs.length} on file.`}
+          {summary.expiring > 0 && <span className="text-amber-400 font-semibold"> · {summary.expiring} expiring soon</span>}
+          {summary.expired > 0 && <span className="text-red-400 font-semibold"> · {summary.expired} expired</span>}
+        </div>
+        {editingCert === null && (
+          <button
+            onClick={() => setEditingCert("new")}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500"
+          >
+            + Add certification
+          </button>
+        )}
+      </div>
+
+      {/* Editor form (collapsible) */}
+      {editingCert !== null && (
+        <CertEditorForm
+          item={editingCert === "new" ? null : editingCert}
+          onSave={handleSave}
+          onCancel={() => setEditingCert(null)}
+        />
+      )}
+
+      {/* List */}
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-6">Loading certifications…</div>
+      ) : certs.length === 0 && editingCert === null ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
+          <div className="font-semibold text-slate-400 mb-1">No certifications yet</div>
+          <div className="text-xs text-slate-600">Click "Add certification" to record training completed.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {certs.map(c => {
+            const status = getCertExpiryStatus(c.expiresDate);
+            const badgeColor = {
+              valid:     "bg-emerald-950/40 border-emerald-900 text-emerald-300",
+              expiring:  "bg-amber-950/40 border-amber-800 text-amber-300",
+              expired:   "bg-red-950/40 border-red-900 text-red-300",
+              no_expiry: "bg-slate-800 border-slate-700 text-slate-400",
+            }[status];
+            const badgeLabel = {
+              valid:     "Valid",
+              expiring:  "⚠ Expiring soon",
+              expired:   "✗ Expired",
+              no_expiry: "No expiry",
+            }[status];
+            return (
+              <div key={c.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="text-sm font-semibold text-slate-200">{c.name}</div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${badgeColor}`}>
+                        {badgeLabel}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      Obtained {new Date(c.obtainedDate).toLocaleDateString("en-GB")}
+                      {c.expiresDate && <> · Expires {new Date(c.expiresDate).toLocaleDateString("en-GB")}</>}
+                      {c.issuingBody && <> · {c.issuingBody}</>}
+                    </div>
+                    {c.certificateNumber && (
+                      <div className="text-[11px] text-slate-600 mt-0.5">Cert #: {c.certificateNumber}</div>
+                    )}
+                    {c.notes && (
+                      <div className="text-xs text-slate-400 italic mt-1.5">"{c.notes}"</div>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => setEditingCert(c)}
+                      className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"
+                      title="Edit"
+                    >
+                      <Edit size={13}/>
+                    </button>
+                    {isHqOrOwner && (
+                      <button
+                        onClick={() => handleArchive(c)}
+                        className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"
+                        title="Archive (HQ/owner only)"
+                      >
+                        <Trash2 size={13}/>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Helper component — the certification add/edit form. Sub-component of
+// CertificationsTab; lifted out so it can manage its own state without
+// re-rendering the whole tab on every keystroke.
+function CertEditorForm({ item, onSave, onCancel }) {
+  const [form, setFormState] = useState({
+    id:                item?.id || null,
+    certType:          item?.certType || "food_hygiene_lvl_2",
+    name:              item?.name || "",
+    obtainedDate:      item?.obtainedDate || "",
+    expiresDate:       item?.expiresDate || "",
+    certificateNumber: item?.certificateNumber || "",
+    issuingBody:       item?.issuingBody || "",
+    notes:             item?.notes || "",
+  });
+  const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const [saving, setSaving] = useState(false);
+
+  // When user picks a type, auto-fill the name from the type's label
+  // (unless they've already typed a custom name). For "other" type, leave
+  // name as-is so they can type their own.
+  useEffect(() => {
+    if (form.certType === "other") return;
+    const meta = getCertTypeMeta(form.certType);
+    // Only auto-fill if name is currently empty OR matches a different type's label
+    const looksLikePresetLabel = CERTIFICATION_TYPES.some(t => t.label === form.name);
+    if (!form.name || looksLikePresetLabel) {
+      setFormState(f => ({ ...f, name: meta.label }));
+    }
+  }, [form.certType]);
+
+  // When user picks obtained date AND type has a default validity, auto-fill
+  // expiry. They can override before saving.
+  useEffect(() => {
+    if (!form.obtainedDate) return;
+    if (form.expiresDate) return;   // don't overwrite if already set
+    const meta = getCertTypeMeta(form.certType);
+    if (!meta.defaultValidityMonths) return;
+    const obtained = new Date(form.obtainedDate);
+    if (isNaN(obtained.getTime())) return;
+    const expires = new Date(obtained);
+    expires.setMonth(expires.getMonth() + meta.defaultValidityMonths);
+    setFormState(f => ({ ...f, expiresDate: expires.toISOString().slice(0, 10) }));
+  }, [form.obtainedDate, form.certType]);
+
+  const handleSubmit = async () => {
+    if (!form.name?.trim()) { alert("Please enter a name for this certification."); return; }
+    if (!form.obtainedDate) { alert("Please enter the date this certification was obtained."); return; }
+    setSaving(true);
+    try {
+      await onSave({
+        ...form,
+        name: form.name.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+        {item ? "Edit certification" : "Add certification"}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Type *</label>
+          <select
+            value={form.certType}
+            onChange={e => set("certType", e.target.value)}
+            className={inputCls}
+          >
+            {CERTIFICATION_TYPES.map(t => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelCls}>Display name *</label>
+          <input
+            value={form.name}
+            onChange={e => set("name", e.target.value)}
+            placeholder={form.certType === "other" ? "Type the certification name" : "Auto-filled from type"}
+            className={inputCls}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Obtained date *</label>
+          <input
+            type="date"
+            value={form.obtainedDate}
+            onChange={e => set("obtainedDate", e.target.value)}
+            max={new Date().toISOString().slice(0, 10)}
+            className={`${inputCls} cursor-pointer`}
+            onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Expires date</label>
+          <input
+            type="date"
+            value={form.expiresDate}
+            onChange={e => set("expiresDate", e.target.value)}
+            className={`${inputCls} cursor-pointer`}
+            onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+          />
+          <div className="text-[10px] text-slate-600 mt-1">
+            {getCertTypeMeta(form.certType).defaultValidityMonths
+              ? `Auto-filled from type's typical validity. Override if your certificate says different.`
+              : `Leave blank if this certification doesn't expire.`
+            }
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Certificate number</label>
+          <input
+            value={form.certificateNumber}
+            onChange={e => set("certificateNumber", e.target.value)}
+            placeholder="As printed on certificate"
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Issuing body</label>
+          <input
+            value={form.issuingBody}
+            onChange={e => set("issuingBody", e.target.value)}
+            placeholder="e.g. Highfield, RSPH"
+            className={inputCls}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>Notes</label>
+        <textarea
+          value={form.notes}
+          onChange={e => set("notes", e.target.value)}
+          rows={2}
+          placeholder="Any additional info (e.g. training provider, course details)"
+          className={`${inputCls} resize-none`}
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={saving}
+          className="px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {saving ? "Saving…" : (item ? "Save changes" : "Add certification")}
+        </button>
+      </div>
     </div>
   );
 }
