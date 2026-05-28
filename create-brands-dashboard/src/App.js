@@ -7060,7 +7060,7 @@ function CertificationsTab({ employeeId, currentUser }) {
       alert("Only HQ and owners can archive certifications. Edit instead if you need to fix a typo.");
       return;
     }
-    if (!confirm(`Archive "${cert.name}"?\n\nThis hides the certification from the active list. The record is preserved in the database for compliance.`)) return;
+    if (!window.confirm(`Archive "${cert.name}"?\n\nThis hides the certification from the active list. The record is preserved in the database for compliance.`)) return;
     try {
       await archiveEmployeeCertification(cert.id);
       setCerts(prev => prev.filter(c => c.id !== cert.id));
