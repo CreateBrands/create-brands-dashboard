@@ -20,6 +20,46 @@ export async function insertBrand(brand) {
   if (error) throw error;
   return dbBrandToApp(data);
 }
+// ════════════════════════════════════════════════════════════════════════════
+// UPSERT VS PARTIAL UPDATE — pattern reference
+// ════════════════════════════════════════════════════════════════════════════
+// All `upsertX(item)` functions below use Supabase's `.upsert()`. This is
+// INSERT ... ON CONFLICT (id) DO UPDATE — useful when you don't know in
+// advance whether the row exists. But it has a footgun:
+//
+//   Supabase enforces ALL NOT NULL constraints on upsert, because it must
+//   be ready to INSERT even if the row already exists. So a payload like
+//   { id, status: 'done' } will FAIL with "null value in column X violates
+//   not-null constraint" — even though we're really updating an existing
+//   row that already has X set.
+//
+// The workaround: ALWAYS PASS THE COMPLETE OBJECT to upsert*. Spread the
+// existing row, override the fields you want to change, then pass the
+// spread result:
+//
+//   ✓ SAFE:    await updateIssue({ ...issue, status: 'done' })
+//   ✗ UNSAFE:  await updateIssue({ id: issue.id, status: 'done' })
+//
+// If you need true partial-update semantics (e.g. an "edit one field at a
+// time" UI), DO NOT use the upsert path. Add a sibling function that uses
+// `.update().eq(...)` directly — see `updateOpsTeamMember` for the
+// canonical example. Also requires the mapper to be partial-aware (only
+// include fields that are actually present in the input).
+//
+// Mappers known to be partial-aware (safe for partial updates):
+//   - appApplicationToDb  (fixed mid-session after critical data-loss bug)
+//   - appOpsTeamToDb      (fixed during mapper audit)
+//   - appStoreToDb        (was already correct)
+//   - appStoreRoleToDb    (was already correct)
+//   - appStoreDepartmentToDb (was already correct)
+//
+// Mappers NOT confirmed partial-aware (UNSAFE for partial updates without
+// audit first): appBrandToDb, appUserToDb, appIssueToDb, appTempUnitToDb,
+// appCleanTaskToDb, appAssignmentToDb, appEntryToDb, appAuditToDb,
+// appMsgToDb, appAvailToDb, appScheduleToDb, appPunchToDb. If you need to
+// partial-update any of these tables, audit the mapper first.
+// ════════════════════════════════════════════════════════════════════════════
+
 export async function upsertBrand(brand) {
   const { data, error } = await supabase.from("brands").upsert(appBrandToDb(brand), { onConflict: "id" }).select().single();
   if (error) throw error;
