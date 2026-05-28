@@ -2183,3 +2183,112 @@ export async function addPayHistory({
   if (error) throw error;
   return data ? dbPayHistoryToApp(data) : dbPayHistoryToApp(row);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE CERTIFICATIONS (slice 6 follow-up)
+// ════════════════════════════════════════════════════════════════════════════
+// Compliance training records per employee. Hardcoded type list in App.js
+// (CERTIFICATION_TYPES) — `cert_type` matches one of those keys, `name` is
+// a snapshot in case the hardcoded list changes later.
+
+function dbCertificationToApp(c) {
+  return {
+    id:                c.id,
+    employeeId:        c.employee_id,
+    certType:          c.cert_type,
+    name:              c.name,
+    obtainedDate:      c.obtained_date,
+    expiresDate:       c.expires_date || null,
+    certificateNumber: c.certificate_number || null,
+    issuingBody:       c.issuing_body || null,
+    notes:             c.notes || null,
+    createdAt:         c.created_at,
+    updatedAt:         c.updated_at,
+    createdById:       c.created_by_id || null,
+    createdByName:     c.created_by_name || "Unknown",
+    archivedAt:        c.archived_at || null,
+  };
+}
+
+export async function fetchEmployeeCertifications(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_certifications")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .is("archived_at", null)
+    .order("expires_date", { ascending: true, nullsFirst: false })
+    .order("obtained_date", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbCertificationToApp);
+}
+
+export async function addEmployeeCertification({
+  employeeId, certType, name,
+  obtainedDate, expiresDate,
+  certificateNumber, issuingBody, notes,
+  createdById, createdByName,
+}) {
+  if (!employeeId) throw new Error("employeeId required");
+  if (!certType)   throw new Error("certType required");
+  if (!name)       throw new Error("name required");
+  if (!obtainedDate) throw new Error("obtainedDate required");
+  const row = {
+    id:                 `cert-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id:        employeeId,
+    cert_type:          certType,
+    name:               name,
+    obtained_date:      obtainedDate,
+    expires_date:       expiresDate || null,
+    certificate_number: certificateNumber?.trim() || null,
+    issuing_body:       issuingBody?.trim() || null,
+    notes:              notes?.trim() || null,
+    created_by_id:      createdById || null,
+    created_by_name:    createdByName || "Unknown",
+  };
+  const { data, error } = await supabase
+    .from("employee_certifications")
+    .insert(row)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data ? dbCertificationToApp(data) : dbCertificationToApp(row);
+}
+
+// Partial update — only fields explicitly in `patch` are written. Used for
+// editing typos (per Q5=b). Same RLS-tolerant pattern as updateOpsTeamMember.
+export async function updateEmployeeCertification(id, patch) {
+  if (!id) throw new Error("id required");
+  const row = {};
+  if (patch.certType          !== undefined) row.cert_type          = patch.certType;
+  if (patch.name              !== undefined) row.name               = patch.name;
+  if (patch.obtainedDate      !== undefined) row.obtained_date      = patch.obtainedDate;
+  if (patch.expiresDate       !== undefined) row.expires_date       = patch.expiresDate || null;
+  if (patch.certificateNumber !== undefined) row.certificate_number = patch.certificateNumber?.trim() || null;
+  if (patch.issuingBody       !== undefined) row.issuing_body       = patch.issuingBody?.trim() || null;
+  if (patch.notes             !== undefined) row.notes              = patch.notes?.trim() || null;
+  if (patch.archivedAt        !== undefined) row.archived_at        = patch.archivedAt;
+  const { data, error } = await supabase
+    .from("employee_certifications")
+    .update(row)
+    .eq("id", id)
+    .select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbCertificationToApp(data[0]);
+  // RLS-tolerant fallback: refetch defensively
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("employee_certifications").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Certification ${id} updated but could not be retrieved.`);
+  return dbCertificationToApp(fresh);
+}
+
+// Soft-delete a certification. Per Q5=b, restricted to HQ/owner in app code;
+// at DB level any authenticated user can call this (RLS not enforced on
+// this table). The archive flag is preferred over hard delete so the
+// compliance trail isn't lost — if you need to fully delete, do it
+// manually in SQL.
+export async function archiveEmployeeCertification(id) {
+  if (!id) throw new Error("id required");
+  return updateEmployeeCertification(id, { archivedAt: new Date().toISOString() });
+}
