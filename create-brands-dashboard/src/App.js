@@ -5923,20 +5923,27 @@ function HiringView({
                         <Trash2 size={11}/> Delete
                       </button>
                       {/* Slice 6 follow-up — retry magic link.
-                          Shown for applications with an email regardless of
-                          status (per Q2=a: hired candidates may still want
-                          portal access). Only useful when status is "failed"
-                          OR "pending" stale — but we don't restrict, since
-                          a manager might want to "re-send" a link for any
-                          reason (e.g. candidate lost the email). */}
+                          ⚠ Currently the candidate portal route (/candidate)
+                          does not exist — slice 4 was rolled back. Clicking
+                          retry will send an email but the link leads to a
+                          404. Kept here for when the portal is built. */}
                       {app.email && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleRetryLink(app); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!window.confirm(
+                              "Heads up: the candidate portal isn't built yet. " +
+                              "If you send this link, the candidate will get an email " +
+                              "but clicking it leads nowhere useful.\n\n" +
+                              "Send anyway? (Useful for testing the email infrastructure.)"
+                            )) return;
+                            handleRetryLink(app);
+                          }}
                           disabled={retryingId === app.id}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50"
                           title={app.emailLinkStatus === "failed"
-                            ? `Last attempt failed: ${app.emailLinkError || "unknown reason"}. Click to retry.`
-                            : "Re-send the candidate's portal login link."}
+                            ? `Last attempt failed: ${app.emailLinkError || "unknown reason"}. ⚠ Portal not live — link won't work yet.`
+                            : "⚠ Portal not live yet — link will 404."}
                         >
                           {retryingId === app.id
                             ? "Sending…"
@@ -15505,23 +15512,36 @@ function ApplyShell() {
       // candidate sees the "thanks" screen immediately regardless of email
       // outcome. If the send fails (rate limit, network), manager will see
       // a "email pending" flag in the dashboard and can follow up manually.
-      // No retry loop here — Supabase free tier rate limit is real and
-      // retrying would just keep failing; better to surface the failure to
-      // the manager than to spam the candidate.
-      (async () => {
-        try {
-          const result = await sendCandidateMagicLink(candidateEmail);
-          await setApplicationEmailStatus(
-            applicationId,
-            result.ok ? "sent" : "failed",
-            result.ok ? null : result.error,
-          );
-        } catch (err) {
-          // Defensive — sendCandidateMagicLink already swallows errors but
-          // belt-and-braces. setApplicationEmailStatus also swallows.
-          console.warn("Magic link send error (non-blocking):", err);
-        }
-      })();
+      // ⚠ DISABLED: Auto-send magic link on /apply submission.
+      //
+      // This was originally part of slice 4 (candidate portal). When the
+      // candidate portal RLS was rolled back, the /candidate route was
+      // removed, but this send code stayed. The result: every public_form
+      // application sends an email whose link leads to a 404 (or worse,
+      // ERR_CONNECTION_REFUSED if the link was generated from localhost dev).
+      //
+      // Keep the manager-side retry button (it's harmless — same dead link,
+      // but at least it's an explicit choice). Auto-sending on every form
+      // submission was creating broken experiences for real candidates.
+      //
+      // Re-enable when the candidate portal is built (slice 4 properly).
+      //
+      // Application is still saved with email_link_status='pending' (the
+      // DB default). When the portal exists, we can backfill links for
+      // any pending applications.
+      //
+      // (async () => {
+      //   try {
+      //     const result = await sendCandidateMagicLink(candidateEmail);
+      //     await setApplicationEmailStatus(
+      //       applicationId,
+      //       result.ok ? "sent" : "failed",
+      //       result.ok ? null : result.error,
+      //     );
+      //   } catch (err) {
+      //     console.warn("Magic link send error (non-blocking):", err);
+      //   }
+      // })();
 
       try { localStorage.setItem(APPLY_RATE_LIMIT_KEY, String(Date.now())); } catch {}
       setSubmitted(true);
