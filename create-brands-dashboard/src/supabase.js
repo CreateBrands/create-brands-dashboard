@@ -2114,3 +2114,72 @@ export async function fetchLinkedApplication(employeeId) {
   if (error) throw error;
   return data ? dbApplicationToApp(data) : null;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE PAY HISTORY (slice 6 follow-up)
+// ════════════════════════════════════════════════════════════════════════════
+// Append-only audit trail of pay changes. Populated automatically when the
+// Job Assignment tab saves AND pay actually changed, OR manually via the
+// Pay History tab for backfilling old data.
+
+function dbPayHistoryToApp(h) {
+  return {
+    id:            h.id,
+    employeeId:    h.employee_id,
+    oldAmount:     h.old_amount != null ? Number(h.old_amount) : null,
+    oldPayType:    h.old_pay_type || null,
+    newAmount:     Number(h.new_amount),
+    newPayType:    h.new_pay_type || "hourly",
+    effectiveDate: h.effective_date,
+    reason:        h.reason || null,
+    authorId:      h.author_id || null,
+    authorName:    h.author_name || "Unknown",
+    createdAt:     h.created_at,
+  };
+}
+
+export async function fetchPayHistory(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_pay_history")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("effective_date", { ascending: false })
+    .order("created_at",     { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbPayHistoryToApp);
+}
+
+// Append a pay history row. Accepts old_* as null for backfills and for
+// the very first entry an employee receives.
+export async function addPayHistory({
+  employeeId,
+  oldAmount, oldPayType,
+  newAmount, newPayType,
+  effectiveDate,
+  reason,
+  authorId, authorName,
+}) {
+  if (!employeeId) throw new Error("employeeId required");
+  if (newAmount == null || newAmount === "") throw new Error("New amount required");
+  if (!effectiveDate) throw new Error("Effective date required");
+  const row = {
+    id:             `ph-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id:    employeeId,
+    old_amount:     oldAmount != null && oldAmount !== "" ? Number(oldAmount) : null,
+    old_pay_type:   oldPayType || null,
+    new_amount:     Number(newAmount),
+    new_pay_type:   newPayType || "hourly",
+    effective_date: effectiveDate,
+    reason:         reason?.trim() || null,
+    author_id:      authorId || null,
+    author_name:    authorName || "Unknown",
+  };
+  const { data, error } = await supabase
+    .from("employee_pay_history")
+    .insert(row)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data ? dbPayHistoryToApp(data) : dbPayHistoryToApp(row);
+}

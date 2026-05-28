@@ -38,6 +38,8 @@ import {
   hireApplication, hireApplicationCheck,
   // Slice 6: employee profile
   fetchEmployeeNotes, addEmployeeNote, fetchLinkedApplication,
+  // Slice 6 follow-up: pay history
+  fetchPayHistory, addPayHistory,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6143,6 +6145,7 @@ function EmployeeProfileView({
         {[
           { key: "personal",    label: "Personal & HR" },
           { key: "job",         label: "Job Assignment" },
+          { key: "pay",         label: "Pay History" },
           { key: "application", label: linkedApp ? "Linked Application" : "Linked Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
         ].map(t => (
@@ -6178,6 +6181,15 @@ function EmployeeProfileView({
           storeDepartments={storeDepartments}
           opsTeam={opsTeam}
           onUpdateEmployee={onUpdateEmployee}
+          currentUser={currentUser}
+        />
+      )}
+
+      {tab === "pay" && (
+        <PayHistoryTab
+          employeeId={employeeId}
+          employee={employee}
+          currentUser={currentUser}
         />
       )}
 
@@ -6304,7 +6316,7 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
 // kiosk can identify staff from PIN alone (Q6 from kiosk auth design).
 // Validated here with a soft warning rather than a hard block — the save
 // will fail with a DB-level uniqueness error if the user persists.
-function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsTeam, onUpdateEmployee }) {
+function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsTeam, onUpdateEmployee, currentUser }) {
   const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
 
   // Only owned, non-archived stores — same rule as the edit modal.
@@ -6409,6 +6421,38 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
         color:        form.color,
         ...(newStatus ? { status: newStatus } : {}),
       });
+
+      // Auto-capture pay history if pay actually changed.
+      // Q3 = (a): only on actual change, no no-op rows.
+      // Q2 = (b): effective_date defaults to today (the moment of save).
+      //          A future tab feature could let manager backdate before saving.
+      const oldAmount  = employee.hourlyRate || 0;
+      const oldPayType = employee.payType || "hourly";
+      const newAmount  = parseFloat(form.hourlyRate) || 0;
+      const newPayType = form.payType || "hourly";
+      const payChanged = oldAmount !== newAmount || oldPayType !== newPayType;
+      if (payChanged) {
+        try {
+          await addPayHistory({
+            employeeId:    employee.id,
+            // Only set old_* if there was a previous non-zero pay. For
+            // brand-new hires with no prior rate, leave old as null —
+            // the history shows "Initial pay: £X".
+            oldAmount:     oldAmount > 0 ? oldAmount : null,
+            oldPayType:    oldAmount > 0 ? oldPayType : null,
+            newAmount,
+            newPayType,
+            effectiveDate: new Date().toISOString().slice(0, 10),
+            reason:        null,   // auto-capture has no reason; manager can edit via manual entry if needed
+            authorId:      currentUser?.id,
+            authorName:    currentUser?.name || currentUser?.email || "Unknown",
+          });
+        } catch (histErr) {
+          // Don't fail the whole save if history insert fails — the pay
+          // change has already been recorded in ops_team. Just log it.
+          console.error("Pay history auto-capture failed:", histErr);
+        }
+      }
     } catch (err) {
       console.error("Job assignment save failed:", err);
       alert(`Could not save: ${err?.message || err}`);
@@ -6584,6 +6628,242 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
           {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Tab 1.6 — Pay History (slice 6 follow-up).
+// Append-only list of pay changes. Auto-populated when Job Assignment tab
+// saves AND pay actually changed; manually populatable for backfilling
+// historical data from before the system tracked it.
+//
+// Read-only after creation (Q4=a). Mistakes get a new entry referencing
+// the original — same audit-trail logic as Notes.
+function PayHistoryTab({ employeeId, employee, currentUser }) {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  // Manual entry form state (for backfilling historical changes).
+  // Defaults reasonable for "I'm backfilling a pay change I forgot to record":
+  //   - new_amount/type prefilled to current (manager edits as needed)
+  //   - effective_date blank (must be set — backfills are inherently past-dated)
+  //   - reason blank
+  const [draftEntry, setDraftEntry] = useState({
+    oldAmount:     "",
+    oldPayType:    "hourly",
+    newAmount:     employee?.hourlyRate ? String(employee.hourlyRate) : "",
+    newPayType:    employee?.payType || "hourly",
+    effectiveDate: "",
+    reason:        "",
+  });
+  const setDraft = (k, v) => setDraftEntry(s => ({ ...s, [k]: v }));
+  const [submitting, setSubmitting] = useState(false);
+
+  // Load history when employee changes
+  useEffect(() => {
+    let cancelled = false;
+    if (!employeeId) return;
+    setLoading(true);
+    fetchPayHistory(employeeId)
+      .then(rows => { if (!cancelled) setHistory(rows); })
+      .catch(err => { console.error("Pay history load failed:", err); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  const handleAddManual = async () => {
+    if (!draftEntry.newAmount || isNaN(parseFloat(draftEntry.newAmount))) {
+      alert("Please enter a valid new amount.");
+      return;
+    }
+    if (!draftEntry.effectiveDate) {
+      alert("Please set the effective date for this historical entry.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const inserted = await addPayHistory({
+        employeeId,
+        oldAmount:     draftEntry.oldAmount ? parseFloat(draftEntry.oldAmount) : null,
+        oldPayType:    draftEntry.oldAmount ? draftEntry.oldPayType : null,
+        newAmount:     parseFloat(draftEntry.newAmount),
+        newPayType:    draftEntry.newPayType,
+        effectiveDate: draftEntry.effectiveDate,
+        reason:        draftEntry.reason,
+        authorId:      currentUser?.id,
+        authorName:    currentUser?.name || currentUser?.email || "Unknown",
+      });
+      // Insert into local list; resort defensively (server-sorted on next load)
+      setHistory(prev => [inserted, ...prev].sort(
+        (a, b) => new Date(b.effectiveDate) - new Date(a.effectiveDate)
+      ));
+      // Reset form, hide it
+      setDraftEntry({
+        oldAmount: "", oldPayType: "hourly",
+        newAmount: employee?.hourlyRate ? String(employee.hourlyRate) : "",
+        newPayType: employee?.payType || "hourly",
+        effectiveDate: "", reason: "",
+      });
+      setShowAddForm(false);
+    } catch (err) {
+      console.error("Pay history manual entry failed:", err);
+      alert(`Could not save: ${err?.message || err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-4">
+      {/* Header + add button */}
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-slate-500">
+          Pay changes are recorded automatically when saved on the Job Assignment tab. Add a manual entry to backfill historical changes.
+        </div>
+        {!showAddForm && (
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-200 text-xs font-semibold hover:bg-slate-700 flex-shrink-0"
+          >
+            + Add historical entry
+          </button>
+        )}
+      </div>
+
+      {/* Manual entry form (collapsible) */}
+      {showAddForm && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Add historical pay change</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Previous amount (optional)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={draftEntry.oldAmount}
+                onChange={e => setDraft("oldAmount", e.target.value)}
+                placeholder="Leave blank for initial pay"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Previous pay type</label>
+              <select
+                value={draftEntry.oldPayType}
+                onChange={e => setDraft("oldPayType", e.target.value)}
+                className={inputCls}
+                disabled={!draftEntry.oldAmount}
+              >
+                {PAY_TYPE_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>New amount *</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={draftEntry.newAmount}
+                onChange={e => setDraft("newAmount", e.target.value)}
+                placeholder="e.g. 13.00"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>New pay type *</label>
+              <select
+                value={draftEntry.newPayType}
+                onChange={e => setDraft("newPayType", e.target.value)}
+                className={inputCls}
+              >
+                {PAY_TYPE_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Effective date *</label>
+            <input
+              type="date"
+              value={draftEntry.effectiveDate}
+              onChange={e => setDraft("effectiveDate", e.target.value)}
+              max={new Date().toISOString().slice(0, 10)}
+              className={`${inputCls} cursor-pointer`}
+              onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+            />
+            <div className="text-[10px] text-slate-600 mt-1">When this rate started applying. For backfills, set to the actual historical date.</div>
+          </div>
+          <div>
+            <label className={labelCls}>Reason (optional)</label>
+            <input
+              value={draftEntry.reason}
+              onChange={e => setDraft("reason", e.target.value)}
+              placeholder="e.g. Annual review, Promotion to senior barista, NMW increase"
+              className={inputCls}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              onClick={() => setShowAddForm(false)}
+              disabled={submitting}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleAddManual}
+              disabled={submitting}
+              className="px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {submitting ? "Saving…" : "Add entry"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* History list */}
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-6">Loading pay history…</div>
+      ) : history.length === 0 ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
+          <div className="font-semibold text-slate-400 mb-1">No pay history yet</div>
+          <div className="text-xs text-slate-600">Changes made via the Job Assignment tab will appear here automatically.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {history.map(h => (
+            <div key={h.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-sm text-slate-200">
+                  {h.oldAmount != null
+                    ? <><span className="text-slate-500">{formatPayDisplay(h.oldAmount, h.oldPayType)}</span>{" → "}<span className="text-emerald-300 font-semibold">{formatPayDisplay(h.newAmount, h.newPayType)}</span></>
+                    : <><span className="text-slate-500 italic">Initial pay: </span><span className="text-emerald-300 font-semibold">{formatPayDisplay(h.newAmount, h.newPayType)}</span></>
+                  }
+                </div>
+                <div className="text-xs text-slate-500 flex-shrink-0">
+                  Effective {new Date(h.effectiveDate).toLocaleDateString("en-GB")}
+                </div>
+              </div>
+              {h.reason && (
+                <div className="text-xs text-slate-400 mt-1.5 italic">"{h.reason}"</div>
+              )}
+              <div className="text-[10px] text-slate-600 mt-2">
+                Recorded by {h.authorName} · {new Date(h.createdAt).toLocaleString("en-GB")}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
