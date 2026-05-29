@@ -6174,7 +6174,7 @@ function KioskApp({ opsTeam, brands, punchRecords, onPunchIn, onPunchOut }) {
           className={`w-32 h-32 rounded-full object-cover border-2 transition-all ${
             cameraReady ? "border-emerald-500/40" : cameraError ? "border-red-500/40 opacity-30" : "border-slate-700 opacity-40"
           }`}
-          style={{ transform: "scaleX(-1)" }}
+          style={{ transform: "scaleX(-1)" }} /* mirror so it feels like a selfie */
         />
         {/* Status dot */}
         <div className={`absolute bottom-1 right-1 w-3 h-3 rounded-full border-2 border-slate-950 ${
@@ -6673,7 +6673,7 @@ function TimeAttendanceView({ brands, opsTeam, schedules, punchRecords, currentU
         <Modal title={photoModal.label} onClose={() => setPhotoModal(null)} maxW="max-w-md">
           <div className="space-y-3">
             <img src={photoModal.url} alt="Punch verification" className="w-full rounded-2xl border border-slate-700"
-              style={{ transform: "scaleX(-1)" }}
+              style={{ transform: "scaleX(-1)" }} /* unflip the mirrored kiosk capture */
             />
             <div className="text-center text-xs text-slate-500">
               Captured at <span className="text-slate-300 font-semibold">{photoModal.time}</span>
