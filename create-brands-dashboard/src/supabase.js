@@ -469,6 +469,13 @@ function appOpsTeamToDb(m) {
   // Slice 6 follow-up — pay type. The hourly_rate column is reused as the
   // "amount" regardless of type, so no separate "pay_amount" column.
   if (m.payType       !== undefined) row.pay_type      = m.payType || "hourly";
+  // Slice 7 — emergency contact (single contact per employee)
+  if (m.emergencyContactName         !== undefined) row.emergency_contact_name         = m.emergencyContactName?.trim() || null;
+  if (m.emergencyContactPhone        !== undefined) row.emergency_contact_phone        = m.emergencyContactPhone?.trim() || null;
+  if (m.emergencyContactRelationship !== undefined) row.emergency_contact_relationship = m.emergencyContactRelationship?.trim() || null;
+  // Slice 7 — probation
+  if (m.probationEndDate !== undefined) row.probation_end_date = m.probationEndDate || null;
+  if (m.probationStatus  !== undefined) row.probation_status   = m.probationStatus  || "in_progress";
   return row;
 }
 function dbOpsTeamToApp(m) {
@@ -493,6 +500,13 @@ function dbOpsTeamToApp(m) {
     archivedAt:  m.archived_at || null,
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
+    // Slice 7 — emergency contact
+    emergencyContactName:         m.emergency_contact_name         || null,
+    emergencyContactPhone:        m.emergency_contact_phone        || null,
+    emergencyContactRelationship: m.emergency_contact_relationship || null,
+    // Slice 7 — probation
+    probationEndDate: m.probation_end_date || null,
+    probationStatus:  m.probation_status   || "in_progress",
   };
 }
 
@@ -2310,4 +2324,222 @@ export async function updateEmployeeCertification(id, patch) {
 export async function archiveEmployeeCertification(id) {
   if (!id) throw new Error("id required");
   return updateEmployeeCertification(id, { archivedAt: new Date().toISOString() });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE DOCUMENTS (slice 7)
+// ════════════════════════════════════════════════════════════════════════════
+// Files attached to an employee record. Initially used for RTW (right-to-work)
+// documents — passport scans, BRP images, share code screenshots, visa stamps.
+// The doc_type column allows extension to contracts, P45s, etc. later without
+// schema changes (just extend the CHECK constraint).
+//
+// Storage strategy: reuses the existing `applicant-photos` bucket from slice 3.
+// Same upload mechanism, same public URL pattern. Stored under a different
+// path prefix (`employee-docs/...`) for organizational tidiness, but lives in
+// the same bucket so RLS behavior is identical.
+
+function dbEmployeeDocumentToApp(d) {
+  return {
+    id:             d.id,
+    employeeId:     d.employee_id,
+    docType:        d.doc_type,
+    fileUrl:        d.file_url,
+    filePath:       d.file_path,
+    fileName:       d.file_name || null,
+    expiryDate:     d.expiry_date || null,
+    signedAt:       d.signed_at || null,
+    notes:          d.notes || null,
+    uploadedById:   d.uploaded_by_id || null,
+    uploadedByName: d.uploaded_by_name || "Unknown",
+    createdAt:      d.created_at,
+    updatedAt:      d.updated_at,
+    archivedAt:     d.archived_at || null,
+  };
+}
+
+export async function fetchEmployeeDocuments(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_documents")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .is("archived_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbEmployeeDocumentToApp);
+}
+
+// Uploads a document file to Supabase Storage. Reuses the applicant-photos
+// bucket for simplicity — same RLS posture (public reads, authenticated
+// uploads). Path is under `employee-docs/{yyyy-mm}/{token}.{ext}` so it's
+// distinguishable from applicant photos in the bucket.
+//
+// Returns { url, path } for the caller to store in employee_documents.
+export async function uploadEmployeeDocument(file) {
+  if (!file) throw new Error("No file provided");
+  if (!(file instanceof File || file instanceof Blob)) throw new Error("Invalid file");
+
+  // Accept PDF + images for RTW docs (passport scan often PDF, BRP often image,
+  // share code screenshot often PNG). 10 MB is generous but reasonable for
+  // a passport scan.
+  const extByType = {
+    "image/jpeg":      "jpg",
+    "image/png":       "png",
+    "image/webp":      "webp",
+    "application/pdf": "pdf",
+  };
+  const ext = extByType[file.type];
+  if (!ext) throw new Error("Only JPG, PNG, WEBP, and PDF files are accepted.");
+
+  const MAX_BYTES = 10 * 1024 * 1024;
+  if (file.size > MAX_BYTES) {
+    throw new Error(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 10 MB.`);
+  }
+
+  const now    = new Date();
+  const yyyyMm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const token  = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const path   = `employee-docs/${yyyyMm}/${token}.${ext}`;
+
+  const { error: upErr } = await supabase.storage
+    .from("applicant-photos")
+    .upload(path, file, {
+      contentType:  file.type,
+      cacheControl: "3600",   // 1 hour — docs can be re-uploaded
+      upsert:       false,
+    });
+  if (upErr) throw upErr;
+
+  const { data: { publicUrl } } = supabase.storage
+    .from("applicant-photos")
+    .getPublicUrl(path);
+
+  return { url: publicUrl, path };
+}
+
+// Insert a document record after the file is uploaded. Two-step pattern
+// (upload, then DB insert) so we can show progress and handle upload
+// failures separately from DB failures.
+export async function addEmployeeDocument({
+  employeeId,
+  docType,
+  fileUrl,
+  filePath,
+  fileName,
+  expiryDate,
+  signedAt,
+  notes,
+  uploadedById,
+  uploadedByName,
+}) {
+  if (!employeeId) throw new Error("employeeId required");
+  if (!docType)    throw new Error("docType required");
+  if (!fileUrl)    throw new Error("fileUrl required");
+  if (!filePath)   throw new Error("filePath required");
+  const row = {
+    id:                `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id:       employeeId,
+    doc_type:          docType,
+    file_url:          fileUrl,
+    file_path:         filePath,
+    file_name:         fileName?.trim() || null,
+    expiry_date:       expiryDate || null,
+    signed_at:         signedAt   || null,
+    notes:             notes?.trim() || null,
+    uploaded_by_id:    uploadedById   || null,
+    uploaded_by_name:  uploadedByName || "Unknown",
+  };
+  const { data, error } = await supabase
+    .from("employee_documents")
+    .insert(row)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data ? dbEmployeeDocumentToApp(data) : dbEmployeeDocumentToApp(row);
+}
+
+// Soft-delete an employee document (archive). Same pattern as certifications
+// — never hard-delete from app; manual SQL only for compliance.
+//
+// Note: the file in Storage is NOT deleted automatically. Use
+// deleteEmployeeDocumentFile() separately if you want to purge it (e.g. for
+// GDPR removal request). Default archive just hides from the active list.
+export async function archiveEmployeeDocument(id) {
+  if (!id) throw new Error("id required");
+  const { data, error } = await supabase
+    .from("employee_documents")
+    .update({ archived_at: new Date().toISOString() })
+    .eq("id", id)
+    .select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbEmployeeDocumentToApp(data[0]);
+  // RLS-tolerant fallback
+  const { data: fresh } = await supabase
+    .from("employee_documents").select("*").eq("id", id).maybeSingle();
+  return fresh ? dbEmployeeDocumentToApp(fresh) : null;
+}
+
+// Hard-delete the actual file from Storage (separate from DB archive).
+// Used for GDPR data-removal requests.
+export async function deleteEmployeeDocumentFile(path) {
+  if (!path) return;
+  const { error } = await supabase.storage.from("applicant-photos").remove([path]);
+  if (error && error.message && !/not.found/i.test(error.message)) throw error;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// APPLICATION DUPLICATE CHECK (slice 7)
+// ════════════════════════════════════════════════════════════════════════════
+// Called from the Hiring view when manager expands an application — shows
+// a soft warning if the email matches OTHER applications OR an existing
+// employee. Helps catch repeat-applicants and returning ex-employees.
+//
+// Returns: { otherApplications: [...], existingEmployee: {...} | null }
+// otherApplications excludes the application being viewed.
+// existingEmployee includes archived employees (returning workers).
+
+export async function findApplicationsByEmail(email, excludeId = null) {
+  if (!email) return { otherApplications: [], existingEmployee: null };
+  const lower = email.trim().toLowerCase();
+  if (!lower) return { otherApplications: [], existingEmployee: null };
+
+  // Other applications matching this email (case-insensitive)
+  const { data: apps, error: appsErr } = await supabase
+    .from("job_applications")
+    .select("id, first_name, last_name, email, status, source, archived_at, created_at")
+    .ilike("email", lower);
+  if (appsErr) throw appsErr;
+  const otherApplications = (apps || [])
+    .filter(a => a.id !== excludeId)
+    .map(a => ({
+      id:         a.id,
+      firstName:  a.first_name,
+      lastName:   a.last_name,
+      email:      a.email,
+      status:     a.status,
+      source:     a.source,
+      archivedAt: a.archived_at,
+      createdAt:  a.created_at,
+    }));
+
+  // Existing employee with this email (active OR archived — returning
+  // workers matter here)
+  const { data: emps, error: empsErr } = await supabase
+    .from("ops_team")
+    .select("id, first_name, last_name, email, archived_at, status")
+    .ilike("email", lower)
+    .limit(1);
+  if (empsErr) throw empsErr;
+  const existingEmployee = emps && emps.length > 0 ? {
+    id:         emps[0].id,
+    firstName:  emps[0].first_name,
+    lastName:   emps[0].last_name,
+    email:      emps[0].email,
+    archivedAt: emps[0].archived_at,
+    status:     emps[0].status,
+  } : null;
+
+  return { otherApplications, existingEmployee };
 }
