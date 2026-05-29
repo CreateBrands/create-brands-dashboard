@@ -6157,6 +6157,13 @@ function EmployeeProfileView({
       address:     employee.address     || "",
       legalStatus: employee.legalStatus || "",
       hrNotes:     employee.hrNotes     || "",
+      // Slice 7 — emergency contact
+      emergencyContactName:         employee.emergencyContactName         || "",
+      emergencyContactPhone:        employee.emergencyContactPhone        || "",
+      emergencyContactRelationship: employee.emergencyContactRelationship || "",
+      // Slice 7 — probation
+      probationEndDate: employee.probationEndDate || "",
+      probationStatus:  employee.probationStatus  || "in_progress",
     });
   }, [employee?.id]);  // re-init on employee swap, not on every prop tick
 
@@ -6205,6 +6212,21 @@ function EmployeeProfileView({
     if (!editHr) return;
     setSavingHr(true);
     try {
+      // Slice 7 — if probation status is in_progress and no end date set,
+      // auto-fill to hireDate + 90 days. This way the manager doesn't have
+      // to manually set the date for every new hire.
+      let probEndDate = editHr.probationEndDate || null;
+      if (!probEndDate
+          && (editHr.probationStatus === "in_progress")
+          && (editHr.hireDate || employee.hireDate || derivedHireDate)) {
+        const hireSrc = editHr.hireDate || employee.hireDate || derivedHireDate;
+        const hireD = new Date(hireSrc);
+        if (!isNaN(hireD.getTime())) {
+          hireD.setDate(hireD.getDate() + 90);
+          probEndDate = hireD.toISOString().slice(0, 10);
+        }
+      }
+
       // Use partial update — only the HR fields. Other fields (role, pin,
       // storeIds, etc.) untouched thanks to the partial-aware mapper.
       await onUpdateEmployee({
@@ -6216,6 +6238,13 @@ function EmployeeProfileView({
         address:     editHr.address     || null,
         legalStatus: editHr.legalStatus || null,
         hrNotes:     editHr.hrNotes     || null,
+        // Slice 7 — emergency contact
+        emergencyContactName:         editHr.emergencyContactName         || null,
+        emergencyContactPhone:        editHr.emergencyContactPhone        || null,
+        emergencyContactRelationship: editHr.emergencyContactRelationship || null,
+        // Slice 7 — probation
+        probationEndDate: probEndDate,
+        probationStatus:  editHr.probationStatus || "in_progress",
       });
     } catch (err) {
       console.error("HR save failed:", err);
@@ -6434,6 +6463,126 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
         <div className="text-[10px] text-slate-600 mt-1">
           One-line free-form notes editable any time. For dated, append-only entries, use the Notes tab.
         </div>
+      </div>
+
+      {/* ── Emergency contact (slice 7) ── */}
+      <div className="pt-4 border-t border-slate-800">
+        <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">
+          Emergency contact
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>Name</label>
+            <input
+              value={editHr.emergencyContactName || ""}
+              onChange={e => set("emergencyContactName", e.target.value)}
+              placeholder="Full name of next-of-kin"
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Relationship</label>
+            <input
+              value={editHr.emergencyContactRelationship || ""}
+              onChange={e => set("emergencyContactRelationship", e.target.value)}
+              placeholder="e.g. Spouse, Parent, Sibling, Friend"
+              className={inputCls}
+            />
+          </div>
+        </div>
+        <div className="mt-3">
+          <label className={labelCls}>Phone</label>
+          <input
+            type="tel"
+            value={editHr.emergencyContactPhone || ""}
+            onChange={e => set("emergencyContactPhone", e.target.value)}
+            placeholder="Contact number"
+            className={inputCls}
+          />
+          <div className="text-[10px] text-slate-600 mt-1">
+            Who we call if this employee has an incident at work. Required by H&amp;S best practice.
+          </div>
+        </div>
+      </div>
+
+      {/* ── Probation (slice 7) ── */}
+      <div className="pt-4 border-t border-slate-800">
+        <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">
+          Probation
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>Status</label>
+            <select
+              value={editHr.probationStatus || "in_progress"}
+              onChange={e => set("probationStatus", e.target.value)}
+              className={inputCls}
+            >
+              <option value="in_progress">In progress</option>
+              <option value="passed">Passed</option>
+              <option value="failed">Failed</option>
+              <option value="extended">Extended</option>
+              <option value="not_applicable">Not applicable</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>End date</label>
+            <input
+              type="date"
+              value={editHr.probationEndDate || ""}
+              onChange={e => set("probationEndDate", e.target.value)}
+              className={`${inputCls} cursor-pointer`}
+              onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+              disabled={editHr.probationStatus === "not_applicable"}
+            />
+            <div className="text-[10px] text-slate-600 mt-1">
+              {editHr.probationStatus === "not_applicable"
+                ? "Not applicable — no probation period."
+                : editHr.probationEndDate
+                  ? (() => {
+                      const end = new Date(editHr.probationEndDate);
+                      const now = new Date();
+                      const daysLeft = Math.floor((end - now) / (1000 * 60 * 60 * 24));
+                      if (isNaN(end.getTime())) return "Invalid date.";
+                      if (editHr.probationStatus === "passed") return "Probation completed.";
+                      if (editHr.probationStatus === "failed") return "Probation review failed.";
+                      if (daysLeft < 0)  return `Past probation by ${Math.abs(daysLeft)} days. Review needed.`;
+                      if (daysLeft <= 14) return `⚠ Review due in ${daysLeft} days.`;
+                      return `${daysLeft} days remaining.`;
+                    })()
+                  : "Auto-fills to hire date + 90 days on save."
+              }
+            </div>
+          </div>
+        </div>
+        {/* Quick action: mark probation passed (most common review outcome) */}
+        {editHr.probationStatus === "in_progress" && editHr.probationEndDate && (() => {
+          const end = new Date(editHr.probationEndDate);
+          const now = new Date();
+          const daysLeft = Math.floor((end - now) / (1000 * 60 * 60 * 24));
+          // Show the quick-action button if probation end is within 14 days
+          // OR already past. Otherwise hide to keep UI uncluttered.
+          if (isNaN(end.getTime())) return null;
+          if (daysLeft > 14) return null;
+          return (
+            <div className="mt-3 flex gap-2 flex-wrap">
+              <button
+                onClick={() => set("probationStatus", "passed")}
+                type="button"
+                className="px-3 py-1.5 rounded-xl bg-emerald-950/40 border border-emerald-900 text-emerald-300 text-xs font-semibold hover:bg-emerald-900/40"
+              >
+                ✓ Mark probation passed
+              </button>
+              <button
+                onClick={() => set("probationStatus", "extended")}
+                type="button"
+                className="px-3 py-1.5 rounded-xl bg-amber-950/40 border border-amber-900 text-amber-300 text-xs font-semibold hover:bg-amber-900/40"
+              >
+                Extend probation
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="flex justify-end">
