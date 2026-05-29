@@ -1607,13 +1607,32 @@ export async function fetchApplications() {
 }
 
 export async function insertApplication(application) {
+  // Slice 4 RLS — once RLS is enabled, anonymous /apply submissions can
+  // INSERT but cannot SELECT the inserted row (no read access for anon).
+  // `.insert(...).select().single()` would throw because the SELECT returns
+  // empty under RLS. We handle this gracefully:
+  //
+  //   1. Try the normal insert+select+single (works for authenticated
+  //      dashboard users with full access).
+  //   2. If the select returned 0 rows (PGRST116) AND we're on anon, the
+  //      INSERT did succeed — we synthesize the saved row from the input.
+  //      This is safe because the caller (/apply form) generates the id
+  //      client-side and doesn't depend on server-generated fields.
+  const dbRow = appApplicationToDb(application);
   const { data, error } = await supabase
     .from("job_applications")
-    .insert(appApplicationToDb(application))
-    .select()
-    .single();
-  if (error) throw error;
-  return dbApplicationToApp(data);
+    .insert(dbRow)
+    .select();
+  if (error) {
+    // Real error — surface it
+    throw error;
+  }
+  if (data && data.length > 0) {
+    return dbApplicationToApp(data[0]);
+  }
+  // INSERT succeeded but SELECT returned nothing (anon RLS path).
+  // Reconstruct the saved-row shape from the input.
+  return dbApplicationToApp(dbRow);
 }
 
 // Updates an application. Pass only the fields you want to change; everything
