@@ -46,6 +46,8 @@ import {
   // Slice 7 stage 3: RTW / compliance documents
   fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
   archiveEmployeeDocument,
+  // Slice 7 stage 4: apply-time duplicate detection
+  findApplicationsByEmail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5842,6 +5844,12 @@ function HiringView({
                 {/* Expanded section */}
                 {isExpanded && (
                   <div className="border-t border-slate-800 p-4 space-y-4 bg-slate-950/40">
+                    {/* Slice 7 stage 4: warn manager if this email matches other
+                        applications or an existing employee. Self-contained —
+                        fetches on mount (i.e. when the row is expanded). Manager-
+                        only info; never shown to the candidate. */}
+                    <DuplicateWarning email={app.email} excludeId={app.id}/>
+
                     {/* Top row: photo (if uploaded) + key details */}
                     <div className="flex items-start gap-4">
                       {app.photoUrl && (
@@ -6095,6 +6103,77 @@ function HiringView({
 }
 
 // Small key/value pair used inside the expanded row
+// Slice 7 stage 4 — apply-time duplicate warning.
+// Rendered inside the expanded application panel. On mount, looks up the
+// applicant's email against other applications and existing employees and
+// shows a soft amber warning if anything matches. Purely informational —
+// it never blocks any action, and it's only ever seen by the manager
+// (Q5: the candidate must not learn about other applicants on the same email).
+//
+// Fails silently: a lookup error just renders nothing rather than disrupting
+// the panel. No email → nothing to check → renders nothing.
+function DuplicateWarning({ email, excludeId }) {
+  const [result, setResult] = useState(null);  // { otherApplications, existingEmployee } | null
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!email?.trim()) { setResult(null); return; }
+    setLoading(true);
+    findApplicationsByEmail(email, excludeId)
+      .then(r => { if (!cancelled) setResult(r); })
+      .catch(err => { console.error("Duplicate check failed:", err); if (!cancelled) setResult(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [email, excludeId]);
+
+  if (loading || !result) return null;
+
+  const { otherApplications = [], existingEmployee = null } = result;
+  if (otherApplications.length === 0 && !existingEmployee) return null;
+
+  return (
+    <div className="bg-amber-950/30 border border-amber-800/70 rounded-xl p-3 space-y-2">
+      <div className="flex items-center gap-2 text-amber-300 text-xs font-semibold">
+        <AlertTriangle size={14}/> Possible duplicate
+      </div>
+
+      {existingEmployee && (
+        <div className="text-xs text-amber-200/90">
+          This email matches an existing employee:{" "}
+          <span className="font-semibold">
+            {existingEmployee.firstName} {existingEmployee.lastName}
+          </span>
+          {existingEmployee.archivedAt
+            ? <span className="text-amber-300/70"> (archived — possible returning worker)</span>
+            : <span className="text-amber-300/70"> (active)</span>}
+          . Consider linking to the existing record rather than creating a duplicate.
+        </div>
+      )}
+
+      {otherApplications.length > 0 && (
+        <div className="text-xs text-amber-200/90">
+          This email also appears on {otherApplications.length} other application{otherApplications.length === 1 ? "" : "s"}:
+          <ul className="mt-1 space-y-0.5">
+            {otherApplications.map(o => {
+              const st = APPLICATION_STATUSES.find(s => s.key === o.status);
+              return (
+                <li key={o.id} className="text-amber-100/80">
+                  · {o.firstName} {o.lastName}
+                  {" — "}
+                  <span className="text-amber-300/80">{st?.label || o.status}</span>
+                  {o.archivedAt && <span className="text-amber-300/60"> (archived)</span>}
+                  <span className="text-amber-400/50"> · {new Date(o.createdAt).toLocaleDateString("en-GB")}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetailField({ label, value, full }) {
   return (
     <div className={full ? "col-span-2 md:col-span-3" : ""}>
