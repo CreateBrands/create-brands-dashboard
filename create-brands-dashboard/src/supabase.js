@@ -2543,3 +2543,101 @@ export async function findApplicationsByEmail(email, excludeId = null) {
 
   return { otherApplications, existingEmployee };
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// TRAINING MODULES (trainee portal — step 2)
+// ════════════════════════════════════════════════════════════════════════════
+// Per-store training modules. A store defines its own set; trainees work
+// through them. Completion state lives in a separate training_progress table
+// (a later step), NOT here — a module is just the definition.
+//
+// Mappers are partial-aware (the project-wide rule: only write fields that are
+// explicitly present, so partial updates never wipe untouched columns).
+// updateTrainingModule uses .update().eq() (not upsert) to avoid the NOT NULL
+// footgun on partial saves. Soft delete via archived_at; never hard-delete
+// from app code.
+
+function dbTrainingModuleToApp(m) {
+  return {
+    id:          m.id,
+    storeId:     m.store_id,
+    title:       m.title,
+    description: m.description || null,
+    category:    m.category || null,
+    sortOrder:   m.sort_order ?? 0,
+    required:    m.required ?? true,
+    createdAt:   m.created_at,
+    updatedAt:   m.updated_at,
+    archivedAt:  m.archived_at || null,
+  };
+}
+
+export async function fetchTrainingModules(storeId) {
+  if (!storeId) return [];
+  const { data, error } = await supabase
+    .from("training_modules")
+    .select("*")
+    .eq("store_id", storeId)
+    .is("archived_at", null)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbTrainingModuleToApp);
+}
+
+export async function addTrainingModule({
+  storeId, title, description, category, sortOrder, required,
+}) {
+  if (!storeId) throw new Error("storeId required");
+  if (!title?.trim()) throw new Error("title required");
+  const row = {
+    id:          `tmod-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    store_id:    storeId,
+    title:       title.trim(),
+    description: description?.trim() || null,
+    category:    category?.trim() || null,
+    sort_order:  Number.isFinite(sortOrder) ? sortOrder : 0,
+    required:    required === undefined ? true : !!required,
+  };
+  const { data, error } = await supabase
+    .from("training_modules")
+    .insert(row)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data ? dbTrainingModuleToApp(data) : dbTrainingModuleToApp(row);
+}
+
+// Partial update — only fields explicitly in `patch` are written. Uses
+// .update().eq() (not upsert) so NOT NULL columns aren't required on a
+// partial save. RLS-tolerant refetch fallback, same as updateEmployeeCertification.
+export async function updateTrainingModule(id, patch) {
+  if (!id) throw new Error("id required");
+  const row = {};
+  if (patch.title       !== undefined) row.title       = patch.title?.trim();
+  if (patch.description !== undefined) row.description = patch.description?.trim() || null;
+  if (patch.category    !== undefined) row.category    = patch.category?.trim() || null;
+  if (patch.sortOrder   !== undefined) row.sort_order  = Number.isFinite(patch.sortOrder) ? patch.sortOrder : 0;
+  if (patch.required    !== undefined) row.required    = !!patch.required;
+  if (patch.archivedAt  !== undefined) row.archived_at = patch.archivedAt;
+  const { data, error } = await supabase
+    .from("training_modules")
+    .update(row)
+    .eq("id", id)
+    .select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbTrainingModuleToApp(data[0]);
+  // RLS-tolerant fallback: refetch defensively
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("training_modules").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Training module ${id} updated but could not be retrieved.`);
+  return dbTrainingModuleToApp(fresh);
+}
+
+// Soft-delete a training module. Restricted to manager/HQ/owner in app code;
+// archive preferred over hard delete so trainee progress history stays coherent.
+export async function archiveTrainingModule(id) {
+  if (!id) throw new Error("id required");
+  return updateTrainingModule(id, { archivedAt: new Date().toISOString() });
+}
