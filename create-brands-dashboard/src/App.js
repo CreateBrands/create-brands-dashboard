@@ -5636,6 +5636,12 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
   const [tplLoading, setTplLoading] = useState(false);
   const [editingTpl, setEditingTpl] = useState(null);   // template being edited, "new", or null
   const [pickTemplate, setPickTemplate] = useState(false); // "add from template" picker open?
+  // Trainee progress tab
+  const [progressTraineeId, setProgressTraineeId] = useState("");
+  const [progModules, setProgModules] = useState([]);
+  const [progRows, setProgRows] = useState([]);
+  const [progLoading, setProgLoading] = useState(false);
+  const [progBusy, setProgBusy] = useState(null);   // moduleId being verified
 
   useEffect(() => {
     if (!storeId) { setModules([]); return; }
@@ -5696,6 +5702,52 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
     } catch (err) {
       console.error("Instantiate failed:", err);
       alert(`Could not add from template: ${err?.message || err}`);
+    }
+  };
+
+  // Trainees in visible stores (for the progress tab picker).
+  const trainees = useMemo(() => {
+    const visibleStoreIdSet = new Set(visibleStores.map(s => s.id));
+    return (opsTeam || []).filter(m =>
+      m.isTrainee && !m.archivedAt &&
+      (visibleStoreIdSet.has(m.primaryStoreId) || visibleStoreIdSet.has(m.storeId) || (m.storeIds || []).some(id => visibleStoreIdSet.has(id)))
+    );
+  }, [opsTeam, visibleStores]);
+
+  // Load a trainee's modules + progress when selected.
+  useEffect(() => {
+    if (tab !== "progress" || !progressTraineeId) { return; }
+    const trainee = trainees.find(t => t.id === progressTraineeId);
+    const tStoreId = trainee?.primaryStoreId || trainee?.storeId || (trainee?.storeIds && trainee.storeIds[0]);
+    if (!tStoreId) { setProgModules([]); setProgRows([]); return; }
+    let cancelled = false;
+    setProgLoading(true);
+    Promise.all([fetchTrainingModules(tStoreId), fetchTrainingProgress(progressTraineeId)])
+      .then(([mods, rows]) => { if (!cancelled) { setProgModules(mods.filter(m => (m.type || "onboarding") === "onboarding")); setProgRows(rows); } })
+      .catch(err => console.error("Progress load failed:", err))
+      .finally(() => { if (!cancelled) setProgLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, progressTraineeId, trainees]);
+
+  const progByModule = useMemo(() => {
+    const map = {};
+    progRows.forEach(p => { map[p.moduleId] = p; });
+    return map;
+  }, [progRows]);
+
+  const handleVerify = async (moduleId, verified) => {
+    setProgBusy(moduleId);
+    try {
+      const updated = await setModuleVerification(progressTraineeId, moduleId, verified, currentUser);
+      setProgRows(prev => {
+        const others = prev.filter(p => p.moduleId !== moduleId);
+        return [...others, updated];
+      });
+    } catch (err) {
+      console.error("Verify failed:", err);
+      alert(`Could not update: ${err?.message || err}`);
+    } finally {
+      setProgBusy(null);
     }
   };
 
@@ -5786,6 +5838,7 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
         {[
           { key: "modules",   label: "Store modules" },
           { key: "templates", label: "Templates" },
+          { key: "progress",  label: "Trainee progress" },
         ].map(t => (
           <button
             key={t.key}
@@ -5904,6 +5957,76 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
             onCancel={() => setEditingTpl(null)}
           />
         )}
+      </>}
+
+      {tab === "progress" && <>
+        <div>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Trainee</label>
+          <select
+            value={progressTraineeId}
+            onChange={e => setProgressTraineeId(e.target.value)}
+            className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500 min-w-[260px]"
+          >
+            <option value="">— Select a trainee —</option>
+            {trainees.length === 0 && <option value="" disabled>No trainees in your stores</option>}
+            {trainees.map(t => {
+              const s = visibleStores.find(st => st.id === (t.primaryStoreId || t.storeId));
+              return <option key={t.id} value={t.id}>{t.firstName} {t.lastName}{s ? ` · ${s.shortName || s.name}` : ""}</option>;
+            })}
+          </select>
+        </div>
+
+        {!progressTraineeId ? (
+          <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center mt-4">
+            Select a trainee to see their onboarding progress and verify completed modules.
+          </div>
+        ) : progLoading ? (
+          <div className="text-sm text-slate-500 text-center py-8">Loading progress…</div>
+        ) : progModules.length === 0 ? (
+          <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center mt-4">
+            No onboarding modules for this trainee's store yet.
+          </div>
+        ) : (() => {
+          const done = progModules.filter(m => progByModule[m.id]?.completedAt).length;
+          const verified = progModules.filter(m => progByModule[m.id]?.verifiedAt).length;
+          return (
+            <div className="mt-4 space-y-3">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between text-sm">
+                <span className="font-semibold text-slate-200">Onboarding progress</span>
+                <span className="text-slate-400">{done}/{progModules.length} completed · {verified}/{progModules.length} verified</span>
+              </div>
+              <div className="space-y-2">
+                {progModules.map(mod => {
+                  const p = progByModule[mod.id];
+                  const completed = !!p?.completedAt;
+                  const isVerified = !!p?.verifiedAt;
+                  return (
+                    <div key={mod.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-semibold text-slate-200">{mod.title}</span>
+                          {mod.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">{mod.category}</span>}
+                          {completed
+                            ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold">✓ Trainee completed</span>
+                            : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Not completed</span>}
+                          {isVerified && <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-950/40 border border-sky-800 text-sky-300 font-semibold">✓ Verified{p?.verifiedByName ? ` by ${p.verifiedByName}` : ""}</span>}
+                        </div>
+                        {completed && p?.completedAt && <div className="text-[11px] text-slate-600 mt-1">Completed {new Date(p.completedAt).toLocaleDateString("en-GB")}</div>}
+                      </div>
+                      <div className="flex-shrink-0">
+                        {isVerified ? (
+                          <button onClick={() => handleVerify(mod.id, false)} disabled={progBusy === mod.id} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50">Unverify</button>
+                        ) : (
+                          <button onClick={() => handleVerify(mod.id, true)} disabled={progBusy === mod.id} className="px-2.5 py-1 rounded-lg bg-sky-600 text-white text-[11px] font-semibold hover:bg-sky-500 disabled:opacity-50">Verify</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
       </>}
 
       {/* Add-from-template picker (opens from Store modules tab) */}
