@@ -2360,6 +2360,18 @@ function dbEmployeeDocumentToApp(d) {
     reviewedByName: d.reviewed_by_name || null,
     reviewedAt:     d.reviewed_at || null,
     rejectionReason: d.rejection_reason || null,
+    // Two-stage workflow
+    requiredDocKey:   d.required_doc_key || null,
+    reviewStage:      d.review_stage || "pending",
+    managerApprovedById:   d.manager_approved_by_id || null,
+    managerApprovedByName: d.manager_approved_by_name || null,
+    managerApprovedAt:     d.manager_approved_at || null,
+    hrApprovedById:        d.hr_approved_by_id || null,
+    hrApprovedByName:      d.hr_approved_by_name || null,
+    hrApprovedAt:          d.hr_approved_at || null,
+    rejectedByName:        d.rejected_by_name || null,
+    rejectedAt:            d.rejected_at || null,
+    rejectedStage:         d.rejected_stage || null,
     createdAt:      d.created_at,
     updatedAt:      d.updated_at,
     archivedAt:     d.archived_at || null,
@@ -2440,11 +2452,33 @@ export async function addEmployeeDocument({
   notes,
   uploadedById,
   uploadedByName,
+  requiredDocKey,        // slot key, or null for a free ("other") upload
+  reviewStage,           // optional initial stage (e.g. manager_approved for RTW manager-upload)
+  managerApprovedBy,     // {id,name} if pre-approving at manager stage (RTW case)
 }) {
   if (!employeeId) throw new Error("employeeId required");
   if (!docType)    throw new Error("docType required");
   if (!fileUrl)    throw new Error("fileUrl required");
   if (!filePath)   throw new Error("filePath required");
+
+  // Supersede: if uploading into a slot, archive any existing CURRENT version
+  // in that slot first — so the slot holds one current version + archived history.
+  if (requiredDocKey) {
+    const { data: existing } = await supabase
+      .from("employee_documents")
+      .select("id")
+      .eq("employee_id", employeeId)
+      .eq("required_doc_key", requiredDocKey)
+      .is("archived_at", null);
+    if (existing && existing.length) {
+      await supabase
+        .from("employee_documents")
+        .update({ archived_at: new Date().toISOString() })
+        .in("id", existing.map(e => e.id));
+    }
+  }
+
+  const stage = reviewStage || "pending";
   const row = {
     id:                `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     employee_id:       employeeId,
@@ -2457,6 +2491,12 @@ export async function addEmployeeDocument({
     notes:             notes?.trim() || null,
     uploaded_by_id:    uploadedById   || null,
     uploaded_by_name:  uploadedByName || "Unknown",
+    required_doc_key:  requiredDocKey || null,
+    review_stage:      stage,
+    status:            stage === "hr_approved" ? "accepted" : stage === "rejected" ? "rejected" : "pending",
+    manager_approved_by_id:   stage === "manager_approved" ? (managerApprovedBy?.id || null)   : null,
+    manager_approved_by_name: stage === "manager_approved" ? (managerApprovedBy?.name || null) : null,
+    manager_approved_at:      stage === "manager_approved" ? new Date().toISOString()          : null,
   };
   const { data, error } = await supabase
     .from("employee_documents")
@@ -2488,20 +2528,14 @@ export async function archiveEmployeeDocument(id) {
   return fresh ? dbEmployeeDocumentToApp(fresh) : null;
 }
 
-// Manager review action: accept or reject a document. On reject, a reason can
-// be supplied (shown to the trainee so they know what to fix on re-upload).
-// status: 'accepted' | 'rejected' | 'pending'. Any manager/HQ/owner (enforced
-// in app code). Setting back to 'pending' clears the review fields.
-export async function setDocumentStatus(id, status, reviewer, rejectionReason) {
-  if (!id) throw new Error("id required");
-  if (!["accepted", "rejected", "pending"].includes(status)) throw new Error("invalid status");
-  const row = {
-    status,
-    reviewed_by_id:   status === "pending" ? null : (reviewer?.id || null),
-    reviewed_by_name: status === "pending" ? null : (reviewer?.name || reviewer?.email || "Manager"),
-    reviewed_at:      status === "pending" ? null : new Date().toISOString(),
-    rejection_reason: status === "rejected" ? (rejectionReason?.trim() || null) : null,
-  };
+// ── Two-stage document approval ────────────────────────────────────────────
+// Stage 1 (manager) → Stage 2 (HR = hq_staff/owner) → fully approved.
+// Reject at either stage sends it back to the trainee (re-upload restarts).
+// `status` is kept in sync for back-compat (hr_approved→accepted, else mapped).
+//
+// All four helpers reload the row defensively (RLS-tolerant) on return.
+
+async function _updateDocAndReturn(id, row) {
   const { data, error } = await supabase
     .from("employee_documents").update(row).eq("id", id).select();
   if (error) throw error;
@@ -2509,6 +2543,62 @@ export async function setDocumentStatus(id, status, reviewer, rejectionReason) {
   const { data: fresh } = await supabase
     .from("employee_documents").select("*").eq("id", id).maybeSingle();
   return fresh ? dbEmployeeDocumentToApp(fresh) : null;
+}
+
+// Stage 1: a manager approves. Moves pending → manager_approved.
+export async function managerApproveDocument(id, manager) {
+  if (!id) throw new Error("id required");
+  return _updateDocAndReturn(id, {
+    review_stage: "manager_approved",
+    status:       "pending",   // not fully accepted until HR
+    manager_approved_by_id:   manager?.id || null,
+    manager_approved_by_name: manager?.name || manager?.email || "Manager",
+    manager_approved_at:      new Date().toISOString(),
+    // clear any prior rejection
+    rejected_by_id: null, rejected_by_name: null, rejected_at: null,
+    rejected_stage: null, rejection_reason: null,
+  });
+}
+
+// Stage 2: HR gives final approval. Requires manager_approved first (enforced
+// in app UI — HR controls only show on manager_approved docs). hr_approved is
+// the terminal "fully approved" state.
+export async function hrApproveDocument(id, hr) {
+  if (!id) throw new Error("id required");
+  return _updateDocAndReturn(id, {
+    review_stage: "hr_approved",
+    status:       "accepted",
+    hr_approved_by_id:   hr?.id || null,
+    hr_approved_by_name: hr?.name || hr?.email || "HR",
+    hr_approved_at:      new Date().toISOString(),
+  });
+}
+
+// Reject at either stage. `stage` = 'manager' | 'hr'. Sends back to trainee.
+export async function rejectDocument(id, stage, reviewer, reason) {
+  if (!id) throw new Error("id required");
+  return _updateDocAndReturn(id, {
+    review_stage: "rejected",
+    status:       "rejected",
+    rejected_by_id:   reviewer?.id || null,
+    rejected_by_name: reviewer?.name || reviewer?.email || "Reviewer",
+    rejected_at:      new Date().toISOString(),
+    rejected_stage:   stage === "hr" ? "hr" : "manager",
+    rejection_reason: reason?.trim() || null,
+  });
+}
+
+// Reset a document back to pending (clears all review state).
+export async function resetDocumentReview(id) {
+  if (!id) throw new Error("id required");
+  return _updateDocAndReturn(id, {
+    review_stage: "pending",
+    status:       "pending",
+    manager_approved_by_id: null, manager_approved_by_name: null, manager_approved_at: null,
+    hr_approved_by_id: null, hr_approved_by_name: null, hr_approved_at: null,
+    rejected_by_id: null, rejected_by_name: null, rejected_at: null,
+    rejected_stage: null, rejection_reason: null,
+  });
 }
 
 // Hard-delete the actual file from Storage (separate from DB archive).

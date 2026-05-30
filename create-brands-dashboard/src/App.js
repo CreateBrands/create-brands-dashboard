@@ -45,7 +45,8 @@ import {
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
   fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
-  archiveEmployeeDocument, setDocumentStatus,
+  archiveEmployeeDocument,
+  managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   // Slice 7 stage 4: apply-time duplicate detection
   findApplicationsByEmail,
   // Training content layer: module authoring
@@ -8488,30 +8489,44 @@ function getDocTypeLabel(value) {
   return RTW_DOC_TYPES.find(t => t.value === value)?.label || value;
 }
 
+// Required onboarding document slots (fixed, global). Each is a named slot the
+// trainee (or, for RTW, a manager) fills. Two-stage approval per slot.
+//   managerOnly: only managers/HQ/owner can upload (Right to work — the employer
+//                does the gov.uk check; manager upload auto-passes stage 1).
+const REQUIRED_DOC_SLOTS = [
+  { key: "passport",         label: "Passport",          managerOnly: false },
+  { key: "share_code",       label: "Share code",        managerOnly: false },
+  { key: "proof_of_address", label: "Proof of address",  managerOnly: false },
+  { key: "ni_number",        label: "NI number document",managerOnly: false },
+  { key: "right_to_work",    label: "Right to work",     managerOnly: true  },
+];
+function getSlotLabel(key) {
+  return REQUIRED_DOC_SLOTS.find(s => s.key === key)?.label || key;
+}
+// Two-stage status display helper.
+function docStageMeta(stage) {
+  return {
+    pending:          { label: "⏳ Awaiting manager",        cls: "bg-slate-800 border-slate-600 text-slate-300" },
+    manager_approved: { label: "👤 Manager approved · awaiting HR", cls: "bg-sky-950/40 border-sky-800 text-sky-300" },
+    hr_approved:      { label: "✓ Fully approved",           cls: "bg-emerald-950/40 border-emerald-800 text-emerald-300" },
+    rejected:         { label: "✗ Rejected — re-upload",     cls: "bg-red-950/40 border-red-800 text-red-300" },
+  }[stage || "pending"];
+}
+
 function DocumentsTab({ employeeId, currentUser }) {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [reviewingId, setReviewingId] = useState(null);  // doc being rejected (reason prompt)
+  const [uploadingSlot, setUploadingSlot] = useState(null);  // slot key being uploaded, or "other"
+  const [rejectingId, setRejectingId] = useState(null);      // doc id being rejected (reason prompt)
+  const [rejectStage, setRejectStage] = useState(null);      // 'manager' | 'hr'
   const [busyId, setBusyId] = useState(null);
-  const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
-  // Managers/HQ/owner can review (accept/reject). A trainee (role "employee")
-  // viewing their own documents cannot — they only see status + re-upload.
-  const canReview = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
 
-  const handleSetStatus = async (doc, status, reason) => {
-    setBusyId(doc.id);
-    try {
-      const updated = await setDocumentStatus(doc.id, status, currentUser, reason);
-      setDocs(prev => prev.map(d => d.id === doc.id ? updated : d));
-      setReviewingId(null);
-    } catch (err) {
-      console.error("Set document status failed:", err);
-      alert(`Could not update: ${err?.message || err}`);
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+  const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
+  // HR = hq_staff/owner does stage-2 final approval.
+  const isHR = isHqOrOwner;
+  // A trainee (role "employee") views their own slots: upload only, no review.
+  const isTrainee = !isManagerPlus;
 
   useEffect(() => {
     let cancelled = false;
@@ -8524,223 +8539,213 @@ function DocumentsTab({ employeeId, currentUser }) {
     return () => { cancelled = true; };
   }, [employeeId]);
 
-  const handleAdd = async ({ file, docType, expiryDate, referenceNumber, notes }) => {
-    // Two-step: upload file first, then insert the DB record. If the DB insert
-    // fails after upload, the file is orphaned in Storage — acceptable for now
-    // (no incident observed), flagged for a future cleanup job.
+  const reload = async () => {
+    try { setDocs(await fetchEmployeeDocuments(employeeId)); }
+    catch (err) { console.error("Reload docs failed:", err); }
+  };
+
+  // Current (non-archived) doc for each slot key.
+  const bySlot = useMemo(() => {
+    const map = {};
+    docs.forEach(d => { if (d.requiredDocKey) map[d.requiredDocKey] = d; });
+    return map;
+  }, [docs]);
+
+  // Free uploads (no slot key) → "Other documents".
+  const otherDocs = useMemo(() => docs.filter(d => !d.requiredDocKey), [docs]);
+
+  const requiredDone = REQUIRED_DOC_SLOTS.filter(s => bySlot[s.key]?.reviewStage === "hr_approved").length;
+  const allRequiredApproved = requiredDone === REQUIRED_DOC_SLOTS.length;
+
+  // Upload into a slot (or "other"). RTW slot is manager-only and auto manager_approved.
+  const handleUpload = async ({ file, docType, expiryDate, referenceNumber, notes }, slotKey) => {
+    const slot = REQUIRED_DOC_SLOTS.find(s => s.key === slotKey);
+    const managerUploadRTW = slot?.managerOnly && isManagerPlus;
     const { url, path } = await uploadEmployeeDocument(file);
     const created = await addEmployeeDocument({
       employeeId,
-      docType,
+      docType:        slotKey && slotKey !== "other" ? slotKey : docType,
       fileUrl:        url,
       filePath:       path,
       fileName:       file.name,
       expiryDate:     expiryDate || null,
-      // Reference/certificate number is folded into notes so we don't need a
-      // separate column. Prefixed so it's machine-findable later if needed.
       notes:          [referenceNumber ? `Ref: ${referenceNumber}` : "", notes || ""].filter(Boolean).join(" — ") || null,
-      uploadedById:   currentUser?.id,
+      uploadedById:   currentUser?.opsTeamMemberId || currentUser?.id || null,
       uploadedByName: currentUser?.name || currentUser?.email || "Unknown",
+      requiredDocKey: slotKey && slotKey !== "other" ? slotKey : null,
+      reviewStage:    managerUploadRTW ? "manager_approved" : "pending",
+      managerApprovedBy: managerUploadRTW ? { id: currentUser?.id, name: currentUser?.name || currentUser?.email } : null,
     });
-    setDocs(prev => [created, ...prev]);
-    setAdding(false);
+    setDocs(prev => [created, ...prev.filter(d => d.id !== created.id)]);
+    setUploadingSlot(null);
+    await reload();
   };
 
-  const handleArchive = async (doc) => {
-    if (!isHqOrOwner) {
-      alert("Only HQ and owners can remove documents.");
-      return;
-    }
-    if (!window.confirm(`Archive "${getDocTypeLabel(doc.docType)}"?\n\nThis hides the document from the active list. The record and file are preserved for compliance — use a GDPR purge to delete permanently.`)) return;
+  const act = async (fn, doc, ...args) => {
+    setBusyId(doc.id);
     try {
-      await archiveEmployeeDocument(doc.id);
-      setDocs(prev => prev.filter(d => d.id !== doc.id));
+      const updated = await fn(doc.id, ...args);
+      setDocs(prev => prev.map(d => d.id === doc.id ? updated : d));
+      setRejectingId(null); setRejectStage(null);
     } catch (err) {
-      console.error("Document archive failed:", err);
-      alert(`Could not archive: ${err?.message || err}`);
+      console.error("Doc action failed:", err);
+      alert(`Could not update: ${err?.message || err}`);
+    } finally {
+      setBusyId(null);
     }
   };
 
-  // Sort by expiry: expired first, then expiring soon, then valid/no-expiry.
-  // Within a group, soonest expiry first.
-  const sortedDocs = useMemo(() => {
-    const rank = { expired: 0, expiring: 1, valid: 2, no_expiry: 3 };
-    return [...docs].sort((a, b) => {
-      const ra = rank[getCertExpiryStatus(a.expiryDate)];
-      const rb = rank[getCertExpiryStatus(b.expiryDate)];
-      if (ra !== rb) return ra - rb;
-      if (a.expiryDate && b.expiryDate) return new Date(a.expiryDate) - new Date(b.expiryDate);
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    });
-  }, [docs]);
+  // Review controls for a single doc, depending on stage + viewer role.
+  const reviewControls = (d) => {
+    if (isTrainee) return null;
+    if (rejectingId === d.id) {
+      return (
+        <DocRejectPrompt
+          busy={busyId === d.id}
+          onCancel={() => { setRejectingId(null); setRejectStage(null); }}
+          onConfirm={(reason) => act(rejectDocument, d, rejectStage, currentUser, reason)}
+        />
+      );
+    }
+    const btns = [];
+    // Stage 1 — manager: act on pending docs.
+    if (d.reviewStage === "pending" && isManagerPlus) {
+      btns.push(<button key="ma" onClick={() => act(managerApproveDocument, d, currentUser)} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-sky-600 text-white text-[11px] font-semibold hover:bg-sky-500 disabled:opacity-50">👤 Manager approve</button>);
+      btns.push(<button key="mr" onClick={() => { setRejectingId(d.id); setRejectStage("manager"); }} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-slate-800 text-red-300 text-[11px] font-semibold hover:bg-red-950/30 border border-red-900/50 disabled:opacity-50">✗ Reject</button>);
+    }
+    // Stage 2 — HR: act on manager_approved docs.
+    if (d.reviewStage === "manager_approved" && isHR) {
+      btns.push(<button key="ha" onClick={() => act(hrApproveDocument, d, currentUser)} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50">✓ HR final approve</button>);
+      btns.push(<button key="hr" onClick={() => { setRejectingId(d.id); setRejectStage("hr"); }} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-slate-800 text-red-300 text-[11px] font-semibold hover:bg-red-950/30 border border-red-900/50 disabled:opacity-50">✗ Reject</button>);
+    }
+    // manager_approved but viewer is only a manager (not HR): waiting note.
+    if (d.reviewStage === "manager_approved" && !isHR) {
+      btns.push(<span key="wait" className="text-[11px] text-slate-500 italic">Awaiting HR final approval</span>);
+    }
+    // Reset (any reviewer) for approved/rejected docs.
+    if (["hr_approved", "rejected"].includes(d.reviewStage) && isManagerPlus) {
+      btns.push(<button key="rs" onClick={() => act(resetDocumentReview, d)} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50">Reset</button>);
+    }
+    return btns.length ? <div className="flex gap-2 mt-2 flex-wrap">{btns}</div> : null;
+  };
 
-  const summary = useMemo(() => {
-    let expiring = 0, expired = 0;
-    docs.forEach(d => {
-      const s = getCertExpiryStatus(d.expiryDate);
-      if (s === "expiring") expiring++;
-      else if (s === "expired") expired++;
-    });
-    return { expiring, expired };
-  }, [docs]);
+  // Render one document's detail (used inside a slot and in Other docs).
+  const docDetail = (d) => {
+    const meta = docStageMeta(d.reviewStage);
+    return (
+      <div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${meta.cls}`}>{meta.label}</span>
+          {d.expiryDate && <span className="text-[10px] text-slate-500">Expires {new Date(d.expiryDate).toLocaleDateString("en-GB")}</span>}
+          <a href={d.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1"><Eye size={11}/> View</a>
+        </div>
+        <div className="text-[11px] text-slate-600 mt-1">
+          Uploaded {new Date(d.createdAt).toLocaleDateString("en-GB")} by {d.uploadedByName}
+          {d.fileName && <> · {d.fileName}</>}
+        </div>
+        {d.managerApprovedByName && <div className="text-[10px] text-sky-400/70 mt-0.5">Manager approved by {d.managerApprovedByName}{d.managerApprovedAt && <> · {new Date(d.managerApprovedAt).toLocaleDateString("en-GB")}</>}</div>}
+        {d.hrApprovedByName && <div className="text-[10px] text-emerald-400/70 mt-0.5">HR approved by {d.hrApprovedByName}{d.hrApprovedAt && <> · {new Date(d.hrApprovedAt).toLocaleDateString("en-GB")}</>}</div>}
+        {d.reviewStage === "rejected" && d.rejectionReason && (
+          <div className="text-xs text-red-300 bg-red-950/30 border border-red-900 rounded-lg px-2 py-1.5 mt-1.5">
+            <span className="font-semibold">Rejected{d.rejectedStage === "hr" ? " by HR" : " by manager"}:</span> {d.rejectionReason}
+          </div>
+        )}
+        {reviewControls(d)}
+      </div>
+    );
+  };
+
+  if (loading) return <div className="text-sm text-slate-500 text-center py-8">Loading documents…</div>;
 
   return (
-    <div className="space-y-4">
-      {/* Header + summary + add */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="text-xs text-slate-500">
-          Right-to-work &amp; compliance documents. {docs.length === 0 ? "None on file yet." : `${docs.length} on file.`}
-          {summary.expiring > 0 && <span className="text-amber-400 font-semibold"> · {summary.expiring} expiring soon</span>}
-          {summary.expired > 0 && <span className="text-red-400 font-semibold"> · {summary.expired} expired</span>}
+    <div className="space-y-5">
+      {/* Progress */}
+      <div className={`rounded-xl border p-3 ${allRequiredApproved ? "bg-emerald-950/30 border-emerald-800" : "bg-slate-900 border-slate-800"}`}>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-sm font-semibold text-slate-200">
+            {allRequiredApproved ? "✓ All required documents approved" : "Required onboarding documents"}
+          </span>
+          <span className="text-sm text-slate-400">{requiredDone} / {REQUIRED_DOC_SLOTS.length} approved</span>
         </div>
-        {!adding && (
-          <button
-            onClick={() => setAdding(true)}
-            className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500"
-          >
-            + Upload document
-          </button>
-        )}
       </div>
 
-      {/* Upload form (collapsible) */}
-      {adding && (
-        <DocUploadForm
-          onSave={handleAdd}
-          onCancel={() => setAdding(false)}
-        />
-      )}
-
-      {/* List */}
-      {loading ? (
-        <div className="text-sm text-slate-500 text-center py-6">Loading documents…</div>
-      ) : docs.length === 0 && !adding ? (
-        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
-          <div className="font-semibold text-slate-400 mb-1">No documents yet</div>
-          <div className="text-xs text-slate-600">Click "Upload document" to add a right-to-work record (passport, BRP, share code, visa).</div>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {sortedDocs.map(d => {
-            const status = getCertExpiryStatus(d.expiryDate);
-            const badgeColor = {
-              valid:     "bg-emerald-950/40 border-emerald-900 text-emerald-300",
-              expiring:  "bg-amber-950/40 border-amber-800 text-amber-300",
-              expired:   "bg-red-950/40 border-red-900 text-red-300",
-              no_expiry: "bg-slate-800 border-slate-700 text-slate-400",
-            }[status];
-            const badgeLabel = {
-              valid:     "Valid",
-              expiring:  "⚠ Expiring soon",
-              expired:   "✗ Expired",
-              no_expiry: "No expiry",
-            }[status];
-            return (
-              <div key={d.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <FileText size={14} className="text-slate-500 flex-shrink-0"/>
-                      <div className="text-sm font-semibold text-slate-200">{getDocTypeLabel(d.docType)}</div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${badgeColor}`}>
-                        {badgeLabel}
-                      </span>
-                      {(() => {
-                        const reviewBadge = {
-                          pending:  "bg-slate-800 border-slate-600 text-slate-300",
-                          accepted: "bg-emerald-950/40 border-emerald-800 text-emerald-300",
-                          rejected: "bg-red-950/40 border-red-800 text-red-300",
-                        }[d.status || "pending"];
-                        const reviewLabel = {
-                          pending:  "⏳ Pending review",
-                          accepted: "✓ Accepted",
-                          rejected: "✗ Rejected",
-                        }[d.status || "pending"];
-                        return <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${reviewBadge}`}>{reviewLabel}</span>;
-                      })()}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      Uploaded {new Date(d.createdAt).toLocaleDateString("en-GB")} by {d.uploadedByName}
-                      {d.expiryDate && <> · Expires {new Date(d.expiryDate).toLocaleDateString("en-GB")}</>}
-                    </div>
-                    {d.fileName && (
-                      <div className="text-[11px] text-slate-600 mt-0.5 truncate">{d.fileName}</div>
-                    )}
-                    {d.notes && (
-                      <div className="text-xs text-slate-400 italic mt-1.5">"{d.notes}"</div>
-                    )}
-                    {d.status === "rejected" && d.rejectionReason && (
-                      <div className="text-xs text-red-300 bg-red-950/30 border border-red-900 rounded-lg px-2 py-1.5 mt-1.5">
-                        <span className="font-semibold">Rejected:</span> {d.rejectionReason}
-                      </div>
-                    )}
-                    {d.status !== "pending" && d.reviewedByName && (
-                      <div className="text-[10px] text-slate-600 mt-1">
-                        {d.status === "accepted" ? "Accepted" : "Reviewed"} by {d.reviewedByName}
-                        {d.reviewedAt && <> · {new Date(d.reviewedAt).toLocaleDateString("en-GB")}</>}
-                      </div>
-                    )}
-                    {/* Manager review controls */}
-                    {canReview && (
-                      reviewingId === d.id ? (
-                        <DocRejectPrompt
-                          onConfirm={(reason) => handleSetStatus(d, "rejected", reason)}
-                          onCancel={() => setReviewingId(null)}
-                          busy={busyId === d.id}
-                        />
-                      ) : (
-                        <div className="flex gap-2 mt-2">
-                          {d.status !== "accepted" && (
-                            <button
-                              onClick={() => handleSetStatus(d, "accepted")}
-                              disabled={busyId === d.id}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50"
-                            >✓ Accept</button>
-                          )}
-                          {d.status !== "rejected" && (
-                            <button
-                              onClick={() => setReviewingId(d.id)}
-                              disabled={busyId === d.id}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800 text-red-300 text-[11px] font-semibold hover:bg-red-950/30 border border-red-900/50 disabled:opacity-50"
-                            >✗ Reject</button>
-                          )}
-                          {d.status !== "pending" && (
-                            <button
-                              onClick={() => handleSetStatus(d, "pending")}
-                              disabled={busyId === d.id}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50"
-                            >Reset</button>
-                          )}
-                        </div>
-                      )
-                    )}
+      {/* Required slots */}
+      <div className="space-y-2">
+        {REQUIRED_DOC_SLOTS.map(slot => {
+          const d = bySlot[slot.key];
+          const canUploadHere = slot.managerOnly ? isManagerPlus : true;
+          const showUpload = uploadingSlot === slot.key;
+          return (
+            <div key={slot.key} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <FileText size={14} className="text-slate-500 flex-shrink-0"/>
+                    <span className="text-sm font-semibold text-slate-200">{slot.label}</span>
+                    {slot.managerOnly && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Manager uploads</span>}
+                    {!d && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Not uploaded</span>}
                   </div>
-                  <div className="flex gap-1.5 flex-shrink-0">
-                    <a
-                      href={d.fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"
-                      title="View document"
-                    >
-                      <Eye size={13}/>
-                    </a>
-                    {isHqOrOwner && (
-                      <button
-                        onClick={() => handleArchive(d)}
-                        className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"
-                        title="Archive (HQ/owner only)"
-                      >
-                        <Trash2 size={13}/>
-                      </button>
-                    )}
-                  </div>
+                  {d && <div className="mt-2">{docDetail(d)}</div>}
+                  {!d && slot.managerOnly && isTrainee && (
+                    <div className="text-[11px] text-slate-600 mt-1">Your manager will complete this after the right-to-work check.</div>
+                  )}
                 </div>
+                {canUploadHere && (
+                  <button
+                    onClick={() => setUploadingSlot(showUpload ? null : slot.key)}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700 flex-shrink-0"
+                  >
+                    {d ? "Re-upload" : (slot.managerOnly ? "Upload (manager)" : "Upload")}
+                  </button>
+                )}
               </div>
-            );
-          })}
+              {showUpload && (
+                <div className="mt-3 border-t border-slate-800 pt-3">
+                  <DocUploadForm
+                    fixedLabel={slot.label}
+                    onCancel={() => setUploadingSlot(null)}
+                    onSave={(payload) => handleUpload(payload, slot.key)}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Other documents (free uploads / legacy) */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold">Other documents</div>
+          <button
+            onClick={() => setUploadingSlot(uploadingSlot === "other" ? null : "other")}
+            className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold hover:bg-slate-700"
+          >+ Upload other</button>
         </div>
-      )}
+        {uploadingSlot === "other" && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 mb-2">
+            <DocUploadForm onCancel={() => setUploadingSlot(null)} onSave={(payload) => handleUpload(payload, "other")} />
+          </div>
+        )}
+        {otherDocs.length === 0 ? (
+          <div className="text-xs text-slate-600">No other documents.</div>
+        ) : (
+          <div className="space-y-2">
+            {otherDocs.map(d => (
+              <div key={d.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <FileText size={14} className="text-slate-500"/>
+                  <span className="text-sm font-semibold text-slate-200">{getDocTypeLabel(d.docType)}</span>
+                  {isHqOrOwner && (
+                    <button onClick={() => act(archiveEmployeeDocument, d)} disabled={busyId === d.id} className="ml-auto p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20" title="Archive (HQ/owner)"><Trash2 size={12}/></button>
+                  )}
+                </div>
+                <div className="mt-2">{docDetail(d)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -8775,7 +8780,7 @@ function DocRejectPrompt({ onConfirm, onCancel, busy }) {
 
 // Helper component — the document upload form. Sub-component of DocumentsTab.
 // Handles file selection + validation client-side before the two-step upload.
-function DocUploadForm({ onSave, onCancel }) {
+function DocUploadForm({ onSave, onCancel, fixedLabel }) {
   const [docType, setDocType]         = useState("rtw_passport");
   const [file, setFile]               = useState(null);
   const [expiryDate, setExpiryDate]   = useState("");
@@ -8823,22 +8828,24 @@ function DocUploadForm({ onSave, onCancel }) {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
-        Upload right-to-work document
+        {fixedLabel ? `Upload: ${fixedLabel}` : "Upload right-to-work document"}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className={labelCls}>Document type *</label>
-          <select
-            value={docType}
-            onChange={e => setDocType(e.target.value)}
-            className={inputCls}
-          >
-            {RTW_DOC_TYPES.map(t => (
-              <option key={t.value} value={t.value}>{t.label}</option>
-            ))}
-          </select>
-        </div>
+        {!fixedLabel && (
+          <div>
+            <label className={labelCls}>Document type *</label>
+            <select
+              value={docType}
+              onChange={e => setDocType(e.target.value)}
+              className={inputCls}
+            >
+              {RTW_DOC_TYPES.map(t => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className={labelCls}>Expiry date</label>
           <input
@@ -8849,7 +8856,7 @@ function DocUploadForm({ onSave, onCancel }) {
             onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
           />
           <div className="text-[10px] text-slate-600 mt-1">
-            Leave blank if this document doesn't expire (e.g. a UK passport you only need on file).
+            Leave blank if this document doesn't expire.
           </div>
         </div>
       </div>
