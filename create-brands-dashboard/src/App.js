@@ -6097,6 +6097,11 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
 
 // Editor modal for a single training module. Markdown content authored in a
 // plain textarea (rendered safely as Markdown in the trainee view).
+// Full authoring guide PDF. Upload Training_Content_Authoring_Guide.pdf to
+// storage (or anywhere public) and paste its URL here to enable the
+// "Full guide (PDF)" link in the editor. Leave "" to hide the link.
+const TRAINING_GUIDE_PDF_URL = "";
+
 function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [title, setTitle]             = useState(module?.title || "");
   const [description, setDescription] = useState(module?.description || "");
@@ -6107,6 +6112,7 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
   const [uploadingImg, setUploadingImg] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const contentRef = useRef(null);
 
   // Upload an image and insert a Markdown image tag at the cursor (or append).
@@ -6171,18 +6177,49 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
         </div>
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className={labelCls + " mb-0"}>Content (Markdown — headings, **bold**, [links](url))</label>
-            <label className={`text-[11px] font-semibold cursor-pointer ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
-              {uploadingImg ? "Uploading…" : "+ Insert image"}
-              <input
-                type="file"
-                accept=".jpg,.jpeg,.png,.webp"
-                disabled={uploadingImg}
-                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; handleInsertImage(f); }}
-                className="hidden"
-              />
-            </label>
+            <label className={labelCls + " mb-0"}>Content (Markdown)</label>
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setShowHelp(h => !h)} className="text-[11px] font-semibold text-slate-400 hover:text-slate-200">
+                {showHelp ? "Hide help" : "Formatting help"}
+              </button>
+              <label className={`text-[11px] font-semibold cursor-pointer ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
+                {uploadingImg ? "Uploading…" : "+ Insert image"}
+                <input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.webp"
+                  disabled={uploadingImg}
+                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; handleInsertImage(f); }}
+                  className="hidden"
+                />
+              </label>
+            </div>
           </div>
+          {showHelp && (
+            <div className="mb-2 bg-slate-950 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 space-y-2">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                <div><code className="text-slate-300"># Heading</code> · big section title</div>
+                <div><code className="text-slate-300">## Sub-heading</code> · smaller</div>
+                <div><code className="text-slate-300">**bold**</code> · <b className="text-slate-200">bold</b></div>
+                <div><code className="text-slate-300">*italic*</code> · <i className="text-slate-200">italic</i></div>
+                <div><code className="text-slate-300">- item</code> · bullet list</div>
+                <div><code className="text-slate-300">1. item</code> · numbered list</div>
+                <div><code className="text-slate-300">[text](url)</code> · link</div>
+                <div>“+ Insert image” · upload a picture</div>
+              </div>
+              <div className="pt-2 border-t border-slate-800">
+                <div className="text-slate-300 font-semibold mb-1">Image beside text</div>
+                <pre className="bg-slate-900 border border-slate-800 rounded p-2 text-[10px] text-slate-300 whitespace-pre-wrap font-mono">{`:::row
+(click + Insert image here)
+Text that sits beside the image.
+:::`}</pre>
+                <div className="mt-1.5 text-slate-500">Markers <code className="text-slate-400">:::row</code> and <code className="text-slate-400">:::</code> each on their own line. Use <code className="text-slate-400">:::row-right</code> to put the image on the right. <b className="text-amber-400">Don't</b> type <code className="text-slate-400">![alt](</code> yourself before inserting — let the button add the whole image.</div>
+              </div>
+              <div className="pt-2 border-t border-slate-800 text-slate-500">
+                Not supported: tables, quote blocks, nested lists.
+                {TRAINING_GUIDE_PDF_URL && <> · <a href={TRAINING_GUIDE_PDF_URL} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 font-semibold">Full guide (PDF) ↗</a></>}
+              </div>
+            </div>
+          )}
           <textarea
             ref={contentRef}
             value={content}
@@ -6191,7 +6228,7 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
             className={`${inputCls} font-mono text-xs leading-relaxed`}
             placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
           />
-          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. Use "+ Insert image" to upload a picture. For image beside text, wrap a block in <code className="text-slate-400">:::row</code> … <code className="text-slate-400">:::</code> (or <code className="text-slate-400">:::row-right</code>). The trainee sees this formatted in their portal.</div>
+          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown — click "Formatting help" for the full list. The trainee sees this formatted in their portal.</div>
         </div>
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
