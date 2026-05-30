@@ -45,7 +45,7 @@ import {
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
   fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
-  archiveEmployeeDocument,
+  archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   fetchDocumentComments, addDocumentComment, markDocumentCommentRead,
   // Slice 7 stage 4: apply-time duplicate detection
@@ -8520,12 +8520,14 @@ function docStageMeta(stage) {
 function DocumentsTab({ employeeId, currentUser }) {
   const [docs, setDocs] = useState([]);
   const [comments, setComments] = useState([]);
+  const [archived, setArchived] = useState([]);              // superseded versions (managers/HR only)
   const [loading, setLoading] = useState(true);
   const [uploadingSlot, setUploadingSlot] = useState(null);  // slot key being uploaded, or "other"
   const [rejectingId, setRejectingId] = useState(null);      // doc id being rejected (reason prompt)
   const [rejectStage, setRejectStage] = useState(null);      // 'manager' | 'hr'
   const [busyId, setBusyId] = useState(null);
   const [openThreadId, setOpenThreadId] = useState(null);    // doc id whose thread is expanded
+  const [openHistorySlot, setOpenHistorySlot] = useState(null); // slot key whose history is expanded
 
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
   const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
@@ -8538,8 +8540,8 @@ function DocumentsTab({ employeeId, currentUser }) {
     let cancelled = false;
     if (!employeeId) return;
     setLoading(true);
-    Promise.all([fetchEmployeeDocuments(employeeId), fetchDocumentComments(employeeId)])
-      .then(([docRows, commentRows]) => { if (!cancelled) { setDocs(docRows); setComments(commentRows); } })
+    Promise.all([fetchEmployeeDocuments(employeeId), fetchDocumentComments(employeeId), fetchArchivedDocuments(employeeId)])
+      .then(([docRows, commentRows, archivedRows]) => { if (!cancelled) { setDocs(docRows); setComments(commentRows); setArchived(archivedRows); } })
       .catch(err => { console.error("Documents load failed:", err); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -8547,10 +8549,10 @@ function DocumentsTab({ employeeId, currentUser }) {
 
   const reload = async () => {
     try {
-      const [docRows, commentRows] = await Promise.all([
-        fetchEmployeeDocuments(employeeId), fetchDocumentComments(employeeId),
+      const [docRows, commentRows, archivedRows] = await Promise.all([
+        fetchEmployeeDocuments(employeeId), fetchDocumentComments(employeeId), fetchArchivedDocuments(employeeId),
       ]);
-      setDocs(docRows); setComments(commentRows);
+      setDocs(docRows); setComments(commentRows); setArchived(archivedRows);
     } catch (err) { console.error("Reload docs failed:", err); }
   };
 
@@ -8783,6 +8785,37 @@ function DocumentsTab({ employeeId, currentUser }) {
                   />
                 </div>
               )}
+              {/* Previous versions (managers/HR only) — superseded uploads kept as history. */}
+              {!isTrainee && (() => {
+                const history = archived.filter(a => a.requiredDocKey === slot.key);
+                if (!history.length) return null;
+                const openH = openHistorySlot === slot.key;
+                return (
+                  <div className="mt-2 border-t border-slate-800/60 pt-2">
+                    <button
+                      onClick={() => setOpenHistorySlot(openH ? null : slot.key)}
+                      className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-300"
+                    >
+                      Previous versions ({history.length})
+                      {openH ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+                    </button>
+                    {openH && (
+                      <div className="mt-1.5 space-y-1.5">
+                        {history.map(h => (
+                          <div key={h.id} className="text-[11px] text-slate-500 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate">
+                              {h.fileName || "Document"} · uploaded {new Date(h.createdAt).toLocaleDateString("en-GB")} by {h.uploadedByName}
+                              {h.reviewStage === "rejected" && <span className="text-red-400"> · was rejected</span>}
+                              {h.reviewStage === "hr_approved" && <span className="text-emerald-400"> · was approved</span>}
+                            </span>
+                            <a href={h.fileUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1 flex-shrink-0"><Eye size={11}/> View</a>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           );
         })}

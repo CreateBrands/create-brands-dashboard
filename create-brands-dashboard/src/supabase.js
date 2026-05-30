@@ -2390,6 +2390,21 @@ export async function fetchEmployeeDocuments(employeeId) {
   return (data || []).map(dbEmployeeDocumentToApp);
 }
 
+// Archived (superseded) document versions — the slot history. Kept on re-upload
+// (never destroyed), shown only to managers/HR via the "previous versions"
+// expander. Newest first.
+export async function fetchArchivedDocuments(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_documents")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .not("archived_at", "is", null)
+    .order("archived_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbEmployeeDocumentToApp);
+}
+
 // Uploads a document file to Supabase Storage. Reuses the applicant-photos
 // bucket for simplicity — same RLS posture (public reads, authenticated
 // uploads). Path is under `employee-docs/{yyyy-mm}/{token}.{ext}` so it's
