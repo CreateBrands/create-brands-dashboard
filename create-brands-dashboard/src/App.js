@@ -8493,12 +8493,15 @@ function getDocTypeLabel(value) {
 // trainee (or, for RTW, a manager) fills. Two-stage approval per slot.
 //   managerOnly: only managers/HQ/owner can upload (Right to work — the employer
 //                does the gov.uk check; manager upload auto-passes stage 1).
+//   docType: a value that satisfies the employee_documents.doc_type CHECK
+//            constraint. Slot identity is carried by required_doc_key, NOT
+//            doc_type — so doc_type just needs to be a valid allowed value.
 const REQUIRED_DOC_SLOTS = [
-  { key: "passport",         label: "Passport",          managerOnly: false },
-  { key: "share_code",       label: "Share code",        managerOnly: false },
-  { key: "proof_of_address", label: "Proof of address",  managerOnly: false },
-  { key: "ni_number",        label: "NI number document",managerOnly: false },
-  { key: "right_to_work",    label: "Right to work",     managerOnly: true  },
+  { key: "passport",         label: "Passport",          managerOnly: false, docType: "rtw_passport"   },
+  { key: "share_code",       label: "Share code",        managerOnly: false, docType: "rtw_share_code" },
+  { key: "proof_of_address", label: "Proof of address",  managerOnly: false, docType: "rtw_other"      },
+  { key: "ni_number",        label: "NI number document",managerOnly: false, docType: "rtw_other"      },
+  { key: "right_to_work",    label: "Right to work",     managerOnly: true,  docType: "rtw_other"      },
 ];
 function getSlotLabel(key) {
   return REQUIRED_DOC_SLOTS.find(s => s.key === key)?.label || key;
@@ -8564,7 +8567,9 @@ function DocumentsTab({ employeeId, currentUser }) {
     const { url, path } = await uploadEmployeeDocument(file);
     const created = await addEmployeeDocument({
       employeeId,
-      docType:        slotKey && slotKey !== "other" ? slotKey : docType,
+      // doc_type must satisfy the DB CHECK constraint. For a slot, use the
+      // slot's mapped docType; slot identity is carried by requiredDocKey.
+      docType:        slot ? slot.docType : docType,
       fileUrl:        url,
       filePath:       path,
       fileName:       file.name,
@@ -8572,7 +8577,7 @@ function DocumentsTab({ employeeId, currentUser }) {
       notes:          [referenceNumber ? `Ref: ${referenceNumber}` : "", notes || ""].filter(Boolean).join(" — ") || null,
       uploadedById:   currentUser?.opsTeamMemberId || currentUser?.id || null,
       uploadedByName: currentUser?.name || currentUser?.email || "Unknown",
-      requiredDocKey: slotKey && slotKey !== "other" ? slotKey : null,
+      requiredDocKey: slot ? slot.key : null,
       reviewStage:    managerUploadRTW ? "manager_approved" : "pending",
       managerApprovedBy: managerUploadRTW ? { id: currentUser?.id, name: currentUser?.name || currentUser?.email } : null,
     });
