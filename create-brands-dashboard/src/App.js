@@ -57,6 +57,7 @@ import {
   fetchTrainingTemplates, addTrainingTemplate, updateTrainingTemplate,
   archiveTrainingTemplate, instantiateTemplate,
   fetchContractTemplates, createContractTemplate, updateContractTemplate, archiveContractTemplate,
+  fetchEmployeeContracts, sendContract, signEmployeeContract, voidContract,
   // Training progress (trainee consumption + manager verify)
   fetchTrainingProgress, setModuleCompletion, setModuleVerification,
 } from "./supabase";
@@ -1627,6 +1628,158 @@ function SafeMarkdown({ text }) {
   );
 }
 
+// Contracts sent to an employee — read, sign, and print. Shown in their portal.
+// Also reused (read-only-ish) on the manager profile via ContractsForEmployee.
+function EmployeeContractsSection({ employeeId, currentUser, managerView = false }) {
+  const [contracts, setContracts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [openId, setOpenId] = useState(null);       // contract being read
+  const [signName, setSignName] = useState("");
+  const [signAgree, setSignAgree] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const SIGN_STATEMENT = "I have read and agree to this contract of employment.";
+  const meId = currentUser?.opsTeamMemberId || currentUser?.id || null;
+
+  const load = () => {
+    setLoading(true);
+    fetchEmployeeContracts(employeeId)
+      .then(setContracts)
+      .catch(err => console.error("Load contracts failed:", err))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { if (employeeId) load(); /* eslint-disable-next-line */ }, [employeeId]);
+
+  const handleSign = async (c) => {
+    if (!signName.trim() || !signAgree) return;
+    if (!window.confirm("By signing you confirm you have read and agree to this contract of employment. This is legally binding. Continue?")) return;
+    setBusy(true);
+    try {
+      await signEmployeeContract(c.id, { signerId: meId, signerName: signName.trim(), statement: SIGN_STATEMENT });
+      setOpenId(null); setSignName(""); setSignAgree(false);
+      load();
+    } catch (err) {
+      console.error("Sign failed:", err);
+      alert(`Could not sign: ${err?.message || err}`);
+    } finally { setBusy(false); }
+  };
+
+  const printContract = (c) => {
+    const w = window.open("", "_blank");
+    if (!w) { alert("Please allow pop-ups to print/save the contract."); return; }
+    const sig = c.status === "signed"
+      ? `<hr/><p><strong>Signed by:</strong> ${escapeHtml(c.signedByName || "")}<br/><strong>Date:</strong> ${c.signedAt ? new Date(c.signedAt).toLocaleString("en-GB") : ""}<br/><em>${escapeHtml(c.signatureStatement || "")}</em></p>`
+      : `<hr/><p><em>Not yet signed.</em></p>`;
+    // Render the frozen body as simple HTML (headings/bold/lists handled minimally).
+    const bodyHtml = contractBodyToPrintHtml(c.filledBody);
+    w.document.write(`<!doctype html><html><head><title>${escapeHtml(c.title)}</title><style>
+      body{font-family:Georgia,'Times New Roman',serif;max-width:720px;margin:40px auto;padding:0 24px;color:#1a1a1a;line-height:1.5;}
+      h1{font-size:22px;} h2{font-size:16px;margin-top:24px;} h3{font-size:14px;}
+      hr{margin:28px 0;border:none;border-top:1px solid #ccc;}
+      li{margin:4px 0;}
+    </style></head><body>${bodyHtml}${sig}</body></html>`);
+    w.document.close();
+    setTimeout(() => w.print(), 300);
+  };
+
+  if (loading) return null;
+  if (!contracts.length) {
+    return managerView
+      ? <div className="text-sm text-slate-500">No contracts sent to this employee yet.</div>
+      : null;  // hide the section entirely in the portal if there's nothing
+  }
+
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">Your contracts</div>
+      <div className="space-y-2">
+        {contracts.filter(c => c.status !== "voided").map(c => {
+          const open = openId === c.id;
+          const signed = c.status === "signed";
+          return (
+            <div key={c.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <FileText size={14} className="text-slate-500 flex-shrink-0"/>
+                    <span className="text-sm font-semibold text-slate-200">{c.title}</span>
+                    {signed
+                      ? <span className="text-[10px] px-1.5 py-0.5 rounded border font-semibold bg-emerald-950/40 border-emerald-800 text-emerald-300">✓ Signed</span>
+                      : <span className="text-[10px] px-1.5 py-0.5 rounded border font-semibold bg-amber-950/40 border-amber-800 text-amber-300">Awaiting your signature</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-600 mt-1">Sent {c.sentAt ? new Date(c.sentAt).toLocaleDateString("en-GB") : ""}{c.sentByName ? ` by ${c.sentByName}` : ""}</div>
+                  {signed && <div className="text-[11px] text-emerald-400/70 mt-0.5">Signed by {c.signedByName}{c.signedAt ? ` on ${new Date(c.signedAt).toLocaleString("en-GB", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" })}` : ""}</div>}
+                </div>
+                <div className="flex gap-2 flex-shrink-0">
+                  <button onClick={() => setOpenId(open ? null : c.id)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">{open ? "Hide" : (signed ? "View" : "Read & sign")}</button>
+                  {signed && <button onClick={() => printContract(c)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">Print / PDF</button>}
+                </div>
+              </div>
+
+              {open && (
+                <div className="mt-3">
+                  <div className="bg-white rounded-xl p-6 max-h-[55vh] overflow-y-auto contract-preview-box">
+                    <style>{`
+                      .contract-preview-box, .contract-preview-box * { color: #1e293b !important; }
+                      .contract-preview-box .text-white, .contract-preview-box [class*="text-slate-200"], .contract-preview-box [class*="text-slate-300"] { color: #0f172a !important; }
+                      .contract-preview-box a { color: #4f46e5 !important; text-decoration: underline; }
+                      .contract-preview-box h1, .contract-preview-box h2, .contract-preview-box h3, .contract-preview-box div[class*="font-bold"] { color: #0f172a !important; }
+                    `}</style>
+                    <SafeMarkdown text={c.filledBody}/>
+                  </div>
+
+                  {!signed && !managerView && (
+                    <div className="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                      <div className="text-[11px] text-slate-400">Read the full contract above, then sign below.</div>
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type your full name</label>
+                        <input value={signName} onChange={e => setSignName(e.target.value)} placeholder="Your full legal name" className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500"/>
+                      </div>
+                      <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+                        <input type="checkbox" checked={signAgree} onChange={e => setSignAgree(e.target.checked)} className="mt-0.5"/>
+                        <span>{SIGN_STATEMENT}</span>
+                      </label>
+                      <button onClick={() => handleSign(c)} disabled={busy || !signName.trim() || !signAgree} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50">{busy ? "Signing…" : "Sign contract"}</button>
+                    </div>
+                  )}
+                  {!signed && managerView && <div className="text-[11px] text-slate-600 mt-2">Awaiting the employee's signature in their portal.</div>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Minimal markdown → print HTML for the contract print window. Handles the
+// subset SafeMarkdown supports (headings, bold, lists, paragraphs).
+function escapeHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function contractBodyToPrintHtml(body) {
+  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let inList = false;
+  const inline = (t) => escapeHtml(t)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+  const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    const li = /^[-*]\s+(.*)$/.exec(line);
+    if (h) { closeList(); const lvl = h[1].length; out.push(`<h${lvl}>${inline(h[2])}</h${lvl}>`); }
+    else if (li) { if (!inList) { out.push("<ul>"); inList = true; } out.push(`<li>${inline(li[1])}</li>`); }
+    else { closeList(); out.push(`<p>${inline(line)}</p>`); }
+  }
+  closeList();
+  return out.join("\n");
+}
+
 function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) {
   // Resolve the trainee's own ops_team record (for their store/brand context).
   const me = opsTeam.find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
@@ -1806,6 +1959,9 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
             ))}
           </div>
         )}
+
+        {/* Contracts sent to this employee for signing */}
+        <EmployeeContractsSection employeeId={employeeId} currentUser={currentUser}/>
 
         {/* RTW documents — reuse the slice 7 Documents tab */}
         <div>
@@ -5667,6 +5823,10 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);   // template, "new", or null
   const [previewTpl, setPreviewTpl] = useState(null);   // template being previewed
+  const [sendTpl, setSendTpl] = useState(null);         // template being sent
+  const [sendEmpId, setSendEmpId] = useState("");
+  const [sendFields, setSendFields] = useState({});     // manual field values
+  const [sending, setSending] = useState(false);
   const [previewEmpId, setPreviewEmpId] = useState("");
 
   const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
@@ -5711,6 +5871,37 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
     catch (err) { console.error("Archive failed:", err); alert(`Could not archive: ${err?.message || err}`); }
   };
 
+  // Send a contract: freeze the fully-filled body (name auto + manual fields)
+  // and create a "sent" contract for the employee. Blocked if any field is
+  // still unfilled (compliance: no blanks go out).
+  const handleSend = async (tpl, employee) => {
+    const employeeName = [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim();
+    const filled = fillContractForSend(tpl.body, employeeName, sendFields);
+    if (/\[\[ .+ — not set \]\]/.test(filled)) {
+      alert("Some fields are not filled in yet. Complete every field before sending — the contract must not contain blanks.");
+      return;
+    }
+    if (!window.confirm(`Send this contract to ${employeeName}? They will be able to read and sign it in their portal. The exact text shown will be recorded as what they sign.`)) return;
+    setSending(true);
+    try {
+      await sendContract({
+        employeeId: employee.id,
+        templateId: tpl.id,
+        title: tpl.title,
+        filledBody: filled,        // FROZEN snapshot
+        fieldValues: { employee_name: employeeName, ...sendFields },
+        sentBy: currentUser,
+      });
+      setSendTpl(null); setSendEmpId(""); setSendFields({});
+      alert(`Contract sent to ${employeeName}. They can now sign it from their portal.`);
+    } catch (err) {
+      console.error("Send contract failed:", err);
+      alert(`Could not send: ${err?.message || err}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
   if (!isManagerPlus) {
     return <div className="text-sm text-slate-500 text-center py-8">You don't have access to contracts.</div>;
   }
@@ -5744,6 +5935,7 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
                 <div className="text-[10px] text-slate-600 mt-1">Updated {new Date(tpl.updatedAt).toLocaleDateString("en-GB")}{tpl.createdByName ? ` · by ${tpl.createdByName}` : ""}</div>
               </div>
               <div className="flex gap-2 flex-shrink-0">
+                <button onClick={() => { setSendTpl(tpl); setSendEmpId(""); setSendFields({}); }} className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500">Send</button>
                 <button onClick={() => { setPreviewTpl(tpl); setPreviewEmpId(""); }} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-semibold hover:bg-indigo-500">Preview</button>
                 <button onClick={() => setEditing(tpl)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">Edit</button>
                 <button onClick={() => handleArchive(tpl)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-semibold hover:bg-slate-700">Archive</button>
@@ -5760,6 +5952,67 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
           onCancel={() => setEditing(null)}
         />
       )}
+
+      {sendTpl && (() => {
+        const emp = employees.find(e => e.id === sendEmpId);
+        const employeeName = emp ? [emp.firstName, emp.lastName].filter(Boolean).join(" ").trim() : "";
+        const filled = emp ? fillContractForSend(sendTpl.body, employeeName, sendFields) : "";
+        const hasGaps = emp ? /\[\[ .+ — not set \]\]/.test(filled) : true;
+        return (
+          <Modal title={`Send — ${sendTpl.title}`} onClose={() => setSendTpl(null)} maxW="max-w-3xl"
+            footer={
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-[11px] text-slate-500">{emp ? (hasGaps ? "Fill every field to enable sending" : "Ready to send") : "Select an employee"}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setSendTpl(null)} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+                  <button onClick={() => handleSend(sendTpl, emp)} disabled={!emp || hasGaps || sending} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50">{sending ? "Sending…" : "Send to employee"}</button>
+                </div>
+              </div>
+            }
+          >
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Employee (name auto-fills)</label>
+                <select value={sendEmpId} onChange={e => setSendEmpId(e.target.value)} className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500 min-w-[260px]">
+                  <option value="">— Select an employee —</option>
+                  {employees.map(e => <option key={e.id} value={e.id}>{e.firstName} {e.lastName}</option>)}
+                </select>
+              </div>
+              {emp && (
+                <>
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider pt-1">Fill in the contract terms</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {CONTRACT_MANUAL_FIELDS.map(f => (
+                      <div key={f.token}>
+                        <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">{f.label}</label>
+                        <input
+                          value={sendFields[f.token] || ""}
+                          onChange={e => setSendFields(s => ({ ...s, [f.token]: e.target.value }))}
+                          placeholder={f.placeholder}
+                          className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pt-1">
+                    <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider mb-1">Preview — this exact text is what {employeeName} will sign</div>
+                    <div className="bg-white rounded-xl p-6 max-h-[40vh] overflow-y-auto contract-preview-box">
+                      <style>{`
+                        .contract-preview-box, .contract-preview-box * { color: #1e293b !important; }
+                        .contract-preview-box .text-white, .contract-preview-box [class*="text-slate-200"], .contract-preview-box [class*="text-slate-300"] { color: #0f172a !important; }
+                        .contract-preview-box a { color: #4f46e5 !important; text-decoration: underline; }
+                        .contract-preview-box h1, .contract-preview-box h2, .contract-preview-box h3, .contract-preview-box div[class*="font-bold"] { color: #0f172a !important; }
+                      `}</style>
+                      <SafeMarkdown text={filled}/>
+                    </div>
+                    {hasGaps && <div className="text-[11px] text-amber-400 mt-1.5">Fields shown as [[ … — not set ]] must be filled before sending.</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          </Modal>
+        );
+      })()}
 
       {previewTpl && (() => {
         const emp = employees.find(e => e.id === previewEmpId);
@@ -6584,6 +6837,18 @@ const CONTRACT_TOKENS = [
   { token: "store_address",  label: "Store address" },
 ];
 
+// Stage 2 decision: only employee_name auto-fills; everything else is entered
+// manually by the manager when sending. These are the prompted fields.
+const CONTRACT_MANUAL_FIELDS = [
+  { token: "position",      label: "Job title / position", placeholder: "e.g. Barista" },
+  { token: "start_date",    label: "Start date",           placeholder: "e.g. 1 June 2026" },
+  { token: "salary",        label: "Pay",                  placeholder: "e.g. £12.50 per hour" },
+  { token: "hours",         label: "Hours per week",       placeholder: "e.g. 40" },
+  { token: "probation",     label: "Probation period",     placeholder: "e.g. three months" },
+  { token: "store",         label: "Store / place of work",placeholder: "e.g. London Road" },
+  { token: "store_address", label: "Store address",        placeholder: "e.g. 12 London Rd, Leicester, LE2 1AB" },
+];
+
 function resolveContractTokens(employee, stores) {
   if (!employee) return {};
   const store = (stores || []).find(s => s.id === (employee.primaryStoreId || employee.storeId || (employee.storeIds && employee.storeIds[0])));
@@ -6600,15 +6865,36 @@ function resolveContractTokens(employee, stores) {
 
 // Substitute tokens into a body. Missing/empty values become a visible
 // [[ Label ]] marker (not silently blank) so gaps are obvious in preview.
+// Used by the Stage-1 preview (auto-fill from record).
 function fillContractBody(body, values) {
   if (!body) return "";
   return body.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (match, name) => {
     const key = name.toLowerCase();
-    if (key === "hours") return match; // intentionally left as literal token for manual edit
+    if (key === "hours") return match; // intentionally left as literal token in preview
     const def = CONTRACT_TOKENS.find(t => t.token === key);
     if (!def) return match;            // unknown token: leave as-is
     const v = values[key];
     return (v && String(v).trim()) ? v : `[[ ${def.label} — not set ]]`;
+  });
+}
+
+// Stage 2 fill: employee name auto-resolved; all OTHER tokens come from the
+// manager's manually-entered field values. Produces the FROZEN body that gets
+// snapshotted and signed. Unknown tokens left as-is. Missing manual values are
+// left as a visible marker so an incomplete contract can't be silently sent.
+const ALL_CONTRACT_LABELS = {
+  employee_name: "Employee name",
+  ...Object.fromEntries(CONTRACT_MANUAL_FIELDS.map(f => [f.token, f.label])),
+};
+function fillContractForSend(body, employeeName, manualValues) {
+  if (!body) return "";
+  const values = { employee_name: employeeName, ...manualValues };
+  return body.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (match, name) => {
+    const key = name.toLowerCase();
+    const v = values[key];
+    if (v && String(v).trim()) return v;
+    const label = ALL_CONTRACT_LABELS[key];
+    return label ? `[[ ${label} — not set ]]` : match;
   });
 }
 
@@ -7808,10 +8094,16 @@ function EmployeeProfileView({
       )}
 
       {tab === "documents" && (
-        <DocumentsTab
-          employeeId={employeeId}
-          currentUser={currentUser}
-        />
+        <div className="space-y-6">
+          <DocumentsTab
+            employeeId={employeeId}
+            currentUser={currentUser}
+          />
+          <div className="pt-2 border-t border-slate-800">
+            <h3 className="text-sm font-bold text-slate-300 mb-3 mt-4">Contracts</h3>
+            <EmployeeContractsSection employeeId={employeeId} currentUser={currentUser} managerView/>
+          </div>
+        </div>
       )}
 
       {tab === "notes" && (

@@ -3147,3 +3147,105 @@ export async function archiveContractTemplate(id) {
     .eq("id", id);
   if (error) throw error;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE CONTRACTS (web-authored contracts — stage 2: send + sign)
+// ════════════════════════════════════════════════════════════════════════════
+// filled_body is FROZEN at send time (caller substitutes all tokens before
+// calling sendContract). The signature attaches to this frozen text. We never
+// recompute it — that is the compliance guarantee.
+
+function dbEmployeeContractToApp(c) {
+  return {
+    id:                 c.id,
+    employeeId:         c.employee_id,
+    templateId:         c.template_id || null,
+    title:              c.title,
+    filledBody:         c.filled_body,
+    fieldValues:        c.field_values || {},
+    status:             c.status || "sent",
+    sentById:           c.sent_by_id || null,
+    sentByName:         c.sent_by_name || null,
+    sentAt:             c.sent_at || null,
+    signedById:         c.signed_by_id || null,
+    signedByName:       c.signed_by_name || null,
+    signatureStatement: c.signature_statement || null,
+    signedAt:           c.signed_at || null,
+    voidedAt:           c.voided_at || null,
+    createdAt:          c.created_at,
+    updatedAt:          c.updated_at,
+  };
+}
+
+// All contracts for one employee (newest first).
+export async function fetchEmployeeContracts(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_contracts")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbEmployeeContractToApp);
+}
+
+// Send a contract to an employee. filledBody MUST already be fully substituted
+// (the caller freezes it). This stores the frozen text + the manual field
+// values used. Status starts "sent".
+export async function sendContract({ employeeId, templateId, title, filledBody, fieldValues, sentBy }) {
+  if (!employeeId) throw new Error("employeeId required");
+  if (!filledBody?.trim()) throw new Error("Contract body is empty");
+  if (!title?.trim()) throw new Error("Title required");
+  const row = {
+    id:           `ectr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id:  employeeId,
+    template_id:  templateId || null,
+    title:        title.trim(),
+    filled_body:  filledBody,            // FROZEN — exactly as the employee will see/sign
+    field_values: fieldValues || {},
+    status:       "sent",
+    sent_by_id:   sentBy?.id || null,
+    sent_by_name: sentBy?.name || sentBy?.email || null,
+    sent_at:      new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("employee_contracts").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbEmployeeContractToApp(data) : dbEmployeeContractToApp(row);
+}
+
+// Employee signs. Does NOT touch filled_body (the frozen text the signature
+// attaches to). Records signer identity + statement + timestamp.
+export async function signEmployeeContract(id, { signerId, signerName, statement }) {
+  if (!id) throw new Error("id required");
+  if (!signerName?.trim()) throw new Error("Signature name required");
+  const { data, error } = await supabase
+    .from("employee_contracts")
+    .update({
+      status:              "signed",
+      signed_by_id:        signerId || null,
+      signed_by_name:      signerName.trim(),
+      signature_statement: statement || null,
+      signed_at:           new Date().toISOString(),
+      updated_at:          new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("status", "sent")   // guard: only an un-signed, sent contract can be signed
+    .select().maybeSingle();
+  if (error) throw error;
+  return data ? dbEmployeeContractToApp(data) : null;
+}
+
+// Void a sent contract (e.g. wrong details). Signed contracts are NOT voidable
+// here — a signed contract is a record; supersede with a new one instead.
+export async function voidContract(id) {
+  if (!id) throw new Error("id required");
+  const { data, error } = await supabase
+    .from("employee_contracts")
+    .update({ status: "voided", voided_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("status", "sent")
+    .select().maybeSingle();
+  if (error) throw error;
+  return data ? dbEmployeeContractToApp(data) : null;
+}
