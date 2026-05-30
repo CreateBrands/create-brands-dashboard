@@ -3080,3 +3080,70 @@ export async function markDocumentCommentRead(id, readerId) {
     console.error("markDocumentCommentRead failed:", err);
   }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// CONTRACT TEMPLATES (web-authored contracts — stage 1, preview only)
+// ════════════════════════════════════════════════════════════════════════════
+// Boilerplate authored once with {{tokens}} that fill from an employee record
+// at preview time. No signing/snapshot here — that is stage 2.
+
+function dbContractTemplateToApp(t) {
+  return {
+    id:            t.id,
+    title:         t.title,
+    description:   t.description || "",
+    body:          t.body || "",
+    createdById:   t.created_by_id || null,
+    createdByName: t.created_by_name || null,
+    createdAt:     t.created_at,
+    updatedAt:     t.updated_at,
+    archivedAt:    t.archived_at || null,
+  };
+}
+
+export async function fetchContractTemplates() {
+  const { data, error } = await supabase
+    .from("contract_templates")
+    .select("*")
+    .is("archived_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbContractTemplateToApp);
+}
+
+export async function createContractTemplate({ title, description, body, author }) {
+  if (!title?.trim()) throw new Error("Title is required");
+  const row = {
+    id:              `ctpl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    title:           title.trim(),
+    description:     description?.trim() || null,
+    body:            body || "",
+    created_by_id:   author?.id || null,
+    created_by_name: author?.name || author?.email || null,
+  };
+  const { data, error } = await supabase
+    .from("contract_templates").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbContractTemplateToApp(data) : dbContractTemplateToApp(row);
+}
+
+export async function updateContractTemplate(id, fields) {
+  if (!id) throw new Error("id required");
+  const row = { updated_at: new Date().toISOString() };
+  if (fields.title       !== undefined) row.title       = fields.title.trim();
+  if (fields.description !== undefined) row.description = fields.description?.trim() || null;
+  if (fields.body        !== undefined) row.body        = fields.body;
+  const { data, error } = await supabase
+    .from("contract_templates").update(row).eq("id", id).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbContractTemplateToApp(data) : null;
+}
+
+export async function archiveContractTemplate(id) {
+  if (!id) throw new Error("id required");
+  const { error } = await supabase
+    .from("contract_templates")
+    .update({ archived_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}

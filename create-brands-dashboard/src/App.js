@@ -56,6 +56,7 @@ import {
   // Training templates: blueprint library
   fetchTrainingTemplates, addTrainingTemplate, updateTrainingTemplate,
   archiveTrainingTemplate, instantiateTemplate,
+  fetchContractTemplates, createContractTemplate, updateContractTemplate, archiveContractTemplate,
   // Training progress (trainee consumption + manager verify)
   fetchTrainingProgress, setModuleCompletion, setModuleVerification,
 } from "./supabase";
@@ -5658,6 +5659,200 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
 // Data layer: fetchTrainingModules / addTrainingModule / updateTrainingModule /
 // archiveTrainingModule (already in supabase.js). Content is plain Markdown
 // text here; the trainee view (C2) renders it safely.
+// ════════════════════════════════════════════════════════════════════════════
+// CONTRACTS — web-authored contract templates (stage 1: author + preview)
+// ════════════════════════════════════════════════════════════════════════════
+function ContractsAdminView({ stores, opsTeam, currentUser }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);   // template, "new", or null
+  const [previewTpl, setPreviewTpl] = useState(null);   // template being previewed
+  const [previewEmpId, setPreviewEmpId] = useState("");
+
+  const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
+
+  const reload = async () => {
+    try { setTemplates(await fetchContractTemplates()); }
+    catch (err) { console.error("Load contract templates failed:", err); }
+  };
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchContractTemplates()
+      .then(rows => { if (!cancelled) setTemplates(rows); })
+      .catch(err => console.error("Load contract templates failed:", err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const employees = useMemo(
+    () => (opsTeam || []).filter(m => !m.archivedAt).sort((a, b) => (a.firstName || "").localeCompare(b.firstName || "")),
+    [opsTeam]
+  );
+
+  const handleSave = async (form) => {
+    try {
+      if (editing === "new") {
+        await createContractTemplate({ ...form, author: currentUser });
+      } else {
+        await updateContractTemplate(editing.id, form);
+      }
+      setEditing(null);
+      await reload();
+    } catch (err) {
+      console.error("Save contract template failed:", err);
+      alert(`Could not save: ${err?.message || err}`);
+    }
+  };
+
+  const handleArchive = async (tpl) => {
+    if (!window.confirm(`Archive contract template "${tpl.title}"? It will no longer appear in the list.`)) return;
+    try { await archiveContractTemplate(tpl.id); await reload(); }
+    catch (err) { console.error("Archive failed:", err); alert(`Could not archive: ${err?.message || err}`); }
+  };
+
+  if (!isManagerPlus) {
+    return <div className="text-sm text-slate-500 text-center py-8">You don't have access to contracts.</div>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2"><FileText size={24}/> Contracts</h1>
+          <p className="text-sm text-slate-400 mt-1">Author a contract template once with merge fields, then preview it filled in for any employee.</p>
+        </div>
+        <button onClick={() => setEditing("new")} className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">+ New contract template</button>
+      </div>
+
+      {/* Stage-1 notice */}
+      <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 text-[11px] text-amber-300/80">
+        Preview stage: author templates and preview them filled in for an employee. Sending a contract to an employee to sign electronically is the next step.
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-8">Loading…</div>
+      ) : templates.length === 0 ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">No contract templates yet. Create one to get started.</div>
+      ) : (
+        <div className="space-y-2">
+          {templates.map(tpl => (
+            <div key={tpl.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-slate-200">{tpl.title}</div>
+                {tpl.description && <div className="text-[11px] text-slate-500 mt-0.5">{tpl.description}</div>}
+                <div className="text-[10px] text-slate-600 mt-1">Updated {new Date(tpl.updatedAt).toLocaleDateString("en-GB")}{tpl.createdByName ? ` · by ${tpl.createdByName}` : ""}</div>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <button onClick={() => { setPreviewTpl(tpl); setPreviewEmpId(""); }} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-semibold hover:bg-indigo-500">Preview</button>
+                <button onClick={() => setEditing(tpl)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">Edit</button>
+                <button onClick={() => handleArchive(tpl)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-semibold hover:bg-slate-700">Archive</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <ContractTemplateEditor
+          template={editing === "new" ? null : editing}
+          onSave={handleSave}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+
+      {previewTpl && (() => {
+        const emp = employees.find(e => e.id === previewEmpId);
+        const values = emp ? resolveContractTokens(emp, stores) : {};
+        const filled = emp ? fillContractBody(previewTpl.body, values) : previewTpl.body;
+        return (
+          <Modal title={`Preview — ${previewTpl.title}`} onClose={() => setPreviewTpl(null)} maxW="max-w-3xl">
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Fill in for employee</label>
+                <select value={previewEmpId} onChange={e => setPreviewEmpId(e.target.value)} className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500 min-w-[260px]">
+                  <option value="">— Select an employee —</option>
+                  {employees.map(e => <option key={e.id} value={e.id}>{e.firstName} {e.lastName}</option>)}
+                </select>
+              </div>
+              {!emp ? (
+                <div className="text-sm text-slate-500 bg-slate-950 border border-slate-800 rounded-xl p-6 text-center">Select an employee to see the contract filled in with their details. (Tokens like <code className="text-slate-400">{"{{hours}}"}</code> stay as-is for you to set manually.)</div>
+              ) : (
+                <div className="bg-white text-slate-900 rounded-xl p-6 max-h-[60vh] overflow-y-auto contract-preview">
+                  <div className="prose-contract"><SafeMarkdown text={filled}/></div>
+                </div>
+              )}
+              {emp && <div className="text-[11px] text-slate-500">Anything shown as <span className="text-amber-400">[[ … — not set ]]</span> is missing from the employee's record — fill it in on their profile, or it will need completing before signing.</div>}
+            </div>
+          </Modal>
+        );
+      })()}
+    </div>
+  );
+}
+
+// Editor for a contract template body (markdown + {{tokens}}).
+function ContractTemplateEditor({ template, onSave, onCancel }) {
+  const [title, setTitle] = useState(template?.title || "");
+  const [description, setDescription] = useState(template?.description || "");
+  const [body, setBody] = useState(template?.body || "");
+  const [saving, setSaving] = useState(false);
+  const [showTokens, setShowTokens] = useState(false);
+  const bodyRef = useRef(null);
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  const insertToken = (token) => {
+    const tag = `{{${token}}}`;
+    const el = bodyRef.current;
+    if (el && typeof el.selectionStart === "number") {
+      const s = el.selectionStart, e = el.selectionEnd;
+      setBody(b => b.slice(0, s) + tag + b.slice(e));
+    } else {
+      setBody(b => b + tag);
+    }
+  };
+
+  const submit = async () => {
+    if (!title.trim()) return;
+    setSaving(true);
+    try { await onSave({ title, description, body }); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title={template ? "Edit contract template" : "New contract template"} onClose={onCancel} maxW="max-w-3xl"
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancel} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={submit} disabled={saving || !title.trim()} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">{saving ? "Saving…" : "Save template"}</button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <div><label className={labelCls}>Title</label><input value={title} onChange={e => setTitle(e.target.value)} className={inputCls} placeholder="e.g. Standard Contract of Employment"/></div>
+        <div><label className={labelCls}>Description</label><input value={description} onChange={e => setDescription(e.target.value)} className={inputCls} placeholder="One line shown in the list"/></div>
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className={labelCls + " mb-0"}>Contract body (Markdown)</label>
+            <button type="button" onClick={() => setShowTokens(s => !s)} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300">{showTokens ? "Hide merge fields" : "Insert merge field"}</button>
+          </div>
+          {showTokens && (
+            <div className="mb-2 bg-slate-950 border border-slate-800 rounded-lg p-2.5 flex flex-wrap gap-1.5">
+              {CONTRACT_TOKENS.map(t => (
+                <button key={t.token} type="button" onClick={() => insertToken(t.token)} className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[10px] font-mono hover:bg-slate-700" title={t.label}>{`{{${t.token}}}`}</button>
+              ))}
+              <span className="text-[10px] text-slate-600 self-center ml-1">click to insert · {`{{hours}}`} is typed manually</span>
+            </div>
+          )}
+          <textarea ref={bodyRef} value={body} onChange={e => setBody(e.target.value)} rows={16} className={`${inputCls} font-mono text-xs leading-relaxed`} placeholder={"# Statement of Main Terms\n\nEmploys: {{employee_name}}\n\n## Commencement date\nYour employment began on {{start_date}}.\n\n## Job title\nYou are employed as {{position}}.\n\n## Hours of work\nYour normal hours per week are {{hours}}.\n\n## Remuneration\nYour pay is {{salary}}."}/>
+          <div className="text-[10px] text-slate-600 mt-1">Use merge fields like <code className="text-slate-400">{"{{employee_name}}"}</code> — they fill from the employee's record at preview time. Supports the same Markdown as training content.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUser }) {
   const visibleStores = useMemo(
     () => stores.filter(s => !visibleStoreIds || visibleStoreIds.includes(s.id)),
@@ -6364,6 +6559,50 @@ function formatPayDisplay(amount, payType) {
     : `£${amount.toLocaleString("en-GB", { maximumFractionDigits: 0 })}`;
   return `${formatted}${meta.suffix}`;
 }
+
+// ── Contract merge tokens ──────────────────────────────────────────────────
+// Resolve {{tokens}} in a contract template body from an employee record.
+// Returns { token: value } for display + the filled body. Unknown tokens and
+// missing values are left visible as a highlighted placeholder so the author
+// notices gaps rather than shipping a blank. {{hours}} is intentionally NOT
+// resolved here (manual literal per product decision).
+const CONTRACT_TOKENS = [
+  { token: "employee_name",  label: "Employee name" },
+  { token: "position",       label: "Job title / role" },
+  { token: "start_date",     label: "Start date" },
+  { token: "salary",         label: "Pay" },
+  { token: "store",          label: "Store name" },
+  { token: "store_address",  label: "Store address" },
+];
+
+function resolveContractTokens(employee, stores) {
+  if (!employee) return {};
+  const store = (stores || []).find(s => s.id === (employee.primaryStoreId || employee.storeId || (employee.storeIds && employee.storeIds[0])));
+  const addressParts = store ? [store.address, store.city, store.postcode].filter(Boolean) : [];
+  return {
+    employee_name: [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim(),
+    position:      employee.role || employee.jobTitle || "",
+    start_date:    employee.hireDate ? new Date(employee.hireDate).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "",
+    salary:        formatPayDisplay(employee.hourlyRate, employee.payType),
+    store:         store ? (store.name || store.shortName || "") : "",
+    store_address: addressParts.join(", "),
+  };
+}
+
+// Substitute tokens into a body. Missing/empty values become a visible
+// [[ Label ]] marker (not silently blank) so gaps are obvious in preview.
+function fillContractBody(body, values) {
+  if (!body) return "";
+  return body.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (match, name) => {
+    const key = name.toLowerCase();
+    if (key === "hours") return match; // intentionally left as literal token for manual edit
+    const def = CONTRACT_TOKENS.find(t => t.token === key);
+    if (!def) return match;            // unknown token: leave as-is
+    const v = values[key];
+    return (v && String(v).trim()) ? v : `[[ ${def.label} — not set ]]`;
+  });
+}
+
 
 // For schedule cost calculations: returns a per-hour cost figure regardless
 // of how the employee is paid. Hourly = the rate directly. Monthly =
@@ -18800,6 +19039,7 @@ export default function App() {
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null },
       { key: "training",     label: "Training",          icon: GraduationCap },
+      { key: "contracts",    label: "Contracts",         icon: FileText },
     ]},
     { group: "MAINTENANCE", items: [
       { key: "issues",  label: "Issues",  icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
@@ -18923,6 +19163,9 @@ export default function App() {
             {effectiveActiveView === "training"       && <TrainingAdminView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               opsTeam={opsTeam} currentUser={currentUser}
+            />}
+            {effectiveActiveView === "contracts"      && <ContractsAdminView
+              stores={stores} opsTeam={opsTeam} currentUser={currentUser}
             />}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
               employeeId={selectedEmployeeId}
