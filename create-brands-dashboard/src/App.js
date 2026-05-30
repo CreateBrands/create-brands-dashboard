@@ -47,6 +47,7 @@ import {
   fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
+  signContractDocument,
   fetchDocumentComments, addDocumentComment, markDocumentCommentRead,
   // Slice 7 stage 4: apply-time duplicate detection
   findApplicationsByEmail,
@@ -8742,11 +8743,12 @@ function getDocTypeLabel(value) {
 //            constraint. Slot identity is carried by required_doc_key, NOT
 //            doc_type — so doc_type just needs to be a valid allowed value.
 const REQUIRED_DOC_SLOTS = [
-  { key: "passport",         label: "Passport",          managerOnly: false, docType: "rtw_passport"   },
-  { key: "share_code",       label: "Share code",        managerOnly: false, docType: "rtw_share_code" },
-  { key: "proof_of_address", label: "Proof of address",  managerOnly: false, docType: "rtw_other"      },
-  { key: "ni_number",        label: "NI number document",managerOnly: false, docType: "rtw_other"      },
-  { key: "right_to_work",    label: "Right to work",     managerOnly: true,  docType: "rtw_other"      },
+  { key: "passport",         label: "Passport",          managerOnly: false, docType: "rtw_passport",   kind: "approve" },
+  { key: "share_code",       label: "Share code",        managerOnly: false, docType: "rtw_share_code", kind: "approve" },
+  { key: "proof_of_address", label: "Proof of address",  managerOnly: false, docType: "rtw_other",      kind: "approve" },
+  { key: "ni_number",        label: "NI number document",managerOnly: false, docType: "rtw_other",      kind: "approve" },
+  { key: "right_to_work",    label: "Right to work",     managerOnly: true,  docType: "rtw_other",      kind: "approve" },
+  { key: "contract",         label: "Contract of employment", managerOnly: true, docType: "rtw_other",  kind: "sign" },
 ];
 function getSlotLabel(key) {
   return REQUIRED_DOC_SLOTS.find(s => s.key === key)?.label || key;
@@ -8772,6 +8774,10 @@ function DocumentsTab({ employeeId, currentUser }) {
   const [busyId, setBusyId] = useState(null);
   const [openThreadId, setOpenThreadId] = useState(null);    // doc id whose thread is expanded
   const [openHistorySlot, setOpenHistorySlot] = useState(null); // slot key whose history is expanded
+  const [signingId, setSigningId] = useState(null);          // contract doc id being signed
+  const [signName, setSignName] = useState("");
+  const [signAgree, setSignAgree] = useState(false);
+  const [signBusy, setSignBusy] = useState(false);
 
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
   const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
@@ -8836,7 +8842,10 @@ function DocumentsTab({ employeeId, currentUser }) {
   // Free uploads (no slot key) → "Other documents".
   const otherDocs = useMemo(() => docs.filter(d => !d.requiredDocKey), [docs]);
 
-  const requiredDone = REQUIRED_DOC_SLOTS.filter(s => bySlot[s.key]?.reviewStage === "hr_approved").length;
+  const requiredDone = REQUIRED_DOC_SLOTS.filter(s => {
+    const doc = bySlot[s.key];
+    return s.kind === "sign" ? doc?.reviewStage === "signed" : doc?.reviewStage === "hr_approved";
+  }).length;
   const allRequiredApproved = requiredDone === REQUIRED_DOC_SLOTS.length;
 
   // Upload into a slot (or "other"). A manager uploading IS the stage-1 review,
@@ -8967,6 +8976,107 @@ function DocumentsTab({ employeeId, currentUser }) {
     );
   };
 
+  // Fixed statement the employee agrees to when signing the contract.
+  const SIGN_STATEMENT = "I have read and agree to this contract of employment.";
+
+  const handleSignContract = async (docId) => {
+    if (!signName.trim() || !signAgree) return;
+    if (!window.confirm("By signing you confirm you have read and agree to this contract of employment. This is legally binding. Continue?")) return;
+    setSignBusy(true);
+    try {
+      const updated = await signContractDocument(docId, {
+        signerId: meId,
+        signerName: signName.trim(),
+        statement: SIGN_STATEMENT,
+      });
+      setDocs(prev => prev.map(x => x.id === docId ? updated : x));
+      setSigningId(null); setSignName(""); setSignAgree(false);
+    } catch (err) {
+      console.error("Sign failed:", err);
+      alert(`Could not sign: ${err?.message || err}`);
+    } finally {
+      setSignBusy(false);
+    }
+  };
+
+  // Render a contract (sign-type) document: status, view, and either the sign
+  // form (employee, unsigned) or the signature audit detail (signed).
+  const docSignDetail = (d) => {
+    const signed = d.reviewStage === "signed" || !!d.signedByName;
+    const isSigning = signingId === d.id;
+    return (
+      <div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {signed
+            ? <span className="text-[10px] px-1.5 py-0.5 rounded border font-semibold bg-emerald-950/40 border-emerald-800 text-emerald-300">✓ Signed</span>
+            : <span className="text-[10px] px-1.5 py-0.5 rounded border font-semibold bg-amber-950/40 border-amber-800 text-amber-300">Awaiting signature</span>}
+          <a href={d.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1"><Eye size={11}/> View contract</a>
+        </div>
+        <div className="text-[11px] text-slate-600 mt-1">
+          Uploaded {new Date(d.createdAt).toLocaleDateString("en-GB")} by {d.uploadedByName}
+          {d.fileName && <> · {d.fileName}</>}
+        </div>
+
+        {signed && (
+          <div className="text-xs text-emerald-300/90 bg-emerald-950/20 border border-emerald-900 rounded-lg px-2.5 py-2 mt-2">
+            <div className="font-semibold">Signed by {d.signedByName}</div>
+            <div className="text-[11px] text-emerald-400/70 mt-0.5">
+              {d.signedAt && <>on {new Date(d.signedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+            </div>
+            {d.signatureStatement && <div className="text-[11px] text-slate-500 mt-1 italic">"{d.signatureStatement}"</div>}
+          </div>
+        )}
+
+        {/* Employee sign flow (only the employee themself, only if unsigned) */}
+        {!signed && isTrainee && (
+          isSigning ? (
+            <div className="mt-2 bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+              <div className="text-[11px] text-slate-400">Please read the contract above, then sign below.</div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type your full name</label>
+                <input value={signName} onChange={e => setSignName(e.target.value)} placeholder="Your full legal name" className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500"/>
+              </div>
+              <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+                <input type="checkbox" checked={signAgree} onChange={e => setSignAgree(e.target.checked)} className="mt-0.5"/>
+                <span>{SIGN_STATEMENT}</span>
+              </label>
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => handleSignContract(d.id)} disabled={signBusy || !signName.trim() || !signAgree} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50">{signBusy ? "Signing…" : "Sign contract"}</button>
+                <button onClick={() => { setSigningId(null); setSignName(""); setSignAgree(false); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold hover:bg-slate-700">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => { setSigningId(d.id); setSignName(""); setSignAgree(false); }} className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500">Review &amp; sign</button>
+          )
+        )}
+        {!signed && !isTrainee && (
+          <div className="text-[11px] text-slate-600 mt-2">Awaiting the employee's signature in their portal.</div>
+        )}
+
+        {/* Comment thread (reused) */}
+        {(() => {
+          const thread = comments.filter(c => c.documentId === d.id);
+          const unread = thread.filter(c => !(c.readBy || []).includes(meId) && c.authorId !== meId).length;
+          const open = openThreadId === d.id;
+          return (
+            <div className="mt-2">
+              <button
+                onClick={() => { const next = open ? null : d.id; setOpenThreadId(next); if (next) markThreadRead(d.id); }}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-200"
+              >
+                <MessageSquare size={12}/>
+                Comments{thread.length ? ` (${thread.length})` : ""}
+                {unread > 0 && <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{unread} new</span>}
+                {open ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+              </button>
+              {open && <DocCommentThread thread={thread} meId={meId} onPost={(body) => handleComment(d.id, body)} />}
+            </div>
+          );
+        })()}
+      </div>
+    );
+  };
+
   if (loading) return <div className="text-sm text-slate-500 text-center py-8">Loading documents…</div>;
 
   return (
@@ -8987,6 +9097,10 @@ function DocumentsTab({ employeeId, currentUser }) {
           const d = bySlot[slot.key];
           const canUploadHere = slot.managerOnly ? isManagerPlus : true;
           const showUpload = uploadingSlot === slot.key;
+          // RTW-style manager-only slots are hidden from the trainee. The
+          // contract (kind "sign") is manager-uploaded but the trainee MUST see
+          // it to sign, so it is not hidden.
+          const hiddenFromTrainee = slot.managerOnly && isTrainee && slot.kind !== "sign";
           return (
             <div key={slot.key} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -8994,18 +9108,22 @@ function DocumentsTab({ employeeId, currentUser }) {
                   <div className="flex items-center gap-2 flex-wrap">
                     <FileText size={14} className="text-slate-500 flex-shrink-0"/>
                     <span className="text-sm font-semibold text-slate-200">{slot.label}</span>
-                    {slot.managerOnly && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Manager uploads</span>}
-                    {!d && !(slot.managerOnly && isTrainee) && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Not uploaded</span>}
+                    {slot.managerOnly && slot.kind !== "sign" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Manager uploads</span>}
+                    {slot.kind === "sign" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-800 text-indigo-300 font-semibold">Requires signature</span>}
+                    {!d && !hiddenFromTrainee && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Not uploaded</span>}
                   </div>
                   {/* RTW (manager-only) is the employer's compliance record — a
                       trainee never sees the document or its detail, only that
-                      it's handled by their manager. */}
-                  {slot.managerOnly && isTrainee ? (
+                      it's handled by their manager. The contract is excepted. */}
+                  {hiddenFromTrainee ? (
                     <div className="text-[11px] text-slate-600 mt-1">Handled by your manager — you don't need to do anything here.</div>
                   ) : (
                     <>
-                      {d && <div className="mt-2">{docDetail(d)}</div>}
-                      {!d && slot.managerOnly && (
+                      {d && <div className="mt-2">{slot.kind === "sign" ? docSignDetail(d) : docDetail(d)}</div>}
+                      {!d && slot.kind === "sign" && (
+                        <div className="text-[11px] text-slate-600 mt-1">{isTrainee ? "Your contract will appear here for signing once your manager uploads it." : "Upload the employee's contract; they'll sign it in their portal."}</div>
+                      )}
+                      {!d && slot.managerOnly && slot.kind !== "sign" && (
                         <div className="text-[11px] text-slate-600 mt-1">Upload after completing the gov.uk right-to-work check.</div>
                       )}
                     </>

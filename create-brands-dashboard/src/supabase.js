@@ -2372,6 +2372,10 @@ function dbEmployeeDocumentToApp(d) {
     rejectedByName:        d.rejected_by_name || null,
     rejectedAt:            d.rejected_at || null,
     rejectedStage:         d.rejected_stage || null,
+    // Contract e-signature
+    signedById:            d.signed_by_id || null,
+    signedByName:          d.signed_by_name || null,
+    signatureStatement:    d.signature_statement || null,
     createdAt:      d.created_at,
     updatedAt:      d.updated_at,
     archivedAt:     d.archived_at || null,
@@ -2613,6 +2617,23 @@ export async function resetDocumentReview(id) {
     hr_approved_by_id: null, hr_approved_by_name: null, hr_approved_at: null,
     rejected_by_id: null, rejected_by_name: null, rejected_at: null,
     rejected_stage: null, rejection_reason: null,
+  });
+}
+
+// Contract e-signature (Option A). The employee types their full name and
+// agrees to a statement; we record signer identity, the exact statement, the
+// timestamp, and (implicitly) the document version via its file_path. Sets
+// review_stage = "signed" as the terminal state for a sign-type slot.
+export async function signContractDocument(id, { signerId, signerName, statement }) {
+  if (!id) throw new Error("id required");
+  if (!signerName?.trim()) throw new Error("Signature name required");
+  return _updateDocAndReturn(id, {
+    review_stage:        "signed",
+    status:              "accepted",
+    signed_by_id:        signerId || null,
+    signed_by_name:      signerName.trim(),
+    signature_statement: statement || null,
+    signed_at:           new Date().toISOString(),
   });
 }
 
