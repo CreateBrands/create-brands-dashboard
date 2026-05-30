@@ -6302,6 +6302,7 @@ function EmployeeProfileView({
   // employee record; reset when employee changes (e.g. navigated to another).
   const [editHr, setEditHr] = useState(null);
   const [savingHr, setSavingHr] = useState(false);
+  const [converting, setConverting] = useState(false);  // trainee→staff conversion in progress
 
   useEffect(() => {
     if (!employee) return;
@@ -6414,7 +6415,8 @@ function EmployeeProfileView({
   // The record is otherwise unchanged (job title, store, PIN all preserved) —
   // conversion is just clearing the trainee flag, per the design (new hires
   // start as trainees, manager converts them when training is complete).
-  const [converting, setConverting] = useState(false);
+  // NOTE: the `converting` state is declared at the top of the component with
+  // the other hooks (rules-of-hooks: no hooks after an early return).
   const handleConvertToStaff = async () => {
     if (!employee) return;
     if (!window.confirm(`Convert ${employee.firstName} ${employee.lastName} from trainee to full staff?\n\nThey'll lose the trainee portal and gain normal employee access on next login.`)) return;
