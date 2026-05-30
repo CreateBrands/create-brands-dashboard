@@ -2972,3 +2972,75 @@ export async function instantiateTemplate(templateId, storeId, sortOrder) {
   if (error) throw error;
   return data ? dbTrainingModuleToApp(data) : dbTrainingModuleToApp(row);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENT COMMENTS (onboarding documents — step 3)
+// ════════════════════════════════════════════════════════════════════════════
+// Per-document back-and-forth thread. Anyone with visibility can post. Unread
+// tracked via read_by array (same pattern as inbox_messages). In-app only.
+
+function dbDocumentCommentToApp(c) {
+  return {
+    id:         c.id,
+    documentId: c.document_id,
+    employeeId: c.employee_id || null,
+    authorId:   c.author_id || null,
+    authorName: c.author_name || "Unknown",
+    authorRole: c.author_role || null,
+    body:       c.body,
+    readBy:     c.read_by || [],
+    createdAt:  c.created_at,
+  };
+}
+
+// All comments for one employee's documents (one query for the whole tab).
+export async function fetchDocumentComments(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("document_comments")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbDocumentCommentToApp);
+}
+
+// Post a comment on a document. authorRole is a display hint ('trainee'|'manager'|'hr').
+// The author is recorded as having read their own comment.
+export async function addDocumentComment({ documentId, employeeId, body, author, authorRole }) {
+  if (!documentId) throw new Error("documentId required");
+  if (!body?.trim()) throw new Error("comment body required");
+  const authorId = author?.id || null;
+  const row = {
+    id:          `dcmt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    document_id: documentId,
+    employee_id: employeeId || null,
+    author_id:   authorId,
+    author_name: author?.name || author?.email || "Unknown",
+    author_role: authorRole || null,
+    body:        body.trim(),
+    read_by:     authorId ? [authorId] : [],
+  };
+  const { data, error } = await supabase
+    .from("document_comments").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbDocumentCommentToApp(data) : dbDocumentCommentToApp(row);
+}
+
+// Mark a comment read by a viewer (append to read_by if absent). Mirrors
+// markMessageRead. Safe to call repeatedly.
+export async function markDocumentCommentRead(id, readerId) {
+  if (!id || !readerId) return;
+  try {
+    const { data: existing } = await supabase
+      .from("document_comments").select("read_by").eq("id", id).single();
+    if (existing && !(existing.read_by || []).includes(readerId)) {
+      await supabase
+        .from("document_comments")
+        .update({ read_by: [...(existing.read_by || []), readerId] })
+        .eq("id", id);
+    }
+  } catch (err) {
+    console.error("markDocumentCommentRead failed:", err);
+  }
+}

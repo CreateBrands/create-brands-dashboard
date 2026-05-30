@@ -47,6 +47,7 @@ import {
   fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
   archiveEmployeeDocument,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
+  fetchDocumentComments, addDocumentComment, markDocumentCommentRead,
   // Slice 7 stage 4: apply-time duplicate detection
   findApplicationsByEmail,
   // Training content layer: module authoring
@@ -8518,11 +8519,13 @@ function docStageMeta(stage) {
 
 function DocumentsTab({ employeeId, currentUser }) {
   const [docs, setDocs] = useState([]);
+  const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingSlot, setUploadingSlot] = useState(null);  // slot key being uploaded, or "other"
   const [rejectingId, setRejectingId] = useState(null);      // doc id being rejected (reason prompt)
   const [rejectStage, setRejectStage] = useState(null);      // 'manager' | 'hr'
   const [busyId, setBusyId] = useState(null);
+  const [openThreadId, setOpenThreadId] = useState(null);    // doc id whose thread is expanded
 
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
   const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
@@ -8535,16 +8538,46 @@ function DocumentsTab({ employeeId, currentUser }) {
     let cancelled = false;
     if (!employeeId) return;
     setLoading(true);
-    fetchEmployeeDocuments(employeeId)
-      .then(rows => { if (!cancelled) setDocs(rows); })
+    Promise.all([fetchEmployeeDocuments(employeeId), fetchDocumentComments(employeeId)])
+      .then(([docRows, commentRows]) => { if (!cancelled) { setDocs(docRows); setComments(commentRows); } })
       .catch(err => { console.error("Documents load failed:", err); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [employeeId]);
 
   const reload = async () => {
-    try { setDocs(await fetchEmployeeDocuments(employeeId)); }
-    catch (err) { console.error("Reload docs failed:", err); }
+    try {
+      const [docRows, commentRows] = await Promise.all([
+        fetchEmployeeDocuments(employeeId), fetchDocumentComments(employeeId),
+      ]);
+      setDocs(docRows); setComments(commentRows);
+    } catch (err) { console.error("Reload docs failed:", err); }
+  };
+
+  const reloadComments = async () => {
+    try { setComments(await fetchDocumentComments(employeeId)); }
+    catch (err) { console.error("Reload comments failed:", err); }
+  };
+
+  const meId = currentUser?.opsTeamMemberId || currentUser?.id || null;
+  const myRole = isTrainee ? "trainee" : (isHqOrOwner ? "hr" : "manager");
+
+  // Post a comment on a document.
+  const handleComment = async (docId, body) => {
+    const created = await addDocumentComment({
+      documentId: docId, employeeId, body,
+      author: { id: meId, name: currentUser?.name || currentUser?.email },
+      authorRole: myRole,
+    });
+    setComments(prev => [...prev, created]);
+  };
+
+  // Mark all comments on a doc read by me (when I open the thread).
+  const markThreadRead = async (docId) => {
+    const unread = comments.filter(c => c.documentId === docId && !(c.readBy || []).includes(meId) && c.authorId !== meId);
+    if (!unread.length) return;
+    await Promise.all(unread.map(c => markDocumentCommentRead(c.id, meId)));
+    await reloadComments();
   };
 
   // Current (non-archived) doc for each slot key.
@@ -8658,6 +8691,32 @@ function DocumentsTab({ employeeId, currentUser }) {
           </div>
         )}
         {reviewControls(d)}
+        {/* Comment thread */}
+        {(() => {
+          const thread = comments.filter(c => c.documentId === d.id);
+          const unread = thread.filter(c => !(c.readBy || []).includes(meId) && c.authorId !== meId).length;
+          const open = openThreadId === d.id;
+          return (
+            <div className="mt-2">
+              <button
+                onClick={() => { const next = open ? null : d.id; setOpenThreadId(next); if (next) markThreadRead(d.id); }}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-200"
+              >
+                <MessageSquare size={12}/>
+                Comments{thread.length ? ` (${thread.length})` : ""}
+                {unread > 0 && <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{unread} new</span>}
+                {open ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+              </button>
+              {open && (
+                <DocCommentThread
+                  thread={thread}
+                  meId={meId}
+                  onPost={(body) => handleComment(d.id, body)}
+                />
+              )}
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -8761,6 +8820,65 @@ function DocumentsTab({ employeeId, currentUser }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Per-document comment thread. Sub-component of DocumentsTab.
+function DocCommentThread({ thread, meId, onPost }) {
+  const [draft, setDraft] = useState("");
+  const [posting, setPosting] = useState(false);
+
+  const roleBadge = {
+    trainee: "bg-indigo-950/40 border-indigo-800 text-indigo-300",
+    manager: "bg-sky-950/40 border-sky-800 text-sky-300",
+    hr:      "bg-emerald-950/40 border-emerald-800 text-emerald-300",
+  };
+  const roleLabel = { trainee: "Trainee", manager: "Manager", hr: "HR" };
+
+  const submit = async () => {
+    if (!draft.trim()) return;
+    setPosting(true);
+    try { await onPost(draft); setDraft(""); }
+    catch (err) { console.error("Post comment failed:", err); alert(`Could not post: ${err?.message || err}`); }
+    finally { setPosting(false); }
+  };
+
+  return (
+    <div className="mt-2 bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-2">
+      {thread.length === 0 ? (
+        <div className="text-[11px] text-slate-600">No comments yet. Start the conversation below.</div>
+      ) : (
+        <div className="space-y-2">
+          {thread.map(c => {
+            const mine = c.authorId === meId;
+            return (
+              <div key={c.id} className={`text-xs ${mine ? "text-right" : ""}`}>
+                <div className="inline-flex items-center gap-1.5 mb-0.5">
+                  <span className="font-semibold text-slate-300">{c.authorName}</span>
+                  {c.authorRole && <span className={`text-[9px] px-1 py-0.5 rounded border font-semibold ${roleBadge[c.authorRole] || "bg-slate-800 border-slate-700 text-slate-400"}`}>{roleLabel[c.authorRole] || c.authorRole}</span>}
+                  <span className="text-[10px] text-slate-600">{new Date(c.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+                <div className={`inline-block px-2.5 py-1.5 rounded-lg ${mine ? "bg-indigo-950/40 text-slate-200" : "bg-slate-900 text-slate-300"} text-xs max-w-[85%] text-left`}>{c.body}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex gap-2 pt-1">
+        <input
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          placeholder="Write a comment…"
+          className="flex-1 px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+        />
+        <button
+          onClick={submit}
+          disabled={posting || !draft.trim()}
+          className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-semibold hover:bg-indigo-500 disabled:opacity-50"
+        >{posting ? "…" : "Send"}</button>
       </div>
     </div>
   );
