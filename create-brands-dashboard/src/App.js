@@ -53,6 +53,8 @@ import {
   // Training templates: blueprint library
   fetchTrainingTemplates, addTrainingTemplate, updateTrainingTemplate,
   archiveTrainingTemplate, instantiateTemplate,
+  // Training progress (trainee consumption + manager verify)
+  fetchTrainingProgress, setModuleCompletion, setModuleVerification,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -1496,11 +1498,155 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
 // steps — read-only content, per-store module checklist (training_modules,
 // already has its data layer), and RTW document upload (reuses the slice 7
 // Documents tab). Those slot into the body below in steps 5+.
+// ─── Safe Markdown renderer ────────────────────────────────────────────────
+// Minimal Markdown → React, NO raw HTML (so no XSS surface). Supports:
+// headings (#..###), bold (**), italic (*), inline code (`), links [t](url),
+// unordered (-/*) and ordered (1.) lists, images ![alt](url), blank-line
+// paragraphs. Anything else renders as plain text. Deliberately small — no
+// dependency. Links open in a new tab with noopener.
+function renderInline(text, keyPrefix) {
+  // Tokenise inline: images, links, bold, italic, code. Order matters.
+  const nodes = [];
+  let remaining = text;
+  let i = 0;
+  const patterns = [
+    { re: /!\[([^\]]*)\]\(([^)\s]+)\)/, kind: "img" },
+    { re: /\[([^\]]+)\]\(([^)\s]+)\)/,  kind: "link" },
+    { re: /\*\*([^*]+)\*\*/,            kind: "bold" },
+    { re: /\*([^*]+)\*/,                kind: "italic" },
+    { re: /`([^`]+)`/,                  kind: "code" },
+  ];
+  while (remaining.length) {
+    let best = null;
+    for (const p of patterns) {
+      const m = p.re.exec(remaining);
+      if (m && (best === null || m.index < best.m.index)) best = { p, m };
+    }
+    if (!best) { nodes.push(remaining); break; }
+    const { p, m } = best;
+    if (m.index > 0) nodes.push(remaining.slice(0, m.index));
+    const k = `${keyPrefix}-${i++}`;
+    if (p.kind === "img")   nodes.push(<img key={k} src={m[2]} alt={m[1]} className="max-w-full rounded-lg my-2" />);
+    if (p.kind === "link")  nodes.push(<a key={k} href={m[2]} target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline hover:text-indigo-300">{m[1]}</a>);
+    if (p.kind === "bold")  nodes.push(<strong key={k} className="font-semibold text-white">{m[1]}</strong>);
+    if (p.kind === "italic")nodes.push(<em key={k}>{m[1]}</em>);
+    if (p.kind === "code")  nodes.push(<code key={k} className="px-1 py-0.5 rounded bg-slate-800 text-xs font-mono">{m[1]}</code>);
+    remaining = remaining.slice(m.index + m[0].length);
+  }
+  return nodes;
+}
+
+function SafeMarkdown({ text }) {
+  if (!text) return null;
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let list = null;   // { ordered, items: [] }
+  let para = [];     // accumulating paragraph lines
+
+  const flushPara = () => {
+    if (para.length) { blocks.push({ type: "p", text: para.join(" ") }); para = []; }
+  };
+  const flushList = () => {
+    if (list) { blocks.push({ type: "list", ordered: list.ordered, items: list.items }); list = null; }
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    const ul = /^[-*]\s+(.*)$/.exec(line);
+    const ol = /^\d+\.\s+(.*)$/.exec(line);
+    if (h)      { flushPara(); flushList(); blocks.push({ type: "h", level: h[1].length, text: h[2] }); }
+    else if (ul){ flushPara(); if (!list || list.ordered) { flushList(); list = { ordered: false, items: [] }; } list.items.push(ul[1]); }
+    else if (ol){ flushPara(); if (!list || !list.ordered){ flushList(); list = { ordered: true,  items: [] }; } list.items.push(ol[1]); }
+    else        { flushList(); para.push(line); }
+  }
+  flushPara(); flushList();
+
+  return (
+    <div className="space-y-2 text-sm text-slate-300 leading-relaxed">
+      {blocks.map((b, bi) => {
+        if (b.type === "h") {
+          const cls = b.level === 1 ? "text-lg font-bold text-white mt-2"
+                    : b.level === 2 ? "text-base font-bold text-white mt-2"
+                    : "text-sm font-bold text-slate-200 mt-1";
+          return <div key={bi} className={cls}>{renderInline(b.text, `h${bi}`)}</div>;
+        }
+        if (b.type === "list") {
+          const Tag = b.ordered ? "ol" : "ul";
+          return (
+            <Tag key={bi} className={b.ordered ? "list-decimal pl-5 space-y-1" : "list-disc pl-5 space-y-1"}>
+              {b.items.map((it, ii) => <li key={ii}>{renderInline(it, `l${bi}-${ii}`)}</li>)}
+            </Tag>
+          );
+        }
+        return <p key={bi}>{renderInline(b.text, `p${bi}`)}</p>;
+      })}
+    </div>
+  );
+}
+
 function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) {
   // Resolve the trainee's own ops_team record (for their store/brand context).
   const me = opsTeam.find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
-  const myStore = me ? stores.find(s => s.id === me.primaryStoreId || s.id === me.storeId) : null;
+  const myStoreId = me?.primaryStoreId || me?.storeId || (me?.storeIds && me.storeIds[0]) || null;
+  const myStore = me ? stores.find(s => s.id === myStoreId) : null;
   const myBrand = me ? brands.find(b => b.id === me.brandId) : null;
+  const employeeId = currentUser.opsTeamMemberId || currentUser.id;
+
+  const [modules, setModules] = useState([]);
+  const [progress, setProgress] = useState([]);   // training_progress rows
+  const [loading, setLoading] = useState(true);
+  const [openModuleId, setOpenModuleId] = useState(null);  // which module is expanded
+  const [busyId, setBusyId] = useState(null);      // module being toggled
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!myStoreId || !employeeId) { setLoading(false); return; }
+    setLoading(true);
+    Promise.all([fetchTrainingModules(myStoreId), fetchTrainingProgress(employeeId)])
+      .then(([mods, prog]) => { if (!cancelled) { setModules(mods); setProgress(prog); } })
+      .catch(err => console.error("Trainee portal load failed:", err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [myStoreId, employeeId]);
+
+  // progress lookup by moduleId
+  const progByModule = useMemo(() => {
+    const map = {};
+    progress.forEach(p => { map[p.moduleId] = p; });
+    return map;
+  }, [progress]);
+
+  const handleToggle = async (mod, done) => {
+    setBusyId(mod.id);
+    try {
+      const updated = await setModuleCompletion(employeeId, mod.id, done);
+      setProgress(prev => {
+        const others = prev.filter(p => p.moduleId !== mod.id);
+        return [...others, updated];
+      });
+    } catch (err) {
+      console.error("Toggle completion failed:", err);
+      alert(`Could not update: ${err?.message || err}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Group modules by category (FOH / BOH / etc). Null category → "General".
+  const grouped = useMemo(() => {
+    const groups = {};
+    modules.forEach(m => {
+      const cat = m.category?.trim() || "General";
+      (groups[cat] = groups[cat] || []).push(m);
+    });
+    return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [modules]);
+
+  const requiredCount = modules.filter(m => m.required).length;
+  const requiredDone = modules.filter(m => m.required && progByModule[m.id]?.completedAt).length;
+  const allRequiredDone = requiredCount > 0 && requiredDone === requiredCount;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -1537,19 +1683,92 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
         <div>
           <h1 className="text-xl font-bold text-white">Welcome, {currentUser.name?.split(" ")[0] || "there"} 👋</h1>
           <p className="text-sm text-slate-400 mt-1">
-            This is your training portal. Your manager will set up your onboarding
-            modules and documents here.
+            Work through your training modules below. Tick each one off as you complete it.
           </p>
         </div>
 
-        {/* Step-3 placeholder. Steps 5+ replace this with: read-only training
-            content, the per-store module checklist, and RTW document upload. */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
-          <div className="text-3xl mb-3">🚧</div>
-          <div className="font-semibold text-slate-300 mb-1">Training content coming soon</div>
-          <div className="text-xs text-slate-500 max-w-sm mx-auto">
-            Your onboarding modules, training materials, and document uploads will
-            appear here once they're set up.
+        {/* Progress summary */}
+        {requiredCount > 0 && (
+          <div className={`rounded-2xl border p-4 ${allRequiredDone ? "bg-emerald-950/30 border-emerald-800" : "bg-slate-900 border-slate-800"}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-slate-200">
+                {allRequiredDone ? "🎉 All required modules complete!" : "Your progress"}
+              </div>
+              <div className="text-sm text-slate-400">{requiredDone} / {requiredCount} required</div>
+            </div>
+            <div className="mt-2 h-2 rounded-full bg-slate-800 overflow-hidden">
+              <div className="h-full bg-emerald-500 transition-all" style={{ width: `${requiredCount ? (requiredDone / requiredCount) * 100 : 0}%` }}/>
+            </div>
+            {allRequiredDone && <div className="text-xs text-emerald-400/80 mt-2">Your manager will confirm and move you to full staff.</div>}
+          </div>
+        )}
+
+        {/* Modules grouped by category */}
+        {loading ? (
+          <div className="text-sm text-slate-500 text-center py-8">Loading your training…</div>
+        ) : modules.length === 0 ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+            <GraduationCap size={28} className="mx-auto mb-3 text-slate-700"/>
+            <div className="font-semibold text-slate-300 mb-1">No training modules yet</div>
+            <div className="text-xs text-slate-500">Your manager hasn't set up modules for your store yet. Check back soon.</div>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {grouped.map(([category, mods]) => (
+              <div key={category}>
+                <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">{category}</div>
+                <div className="space-y-2">
+                  {mods.map(mod => {
+                    const p = progByModule[mod.id];
+                    const done = !!p?.completedAt;
+                    const verified = !!p?.verifiedAt;
+                    const open = openModuleId === mod.id;
+                    return (
+                      <div key={mod.id} className={`rounded-xl border ${done ? "bg-emerald-950/20 border-emerald-900" : "bg-slate-900 border-slate-800"}`}>
+                        <div className="p-3 flex items-start gap-3">
+                          <button
+                            onClick={() => handleToggle(mod, !done)}
+                            disabled={busyId === mod.id}
+                            className={`mt-0.5 w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border ${done ? "bg-emerald-600 border-emerald-600" : "border-slate-600 hover:border-slate-400"} disabled:opacity-50`}
+                            title={done ? "Mark not done" : "Mark complete"}
+                          >
+                            {done && <Check size={13} className="text-white"/>}
+                          </button>
+                          <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setOpenModuleId(open ? null : mod.id)}>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`text-sm font-semibold ${done ? "text-slate-400" : "text-slate-200"}`}>{mod.title}</span>
+                              {mod.required
+                                ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Required</span>
+                                : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Optional</span>}
+                              {verified && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold">✓ Verified</span>}
+                            </div>
+                            {mod.description && <div className="text-xs text-slate-500 mt-0.5">{mod.description}</div>}
+                          </div>
+                          {mod.content && (
+                            <button onClick={() => setOpenModuleId(open ? null : mod.id)} className="p-1 text-slate-500 hover:text-white flex-shrink-0">
+                              {open ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                            </button>
+                          )}
+                        </div>
+                        {open && mod.content && (
+                          <div className="px-3 pb-3 pt-1 border-t border-slate-800/60">
+                            <SafeMarkdown text={mod.content}/>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* RTW documents — reuse the slice 7 Documents tab */}
+        <div>
+          <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">Your documents</div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <DocumentsTab employeeId={employeeId} currentUser={currentUser}/>
           </div>
         </div>
       </main>
