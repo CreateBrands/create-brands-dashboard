@@ -45,7 +45,7 @@ import {
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
   fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
-  archiveEmployeeDocument,
+  archiveEmployeeDocument, setDocumentStatus,
   // Slice 7 stage 4: apply-time duplicate detection
   findApplicationsByEmail,
   // Training content layer: module authoring
@@ -8492,7 +8492,26 @@ function DocumentsTab({ employeeId, currentUser }) {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [reviewingId, setReviewingId] = useState(null);  // doc being rejected (reason prompt)
+  const [busyId, setBusyId] = useState(null);
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+  // Managers/HQ/owner can review (accept/reject). A trainee (role "employee")
+  // viewing their own documents cannot — they only see status + re-upload.
+  const canReview = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
+
+  const handleSetStatus = async (doc, status, reason) => {
+    setBusyId(doc.id);
+    try {
+      const updated = await setDocumentStatus(doc.id, status, currentUser, reason);
+      setDocs(prev => prev.map(d => d.id === doc.id ? updated : d));
+      setReviewingId(null);
+    } catch (err) {
+      console.error("Set document status failed:", err);
+      alert(`Could not update: ${err?.message || err}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -8626,6 +8645,19 @@ function DocumentsTab({ employeeId, currentUser }) {
                       <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${badgeColor}`}>
                         {badgeLabel}
                       </span>
+                      {(() => {
+                        const reviewBadge = {
+                          pending:  "bg-slate-800 border-slate-600 text-slate-300",
+                          accepted: "bg-emerald-950/40 border-emerald-800 text-emerald-300",
+                          rejected: "bg-red-950/40 border-red-800 text-red-300",
+                        }[d.status || "pending"];
+                        const reviewLabel = {
+                          pending:  "⏳ Pending review",
+                          accepted: "✓ Accepted",
+                          rejected: "✗ Rejected",
+                        }[d.status || "pending"];
+                        return <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${reviewBadge}`}>{reviewLabel}</span>;
+                      })()}
                     </div>
                     <div className="text-xs text-slate-500 mt-1">
                       Uploaded {new Date(d.createdAt).toLocaleDateString("en-GB")} by {d.uploadedByName}
@@ -8636,6 +8668,51 @@ function DocumentsTab({ employeeId, currentUser }) {
                     )}
                     {d.notes && (
                       <div className="text-xs text-slate-400 italic mt-1.5">"{d.notes}"</div>
+                    )}
+                    {d.status === "rejected" && d.rejectionReason && (
+                      <div className="text-xs text-red-300 bg-red-950/30 border border-red-900 rounded-lg px-2 py-1.5 mt-1.5">
+                        <span className="font-semibold">Rejected:</span> {d.rejectionReason}
+                      </div>
+                    )}
+                    {d.status !== "pending" && d.reviewedByName && (
+                      <div className="text-[10px] text-slate-600 mt-1">
+                        {d.status === "accepted" ? "Accepted" : "Reviewed"} by {d.reviewedByName}
+                        {d.reviewedAt && <> · {new Date(d.reviewedAt).toLocaleDateString("en-GB")}</>}
+                      </div>
+                    )}
+                    {/* Manager review controls */}
+                    {canReview && (
+                      reviewingId === d.id ? (
+                        <DocRejectPrompt
+                          onConfirm={(reason) => handleSetStatus(d, "rejected", reason)}
+                          onCancel={() => setReviewingId(null)}
+                          busy={busyId === d.id}
+                        />
+                      ) : (
+                        <div className="flex gap-2 mt-2">
+                          {d.status !== "accepted" && (
+                            <button
+                              onClick={() => handleSetStatus(d, "accepted")}
+                              disabled={busyId === d.id}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50"
+                            >✓ Accept</button>
+                          )}
+                          {d.status !== "rejected" && (
+                            <button
+                              onClick={() => setReviewingId(d.id)}
+                              disabled={busyId === d.id}
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 text-red-300 text-[11px] font-semibold hover:bg-red-950/30 border border-red-900/50 disabled:opacity-50"
+                            >✗ Reject</button>
+                          )}
+                          {d.status !== "pending" && (
+                            <button
+                              onClick={() => handleSetStatus(d, "pending")}
+                              disabled={busyId === d.id}
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50"
+                            >Reset</button>
+                          )}
+                        </div>
+                      )
                     )}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
@@ -8664,6 +8741,34 @@ function DocumentsTab({ employeeId, currentUser }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// Small inline prompt for entering a rejection reason. Sub-component of DocumentsTab.
+function DocRejectPrompt({ onConfirm, onCancel, busy }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="mt-2 space-y-1.5">
+      <input
+        value={reason}
+        onChange={e => setReason(e.target.value)}
+        placeholder="Reason for rejection (shown to the trainee)"
+        className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-red-700"
+        autoFocus
+      />
+      <div className="flex gap-2">
+        <button
+          onClick={() => onConfirm(reason)}
+          disabled={busy}
+          className="px-2.5 py-1 rounded-lg bg-red-600 text-white text-[11px] font-semibold hover:bg-red-500 disabled:opacity-50"
+        >{busy ? "…" : "Confirm reject"}</button>
+        <button
+          onClick={onCancel}
+          disabled={busy}
+          className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50"
+        >Cancel</button>
+      </div>
     </div>
   );
 }

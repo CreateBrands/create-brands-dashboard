@@ -2355,6 +2355,11 @@ function dbEmployeeDocumentToApp(d) {
     notes:          d.notes || null,
     uploadedById:   d.uploaded_by_id || null,
     uploadedByName: d.uploaded_by_name || "Unknown",
+    status:         d.status || "pending",
+    reviewedById:   d.reviewed_by_id || null,
+    reviewedByName: d.reviewed_by_name || null,
+    reviewedAt:     d.reviewed_at || null,
+    rejectionReason: d.rejection_reason || null,
     createdAt:      d.created_at,
     updatedAt:      d.updated_at,
     archivedAt:     d.archived_at || null,
@@ -2478,6 +2483,29 @@ export async function archiveEmployeeDocument(id) {
   if (error) throw error;
   if (data && data.length > 0) return dbEmployeeDocumentToApp(data[0]);
   // RLS-tolerant fallback
+  const { data: fresh } = await supabase
+    .from("employee_documents").select("*").eq("id", id).maybeSingle();
+  return fresh ? dbEmployeeDocumentToApp(fresh) : null;
+}
+
+// Manager review action: accept or reject a document. On reject, a reason can
+// be supplied (shown to the trainee so they know what to fix on re-upload).
+// status: 'accepted' | 'rejected' | 'pending'. Any manager/HQ/owner (enforced
+// in app code). Setting back to 'pending' clears the review fields.
+export async function setDocumentStatus(id, status, reviewer, rejectionReason) {
+  if (!id) throw new Error("id required");
+  if (!["accepted", "rejected", "pending"].includes(status)) throw new Error("invalid status");
+  const row = {
+    status,
+    reviewed_by_id:   status === "pending" ? null : (reviewer?.id || null),
+    reviewed_by_name: status === "pending" ? null : (reviewer?.name || reviewer?.email || "Manager"),
+    reviewed_at:      status === "pending" ? null : new Date().toISOString(),
+    rejection_reason: status === "rejected" ? (rejectionReason?.trim() || null) : null,
+  };
+  const { data, error } = await supabase
+    .from("employee_documents").update(row).eq("id", id).select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbEmployeeDocumentToApp(data[0]);
   const { data: fresh } = await supabase
     .from("employee_documents").select("*").eq("id", id).maybeSingle();
   return fresh ? dbEmployeeDocumentToApp(fresh) : null;
