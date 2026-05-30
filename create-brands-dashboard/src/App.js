@@ -50,6 +50,9 @@ import {
   findApplicationsByEmail,
   // Training content layer: module authoring
   fetchTrainingModules, addTrainingModule, updateTrainingModule, archiveTrainingModule,
+  // Training templates: blueprint library
+  fetchTrainingTemplates, addTrainingTemplate, updateTrainingTemplate,
+  archiveTrainingTemplate, instantiateTemplate,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5300,6 +5303,12 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(null);   // module being edited, or "new", or null
   const [error, setError] = useState("");
+  // Templates (blueprint library) — separate tab.
+  const [tab, setTab] = useState("modules");       // "modules" | "templates"
+  const [templates, setTemplates] = useState([]);
+  const [tplLoading, setTplLoading] = useState(false);
+  const [editingTpl, setEditingTpl] = useState(null);   // template being edited, "new", or null
+  const [pickTemplate, setPickTemplate] = useState(false); // "add from template" picker open?
 
   useEffect(() => {
     if (!storeId) { setModules([]); return; }
@@ -5317,6 +5326,50 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
     if (!storeId) return;
     try { setModules(await fetchTrainingModules(storeId)); }
     catch (err) { console.error("Reload failed:", err); }
+  };
+
+  // Load templates when the Templates tab is opened (lazy).
+  useEffect(() => {
+    if (tab !== "templates" && !pickTemplate) return;
+    let cancelled = false;
+    setTplLoading(true);
+    fetchTrainingTemplates()
+      .then(rows => { if (!cancelled) setTemplates(rows); })
+      .catch(err => { console.error("Load templates failed:", err); })
+      .finally(() => { if (!cancelled) setTplLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, pickTemplate]);
+
+  const reloadTemplates = async () => {
+    try { setTemplates(await fetchTrainingTemplates()); }
+    catch (err) { console.error("Reload templates failed:", err); }
+  };
+
+  const handleSaveTpl = async (form) => {
+    if (editingTpl === "new") {
+      await addTrainingTemplate({ ...form, manager: currentUser });
+    } else {
+      await updateTrainingTemplate(editingTpl.id, form);
+    }
+    setEditingTpl(null);
+    await reloadTemplates();
+  };
+
+  const handleArchiveTpl = async (tpl) => {
+    if (!window.confirm(`Archive template "${tpl.title}"?\n\nModules already created from it are unaffected.`)) return;
+    try { await archiveTrainingTemplate(tpl.id); await reloadTemplates(); }
+    catch (err) { console.error("Archive template failed:", err); alert(`Could not archive: ${err?.message || err}`); }
+  };
+
+  const handleAddFromTemplate = async (tpl) => {
+    try {
+      await instantiateTemplate(tpl.id, storeId, modules.length);
+      setPickTemplate(false);
+      await reload();
+    } catch (err) {
+      console.error("Instantiate failed:", err);
+      alert(`Could not add from template: ${err?.message || err}`);
+    }
   };
 
   const handleSave = async (form) => {
@@ -5371,18 +5424,51 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             <GraduationCap size={24}/> Training
           </h1>
-          <p className="text-sm text-slate-400 mt-1">Author onboarding modules for each store. Trainees work through these in their portal.</p>
+          <p className="text-sm text-slate-400 mt-1">Author onboarding modules per store, or build reusable templates.</p>
         </div>
-        {storeId && (
+        {tab === "modules" && storeId && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPickTemplate(true)}
+              className="px-3 py-2 rounded-xl bg-slate-800 text-slate-200 text-sm font-semibold hover:bg-slate-700"
+            >
+              + From template
+            </button>
+            <button
+              onClick={() => setEditing("new")}
+              className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
+            >
+              + New module
+            </button>
+          </div>
+        )}
+        {tab === "templates" && (
           <button
-            onClick={() => setEditing("new")}
+            onClick={() => setEditingTpl("new")}
             className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
           >
-            + New module
+            + New template
           </button>
         )}
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-slate-800">
+        {[
+          { key: "modules",   label: "Store modules" },
+          { key: "templates", label: "Templates" },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px ${tab === t.key ? "border-indigo-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "modules" && <>
       {/* Store picker */}
       <div>
         <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Store</label>
@@ -5443,13 +5529,83 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
           onCancel={() => setEditing(null)}
         />
       )}
+      </>}
+
+      {tab === "templates" && <>
+        {tplLoading ? (
+          <div className="text-sm text-slate-500 text-center py-8">Loading templates…</div>
+        ) : templates.length === 0 ? (
+          <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+            <GraduationCap size={28} className="mx-auto mb-3 text-slate-700"/>
+            <div className="font-semibold text-slate-400 mb-1">No templates yet</div>
+            <div className="text-xs text-slate-600">Templates are reusable blueprints. Create one, then add it to any store from the Store modules tab.</div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {templates.map(tpl => (
+              <div key={tpl.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-slate-200">{tpl.title}</span>
+                    {tpl.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">{tpl.category}</span>}
+                  </div>
+                  {tpl.description && <div className="text-xs text-slate-500 mt-1">{tpl.description}</div>}
+                  <div className="text-[11px] text-slate-600 mt-1">
+                    {tpl.content ? `${tpl.content.length} chars` : "No content"}
+                    {tpl.createdByName && <> · by {tpl.createdByName}</>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button onClick={() => setEditingTpl(tpl)}    className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white" title="Edit"><Edit size={13}/></button>
+                  <button onClick={() => handleArchiveTpl(tpl)} className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20" title="Archive"><Trash2 size={13}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {editingTpl && (
+          <TrainingModuleEditor
+            module={editingTpl === "new" ? null : editingTpl}
+            isTemplate
+            onSave={handleSaveTpl}
+            onCancel={() => setEditingTpl(null)}
+          />
+        )}
+      </>}
+
+      {/* Add-from-template picker (opens from Store modules tab) */}
+      {pickTemplate && (
+        <Modal onClose={() => setPickTemplate(false)} title="Add from template">
+          <div className="space-y-2">
+            {tplLoading ? (
+              <div className="text-sm text-slate-500 text-center py-6">Loading templates…</div>
+            ) : templates.length === 0 ? (
+              <div className="text-sm text-slate-500 text-center py-6">No templates available. Create one in the Templates tab first.</div>
+            ) : templates.map(tpl => (
+              <button
+                key={tpl.id}
+                onClick={() => handleAddFromTemplate(tpl)}
+                className="w-full text-left bg-slate-950 border border-slate-800 rounded-xl p-3 hover:border-indigo-600"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-slate-200">{tpl.title}</span>
+                  {tpl.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">{tpl.category}</span>}
+                </div>
+                {tpl.description && <div className="text-xs text-slate-500 mt-1">{tpl.description}</div>}
+                <div className="text-[10px] text-indigo-400 mt-1">Click to add a copy to this store</div>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
 // Editor modal for a single training module. Markdown content authored in a
 // plain textarea (rendered safely as Markdown in the trainee view).
-function TrainingModuleEditor({ module, onSave, onCancel }) {
+function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [title, setTitle]             = useState(module?.title || "");
   const [description, setDescription] = useState(module?.description || "");
   const [category, setCategory]       = useState(module?.category || "");
@@ -5474,8 +5630,13 @@ function TrainingModuleEditor({ module, onSave, onCancel }) {
   const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
 
   return (
-    <Modal onClose={onCancel} title={module ? "Edit module" : "New module"}>
+    <Modal onClose={onCancel} title={`${module ? "Edit" : "New"} ${isTemplate ? "template" : "module"}`}>
       <div className="space-y-3">
+        {isTemplate && (
+          <div className="text-[11px] text-slate-500 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2">
+            Templates are reusable blueprints. Stores copy them into their own editable modules — later edits here don't change existing copies.
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={labelCls}>Title *</label>

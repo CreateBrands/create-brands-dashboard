@@ -2570,6 +2570,7 @@ function dbTrainingModuleToApp(m) {
     content:     m.content || null,
     sortOrder:   m.sort_order ?? 0,
     required:    m.required ?? true,
+    sourceTemplateId: m.source_template_id || null,
     createdAt:   m.created_at,
     updatedAt:   m.updated_at,
     archivedAt:  m.archived_at || null,
@@ -2742,4 +2743,107 @@ export async function setModuleVerification(employeeId, moduleId, verified, mana
     .single();
   if (error) throw error;
   return dbTrainingProgressToApp(data);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// TRAINING TEMPLATES (blueprint library)
+// ════════════════════════════════════════════════════════════════════════════
+// Reusable blueprints. A store instantiates one → a NEW store-specific
+// training_modules row copied from the template. No propagation: editing a
+// template later does not touch modules already created from it.
+
+function dbTrainingTemplateToApp(t) {
+  return {
+    id:            t.id,
+    title:         t.title,
+    description:   t.description || null,
+    category:      t.category || null,
+    content:       t.content || null,
+    required:      t.required ?? true,
+    createdById:   t.created_by_id || null,
+    createdByName: t.created_by_name || null,
+    createdAt:     t.created_at,
+    updatedAt:     t.updated_at,
+    archivedAt:    t.archived_at || null,
+  };
+}
+
+export async function fetchTrainingTemplates() {
+  const { data, error } = await supabase
+    .from("training_templates")
+    .select("*")
+    .is("archived_at", null)
+    .order("category", { ascending: true })
+    .order("title", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbTrainingTemplateToApp);
+}
+
+export async function addTrainingTemplate({ title, description, category, content, required, manager }) {
+  if (!title?.trim()) throw new Error("title required");
+  const row = {
+    id:              `ttpl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    title:           title.trim(),
+    description:     description?.trim() || null,
+    category:        category?.trim() || null,
+    content:         content?.trim() || null,
+    required:        required === undefined ? true : !!required,
+    created_by_id:   manager?.id || null,
+    created_by_name: manager?.name || manager?.email || null,
+  };
+  const { data, error } = await supabase
+    .from("training_templates").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbTrainingTemplateToApp(data) : dbTrainingTemplateToApp(row);
+}
+
+export async function updateTrainingTemplate(id, patch) {
+  if (!id) throw new Error("id required");
+  const row = {};
+  if (patch.title       !== undefined) row.title       = patch.title?.trim();
+  if (patch.description !== undefined) row.description = patch.description?.trim() || null;
+  if (patch.category    !== undefined) row.category    = patch.category?.trim() || null;
+  if (patch.content     !== undefined) row.content     = patch.content?.trim() || null;
+  if (patch.required    !== undefined) row.required    = !!patch.required;
+  if (patch.archivedAt  !== undefined) row.archived_at = patch.archivedAt;
+  const { data, error } = await supabase
+    .from("training_templates").update(row).eq("id", id).select();
+  if (error) throw error;
+  if (data && data.length > 0) return dbTrainingTemplateToApp(data[0]);
+  const { data: fresh, error: fErr } = await supabase
+    .from("training_templates").select("*").eq("id", id).maybeSingle();
+  if (fErr) throw fErr;
+  if (!fresh) throw new Error(`Template ${id} updated but could not be retrieved.`);
+  return dbTrainingTemplateToApp(fresh);
+}
+
+export async function archiveTrainingTemplate(id) {
+  if (!id) throw new Error("id required");
+  return updateTrainingTemplate(id, { archivedAt: new Date().toISOString() });
+}
+
+// Instantiate a template into a store: reads the template, writes a NEW
+// store-specific module copied from it (sort_order appended, source recorded).
+// Returns the created module (app-shaped). The new module is fully independent.
+export async function instantiateTemplate(templateId, storeId, sortOrder) {
+  if (!templateId || !storeId) throw new Error("templateId and storeId required");
+  const { data: tpl, error: tErr } = await supabase
+    .from("training_templates").select("*").eq("id", templateId).maybeSingle();
+  if (tErr) throw tErr;
+  if (!tpl) throw new Error("Template not found.");
+  const row = {
+    id:                 `tmod-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    store_id:           storeId,
+    title:              tpl.title,
+    description:        tpl.description || null,
+    category:           tpl.category || null,
+    content:            tpl.content || null,
+    required:           tpl.required ?? true,
+    sort_order:         Number.isFinite(sortOrder) ? sortOrder : 0,
+    source_template_id: tpl.id,
+  };
+  const { data, error } = await supabase
+    .from("training_modules").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbTrainingModuleToApp(data) : dbTrainingModuleToApp(row);
 }
