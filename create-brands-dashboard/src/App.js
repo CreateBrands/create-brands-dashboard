@@ -7191,18 +7191,18 @@ function EmployeeProfileView({
       </button>
 
       {/* Header card */}
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5">
+      <div className="bg-gradient-to-br from-slate-900 to-slate-900/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg shadow-black/20">
         <div className="flex items-start gap-4">
           {/* Photo or initials */}
           {employee.photoUrl ? (
             <img
               src={employee.photoUrl}
               alt={`${employee.firstName} ${employee.lastName}`}
-              className="w-20 h-20 rounded-xl object-cover border border-slate-700 flex-shrink-0"
+              className="w-16 h-16 rounded-xl object-cover border border-slate-700 flex-shrink-0"
             />
           ) : (
             <div
-              className="w-20 h-20 rounded-xl flex items-center justify-center text-2xl font-bold flex-shrink-0"
+              className="w-16 h-16 rounded-xl flex items-center justify-center text-xl font-bold flex-shrink-0"
               style={{ background: (employee.color || "#6366f1") + "30", color: employee.color || "#6366f1" }}
             >
               {employee.firstName[0]}{employee.lastName?.[0] || ""}
@@ -7228,22 +7228,22 @@ function EmployeeProfileView({
               )}
             </div>
             {employee.nickname && <div className="text-sm text-slate-500 mb-2">"{employee.nickname}"</div>}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Role</div><div className="text-slate-200 mt-0.5">{roleLabel || "—"}</div></div>
-              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Department</div><div className="text-slate-200 mt-0.5">{deptLabel || "—"}</div></div>
-              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Store</div><div className="text-slate-200 mt-0.5">{primaryStore ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}` : "—"}</div></div>
-              <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Pay</div><div className="text-slate-200 mt-0.5">{formatPayDisplay(employee.hourlyRate, employee.payType)}</div></div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-xs mt-2">
+              <div><div className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">Role</div><div className="text-slate-200 mt-0.5 font-medium">{roleLabel || "—"}</div></div>
+              <div><div className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">Department</div><div className="text-slate-200 mt-0.5 font-medium">{deptLabel || "—"}</div></div>
+              <div><div className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">Store</div><div className="text-slate-200 mt-0.5 font-medium">{primaryStore ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}` : "—"}</div></div>
+              <div><div className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">Pay</div><div className="text-slate-200 mt-0.5 font-medium">{formatPayDisplay(employee.hourlyRate, employee.payType)}</div></div>
             </div>
             {employee.isTrainee && (
-              <div className="mt-3">
+              <div className="mt-4 flex items-center gap-3 flex-wrap pt-3 border-t border-slate-800">
                 <button
                   onClick={handleConvertToStaff}
                   disabled={converting}
-                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-semibold hover:bg-sky-500 disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-semibold hover:bg-sky-500 disabled:opacity-50 flex-shrink-0"
                 >
                   {converting ? "Converting…" : "🎓 → Convert to full staff"}
                 </button>
-                <span className="text-[11px] text-slate-600 ml-2">
+                <span className="text-[11px] text-slate-500">
                   Clears trainee status and grants normal employee access.
                 </span>
               </div>
@@ -7253,14 +7253,13 @@ function EmployeeProfileView({
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-slate-800 flex-wrap">
+      <div className="flex gap-1 border-b border-slate-800 flex-wrap mt-1">
         {[
           { key: "personal",    label: "Personal & HR" },
-          { key: "job",         label: "Job Assignment" },
-          { key: "pay",         label: "Pay History" },
+          { key: "job",         label: "Job & Pay" },
           { key: "certs",       label: "Certifications" },
-          { key: "application", label: linkedApp ? "Linked Application" : "Linked Application (none)" },
           { key: "documents",   label: "Documents" },
+          { key: "application", label: linkedApp ? "Linked Application" : "Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
         ].map(t => (
           <button
@@ -7288,23 +7287,25 @@ function EmployeeProfileView({
       )}
 
       {tab === "job" && (
-        <JobAssignmentTab
-          employee={employee}
-          stores={stores}
-          storeRoles={storeRoles}
-          storeDepartments={storeDepartments}
-          opsTeam={opsTeam}
-          onUpdateEmployee={onUpdateEmployee}
-          currentUser={currentUser}
-        />
-      )}
-
-      {tab === "pay" && (
-        <PayHistoryTab
-          employeeId={employeeId}
-          employee={employee}
-          currentUser={currentUser}
-        />
+        <div className="space-y-6">
+          <JobAssignmentTab
+            employee={employee}
+            stores={stores}
+            storeRoles={storeRoles}
+            storeDepartments={storeDepartments}
+            opsTeam={opsTeam}
+            onUpdateEmployee={onUpdateEmployee}
+            currentUser={currentUser}
+          />
+          <div className="pt-2 border-t border-slate-800">
+            <h3 className="text-sm font-bold text-slate-300 mb-3 mt-4">Pay history</h3>
+            <PayHistoryTab
+              employeeId={employeeId}
+              employee={employee}
+              currentUser={currentUser}
+            />
+          </div>
+        </div>
       )}
 
       {tab === "certs" && (
@@ -7345,85 +7346,93 @@ function EmployeeProfileView({
 function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, saving }) {
   const set = (k, v) => setEditHr(s => ({ ...s, [k]: v }));
   const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
-  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const inputCls = "w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const sectionCls = "text-[11px] text-slate-400 font-semibold uppercase tracking-wider mb-3";
 
   // Show whether hire date is overridden or derived. If editHr.hireDate
   // matches the derived value, it's not really "overridden".
   const isExplicitOverride = !!editHr.hireDate && editHr.hireDate !== (derivedHireDate || "");
 
   return (
-    <div className="space-y-4 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+    <div className="space-y-6 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      {/* ── Identity & contact ── */}
       <div>
-        <label className={labelCls}>Hire date</label>
-        <input
-          type="date"
-          value={editHr.hireDate}
-          onChange={e => set("hireDate", e.target.value)}
-          max={new Date().toISOString().slice(0, 10)}
-          className={`${inputCls} cursor-pointer`}
-          onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
-        />
-        <div className="text-[10px] text-slate-600 mt-1">
-          {linkedApp
-            ? <>Default: {derivedHireDate ? new Date(derivedHireDate).toLocaleDateString("en-GB") : "—"} (from linked application's hire date). Override above if different.{isExplicitOverride && <span className="text-amber-400"> · Override active</span>}</>
-            : <>No linked application — set this manually.</>
-          }
+        <div className={sectionCls}>Identity &amp; contact</div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={labelCls}>Email</label><input type="email" value={editHr.email} onChange={e => set("email", e.target.value)} className={inputCls}/></div>
+            <div><label className={labelCls}>Phone</label><input value={editHr.phone} onChange={e => set("phone", e.target.value)} className={inputCls}/></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Date of birth</label>
+              <input
+                type="date"
+                value={editHr.dob}
+                onChange={e => set("dob", e.target.value)}
+                max={new Date().toISOString().slice(0, 10)}
+                className={`${inputCls} cursor-pointer`}
+                onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+              />
+              {editHr.dob && isUnder18(editHr.dob) && (
+                <div className="text-[10px] text-amber-400 mt-0.5">⚠ Under 18 — restricted hours apply.</div>
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>Legal status</label>
+              <select value={editHr.legalStatus} onChange={e => set("legalStatus", e.target.value)} className={inputCls}>
+                <option value="">— Not set —</option>
+                {LEGAL_STATUS_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Address</label>
+            <input value={editHr.address} onChange={e => set("address", e.target.value)} className={inputCls} placeholder="Street, town, postcode"/>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div><label className={labelCls}>Email</label><input type="email" value={editHr.email} onChange={e => set("email", e.target.value)} className={inputCls}/></div>
-        <div><label className={labelCls}>Phone</label><input value={editHr.phone} onChange={e => set("phone", e.target.value)} className={inputCls}/></div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
+      {/* ── Employment ── */}
+      <div className="pt-4 border-t border-slate-800">
+        <div className={sectionCls}>Employment</div>
         <div>
-          <label className={labelCls}>Date of birth</label>
+          <label className={labelCls}>Hire date</label>
           <input
             type="date"
-            value={editHr.dob}
-            onChange={e => set("dob", e.target.value)}
+            value={editHr.hireDate}
+            onChange={e => set("hireDate", e.target.value)}
             max={new Date().toISOString().slice(0, 10)}
-            className={`${inputCls} cursor-pointer`}
+            className={`${inputCls} cursor-pointer max-w-xs`}
             onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
           />
-          {editHr.dob && isUnder18(editHr.dob) && (
-            <div className="text-[10px] text-amber-400 mt-0.5">⚠ Under 18 — restricted hours apply.</div>
-          )}
+          <div className="text-[10px] text-slate-600 mt-1">
+            {linkedApp
+              ? <>Default: {derivedHireDate ? new Date(derivedHireDate).toLocaleDateString("en-GB") : "—"} (from linked application). Override if different.{isExplicitOverride && <span className="text-amber-400"> · Override active</span>}</>
+              : <>No linked application — set this manually.</>
+            }
+          </div>
         </div>
-        <div>
-          <label className={labelCls}>Legal status</label>
-          <select value={editHr.legalStatus} onChange={e => set("legalStatus", e.target.value)} className={inputCls}>
-            <option value="">— Not set —</option>
-            {LEGAL_STATUS_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div>
-        <label className={labelCls}>Address</label>
-        <input value={editHr.address} onChange={e => set("address", e.target.value)} className={inputCls} placeholder="Street, town, postcode"/>
-      </div>
-
-      <div>
-        <label className={labelCls}>HR notes</label>
-        <textarea
-          value={editHr.hrNotes}
-          onChange={e => set("hrNotes", e.target.value)}
-          rows={3}
-          placeholder="Internal HR notes about this employee (e.g. preferred contact times, visa expiry date). Different from the Notes tab which is append-only."
-          className={`${inputCls} resize-none`}
-        />
-        <div className="text-[10px] text-slate-600 mt-1">
-          One-line free-form notes editable any time. For dated, append-only entries, use the Notes tab.
+        <div className="mt-3">
+          <label className={labelCls}>HR notes</label>
+          <textarea
+            value={editHr.hrNotes}
+            onChange={e => set("hrNotes", e.target.value)}
+            rows={2}
+            placeholder="Internal HR notes (e.g. preferred contact times, visa expiry). Different from the append-only Notes tab."
+            className={`${inputCls} resize-none`}
+          />
+          <div className="text-[10px] text-slate-600 mt-1">
+            Free-form notes editable any time. For dated, append-only entries, use the Notes tab.
+          </div>
         </div>
       </div>
 
       {/* ── Emergency contact (slice 7) ── */}
       <div className="pt-4 border-t border-slate-800">
-        <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">
+        <div className={sectionCls}>
           Emergency contact
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -7463,7 +7472,7 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
 
       {/* ── Probation (slice 7) ── */}
       <div className="pt-4 border-t border-slate-800">
-        <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">
+        <div className={sectionCls}>
           Probation
         </div>
         <div className="grid grid-cols-2 gap-3">
