@@ -5602,6 +5602,7 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
         category:    form.category,
         content:     form.content,
         required:    form.required,
+        type:        form.type,
         sortOrder:   modules.length,   // append to end
       });
     } else {
@@ -5611,6 +5612,7 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
         category:    form.category,
         content:     form.content,
         required:    form.required,
+        type:        form.type,
       });
     }
     setEditing(null);
