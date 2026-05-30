@@ -2039,6 +2039,7 @@ export async function hireApplication(application, options = {}) {
       photoUrl:     application.photoUrl || null,
       hrNotes:      "",
       status:       "pending_setup",  // ← key flag for the warning badge
+      isTrainee:    true,             // new hires start as trainees (trainee portal)
     };
     const { data, error } = await supabase
       .from("ops_team")

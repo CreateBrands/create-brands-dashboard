@@ -8934,10 +8934,12 @@ function OpsTeamMemberFormModal({
       hireDate:    isHireFlow
                      ? new Date().toISOString().slice(0, 10)
                      : (item?.hireDate || undefined),
-      // Trainee portal: new hires/adds start as trainees (is_trainee = true);
-      // a manager converts them to staff later via the profile. On EDIT of an
-      // existing member, preserve their current flag (never auto-flip).
-      isTrainee:   item ? (item.isTrainee ?? false) : true,
+      // Trainee portal: new HIRES start as trainees (is_trainee = true); a
+      // manager converts them to staff later via the profile. Keyed off
+      // isHireFlow (not `item`) — the hire modal may receive a constructed
+      // item, so "no item" is the wrong discriminator. On a plain edit/add,
+      // preserve the existing flag (default false) and never auto-flip.
+      isTrainee:   isHireFlow ? true : (item?.isTrainee ?? false),
     });
   };
 
