@@ -48,6 +48,8 @@ import {
   archiveEmployeeDocument,
   // Slice 7 stage 4: apply-time duplicate detection
   findApplicationsByEmail,
+  // Training content layer: module authoring
+  fetchTrainingModules, addTrainingModule, updateTrainingModule, archiveTrainingModule,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -63,7 +65,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign,
-  Globe, FileText, ChefHat, PoundSterling, Search
+  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -5276,6 +5278,242 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
       {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
       {deleteId && <OpsConfirmModal message="Delete this assignment?" onConfirm={() => onDelete(deleteId)} onClose={() => setDeleteId(null)}/>}
     </div>
+  );
+}
+
+// ─── Training Admin View (manager authoring — C1) ──────────────────────────────
+// Manager picks a store and authors that store's training modules: create,
+// edit, reorder, archive. Each module has a title, description, category,
+// required flag, and a Markdown content body the trainee reads. Per-store
+// (modules belong to one store). Gated to manager/HQ/owner by the sidebar.
+//
+// Data layer: fetchTrainingModules / addTrainingModule / updateTrainingModule /
+// archiveTrainingModule (already in supabase.js). Content is plain Markdown
+// text here; the trainee view (C2) renders it safely.
+function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUser }) {
+  const visibleStores = useMemo(
+    () => stores.filter(s => !visibleStoreIds || visibleStoreIds.includes(s.id)),
+    [stores, visibleStoreIds]
+  );
+  const [storeId, setStoreId] = useState(visibleStores[0]?.id || "");
+  const [modules, setModules] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(null);   // module being edited, or "new", or null
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!storeId) { setModules([]); return; }
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    fetchTrainingModules(storeId)
+      .then(rows => { if (!cancelled) setModules(rows); })
+      .catch(err => { console.error("Load modules failed:", err); if (!cancelled) setError(err?.message || "Failed to load modules"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [storeId]);
+
+  const reload = async () => {
+    if (!storeId) return;
+    try { setModules(await fetchTrainingModules(storeId)); }
+    catch (err) { console.error("Reload failed:", err); }
+  };
+
+  const handleSave = async (form) => {
+    if (editing === "new") {
+      await addTrainingModule({
+        storeId,
+        title:       form.title,
+        description: form.description,
+        category:    form.category,
+        content:     form.content,
+        required:    form.required,
+        sortOrder:   modules.length,   // append to end
+      });
+    } else {
+      await updateTrainingModule(editing.id, {
+        title:       form.title,
+        description: form.description,
+        category:    form.category,
+        content:     form.content,
+        required:    form.required,
+      });
+    }
+    setEditing(null);
+    await reload();
+  };
+
+  const handleArchive = async (mod) => {
+    if (!window.confirm(`Archive "${mod.title}"?\n\nIt will be removed from the trainee's module list. Existing progress is preserved.`)) return;
+    try { await archiveTrainingModule(mod.id); await reload(); }
+    catch (err) { console.error("Archive failed:", err); alert(`Could not archive: ${err?.message || err}`); }
+  };
+
+  // Move a module up/down — swaps sort_order with its neighbour.
+  const handleMove = async (mod, dir) => {
+    const idx = modules.findIndex(m => m.id === mod.id);
+    const swapIdx = dir === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= modules.length) return;
+    const other = modules[swapIdx];
+    try {
+      await Promise.all([
+        updateTrainingModule(mod.id,   { sortOrder: other.sortOrder }),
+        updateTrainingModule(other.id, { sortOrder: mod.sortOrder }),
+      ]);
+      await reload();
+    } catch (err) { console.error("Reorder failed:", err); }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+            <GraduationCap size={24}/> Training
+          </h1>
+          <p className="text-sm text-slate-400 mt-1">Author onboarding modules for each store. Trainees work through these in their portal.</p>
+        </div>
+        {storeId && (
+          <button
+            onClick={() => setEditing("new")}
+            className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
+          >
+            + New module
+          </button>
+        )}
+      </div>
+
+      {/* Store picker */}
+      <div>
+        <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Store</label>
+        <select
+          value={storeId}
+          onChange={e => setStoreId(e.target.value)}
+          className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500 min-w-[260px]"
+        >
+          {visibleStores.length === 0 && <option value="">No stores available</option>}
+          {visibleStores.map(s => {
+            const brand = brands.find(b => b.id === s.brandId);
+            return <option key={s.id} value={s.id}>{brand?.name ? `${brand.name} · ` : ""}{s.name}</option>;
+          })}
+        </select>
+      </div>
+
+      {error && <div className="text-xs text-red-400 bg-red-950/30 border border-red-900 rounded-xl px-3 py-2">{error}</div>}
+
+      {/* Module list */}
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-8">Loading modules…</div>
+      ) : modules.length === 0 ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+          <GraduationCap size={28} className="mx-auto mb-3 text-slate-700"/>
+          <div className="font-semibold text-slate-400 mb-1">No modules for this store yet</div>
+          <div className="text-xs text-slate-600">Click "New module" to create the first training module.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {modules.map((mod, idx) => (
+            <div key={mod.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-slate-200">{mod.title}</span>
+                  {mod.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">{mod.category}</span>}
+                  {mod.required
+                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Required</span>
+                    : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Optional</span>}
+                </div>
+                {mod.description && <div className="text-xs text-slate-500 mt-1">{mod.description}</div>}
+                <div className="text-[11px] text-slate-600 mt-1">{mod.content ? `${mod.content.length} chars of content` : "No content yet"}</div>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button onClick={() => handleMove(mod, "up")}   disabled={idx === 0}                  className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30" title="Move up"><ChevronUp size={13}/></button>
+                <button onClick={() => handleMove(mod, "down")} disabled={idx === modules.length - 1} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30" title="Move down"><ChevronDown size={13}/></button>
+                <button onClick={() => setEditing(mod)}   className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white" title="Edit"><Edit size={13}/></button>
+                <button onClick={() => handleArchive(mod)} className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20" title="Archive"><Trash2 size={13}/></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <TrainingModuleEditor
+          module={editing === "new" ? null : editing}
+          onSave={handleSave}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Editor modal for a single training module. Markdown content authored in a
+// plain textarea (rendered safely as Markdown in the trainee view).
+function TrainingModuleEditor({ module, onSave, onCancel }) {
+  const [title, setTitle]             = useState(module?.title || "");
+  const [description, setDescription] = useState(module?.description || "");
+  const [category, setCategory]       = useState(module?.category || "");
+  const [content, setContent]         = useState(module?.content || "");
+  const [required, setRequired]       = useState(module?.required ?? true);
+  const [saving, setSaving]           = useState(false);
+  const [error, setError]             = useState("");
+
+  const handleSubmit = async () => {
+    if (!title.trim()) { setError("Title is required."); return; }
+    setSaving(true); setError("");
+    try {
+      await onSave({ title, description, category, content, required });
+    } catch (err) {
+      console.error("Save module failed:", err);
+      setError(err?.message || "Save failed.");
+      setSaving(false);
+    }
+  };
+
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <Modal onClose={onCancel} title={module ? "Edit module" : "New module"}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>Title *</label>
+            <input value={title} onChange={e => setTitle(e.target.value)} className={inputCls} placeholder="e.g. Food hygiene basics"/>
+          </div>
+          <div>
+            <label className={labelCls}>Category</label>
+            <input value={category} onChange={e => setCategory(e.target.value)} className={inputCls} placeholder="e.g. Food Safety"/>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Short description</label>
+          <input value={description} onChange={e => setDescription(e.target.value)} className={inputCls} placeholder="One line shown in the module list"/>
+        </div>
+        <div>
+          <label className={labelCls}>Content (Markdown — headings, **bold**, [links](url))</label>
+          <textarea
+            value={content}
+            onChange={e => setContent(e.target.value)}
+            rows={10}
+            className={`${inputCls} font-mono text-xs leading-relaxed`}
+            placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
+          />
+          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. The trainee sees this formatted in their portal.</div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+          <input type="checkbox" checked={required} onChange={e => setRequired(e.target.checked)} className="rounded"/>
+          Required module (trainee must complete to finish training)
+        </label>
+
+        {error && <div className="text-xs text-red-400 bg-red-950/30 border border-red-900 rounded-xl px-3 py-2">{error}</div>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onCancel} disabled={saving} className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50">Cancel</button>
+          <button onClick={handleSubmit} disabled={saving || !title.trim()} className="px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{saving ? "Saving…" : "Save module"}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -17408,6 +17646,7 @@ export default function App() {
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null },
+      { key: "training",     label: "Training",          icon: GraduationCap },
     ]},
     { group: "MAINTENANCE", items: [
       { key: "issues",  label: "Issues",  icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
@@ -17527,6 +17766,10 @@ export default function App() {
               onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
               onAddOpsTeam={addOpsTeam}
               onOpenEmployeeProfile={openEmployeeProfile}
+            />}
+            {effectiveActiveView === "training"       && <TrainingAdminView
+              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+              opsTeam={opsTeam} currentUser={currentUser}
             />}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
               employeeId={selectedEmployeeId}

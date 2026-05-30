@@ -2567,6 +2567,7 @@ function dbTrainingModuleToApp(m) {
     title:       m.title,
     description: m.description || null,
     category:    m.category || null,
+    content:     m.content || null,
     sortOrder:   m.sort_order ?? 0,
     required:    m.required ?? true,
     createdAt:   m.created_at,
@@ -2589,7 +2590,7 @@ export async function fetchTrainingModules(storeId) {
 }
 
 export async function addTrainingModule({
-  storeId, title, description, category, sortOrder, required,
+  storeId, title, description, category, content, sortOrder, required,
 }) {
   if (!storeId) throw new Error("storeId required");
   if (!title?.trim()) throw new Error("title required");
@@ -2599,6 +2600,7 @@ export async function addTrainingModule({
     title:       title.trim(),
     description: description?.trim() || null,
     category:    category?.trim() || null,
+    content:     content?.trim() || null,
     sort_order:  Number.isFinite(sortOrder) ? sortOrder : 0,
     required:    required === undefined ? true : !!required,
   };
@@ -2620,6 +2622,7 @@ export async function updateTrainingModule(id, patch) {
   if (patch.title       !== undefined) row.title       = patch.title?.trim();
   if (patch.description !== undefined) row.description = patch.description?.trim() || null;
   if (patch.category    !== undefined) row.category    = patch.category?.trim() || null;
+  if (patch.content     !== undefined) row.content     = patch.content?.trim() || null;
   if (patch.sortOrder   !== undefined) row.sort_order  = Number.isFinite(patch.sortOrder) ? patch.sortOrder : 0;
   if (patch.required    !== undefined) row.required    = !!patch.required;
   if (patch.archivedAt  !== undefined) row.archived_at = patch.archivedAt;
@@ -2643,4 +2646,100 @@ export async function updateTrainingModule(id, patch) {
 export async function archiveTrainingModule(id) {
   if (!id) throw new Error("id required");
   return updateTrainingModule(id, { archivedAt: new Date().toISOString() });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// TRAINING PROGRESS (training content layer — step B)
+// ════════════════════════════════════════════════════════════════════════════
+// One row per (employee, module). Two-state completion model:
+//   - completed_at: trainee ticked it done (self-serve)
+//   - verified_at + verified_by: manager signed off / verified
+// A manager can verify or clear; a trainee can tick or untick their own.
+// Upsert keyed on the (employee_id, module_id) UNIQUE constraint.
+
+function dbTrainingProgressToApp(p) {
+  return {
+    id:             p.id,
+    employeeId:     p.employee_id,
+    moduleId:       p.module_id,
+    completedAt:    p.completed_at || null,
+    verifiedAt:     p.verified_at || null,
+    verifiedById:   p.verified_by_id || null,
+    verifiedByName: p.verified_by_name || null,
+    createdAt:      p.created_at,
+    updatedAt:      p.updated_at,
+    archivedAt:     p.archived_at || null,
+  };
+}
+
+// All progress rows for one trainee (their completion across modules).
+export async function fetchTrainingProgress(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("training_progress")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .is("archived_at", null);
+  if (error) throw error;
+  return (data || []).map(dbTrainingProgressToApp);
+}
+
+// Internal: fetch the existing progress row (or null) for merge-before-upsert.
+async function _fetchProgressRow(employeeId, moduleId) {
+  const { data, error } = await supabase
+    .from("training_progress")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .eq("module_id", moduleId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+// Trainee ticks / unticks a module complete. Reads the existing row first and
+// merges, so this NEVER clobbers a manager's verification (the two operations
+// touch different fields but share one row — a blind upsert would wipe the
+// other half, same footgun as the partial-mapper bug).
+export async function setModuleCompletion(employeeId, moduleId, done) {
+  if (!employeeId || !moduleId) throw new Error("employeeId and moduleId required");
+  const existing = await _fetchProgressRow(employeeId, moduleId);
+  const row = {
+    ...(existing || {}),
+    id:           existing?.id || `tprog-${employeeId}-${moduleId}`,
+    employee_id:  employeeId,
+    module_id:    moduleId,
+    completed_at: done ? new Date().toISOString() : null,
+  };
+  delete row.created_at; delete row.updated_at;  // let DB defaults/trigger manage
+  const { data, error } = await supabase
+    .from("training_progress")
+    .upsert(row, { onConflict: "employee_id,module_id" })
+    .select()
+    .single();
+  if (error) throw error;
+  return dbTrainingProgressToApp(data);
+}
+
+// Manager verifies (or clears verification on) a trainee's module. Same
+// merge-before-upsert so the trainee's completed_at is preserved.
+export async function setModuleVerification(employeeId, moduleId, verified, manager) {
+  if (!employeeId || !moduleId) throw new Error("employeeId and moduleId required");
+  const existing = await _fetchProgressRow(employeeId, moduleId);
+  const row = {
+    ...(existing || {}),
+    id:               existing?.id || `tprog-${employeeId}-${moduleId}`,
+    employee_id:      employeeId,
+    module_id:        moduleId,
+    verified_at:      verified ? new Date().toISOString() : null,
+    verified_by_id:   verified ? (manager?.id || null) : null,
+    verified_by_name: verified ? (manager?.name || manager?.email || "Manager") : null,
+  };
+  delete row.created_at; delete row.updated_at;
+  const { data, error } = await supabase
+    .from("training_progress")
+    .upsert(row, { onConflict: "employee_id,module_id" })
+    .select()
+    .single();
+  if (error) throw error;
+  return dbTrainingProgressToApp(data);
 }
