@@ -5778,8 +5778,17 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
               {!emp ? (
                 <div className="text-sm text-slate-500 bg-slate-950 border border-slate-800 rounded-xl p-6 text-center">Select an employee to see the contract filled in with their details. (Tokens like <code className="text-slate-400">{"{{hours}}"}</code> stay as-is for you to set manually.)</div>
               ) : (
-                <div className="bg-white text-slate-900 rounded-xl p-6 max-h-[60vh] overflow-y-auto contract-preview">
-                  <div className="prose-contract"><SafeMarkdown text={filled}/></div>
+                <div className="bg-white rounded-xl p-8 max-h-[60vh] overflow-y-auto contract-preview-box">
+                  <style>{`
+                    .contract-preview-box, .contract-preview-box * { color: #1e293b !important; }
+                    .contract-preview-box .text-white,
+                    .contract-preview-box [class*="text-slate-200"],
+                    .contract-preview-box [class*="text-slate-300"] { color: #0f172a !important; }
+                    .contract-preview-box a { color: #4f46e5 !important; text-decoration: underline; }
+                    .contract-preview-box h1, .contract-preview-box h2, .contract-preview-box h3,
+                    .contract-preview-box div[class*="font-bold"] { color: #0f172a !important; }
+                  `}</style>
+                  <SafeMarkdown text={filled}/>
                 </div>
               )}
               {emp && <div className="text-[11px] text-slate-500">Anything shown as <span className="text-amber-400">[[ … — not set ]]</span> is missing from the employee's record — fill it in on their profile, or it will need completing before signing.</div>}
