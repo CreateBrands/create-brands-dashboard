@@ -1778,6 +1778,102 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
   );
 }
 
+// ─── Staff Training View (reference library — all staff) ───────────────────────
+// Read-only library shown to EXISTING STAFF in the normal employee shell. Shows
+// ALL of their store's modules — both onboarding AND training types — grouped by
+// category, with expandable Markdown content. No completion checkboxes: this is
+// reference, not the onboarding flow. (Onboarding completion lives in the trainee
+// portal.) A type badge distinguishes onboarding vs training material.
+function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
+  const me = opsTeam.find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+  const myStoreId = me?.primaryStoreId || me?.storeId || (me?.storeIds && me.storeIds[0]) || null;
+  const myStore = me ? stores.find(s => s.id === myStoreId) : null;
+
+  const [modules, setModules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [openId, setOpenId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!myStoreId) { setLoading(false); return; }
+    setLoading(true);
+    fetchTrainingModules(myStoreId)
+      .then(mods => { if (!cancelled) setModules(mods); })
+      .catch(err => console.error("Staff training load failed:", err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [myStoreId]);
+
+  // Group ALL modules by category (no type filter — staff see everything).
+  const grouped = useMemo(() => {
+    const groups = {};
+    modules.forEach(m => {
+      const cat = m.category?.trim() || "General";
+      (groups[cat] = groups[cat] || []).push(m);
+    });
+    return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [modules]);
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-xl font-bold text-white flex items-center gap-2"><GraduationCap size={22}/> Training library</h1>
+        <p className="text-sm text-slate-400 mt-1">
+          Reference material for {myStore ? (myStore.shortName || myStore.name) : "your store"}. Browse any module anytime.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-8">Loading training…</div>
+      ) : modules.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+          <GraduationCap size={28} className="mx-auto mb-3 text-slate-700"/>
+          <div className="font-semibold text-slate-300 mb-1">No training material yet</div>
+          <div className="text-xs text-slate-500">Your manager hasn't added any modules for your store yet.</div>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {grouped.map(([category, mods]) => (
+            <div key={category}>
+              <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">{category}</div>
+              <div className="space-y-2">
+                {mods.map(mod => {
+                  const open = openId === mod.id;
+                  const isTraining = (mod.type || "onboarding") === "training";
+                  return (
+                    <div key={mod.id} className="rounded-xl border bg-slate-900 border-slate-800">
+                      <div className="p-3 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpenId(open ? null : mod.id)}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-slate-200">{mod.title}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${isTraining ? "bg-sky-950/40 border-sky-800 text-sky-300" : "bg-indigo-950/40 border-indigo-800 text-indigo-300"}`}>
+                              {isTraining ? "📚 Training" : "🎓 Onboarding"}
+                            </span>
+                          </div>
+                          {mod.description && <div className="text-xs text-slate-500 mt-0.5">{mod.description}</div>}
+                        </div>
+                        {mod.content && (open ? <ChevronUp size={16} className="text-slate-500 flex-shrink-0"/> : <ChevronDown size={16} className="text-slate-500 flex-shrink-0"/>)}
+                      </div>
+                      {open && mod.content && (
+                        <div className="px-3 pb-3 pt-1 border-t border-slate-800/60">
+                          <SafeMarkdown text={mod.content}/>
+                        </div>
+                      )}
+                      {open && !mod.content && (
+                        <div className="px-3 pb-3 pt-1 border-t border-slate-800/60 text-xs text-slate-600">No content for this module.</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -1810,6 +1906,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
         }).filter(m => !m.readBy?.includes(myId)).length;
         return unread > 0 ? unread.toString() : null;
       })() },
+    { key: "emp-training",   label: "Training",         icon: GraduationCap },
   ];
 
   const titles = {
@@ -1821,6 +1918,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
     "comms":          "Communication",
     "availability":   "Availability",
     "emp-schedule":   "My Schedule",
+    "emp-training":   "Training",
   };
 
   const NavBar = () => (
@@ -1911,6 +2009,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
               schedules={schedules || []} shiftPresets={[]} onAddSchedule={() => {}} onDeleteSchedule={() => {}} onPublishWeek={() => {}}
               punchRecords={punchRecords || []} onUpdatePunchRecord={onAmendPunch} onAddPunchComment={onAddPunchComment}
               isEmployee={true}
+            />
+          )}
+
+          {activeView === "emp-training" && (
+            <StaffTrainingView
+              currentUser={currentUser} brands={brands} stores={stores} opsTeam={opsTeam}
             />
           )}
         </main>
