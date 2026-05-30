@@ -447,6 +447,7 @@ function appOpsTeamToDb(m) {
   if (m.nickname      !== undefined) row.nickname      = m.nickname || "";
   if (m.department    !== undefined) row.department    = m.department || "";
   if (m.role          !== undefined) row.role          = m.role;
+  if (m.isTrainee     !== undefined) row.is_trainee     = !!m.isTrainee;
   if (m.pin           !== undefined) row.pin           = m.pin || "";
   if (m.color         !== undefined) row.color         = m.color || "#6366f1";
   if (m.hourlyRate    !== undefined) row.hourly_rate   = m.hourlyRate || 0;
@@ -484,6 +485,7 @@ function dbOpsTeamToApp(m) {
     firstName: m.first_name, lastName: m.last_name,
     nickname: m.nickname || "", department: m.department || "",
     role: m.role, pin: m.pin, color: m.color,
+    isTrainee: m.is_trainee ?? false,
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,
     storeIds: m.store_ids || [],
     roleId: m.role_id || null,

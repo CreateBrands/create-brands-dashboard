@@ -1342,6 +1342,7 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
         avatar: (selectedMember.firstName[0] + (selectedMember.lastName?.[0] || "")).toUpperCase(),
         opsTeamMemberId: selectedMember.id,
         employeeRole: selectedMember.role,
+        isTrainee: selectedMember.isTrainee || false,
         color: selectedMember.color,
       });
     } else {
@@ -1478,6 +1479,79 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
 
 // ─── Employee Shell ───────────────────────────────────────────────────────────
 // Restricted layout shown to employees — only ops-relevant views, no financial data.
+// ════════════════════════════════════════════════════════════════════════════
+// TRAINEE PORTAL (trainee portal — step 3: placeholder shell)
+// ════════════════════════════════════════════════════════════════════════════
+// Full-takeover view shown ONLY to ops_team members with role "trainee".
+// They reach it via the standard EmployeeLoginScreen (PIN), but see none of
+// the employee/manager surfaces — just their training portal.
+//
+// This is the step-3 PLACEHOLDER shell: it establishes the locked-down layout,
+// the header, and the sign-out. The actual training content lives in later
+// steps — read-only content, per-store module checklist (training_modules,
+// already has its data layer), and RTW document upload (reuses the slice 7
+// Documents tab). Those slot into the body below in steps 5+.
+function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) {
+  // Resolve the trainee's own ops_team record (for their store/brand context).
+  const me = opsTeam.find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+  const myStore = me ? stores.find(s => s.id === me.primaryStoreId || s.id === me.storeId) : null;
+  const myBrand = me ? brands.find(b => b.id === me.brandId) : null;
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200">
+      {/* Header — minimal, no sidebar */}
+      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
+              style={{ background: currentUser.color || "#6366f1" }}
+            >
+              {currentUser.avatar || "?"}
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
+              <div className="text-[11px] text-slate-500 truncate">
+                Trainee
+                {myStore && <> · {myStore.shortName || myStore.name}</>}
+                {myBrand && <> · {myBrand.name}</>}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={onLogout}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 flex-shrink-0"
+          >
+            Sign out
+          </button>
+        </div>
+      </header>
+
+      {/* Body */}
+      <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        <div>
+          <h1 className="text-xl font-bold text-white">Welcome, {currentUser.name?.split(" ")[0] || "there"} 👋</h1>
+          <p className="text-sm text-slate-400 mt-1">
+            This is your training portal. Your manager will set up your onboarding
+            modules and documents here.
+          </p>
+        </div>
+
+        {/* Step-3 placeholder. Steps 5+ replace this with: read-only training
+            content, the per-store module checklist, and RTW document upload. */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+          <div className="text-3xl mb-3">🚧</div>
+          <div className="font-semibold text-slate-300 mb-1">Training content coming soon</div>
+          <div className="text-xs text-slate-500 max-w-sm mx-auto">
+            Your onboarding modules, training materials, and document uploads will
+            appear here once they're set up.
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -6336,6 +6410,25 @@ function EmployeeProfileView({
     }
   };
 
+  // Trainee → staff conversion. Sets is_trainee = false via a partial update.
+  // The record is otherwise unchanged (job title, store, PIN all preserved) —
+  // conversion is just clearing the trainee flag, per the design (new hires
+  // start as trainees, manager converts them when training is complete).
+  const [converting, setConverting] = useState(false);
+  const handleConvertToStaff = async () => {
+    if (!employee) return;
+    if (!window.confirm(`Convert ${employee.firstName} ${employee.lastName} from trainee to full staff?\n\nThey'll lose the trainee portal and gain normal employee access on next login.`)) return;
+    setConverting(true);
+    try {
+      await onUpdateEmployee({ id: employee.id, isTrainee: false });
+    } catch (err) {
+      console.error("Convert to staff failed:", err);
+      alert(`Could not convert: ${err?.message || err}`);
+    } finally {
+      setConverting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Back button */}
@@ -6374,6 +6467,11 @@ function EmployeeProfileView({
                   Archived
                 </span>
               )}
+              {employee.isTrainee && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800 text-sky-300 font-semibold">
+                  🎓 Trainee
+                </span>
+              )}
             </div>
             {employee.nickname && <div className="text-sm text-slate-500 mb-2">"{employee.nickname}"</div>}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
@@ -6382,6 +6480,20 @@ function EmployeeProfileView({
               <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Store</div><div className="text-slate-200 mt-0.5">{primaryStore ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}` : "—"}</div></div>
               <div><div className="text-slate-600 uppercase tracking-wider text-[10px]">Pay</div><div className="text-slate-200 mt-0.5">{formatPayDisplay(employee.hourlyRate, employee.payType)}</div></div>
             </div>
+            {employee.isTrainee && (
+              <div className="mt-3">
+                <button
+                  onClick={handleConvertToStaff}
+                  disabled={converting}
+                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-semibold hover:bg-sky-500 disabled:opacity-50"
+                >
+                  {converting ? "Converting…" : "🎓 → Convert to full staff"}
+                </button>
+                <span className="text-[11px] text-slate-600 ml-2">
+                  Clears trainee status and grants normal employee access.
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -8822,6 +8934,10 @@ function OpsTeamMemberFormModal({
       hireDate:    isHireFlow
                      ? new Date().toISOString().slice(0, 10)
                      : (item?.hireDate || undefined),
+      // Trainee portal: new hires/adds start as trainees (is_trainee = true);
+      // a manager converts them to staff later via the profile. On EDIT of an
+      // existing member, preserve their current flag (never auto-flip).
+      isTrainee:   item ? (item.isTrainee ?? false) : true,
     });
   };
 
@@ -17177,6 +17293,28 @@ export default function App() {
     return (
       <AuthContext.Provider value={{ user: null }}>
         <EmployeeLoginScreen opsTeam={opsTeam} brands={brands} onLogin={handleLogin} onSwitchToManager={() => setLoginMode("manager")}/>
+      </AuthContext.Provider>
+    );
+  }
+
+  // Trainee portal takeover (trainee portal — step 3). A trainee is an
+  // ops_team member flagged is_trainee = true. They log in through the same
+  // EmployeeLoginScreen as any employee (session role "employee"), and the
+  // is_trainee flag rides along on the session. When it's set we show ONLY
+  // the training portal — no sidebar, no dashboard, no employee shell.
+  // (is_trainee is a dedicated column — ops_team.role holds the job title, so
+  // it can't double as a permission flag.) Access control is in app code here,
+  // same posture as the existing employee/kiosk PIN flow.
+  if (currentUser.role === "employee" && currentUser.isTrainee) {
+    return (
+      <AuthContext.Provider value={{ user: currentUser }}>
+        <TraineePortal
+          currentUser={currentUser}
+          brands={brands}
+          stores={stores}
+          opsTeam={opsTeam}
+          onLogout={handleLogout}
+        />
       </AuthContext.Provider>
     );
   }
