@@ -6069,6 +6069,31 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [type, setType]               = useState(module?.type || "onboarding");
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
+  const [uploadingImg, setUploadingImg] = useState(false);
+  const contentRef = useRef(null);
+
+  // Upload an image and insert a Markdown image tag at the cursor (or append).
+  const handleInsertImage = async (file) => {
+    if (!file) return;
+    setUploadingImg(true);
+    setError("");
+    try {
+      const { url } = await uploadEmployeeDocument(file);
+      const tag = `\n![${file.name.replace(/\.[^.]+$/, "")}](${url})\n`;
+      const el = contentRef.current;
+      if (el && typeof el.selectionStart === "number") {
+        const start = el.selectionStart, end = el.selectionEnd;
+        setContent(c => c.slice(0, start) + tag + c.slice(end));
+      } else {
+        setContent(c => c + tag);
+      }
+    } catch (err) {
+      console.error("Image upload failed:", err);
+      setError(err?.message || "Image upload failed.");
+    } finally {
+      setUploadingImg(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!title.trim()) { setError("Title is required."); return; }
@@ -6108,15 +6133,28 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
           <input value={description} onChange={e => setDescription(e.target.value)} className={inputCls} placeholder="One line shown in the module list"/>
         </div>
         <div>
-          <label className={labelCls}>Content (Markdown — headings, **bold**, [links](url))</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className={labelCls + " mb-0"}>Content (Markdown — headings, **bold**, [links](url))</label>
+            <label className={`text-[11px] font-semibold cursor-pointer ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
+              {uploadingImg ? "Uploading…" : "+ Insert image"}
+              <input
+                type="file"
+                accept=".jpg,.jpeg,.png,.webp"
+                disabled={uploadingImg}
+                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; handleInsertImage(f); }}
+                className="hidden"
+              />
+            </label>
+          </div>
           <textarea
+            ref={contentRef}
             value={content}
             onChange={e => setContent(e.target.value)}
             rows={10}
             className={`${inputCls} font-mono text-xs leading-relaxed`}
             placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
           />
-          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. The trainee sees this formatted in their portal.</div>
+          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. Use "+ Insert image" to upload a picture — it's added at your cursor. The trainee sees this formatted in their portal.</div>
         </div>
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
