@@ -1552,8 +1552,27 @@ function SafeMarkdown({ text }) {
     if (list) { blocks.push({ type: "list", ordered: list.ordered, items: list.items }); list = null; }
   };
 
+  // Side-by-side row: ":::row" (image left) or ":::row-right" (image right)
+  // opens; ":::" closes. Inside, the first image goes on one side and all other
+  // lines render as markdown on the other. Stacks on mobile.
+  let row = null;   // { side: 'left'|'right', lines: [] }
+
   for (const raw of lines) {
     const line = raw.trimEnd();
+
+    // Inside a row block: collect lines until the closing :::
+    if (row) {
+      if (/^:::\s*$/.test(line.trim())) {
+        blocks.push({ type: "row", side: row.side, lines: row.lines });
+        row = null;
+      } else {
+        row.lines.push(line);
+      }
+      continue;
+    }
+    const rowOpen = /^:::row(-right)?\b/.exec(line.trim());
+    if (rowOpen) { flushPara(); flushList(); row = { side: rowOpen[1] ? "right" : "left", lines: [] }; continue; }
+
     if (!line.trim()) { flushPara(); flushList(); continue; }
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
     const ul = /^[-*]\s+(.*)$/.exec(line);
@@ -1563,6 +1582,8 @@ function SafeMarkdown({ text }) {
     else if (ol){ flushPara(); if (!list || !list.ordered){ flushList(); list = { ordered: true,  items: [] }; } list.items.push(ol[1]); }
     else        { flushList(); para.push(line); }
   }
+  // Unclosed row (no trailing :::): render what we have.
+  if (row) { blocks.push({ type: "row", side: row.side, lines: row.lines }); row = null; }
   flushPara(); flushList();
 
   return (
@@ -1580,6 +1601,22 @@ function SafeMarkdown({ text }) {
             <Tag key={bi} className={b.ordered ? "list-decimal pl-5 space-y-1" : "list-disc pl-5 space-y-1"}>
               {b.items.map((it, ii) => <li key={ii}>{renderInline(it, `l${bi}-${ii}`)}</li>)}
             </Tag>
+          );
+        }
+        if (b.type === "row") {
+          // Split: first image line vs the rest (rendered as nested markdown).
+          const imgLineIdx = b.lines.findIndex(l => /!\[[^\]]*\]\([^)\s]+\)/.test(l));
+          const imgMatch = imgLineIdx >= 0 ? /!\[([^\]]*)\]\(([^)\s]+)\)/.exec(b.lines[imgLineIdx]) : null;
+          const textLines = b.lines.filter((_, i) => i !== imgLineIdx).join("\n");
+          const imgEl = imgMatch ? (
+            <img src={imgMatch[2]} alt={imgMatch[1]} className="w-full rounded-lg"/>
+          ) : null;
+          const textEl = <div className="flex-1 min-w-0"><SafeMarkdown text={textLines}/></div>;
+          const imgWrap = <div className="sm:w-2/5 flex-shrink-0">{imgEl}</div>;
+          return (
+            <div key={bi} className="flex flex-col sm:flex-row gap-3 items-start my-2">
+              {b.side === "right" ? <>{textEl}{imgWrap}</> : <>{imgWrap}{textEl}</>}
+            </div>
           );
         }
         return <p key={bi}>{renderInline(b.text, `p${bi}`)}</p>;
@@ -6154,7 +6191,7 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
             className={`${inputCls} font-mono text-xs leading-relaxed`}
             placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
           />
-          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. Use "+ Insert image" to upload a picture — it's added at your cursor. The trainee sees this formatted in their portal.</div>
+          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. Use "+ Insert image" to upload a picture. For image beside text, wrap a block in <code className="text-slate-400">:::row</code> … <code className="text-slate-400">:::</code> (or <code className="text-slate-400">:::row-right</code>). The trainee sees this formatted in their portal.</div>
         </div>
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
