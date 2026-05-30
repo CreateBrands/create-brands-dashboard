@@ -8560,10 +8560,12 @@ function DocumentsTab({ employeeId, currentUser }) {
   const requiredDone = REQUIRED_DOC_SLOTS.filter(s => bySlot[s.key]?.reviewStage === "hr_approved").length;
   const allRequiredApproved = requiredDone === REQUIRED_DOC_SLOTS.length;
 
-  // Upload into a slot (or "other"). RTW slot is manager-only and auto manager_approved.
+  // Upload into a slot (or "other"). A manager uploading IS the stage-1 review,
+  // so any manager upload auto-passes to manager_approved (still needs HR).
+  // A trainee upload starts at pending.
   const handleUpload = async ({ file, docType, expiryDate, referenceNumber, notes }, slotKey) => {
     const slot = REQUIRED_DOC_SLOTS.find(s => s.key === slotKey);
-    const managerUploadRTW = slot?.managerOnly && isManagerPlus;
+    const managerUpload = isManagerPlus;
     const { url, path } = await uploadEmployeeDocument(file);
     const created = await addEmployeeDocument({
       employeeId,
@@ -8578,8 +8580,8 @@ function DocumentsTab({ employeeId, currentUser }) {
       uploadedById:   currentUser?.opsTeamMemberId || currentUser?.id || null,
       uploadedByName: currentUser?.name || currentUser?.email || "Unknown",
       requiredDocKey: slot ? slot.key : null,
-      reviewStage:    managerUploadRTW ? "manager_approved" : "pending",
-      managerApprovedBy: managerUploadRTW ? { id: currentUser?.id, name: currentUser?.name || currentUser?.email } : null,
+      reviewStage:    managerUpload ? "manager_approved" : "pending",
+      managerApprovedBy: managerUpload ? { id: currentUser?.id, name: currentUser?.name || currentUser?.email } : null,
     });
     setDocs(prev => [created, ...prev.filter(d => d.id !== created.id)]);
     setUploadingSlot(null);
@@ -8688,11 +8690,20 @@ function DocumentsTab({ employeeId, currentUser }) {
                     <FileText size={14} className="text-slate-500 flex-shrink-0"/>
                     <span className="text-sm font-semibold text-slate-200">{slot.label}</span>
                     {slot.managerOnly && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Manager uploads</span>}
-                    {!d && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Not uploaded</span>}
+                    {!d && !(slot.managerOnly && isTrainee) && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Not uploaded</span>}
                   </div>
-                  {d && <div className="mt-2">{docDetail(d)}</div>}
-                  {!d && slot.managerOnly && isTrainee && (
-                    <div className="text-[11px] text-slate-600 mt-1">Your manager will complete this after the right-to-work check.</div>
+                  {/* RTW (manager-only) is the employer's compliance record — a
+                      trainee never sees the document or its detail, only that
+                      it's handled by their manager. */}
+                  {slot.managerOnly && isTrainee ? (
+                    <div className="text-[11px] text-slate-600 mt-1">Handled by your manager — you don't need to do anything here.</div>
+                  ) : (
+                    <>
+                      {d && <div className="mt-2">{docDetail(d)}</div>}
+                      {!d && slot.managerOnly && (
+                        <div className="text-[11px] text-slate-600 mt-1">Upload after completing the gov.uk right-to-work check.</div>
+                      )}
+                    </>
                   )}
                 </div>
                 {canUploadHere && (
