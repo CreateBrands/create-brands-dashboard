@@ -2571,6 +2571,7 @@ function dbTrainingModuleToApp(m) {
     sortOrder:   m.sort_order ?? 0,
     required:    m.required ?? true,
     sourceTemplateId: m.source_template_id || null,
+    type:        m.type || "onboarding",
     createdAt:   m.created_at,
     updatedAt:   m.updated_at,
     archivedAt:  m.archived_at || null,
@@ -2591,7 +2592,7 @@ export async function fetchTrainingModules(storeId) {
 }
 
 export async function addTrainingModule({
-  storeId, title, description, category, content, sortOrder, required,
+  storeId, title, description, category, content, sortOrder, required, type,
 }) {
   if (!storeId) throw new Error("storeId required");
   if (!title?.trim()) throw new Error("title required");
@@ -2604,6 +2605,7 @@ export async function addTrainingModule({
     content:     content?.trim() || null,
     sort_order:  Number.isFinite(sortOrder) ? sortOrder : 0,
     required:    required === undefined ? true : !!required,
+    type:        type === "training" ? "training" : "onboarding",
   };
   const { data, error } = await supabase
     .from("training_modules")
@@ -2624,6 +2626,7 @@ export async function updateTrainingModule(id, patch) {
   if (patch.description !== undefined) row.description = patch.description?.trim() || null;
   if (patch.category    !== undefined) row.category    = patch.category?.trim() || null;
   if (patch.content     !== undefined) row.content     = patch.content?.trim() || null;
+  if (patch.type        !== undefined) row.type        = patch.type === "training" ? "training" : "onboarding";
   if (patch.sortOrder   !== undefined) row.sort_order  = Number.isFinite(patch.sortOrder) ? patch.sortOrder : 0;
   if (patch.required    !== undefined) row.required    = !!patch.required;
   if (patch.archivedAt  !== undefined) row.archived_at = patch.archivedAt;
@@ -2760,6 +2763,7 @@ function dbTrainingTemplateToApp(t) {
     category:      t.category || null,
     content:       t.content || null,
     required:      t.required ?? true,
+    type:          t.type || "onboarding",
     createdById:   t.created_by_id || null,
     createdByName: t.created_by_name || null,
     createdAt:     t.created_at,
@@ -2779,7 +2783,7 @@ export async function fetchTrainingTemplates() {
   return (data || []).map(dbTrainingTemplateToApp);
 }
 
-export async function addTrainingTemplate({ title, description, category, content, required, manager }) {
+export async function addTrainingTemplate({ title, description, category, content, required, type, manager }) {
   if (!title?.trim()) throw new Error("title required");
   const row = {
     id:              `ttpl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -2788,6 +2792,7 @@ export async function addTrainingTemplate({ title, description, category, conten
     category:        category?.trim() || null,
     content:         content?.trim() || null,
     required:        required === undefined ? true : !!required,
+    type:            type === "training" ? "training" : "onboarding",
     created_by_id:   manager?.id || null,
     created_by_name: manager?.name || manager?.email || null,
   };
@@ -2804,6 +2809,7 @@ export async function updateTrainingTemplate(id, patch) {
   if (patch.description !== undefined) row.description = patch.description?.trim() || null;
   if (patch.category    !== undefined) row.category    = patch.category?.trim() || null;
   if (patch.content     !== undefined) row.content     = patch.content?.trim() || null;
+  if (patch.type        !== undefined) row.type        = patch.type === "training" ? "training" : "onboarding";
   if (patch.required    !== undefined) row.required    = !!patch.required;
   if (patch.archivedAt  !== undefined) row.archived_at = patch.archivedAt;
   const { data, error } = await supabase
@@ -2839,6 +2845,7 @@ export async function instantiateTemplate(templateId, storeId, sortOrder) {
     category:           tpl.category || null,
     content:            tpl.content || null,
     required:           tpl.required ?? true,
+    type:               tpl.type || "onboarding",
     sort_order:         Number.isFinite(sortOrder) ? sortOrder : 0,
     source_template_id: tpl.id,
   };

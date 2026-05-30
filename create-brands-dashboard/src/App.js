@@ -1635,17 +1635,19 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
   };
 
   // Group modules by category (FOH / BOH / etc). Null category → "General".
+  // Trainees see ONLY onboarding-type modules (training-type = general staff library).
   const grouped = useMemo(() => {
     const groups = {};
-    modules.forEach(m => {
+    modules.filter(m => (m.type || "onboarding") === "onboarding").forEach(m => {
       const cat = m.category?.trim() || "General";
       (groups[cat] = groups[cat] || []).push(m);
     });
     return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
   }, [modules]);
 
-  const requiredCount = modules.filter(m => m.required).length;
-  const requiredDone = modules.filter(m => m.required && progByModule[m.id]?.completedAt).length;
+  const onboardingModules = useMemo(() => modules.filter(m => (m.type || "onboarding") === "onboarding"), [modules]);
+  const requiredCount = onboardingModules.filter(m => m.required).length;
+  const requiredDone = onboardingModules.filter(m => m.required && progByModule[m.id]?.completedAt).length;
   const allRequiredDone = requiredCount > 0 && requiredDone === requiredCount;
 
   return (
@@ -1706,11 +1708,11 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
         {/* Modules grouped by category */}
         {loading ? (
           <div className="text-sm text-slate-500 text-center py-8">Loading your training…</div>
-        ) : modules.length === 0 ? (
+        ) : onboardingModules.length === 0 ? (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
             <GraduationCap size={28} className="mx-auto mb-3 text-slate-700"/>
-            <div className="font-semibold text-slate-300 mb-1">No training modules yet</div>
-            <div className="text-xs text-slate-500">Your manager hasn't set up modules for your store yet. Check back soon.</div>
+            <div className="font-semibold text-slate-300 mb-1">No onboarding modules yet</div>
+            <div className="text-xs text-slate-500">Your manager hasn't set up onboarding modules for your store yet. Check back soon.</div>
           </div>
         ) : (
           <div className="space-y-5">
@@ -5722,6 +5724,9 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-slate-200">{mod.title}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${(mod.type || "onboarding") === "training" ? "bg-sky-950/40 border-sky-800 text-sky-300" : "bg-indigo-950/40 border-indigo-800 text-indigo-300"}`}>
+                    {(mod.type || "onboarding") === "training" ? "📚 Training" : "🎓 Onboarding"}
+                  </span>
                   {mod.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">{mod.category}</span>}
                   {mod.required
                     ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Required</span>
@@ -5830,6 +5835,7 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [category, setCategory]       = useState(module?.category || "");
   const [content, setContent]         = useState(module?.content || "");
   const [required, setRequired]       = useState(module?.required ?? true);
+  const [type, setType]               = useState(module?.type || "onboarding");
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
 
@@ -5837,7 +5843,7 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
     if (!title.trim()) { setError("Title is required."); return; }
     setSaving(true); setError("");
     try {
-      await onSave({ title, description, category, content, required });
+      await onSave({ title, description, category, content, required, type });
     } catch (err) {
       console.error("Save module failed:", err);
       setError(err?.message || "Save failed.");
@@ -5880,6 +5886,26 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
             placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
           />
           <div className="text-[10px] text-slate-600 mt-1">Supports Markdown. The trainee sees this formatted in their portal.</div>
+        </div>
+        <div>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setType("onboarding")}
+              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "onboarding" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
+            >
+              🎓 Onboarding<div className="text-[10px] font-normal opacity-80 mt-0.5">New starters only</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setType("training")}
+              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "training" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
+            >
+              📚 Training<div className="text-[10px] font-normal opacity-80 mt-0.5">All staff (reference library)</div>
+            </button>
+          </div>
+          <div className="text-[10px] text-slate-600 mt-1">Onboarding modules show in the trainee portal. Training modules are in the general library all staff can browse.</div>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
           <input type="checkbox" checked={required} onChange={e => setRequired(e.target.checked)} className="rounded"/>
