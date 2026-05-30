@@ -1630,7 +1630,7 @@ function SafeMarkdown({ text }) {
 
 // Contracts sent to an employee — read, sign, and print. Shown in their portal.
 // Also reused (read-only-ish) on the manager profile via ContractsForEmployee.
-function EmployeeContractsSection({ employeeId, currentUser, managerView = false }) {
+function EmployeeContractsSection({ employeeId, currentUser, managerView = false, asPage = false }) {
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState(null);       // contract being read
@@ -1684,9 +1684,15 @@ function EmployeeContractsSection({ employeeId, currentUser, managerView = false
 
   if (loading) return null;
   if (!contracts.length) {
-    return managerView
-      ? <div className="text-sm text-slate-500">No contracts sent to this employee yet.</div>
-      : null;  // hide the section entirely in the portal if there's nothing
+    if (managerView) return <div className="text-sm text-slate-500">No contracts sent to this employee yet.</div>;
+    if (asPage) return (
+      <div className="text-center py-16">
+        <FileText size={32} className="text-slate-700 mx-auto mb-3"/>
+        <div className="text-slate-400 font-semibold">No contracts yet</div>
+        <div className="text-sm text-slate-600 mt-1">When your manager sends you a contract, it will appear here to read and sign.</div>
+      </div>
+    );
+    return null;  // inline in portal: hide entirely if nothing
   }
 
   return (
@@ -2104,6 +2110,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
         return unread > 0 ? unread.toString() : null;
       })() },
     { key: "emp-training",   label: "Training",         icon: GraduationCap },
+    { key: "emp-contracts",  label: "Contracts",        icon: FileText },
   ];
 
   const titles = {
@@ -2116,6 +2123,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
     "availability":   "Availability",
     "emp-schedule":   "My Schedule",
     "emp-training":   "Training",
+    "emp-contracts":  "Contracts",
   };
 
   const NavBar = () => (
@@ -2212,6 +2220,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
           {activeView === "emp-training" && (
             <StaffTrainingView
               currentUser={currentUser} brands={brands} stores={stores} opsTeam={opsTeam}
+            />
+          )}
+
+          {activeView === "emp-contracts" && (
+            <EmployeeContractsSection
+              employeeId={currentUser.opsTeamMemberId || currentUser.id}
+              currentUser={currentUser}
+              asPage
             />
           )}
         </main>
