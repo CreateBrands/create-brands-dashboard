@@ -467,6 +467,9 @@ function appOpsTeamToDb(m) {
   if (m.dob           !== undefined) row.dob           = m.dob || null;
   if (m.address       !== undefined) row.address       = m.address || null;
   if (m.legalStatus   !== undefined) row.legal_status  = m.legalStatus || null;
+  if (m.niNumber      !== undefined) row.ni_number     = m.niNumber?.trim() || null;
+  if (m.selffillToken !== undefined) row.selffill_token = m.selffillToken || null;
+  if (m.selffillCompletedAt !== undefined) row.selffill_completed_at = m.selffillCompletedAt || null;
   if (m.photoUrl      !== undefined) row.photo_url     = m.photoUrl || null;
   if (m.hrNotes       !== undefined) row.hr_notes      = m.hrNotes || null;
   if (m.status        !== undefined) row.status        = m.status || "active";
@@ -517,6 +520,9 @@ function dbOpsTeamToApp(m) {
     dob:         m.dob || null,
     address:     m.address || "",
     legalStatus: m.legal_status || "",
+    niNumber:    m.ni_number || "",
+    selffillToken: m.selffill_token || null,
+    selffillCompletedAt: m.selffill_completed_at || null,
     photoUrl:    m.photo_url || null,
     hrNotes:     m.hr_notes || "",
     status:      m.status || "active",
@@ -3395,4 +3401,90 @@ export async function archiveAdvertisedRole(id) {
     .update({ archived_at: new Date().toISOString() })
     .eq("id", id);
   if (error) throw error;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE SELF-FILL LINK (public, token-based personal-details entry)
+// ════════════════════════════════════════════════════════════════════════════
+// A manager generates a token for an employee and shares the link. The employee
+// opens it (no login) and fills PERSONAL details only. Security: the public
+// update writes ONLY a fixed allow-list of fields — never role/pay/PIN/bank/
+// status — regardless of what's submitted.
+
+// Generate a long unguessable token and attach it to an employee.
+export async function generateSelfFillToken(employeeId) {
+  if (!employeeId) throw new Error("employeeId required");
+  const rand = (typeof crypto !== "undefined" && crypto.getRandomValues)
+    ? Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b => b.toString(16).padStart(2, "0")).join("")
+    : (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Date.now().toString(36));
+  const token = `sf_${rand}`;
+  const { error } = await supabase
+    .from("ops_team").update({ selffill_token: token }).eq("id", employeeId);
+  if (error) throw error;
+  return token;
+}
+
+export async function clearSelfFillToken(employeeId) {
+  if (!employeeId) throw new Error("employeeId required");
+  const { error } = await supabase
+    .from("ops_team").update({ selffill_token: null }).eq("id", employeeId);
+  if (error) throw error;
+}
+
+// PUBLIC: fetch the limited employee info needed to render the self-fill form,
+// found by token. Returns only personal fields (never pay/role/pin/bank).
+export async function fetchEmployeeBySelfFillToken(token) {
+  if (!token) throw new Error("token required");
+  const { data, error } = await supabase
+    .from("ops_team")
+    .select("id, first_name, last_name, nickname, email, phone, dob, address, legal_status, ni_number, photo_url, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, selffill_token, selffill_completed_at")
+    .eq("selffill_token", token)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id: data.id,
+    firstName: data.first_name || "",
+    lastName: data.last_name || "",
+    nickname: data.nickname || "",
+    email: data.email || "",
+    phone: data.phone || "",
+    dob: data.dob || "",
+    address: data.address || "",
+    legalStatus: data.legal_status || "",
+    niNumber: data.ni_number || "",
+    photoUrl: data.photo_url || null,
+    emergencyContactName: data.emergency_contact_name || "",
+    emergencyContactPhone: data.emergency_contact_phone || "",
+    emergencyContactRelationship: data.emergency_contact_relationship || "",
+    completedAt: data.selffill_completed_at || null,
+  };
+}
+
+// PUBLIC: save the employee's self-filled personal details, found by token.
+// SECURITY: only the allow-listed personal columns are ever written — role,
+// pay, pin, bank, status, token, etc. can NOT be set through this path even if
+// included in `fields`. The .eq(token) match scopes the write to that one row.
+const SELFFILL_ALLOWED = {
+  firstName: "first_name", lastName: "last_name", nickname: "nickname",
+  email: "email", phone: "phone", dob: "dob", address: "address",
+  legalStatus: "legal_status", niNumber: "ni_number", photoUrl: "photo_url",
+  emergencyContactName: "emergency_contact_name",
+  emergencyContactPhone: "emergency_contact_phone",
+  emergencyContactRelationship: "emergency_contact_relationship",
+};
+export async function submitSelfFill(token, fields) {
+  if (!token) throw new Error("token required");
+  const row = { selffill_completed_at: new Date().toISOString() };
+  for (const [appKey, dbCol] of Object.entries(SELFFILL_ALLOWED)) {
+    if (fields[appKey] !== undefined) {
+      const v = fields[appKey];
+      row[dbCol] = (typeof v === "string" ? v.trim() : v) || null;
+    }
+  }
+  const { data, error } = await supabase
+    .from("ops_team").update(row).eq("selffill_token", token).select("id").maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("This link is no longer valid.");
+  return true;
 }

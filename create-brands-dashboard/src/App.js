@@ -23,6 +23,7 @@ import {
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
+  generateSelfFillToken, clearSelfFillToken, fetchEmployeeBySelfFillToken, submitSelfFill,
   insertStoreDepartment, updateStoreDepartment, archiveStoreDepartment, unarchiveStoreDepartment,
   insertStoreRole, updateStoreRole, archiveStoreRole, unarchiveStoreRole,
   copyStoreStructure,
@@ -8123,6 +8124,7 @@ function EmployeeProfileView({
       dob:         employee.dob         || "",
       address:     employee.address     || "",
       legalStatus: employee.legalStatus || "",
+      niNumber:    employee.niNumber    || "",
       hrNotes:     employee.hrNotes     || "",
       // Slice 7 — emergency contact
       emergencyContactName:         employee.emergencyContactName         || "",
@@ -8205,6 +8207,7 @@ function EmployeeProfileView({
         dob:         editHr.dob         || null,
         address:     editHr.address     || null,
         legalStatus: editHr.legalStatus || null,
+        niNumber:    editHr.niNumber    || null,
         hrNotes:     editHr.hrNotes     || null,
         // Slice 7 — emergency contact
         emergencyContactName:         editHr.emergencyContactName         || null,
@@ -8433,6 +8436,59 @@ const TAX_STATEMENTS = [
   { value: "C", label: "C — Have another job or receive a pension" },
 ];
 
+// Manager card: generate + copy the secure self-fill link for a new hire.
+function SelfFillLinkCard({ employee, onUpdateEmployee }) {
+  const [token, setToken] = useState(employee.selffillToken || null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const linkFor = (t) => `${window.location.origin}/onboard?token=${encodeURIComponent(t)}`;
+
+  const ensureAndCopy = async () => {
+    setBusy(true);
+    try {
+      let t = token;
+      if (!t) {
+        t = await generateSelfFillToken(employee.id);
+        setToken(t);
+        // reflect on the in-memory record so other views see it
+        onUpdateEmployee?.({ id: employee.id, selffillToken: t });
+      }
+      await navigator.clipboard.writeText(linkFor(t));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch (err) {
+      // clipboard can fail silently on some browsers — show the link to copy manually
+      alert(`Link: ${linkFor(token || "")}\n\n(Could not auto-copy: ${err?.message || err})`);
+    } finally { setBusy(false); }
+  };
+
+  const revoke = async () => {
+    if (!window.confirm("Turn off this self-fill link? The current link will stop working. You can generate a new one later.")) return;
+    setBusy(true);
+    try { await clearSelfFillToken(employee.id); setToken(null); onUpdateEmployee?.({ id: employee.id, selffillToken: null }); }
+    catch (err) { alert(`Could not revoke: ${err?.message || err}`); }
+    finally { setBusy(false); }
+  };
+
+  const filled = !!employee.selffillCompletedAt;
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider mb-2">Self-fill link</div>
+      <p className="text-[12px] text-slate-500 mb-3">Share a secure link so {employee.firstName} can fill in their own personal details (contact, DOB, address, emergency contact, NI number). Bank details aren't collected here — they're added in-app once set up.</p>
+      {filled && <div className="text-[11px] text-emerald-400 mb-3">✓ Employee submitted their details {employee.selffillCompletedAt ? `on ${new Date(employee.selffillCompletedAt).toLocaleDateString("en-GB")}` : ""}. They can still edit until you finalise.</div>}
+      <div className="flex flex-wrap gap-2">
+        <button onClick={ensureAndCopy} disabled={busy} className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">
+          {copied ? "✓ Link copied" : token ? "Copy self-fill link" : "Create & copy link"}
+        </button>
+        {token && <button onClick={revoke} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 text-sm font-semibold hover:bg-slate-700">Turn off link</button>}
+      </div>
+      {token && <div className="text-[10px] text-slate-600 mt-2 break-all">{linkFor(token)}</div>}
+    </div>
+  );
+}
+
 // Manager/HR onboarding management for one employee: completion gate, tax,
 // bank (owner/HR only), policy acknowledgements.
 function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) {
@@ -8531,6 +8587,8 @@ function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) 
 
   return (
     <div className="space-y-5">
+      {/* Self-fill link — share with the new hire to collect their personal details */}
+      <SelfFillLinkCard employee={employee} onUpdateEmployee={onUpdateEmployee}/>
       {/* Completion gate */}
       <div className={`rounded-2xl border p-4 ${allDone ? "bg-emerald-950/30 border-emerald-800" : "bg-slate-900 border-slate-800"}`}>
         <div className="flex items-center justify-between mb-3">
@@ -8673,6 +8731,10 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
           <div>
             <label className={labelCls}>Address</label>
             <input value={editHr.address} onChange={e => set("address", e.target.value)} className={inputCls} placeholder="Street, town, postcode"/>
+          </div>
+          <div>
+            <label className={labelCls}>National Insurance number</label>
+            <input value={editHr.niNumber || ""} onChange={e => set("niNumber", e.target.value)} className={inputCls} placeholder="e.g. QQ123456C"/>
           </div>
         </div>
       </div>
@@ -18618,6 +18680,19 @@ const IS_APPLY = window.location.pathname === "/apply" ||
                  window.location.pathname === "/apply/" ||
                  window.location.hash === "#apply";
 
+// Public self-fill page — a new hire fills in their personal details via a
+// secure per-employee token link. Detected by /onboard?token=... (or #onboard).
+const IS_SELFFILL = window.location.pathname === "/onboard" ||
+                    window.location.pathname === "/onboard/" ||
+                    window.location.hash.startsWith("#onboard");
+function getSelfFillToken() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("token")) return params.get("token");
+  const h = window.location.hash;
+  const m = h.match(/[?&]token=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
 // ── ApplyShell — Public Job Application Form ─────────────────────────────────
 // Renders at /apply for anonymous users. Optionally pre-locks the store
 // via ?store=store-id URL parameter — useful for store-specific job ads
@@ -19201,8 +19276,112 @@ function ApplyShell() {
   );
 }
 
-// ─── ApplyShell helper components (inline styles to avoid Tailwind dependency) ─
-// The apply page uses inline styles instead of Tailwind classes because it
+// ─── SelfFillShell — public per-employee personal-details form ───────────────
+// A new hire opens /onboard?token=... and fills in their personal details.
+// No login. Secured by the unguessable token; saving writes only personal
+// fields (allow-listed server-side in submitSelfFill). Bank details are NOT
+// here — those are done in-app after the employee's account is active.
+function SelfFillShell() {
+  const [token] = useState(getSelfFillToken());
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [form, setForm] = useState(null);
+
+  useEffect(() => {
+    if (!token) { setNotFound(true); setLoading(false); return; }
+    fetchEmployeeBySelfFillToken(token)
+      .then(emp => {
+        if (!emp) { setNotFound(true); return; }
+        setForm({
+          firstName: emp.firstName, lastName: emp.lastName, nickname: emp.nickname,
+          email: emp.email, phone: emp.phone, dob: emp.dob, address: emp.address,
+          legalStatus: emp.legalStatus, niNumber: emp.niNumber,
+          emergencyContactName: emp.emergencyContactName,
+          emergencyContactPhone: emp.emergencyContactPhone,
+          emergencyContactRelationship: emp.emergencyContactRelationship,
+        });
+        if (emp.completedAt) setSaved(false); // allow re-edit; show form pre-filled
+      })
+      .catch(() => setNotFound(true))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setErr("");
+    if (!form.firstName?.trim() || !form.lastName?.trim()) { setErr("Please enter your first and last name."); return; }
+    setSaving(true);
+    try {
+      await submitSelfFill(token, form);
+      setSaved(true);
+    } catch (e) { setErr(e?.message || "Could not save. Please try again."); }
+    finally { setSaving(false); }
+  };
+
+  const wrap = { minHeight: "100vh", background: "#0f172a", fontFamily: "system-ui, sans-serif", padding: "24px 0" };
+
+  if (loading) return <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8" }}>Loading…</div>;
+  if (notFound) return (
+    <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <ApplyCard><div style={{ textAlign: "center", color: "#e2e8f0" }}>
+        <div style={{ fontSize: 32, marginBottom: 8 }}>🔗</div>
+        <h2 style={{ margin: "0 0 8px" }}>Link not valid</h2>
+        <p style={{ color: "#94a3b8", fontSize: 14 }}>This onboarding link isn't valid or has been turned off. Please ask your manager for a new one.</p>
+      </div></ApplyCard>
+    </div>
+  );
+  if (saved) return (
+    <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <ApplyCard><div style={{ textAlign: "center", color: "#e2e8f0" }}>
+        <div style={{ fontSize: 40, marginBottom: 8 }}>✓</div>
+        <h2 style={{ margin: "0 0 8px" }}>Thank you!</h2>
+        <p style={{ color: "#94a3b8", fontSize: 14 }}>Your details have been saved. Your manager will complete the rest of your setup. You can reopen this link any time to update your details until your account is finalised.</p>
+        <button onClick={() => setSaved(false)} style={{ marginTop: 16, padding: "10px 18px", borderRadius: 10, background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", fontWeight: 600, cursor: "pointer" }}>Edit my details</button>
+      </div></ApplyCard>
+    </div>
+  );
+
+  return (
+    <div style={wrap}>
+      <ApplyCard>
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <h1 style={{ color: "white", fontSize: 22, margin: "0 0 4px" }}>Your details</h1>
+          <p style={{ color: "#94a3b8", fontSize: 13, margin: 0 }}>Please fill in your personal details. Your manager will handle the rest.</p>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <ApplyField label="First name *"><input style={applyInputStyle} value={form.firstName} onChange={e => set("firstName", e.target.value)}/></ApplyField>
+            <ApplyField label="Last name *"><input style={applyInputStyle} value={form.lastName} onChange={e => set("lastName", e.target.value)}/></ApplyField>
+          </div>
+          <ApplyField label="Preferred name / nickname"><input style={applyInputStyle} value={form.nickname} onChange={e => set("nickname", e.target.value)}/></ApplyField>
+          <ApplyField label="Email"><input style={applyInputStyle} type="email" value={form.email} onChange={e => set("email", e.target.value)}/></ApplyField>
+          <ApplyField label="Phone"><input style={applyInputStyle} value={form.phone} onChange={e => set("phone", e.target.value)}/></ApplyField>
+          <ApplyField label="Date of birth"><input style={applyInputStyle} type="date" value={form.dob || ""} onChange={e => set("dob", e.target.value)}/></ApplyField>
+          <ApplyField label="Home address"><textarea style={{ ...applyInputStyle, minHeight: 64, resize: "vertical" }} value={form.address} onChange={e => set("address", e.target.value)}/></ApplyField>
+          <ApplyField label="Right to work / legal status" hint="e.g. British citizen, settled status, visa type"><input style={applyInputStyle} value={form.legalStatus} onChange={e => set("legalStatus", e.target.value)}/></ApplyField>
+          <ApplyField label="National Insurance number" hint="e.g. QQ123456C"><input style={applyInputStyle} value={form.niNumber} onChange={e => set("niNumber", e.target.value)}/></ApplyField>
+          <div style={{ borderTop: "1px solid #1e293b", paddingTop: 14 }}>
+            <div style={{ color: "#cbd5e1", fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Emergency contact</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <ApplyField label="Name"><input style={applyInputStyle} value={form.emergencyContactName} onChange={e => set("emergencyContactName", e.target.value)}/></ApplyField>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <ApplyField label="Phone"><input style={applyInputStyle} value={form.emergencyContactPhone} onChange={e => set("emergencyContactPhone", e.target.value)}/></ApplyField>
+                <ApplyField label="Relationship"><input style={applyInputStyle} value={form.emergencyContactRelationship} onChange={e => set("emergencyContactRelationship", e.target.value)}/></ApplyField>
+              </div>
+            </div>
+          </div>
+          {err && <div style={{ color: "#f87171", fontSize: 13 }}>{err}</div>}
+          <button onClick={submit} disabled={saving} style={{ padding: "14px", borderRadius: 12, background: saving ? "#475569" : "#6366f1", color: "white", border: "none", fontSize: 16, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>{saving ? "Saving…" : "Save my details"}</button>
+          <p style={{ color: "#64748b", fontSize: 11, textAlign: "center", margin: 0 }}>Your bank details aren't collected here — you'll add those securely once your account is set up.</p>
+        </div>
+      </ApplyCard>
+    </div>
+  );
+}
 // runs as a separate shell and we want it self-contained — if someone screws
 // up Tailwind purging later, this page should still look correct.
 
@@ -19953,6 +20132,7 @@ export default function App() {
 
   // Kiosk guard — all hooks ran above
   if (IS_APPLY) return <ApplyShell />;
+  if (IS_SELFFILL) return <SelfFillShell />;
   if (IS_KIOSK) return <KioskShell />;
 
   if (dbError) return (
