@@ -17087,7 +17087,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
               <div className="text-xl font-bold text-white">{matched.firstName} {matched.lastName}</div>
               <div className="text-sm mt-0.5 font-semibold">
                 {isClockedIn
-                  ? <span className="text-amber-400">⏱ Currently clocked in — tap to Clock Out</span>
+                  ? <span className="text-amber-400">⏱ Currently clocked in — tap to continue</span>
                   : <span className="text-emerald-400">Ready to Clock In</span>
                 }
               </div>
@@ -17136,7 +17136,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 : "bg-slate-800 text-slate-600 cursor-not-allowed"
             }`}>
             {submitting ? "Processing…" : matched
-              ? isClockedIn ? "⏹ Clock Out" : "▶ Clock In"
+              ? isClockedIn ? "→ Continue" : "▶ Clock In"
               : "Enter PIN"}
           </button>
           {pin.length > 0 && (
