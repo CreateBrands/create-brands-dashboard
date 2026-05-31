@@ -465,6 +465,7 @@ function appOpsTeamToDb(m) {
   if (m.email         !== undefined) row.email         = m.email || null;
   if (m.phone         !== undefined) row.phone         = m.phone || null;
   if (m.dob           !== undefined) row.dob           = m.dob || null;
+  if (m.gender        !== undefined) row.gender        = m.gender || null;
   if (m.address       !== undefined) row.address       = m.address || null;
   if (m.legalStatus   !== undefined) row.legal_status  = m.legalStatus || null;
   if (m.niNumber      !== undefined) row.ni_number     = m.niNumber?.trim() || null;
@@ -518,6 +519,7 @@ function dbOpsTeamToApp(m) {
     email:       m.email || "",
     phone:       m.phone || "",
     dob:         m.dob || null,
+    gender:      m.gender || "",
     address:     m.address || "",
     legalStatus: m.legal_status || "",
     niNumber:    m.ni_number || "",
@@ -3437,7 +3439,7 @@ export async function fetchEmployeeBySelfFillToken(token) {
   if (!token) throw new Error("token required");
   const { data, error } = await supabase
     .from("ops_team")
-    .select("id, first_name, last_name, nickname, email, phone, dob, address, legal_status, ni_number, photo_url, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, selffill_token, selffill_completed_at")
+    .select("id, first_name, last_name, nickname, email, phone, dob, gender, address, legal_status, ni_number, photo_url, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, selffill_token, selffill_completed_at")
     .eq("selffill_token", token)
     .maybeSingle();
   if (error) throw error;
@@ -3450,6 +3452,7 @@ export async function fetchEmployeeBySelfFillToken(token) {
     email: data.email || "",
     phone: data.phone || "",
     dob: data.dob || "",
+    gender: data.gender || "",
     address: data.address || "",
     legalStatus: data.legal_status || "",
     niNumber: data.ni_number || "",
@@ -3467,7 +3470,7 @@ export async function fetchEmployeeBySelfFillToken(token) {
 // included in `fields`. The .eq(token) match scopes the write to that one row.
 const SELFFILL_ALLOWED = {
   firstName: "first_name", lastName: "last_name", nickname: "nickname",
-  email: "email", phone: "phone", dob: "dob", address: "address",
+  email: "email", phone: "phone", dob: "dob", gender: "gender", address: "address",
   legalStatus: "legal_status", niNumber: "ni_number", photoUrl: "photo_url",
   emergencyContactName: "emergency_contact_name",
   emergencyContactPhone: "emergency_contact_phone",

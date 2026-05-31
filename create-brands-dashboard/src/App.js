@@ -6968,6 +6968,14 @@ const LEGAL_STATUS_OPTIONS = [
   { value: "t2_work_permit",             label: "T2 work permit" },
 ];
 
+const GENDER_OPTIONS = [
+  { value: "female",      label: "Female" },
+  { value: "male",        label: "Male" },
+  { value: "non_binary",  label: "Non-binary" },
+  { value: "other",       label: "Other" },
+  { value: "prefer_not",  label: "Prefer not to say" },
+];
+
 // Returns true if a YYYY-MM-DD date string represents someone under 18.
 // Used at submission time to set the is_minor flag (UK employment law has
 // restricted hours for 16-17 year olds; under-16 employment is illegal in
@@ -8122,6 +8130,7 @@ function EmployeeProfileView({
       email:       employee.email       || "",
       phone:       employee.phone       || "",
       dob:         employee.dob         || "",
+      gender:      employee.gender      || "",
       address:     employee.address     || "",
       legalStatus: employee.legalStatus || "",
       niNumber:    employee.niNumber    || "",
@@ -8205,6 +8214,7 @@ function EmployeeProfileView({
         email:       editHr.email       || null,
         phone:       editHr.phone       || null,
         dob:         editHr.dob         || null,
+        gender:      editHr.gender      || null,
         address:     editHr.address     || null,
         legalStatus: editHr.legalStatus || null,
         niNumber:    editHr.niNumber    || null,
@@ -8732,9 +8742,20 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
             <label className={labelCls}>Address</label>
             <input value={editHr.address} onChange={e => set("address", e.target.value)} className={inputCls} placeholder="Street, town, postcode"/>
           </div>
-          <div>
-            <label className={labelCls}>National Insurance number</label>
-            <input value={editHr.niNumber || ""} onChange={e => set("niNumber", e.target.value)} className={inputCls} placeholder="e.g. QQ123456C"/>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Gender</label>
+              <select value={editHr.gender || ""} onChange={e => set("gender", e.target.value)} className={inputCls}>
+                <option value="">— Not set —</option>
+                {GENDER_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>National Insurance number</label>
+              <input value={editHr.niNumber || ""} onChange={e => set("niNumber", e.target.value)} className={inputCls} placeholder="e.g. QQ123456C"/>
+            </div>
           </div>
         </div>
       </div>
@@ -8994,6 +9015,10 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
   const handleSave = async () => {
     if (!form.primaryStoreId) {
       alert("Please pick a primary store.");
+      return;
+    }
+    if (pinConflict) {
+      alert(`This PIN is already used by ${pinConflict.firstName} ${pinConflict.lastName}. PINs must be unique — please choose a different one.`);
       return;
     }
     setSaving(true);
@@ -19297,7 +19322,7 @@ function SelfFillShell() {
         if (!emp) { setNotFound(true); return; }
         setForm({
           firstName: emp.firstName, lastName: emp.lastName, nickname: emp.nickname,
-          email: emp.email, phone: emp.phone, dob: emp.dob, address: emp.address,
+          email: emp.email, phone: emp.phone, dob: emp.dob, gender: emp.gender, address: emp.address,
           legalStatus: emp.legalStatus, niNumber: emp.niNumber,
           emergencyContactName: emp.emergencyContactName,
           emergencyContactPhone: emp.emergencyContactPhone,
@@ -19360,9 +19385,20 @@ function SelfFillShell() {
           <ApplyField label="Preferred name / nickname"><input style={applyInputStyle} value={form.nickname} onChange={e => set("nickname", e.target.value)}/></ApplyField>
           <ApplyField label="Email"><input style={applyInputStyle} type="email" value={form.email} onChange={e => set("email", e.target.value)}/></ApplyField>
           <ApplyField label="Phone"><input style={applyInputStyle} value={form.phone} onChange={e => set("phone", e.target.value)}/></ApplyField>
-          <ApplyField label="Date of birth"><input style={applyInputStyle} type="date" value={form.dob || ""} onChange={e => set("dob", e.target.value)}/></ApplyField>
+          <ApplyField label="Date of birth"><input style={{ ...applyInputStyle, cursor: "pointer" }} type="date" value={form.dob || ""} onChange={e => set("dob", e.target.value)} onClick={e => { try { e.target.showPicker?.(); } catch {} }}/></ApplyField>
+          <ApplyField label="Gender">
+            <select style={applyInputStyle} value={form.gender || ""} onChange={e => set("gender", e.target.value)}>
+              <option value="">— Select —</option>
+              {GENDER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </ApplyField>
           <ApplyField label="Home address"><textarea style={{ ...applyInputStyle, minHeight: 64, resize: "vertical" }} value={form.address} onChange={e => set("address", e.target.value)}/></ApplyField>
-          <ApplyField label="Right to work / legal status" hint="e.g. British citizen, settled status, visa type"><input style={applyInputStyle} value={form.legalStatus} onChange={e => set("legalStatus", e.target.value)}/></ApplyField>
+          <ApplyField label="Right to work / legal status">
+            <select style={applyInputStyle} value={form.legalStatus || ""} onChange={e => set("legalStatus", e.target.value)}>
+              <option value="">— Select —</option>
+              {LEGAL_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </ApplyField>
           <ApplyField label="National Insurance number" hint="e.g. QQ123456C"><input style={applyInputStyle} value={form.niNumber} onChange={e => set("niNumber", e.target.value)}/></ApplyField>
           <div style={{ borderTop: "1px solid #1e293b", paddingTop: 14 }}>
             <div style={{ color: "#cbd5e1", fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Emergency contact</div>
