@@ -12218,6 +12218,174 @@ function CleaningTaskListSection({ brands, stores, visibleStoreIds, cleaningTask
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// OPS TEAM — team management, under PEOPLE. Grouped by store, with filters +
+// search. Extracted from the old Ops Setup "team" tab so it has a proper home.
+// ════════════════════════════════════════════════════════════════════════════
+function OpsTeamView({
+  brands, stores = [], visibleStoreIds = [],
+  storeDepartments = [], storeRoles = [],
+  opsTeam = [],
+  onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam,
+  onOpenEmployeeProfile, currentUser,
+}) {
+  const [tmModal, setTmModal] = useState(null);
+  const [delTarget, setDelTarget] = useState(null);
+  const [search, setSearch] = useState("");
+  const [filterStore, setFilterStore] = useState("");
+  const [filterDept, setFilterDept] = useState("");
+  const [filterRole, setFilterRole] = useState("");
+  const [showOnlyPending, setShowOnlyPending] = useState(false);
+
+  const isHq = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+
+  // Resolve role/department/store labels for a member.
+  const memberMeta = (m) => {
+    const roleLabel = storeRoles.find(r => r.id === m.roleId)?.name || m.role || "";
+    const deptLabel = storeDepartments.find(d => d.id === m.departmentId)?.name || m.department || "";
+    const storeIds = m.storeIds || [];
+    return { roleLabel, deptLabel, storeIds };
+  };
+
+  // Active employees (not archived), with optional pending filter.
+  const base = useMemo(() => opsTeam.filter(m => !m.archivedAt), [opsTeam]);
+
+  const pendingCount = useMemo(() => base.filter(m => {
+    if (m.status !== "pending_setup") return false;
+    if (isHq) return true;
+    const primary = m.storeIds?.[0];
+    return primary && (currentUser?.storeIds || []).includes(primary);
+  }).length, [base, isHq, currentUser]);
+
+  // Apply search + filters.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return base.filter(m => {
+      if (showOnlyPending && m.status !== "pending_setup") return false;
+      const { roleLabel, deptLabel, storeIds } = memberMeta(m);
+      if (filterStore && !storeIds.includes(filterStore)) return false;
+      if (filterDept && (m.departmentId || "") !== filterDept && deptLabel !== filterDept) return false;
+      if (filterRole && (m.roleId || "") !== filterRole && roleLabel !== filterRole) return false;
+      if (q) {
+        const hay = `${m.firstName} ${m.lastName} ${m.nickname || ""} ${roleLabel} ${deptLabel}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [base, search, filterStore, filterDept, filterRole, showOnlyPending, storeRoles, storeDepartments]);
+
+  // Group filtered members by their primary store (first storeId). Members with
+  // no store go in an "Unassigned" group at the end.
+  const groups = useMemo(() => {
+    const byStore = {};
+    const unassigned = [];
+    filtered.forEach(m => {
+      const sid = (m.storeIds || [])[0];
+      if (!sid) { unassigned.push(m); return; }
+      (byStore[sid] = byStore[sid] || []).push(m);
+    });
+    const ordered = stores
+      .filter(s => byStore[s.id])
+      .map(s => ({ id: s.id, label: `${s.shortName || s.name}`, members: byStore[s.id] }));
+    if (unassigned.length) ordered.push({ id: "__none__", label: "No store assigned", members: unassigned });
+    return ordered;
+  }, [filtered, stores]);
+
+  // Filter option lists.
+  const storeOpts = useMemo(() => stores.filter(s => (visibleStoreIds.length ? visibleStoreIds.includes(s.id) : true)), [stores, visibleStoreIds]);
+  const deptOpts = useMemo(() => storeDepartments.filter(d => !d.archivedAt), [storeDepartments]);
+  const roleOpts = useMemo(() => storeRoles.filter(r => !r.archivedAt), [storeRoles]);
+
+  const selCls = "px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const anyFilter = search || filterStore || filterDept || filterRole || showOnlyPending;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Users size={24}/> Team</h1>
+          <p className="text-sm text-slate-400 mt-1">{base.length} {base.length === 1 ? "member" : "members"}{pendingCount > 0 ? ` · ${pendingCount} pending setup` : ""}</p>
+        </div>
+        <button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button>
+      </div>
+
+      {/* Filters + search */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or role…" className={`${selCls} flex-1 min-w-[180px]`}/>
+        <select value={filterStore} onChange={e => setFilterStore(e.target.value)} className={selCls}>
+          <option value="">All stores</option>
+          {storeOpts.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        <select value={filterDept} onChange={e => setFilterDept(e.target.value)} className={selCls}>
+          <option value="">All departments</option>
+          {deptOpts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <select value={filterRole} onChange={e => setFilterRole(e.target.value)} className={selCls}>
+          <option value="">All roles</option>
+          {roleOpts.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+        <button onClick={() => setShowOnlyPending(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showOnlyPending ? "bg-amber-700 text-amber-100" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showOnlyPending ? "Showing pending" : "Pending only"}</button>
+        {anyFilter && <button onClick={() => { setSearch(""); setFilterStore(""); setFilterDept(""); setFilterRole(""); setShowOnlyPending(false); }} className="px-3 py-2 rounded-xl text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">Clear</button>}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">{anyFilter ? "No team members match these filters." : "No team members yet."}</div>
+      ) : (
+        <div className="space-y-6">
+          {groups.map(g => (
+            <div key={g.id}>
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-sm font-bold text-slate-300">{g.label}</h2>
+                <span className="text-[11px] text-slate-600">{g.members.length}</span>
+              </div>
+              <div className="space-y-2">
+                {g.members.map(m => {
+                  const { roleLabel, deptLabel } = memberMeta(m);
+                  return (
+                    <div key={m.id} onClick={() => onOpenEmployeeProfile?.(m.id)} title="Click to open profile"
+                      className="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 hover:border-slate-600 transition-colors cursor-pointer">
+                      <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}</div>
+                          {m.status === "pending_setup" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">⚠ Pending setup</span>}
+                        </div>
+                        <div className="text-xs text-slate-600">{[roleLabel, deptLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click to complete setup" : "")}</div>
+                      </div>
+                      <div className="flex gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
+                        <button onClick={() => setDelTarget({ msg: `Delete "${m.firstName} ${m.lastName}"? This removes the team member.`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tmModal && (
+        <OpsTeamMemberFormModal
+          item={tmModal === "new" ? null : tmModal}
+          brands={brands} stores={stores} visibleStoreIds={visibleStoreIds}
+          storeDepartments={storeDepartments} storeRoles={storeRoles}
+          opsTeam={opsTeam}
+          onSave={async (data) => {
+            try {
+              if (tmModal === "new") await onAddOpsTeam(data);
+              else await onUpdateOpsTeam({ ...data, id: tmModal.id });
+              setTmModal(null);
+            } catch (err) { alert(`Could not save: ${err?.message || err}`); }
+          }}
+          onClose={() => setTmModal(null)}
+        />
+      )}
+      {delTarget && <OpsConfirmModal message={delTarget.msg} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
+    </div>
+  );
+}
+
 function OpsSettingsView({
   brands, stores = [], visibleStoreIds = [],
   storeDepartments = [], storeRoles = [],
@@ -12237,12 +12405,7 @@ function OpsSettingsView({
   const [clModal, setClModal] = useState(null);
   const [tuModal, setTuModal] = useState(null);
   const [ctModal, setCtModal] = useState(null);
-  const [tmModal, setTmModal] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
-  // Slice 6 follow-up — filter the team list to only employees needing
-  // setup completion. Toggleable banner. Default off so list shows everyone.
-  // Auto-enabled if user navigated here via the sidebar badge (deep-link).
-  const [showOnlyPending, setShowOnlyPending] = useState(false);
   // "Structure" combines departments + roles in one screen since roles belong
   // to departments. Listed first because it's the per-store identity that
   // everything else hangs off of.
@@ -12251,7 +12414,7 @@ function OpsSettingsView({
     { key: "checklists", label: "Checklists" },
     { key: "tempunits",  label: "Temp Units" },
     { key: "cleaning",   label: "Cleaning Tasks" },
-    { key: "team",       label: "Ops Team" },
+    { key: "presets",    label: "Shift Presets" },
   ];
 
   return (
@@ -12325,109 +12488,12 @@ function OpsSettingsView({
         />
       )}
 
-      {tab === "team" && (
-        <div className="space-y-6">
-          <ShiftPresetManager
-            brands={brands} shiftPresets={shiftPresets}
-            onAdd={onAddShiftPreset} onUpdate={onUpdateShiftPreset} onDelete={onDeleteShiftPreset}
-            currentUser={currentUser}
-          />
-          <div className="border-t border-slate-700 pt-4 space-y-4">
-
-          {/* Slice 6 follow-up — pending-setup banner.
-              Counts only employees the current user can affect (matches
-              the scope used for the sidebar badge in App.js). Shows nothing
-              when zero pending — silent good state. */}
-          {(() => {
-            const isHq = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
-            const pending = opsTeam.filter(m => {
-              if (m.status !== "pending_setup" || m.archivedAt) return false;
-              if (isHq) return true;
-              const primary = m.storeIds?.[0];
-              return primary && (currentUser?.storeIds || []).includes(primary);
-            });
-            if (pending.length === 0) return null;
-            return (
-              <div className="bg-amber-950/30 border border-amber-900/50 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <AlertCircle size={18} className="text-amber-400 flex-shrink-0"/>
-                  <div className="min-w-0">
-                    <div className="text-sm text-amber-200 font-semibold">
-                      {pending.length} {pending.length === 1 ? "employee needs" : "employees need"} setup completion
-                    </div>
-                    <div className="text-[11px] text-amber-300/70 mt-0.5">
-                      Hired but missing role, department, or hourly rate. Click to complete each one.
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowOnlyPending(v => !v)}
-                  className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    showOnlyPending
-                      ? "bg-amber-700 text-amber-100 hover:bg-amber-600"
-                      : "bg-amber-900/50 text-amber-200 hover:bg-amber-900 border border-amber-800"
-                  }`}
-                >
-                  {showOnlyPending ? "Show all" : "Show only pending"}
-                </button>
-              </div>
-            );
-          })()}
-
-          <div className="flex justify-end"><button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button></div>
-          {(showOnlyPending
-            ? opsTeam.filter(m => m.status === "pending_setup" && !m.archivedAt)
-            : opsTeam
-          ).map(m => {
-            const brand = brands.find(b => b.id === m.brandId);
-            // Prefer the per-store assignment if present; fall back to brand
-            // for legacy rows.
-            const primaryStore = (m.storeIds && m.storeIds[0])
-              ? stores.find(s => s.id === m.storeIds[0])
-              : null;
-            const extraStoreCount = Math.max(0, (m.storeIds || []).length - 1);
-            // Role + department come from FKs if linked, else legacy text
-            const roleLabel = storeRoles.find(r => r.id === m.roleId)?.name || m.role || "";
-            const deptLabel = storeDepartments.find(d => d.id === m.departmentId)?.name || m.department || "";
-            const locationLabel = primaryStore
-              ? `${brand?.name ? brand.name + " · " : ""}${primaryStore.shortName || primaryStore.name}${extraStoreCount > 0 ? ` +${extraStoreCount}` : ""}`
-              : (brand?.name || "");
-            return (
-              <div
-                key={m.id}
-                className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4 hover:border-slate-600 transition-colors cursor-pointer"
-                onClick={() => onOpenEmployeeProfile?.(m.id)}
-                title="Click to open profile"
-              >
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}</div>
-                    {/* Slice 5 — pending_setup badge nudges manager to complete
-                        role/department/hourly_rate assignment for newly-hired
-                        employees that came in via the hire workflow. */}
-                    {m.status === "pending_setup" && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">
-                        ⚠ Pending setup
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-600">{[roleLabel, deptLabel, locationLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click to open profile and complete setup (role, department, hourly rate)" : "")}</div>
-                  {!primaryStore && (m.storeIds?.length || 0) === 0 && (
-                    <div className="text-[10px] text-amber-500 mt-0.5">⚠ Not yet linked to a store — click to set</div>
-                  )}
-                </div>
-                {/* stopPropagation on action buttons so clicking edit/delete
-                    doesn't ALSO open the profile (the row-click handler) */}
-                <div className="flex gap-1.5" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700" title="Edit basic details"><Edit size={13}/></button>
-                  <button onClick={() => setDelTarget({ msg: `Delete ${m.firstName} ${m.lastName}?`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20" title="Delete"><Trash2 size={13}/></button>
-                </div>
-              </div>
-            );
-          })}
-          </div>
-        </div>
+      {tab === "presets" && (
+        <ShiftPresetManager
+          brands={brands} shiftPresets={shiftPresets}
+          onAdd={onAddShiftPreset} onUpdate={onUpdateShiftPreset} onDelete={onDeleteShiftPreset}
+          currentUser={currentUser}
+        />
       )}
 
       {clModal && (
@@ -12455,19 +12521,6 @@ function OpsSettingsView({
           stores={stores}
           onSave={item => { ctModal === "new" ? onAddCleanTask(item) : onUpdateCleanTask(item); setCtModal(null); }}
           onClose={() => setCtModal(null)}
-        />
-      )}
-      {tmModal && (
-        <OpsTeamMemberFormModal
-          item={tmModal === "new" ? null : tmModal}
-          brands={brands}
-          stores={stores}
-          visibleStoreIds={visibleStoreIds}
-          storeDepartments={storeDepartments}
-          storeRoles={storeRoles}
-          opsTeam={opsTeam}
-          onSave={item => { tmModal === "new" ? onAddOpsTeam(item) : onUpdateOpsTeam(item); setTmModal(null); }}
-          onClose={() => setTmModal(null)}
         />
       )}
       {delTarget && <OpsConfirmModal message={delTarget.msg} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
@@ -19115,10 +19168,10 @@ export default function App() {
     }
   }, []);
 
-  // Close the profile and return to Ops Team list.
+  // Close the profile and return to the Team list.
   const closeEmployeeProfile = useCallback(() => {
     setSelectedEmployeeId(null);
-    setActiveView("ops-settings");   // closest existing view for ops/team admin
+    setActiveView("team");   // team management now lives under PEOPLE → Team
     if (window.location.hash.startsWith("#employee/")) {
       window.history.pushState(null, "", window.location.pathname);
     }
@@ -19740,6 +19793,7 @@ export default function App() {
       { key: "eod",            label: "EOD Report",      icon: FileText },
     ]},
     { group: "PEOPLE", items: [
+      { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
@@ -19785,7 +19839,7 @@ export default function App() {
     "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
     admin:"Admin", comms:"Communication", "time-attend":"Time & Attendance",
-    "employee-profile":"Employee Profile", hiring:"Hiring" };
+    "employee-profile":"Employee Profile", hiring:"Hiring", team:"Team" };
 
   const currentUser_ctx = currentUser;
 
@@ -19880,6 +19934,14 @@ export default function App() {
               opsTeam={opsTeam} currentUser={currentUser}
               onUpdateEmployee={patchOpsTeam}
               onClose={closeEmployeeProfile}
+            />}
+            {effectiveActiveView === "team"           && <OpsTeamView
+              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+              storeDepartments={storeDepartments} storeRoles={storeRoles}
+              opsTeam={opsTeam}
+              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+              onOpenEmployeeProfile={openEmployeeProfile}
+              currentUser={currentUser}
             />}
             {effectiveActiveView === "ops-settings"   && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
