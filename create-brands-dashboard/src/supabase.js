@@ -453,6 +453,13 @@ function appOpsTeamToDb(m) {
   if (m.hourlyRate    !== undefined) row.hourly_rate   = m.hourlyRate || 0;
   if (m.storeIds      !== undefined) row.store_ids     = m.storeIds || [];
   if (m.roleId        !== undefined) row.role_id       = m.roleId || null;
+  // Multiple job roles. role_ids is the source of truth; role_id mirrors the
+  // first element for backward compatibility with single-role readers.
+  if (m.roleIds       !== undefined) {
+    const ids = Array.isArray(m.roleIds) ? m.roleIds.filter(Boolean) : [];
+    row.role_ids = ids;
+    row.role_id  = ids[0] || null;   // keep legacy single column in sync
+  }
   if (m.departmentId  !== undefined) row.department_id = m.departmentId || null;
   // Slice 5 — HR fields, also partial-aware
   if (m.email         !== undefined) row.email         = m.email || null;
@@ -502,6 +509,7 @@ function dbOpsTeamToApp(m) {
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,
     storeIds: m.store_ids || [],
     roleId: m.role_id || null,
+    roleIds: (m.role_ids && m.role_ids.length) ? m.role_ids : (m.role_id ? [m.role_id] : []),
     departmentId: m.department_id || null,
     // Slice 5 — HR fields
     email:       m.email || "",

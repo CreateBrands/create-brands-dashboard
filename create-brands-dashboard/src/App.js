@@ -8072,7 +8072,8 @@ function EmployeeProfileView({
 
   const primaryStore = stores.find(s => s.id === employee.storeIds?.[0]);
   const brand        = brands.find(b => b.id === employee.brandId);
-  const roleLabel    = storeRoles.find(r => r.id === employee.roleId)?.name || employee.role || "";
+  const _roleIds     = (employee.roleIds && employee.roleIds.length) ? employee.roleIds : (employee.roleId ? [employee.roleId] : []);
+  const roleLabel    = _roleIds.map(id => storeRoles.find(r => r.id === id)?.name).filter(Boolean).join(", ") || employee.role || "";
   const deptLabel    = storeDepartments.find(d => d.id === employee.departmentId)?.name || employee.department || "";
 
   const handleSaveHr = async () => {
@@ -8769,6 +8770,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
     primaryStoreId: employee.storeIds?.[0] || "",
     alsoStoreIds:   (employee.storeIds || []).slice(1),
     roleId:         employee.roleId || "",
+    roleIds:        (employee.roleIds && employee.roleIds.length) ? employee.roleIds : (employee.roleId ? [employee.roleId] : []),
     roleText:       employee.role || "",      // free-text fallback if no roleId match
     deptText:       employee.department || "",
     payType:        employee.payType || "hourly",
@@ -8789,6 +8791,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
       primaryStoreId: employee.storeIds?.[0] || "",
       alsoStoreIds:   (employee.storeIds || []).slice(1),
       roleId:         employee.roleId || "",
+      roleIds:        (employee.roleIds && employee.roleIds.length) ? employee.roleIds : (employee.roleId ? [employee.roleId] : []),
       roleText:       employee.role || "",
       deptText:       employee.department || "",
       payType:        employee.payType || "hourly",
@@ -8805,11 +8808,19 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
     [storeRoles, form.primaryStoreId]
   );
 
-  // When role is picked, auto-fill department from the role's department_id.
-  const selectedRole = rolesForStore.find(r => r.id === form.roleId);
+  // When role is picked, auto-fill department from the FIRST role's department.
+  const selectedRolesJP = (form.roleIds || []).map(id => rolesForStore.find(r => r.id === id)).filter(Boolean);
+  const selectedRole = selectedRolesJP[0] || null;
   const derivedDept  = selectedRole
     ? storeDepartments.find(d => d.id === selectedRole.departmentId)
     : null;
+  const toggleRoleJP = (id) => {
+    setFormState(f => {
+      const has = (f.roleIds || []).includes(id);
+      const next = has ? f.roleIds.filter(x => x !== id) : [...(f.roleIds || []), id];
+      return { ...f, roleIds: next, roleId: next[0] || "" };
+    });
+  };
 
   // PIN duplicate check across the whole org (excluding self).
   // Surfaced as a warning, not a hard block — the DB-level uniqueness
@@ -8835,7 +8846,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
       // Status logic: if this employee was "pending_setup" and now has a
       // role assigned, flip to "active". If they had a role and we're just
       // updating other fields, keep current status. Don't touch archived.
-      const willHaveRole = !!(selectedRole?.id || form.roleText.trim());
+      const willHaveRole = !!((form.roleIds || []).length || form.roleText.trim());
       const newStatus = employee.status === "pending_setup" && willHaveRole
         ? "active"
         : undefined;  // undefined = "don't change" via partial mapper
@@ -8849,6 +8860,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
         id:           employee.id,
         brandId:      newBrandId,
         storeIds:     allStoreIds,
+        roleIds:      (form.roleIds || []).filter(Boolean),
         roleId:       selectedRole?.id || null,
         departmentId: derivedDept?.id || null,
         role:         selectedRole?.name || form.roleText.trim() || "",
@@ -8953,7 +8965,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={labelCls}>Role *</label>
+          <label className={labelCls}>Roles * <span className="text-slate-600 normal-case font-normal">(pick one or more)</span></label>
           {rolesForStore.length === 0 ? (
             <input
               value={form.roleText}
@@ -8962,16 +8974,17 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
               className={inputCls}
             />
           ) : (
-            <select
-              value={form.roleId}
-              onChange={e => set("roleId", e.target.value)}
-              className={inputCls}
-            >
-              <option value="">— Pick a role —</option>
-              {rolesForStore.map(r => (
-                <option key={r.id} value={r.id}>{r.name}{r.isManagement ? " (mgmt)" : ""}</option>
-              ))}
-            </select>
+            <div className="flex flex-wrap gap-1.5">
+              {rolesForStore.map(r => {
+                const on = (form.roleIds || []).includes(r.id);
+                return (
+                  <button key={r.id} type="button" onClick={() => toggleRoleJP(r.id)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${on ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600"}`}>
+                    {on ? "✓ " : ""}{r.name}{r.isManagement ? " (mgmt)" : ""}
+                  </button>
+                );
+              })}
+            </div>
           )}
           {rolesForStore.length === 0 && form.primaryStoreId && (
             <div className="text-[10px] text-amber-400 mt-1">⚠ No roles defined for this store. Add roles in Structure tab first.</div>
@@ -11108,6 +11121,7 @@ function OpsTeamMemberFormModal({
     primaryStoreId: initialPrimary,
     alsoStoreIds:   initialAlsoAt,
     roleId:       item?.roleId       || "",
+    roleIds:      (item?.roleIds && item.roleIds.length) ? item.roleIds : (item?.roleId ? [item.roleId] : []),
     // Legacy free-text fields kept so old rows still render — once a roleId
     // is picked these become derived from the role/department records.
     roleText:     item?.role         || "",
@@ -11130,6 +11144,7 @@ function OpsTeamMemberFormModal({
       // Drop the also-at stores that don't include this one
       alsoStoreIds: f.alsoStoreIds.filter(x => x !== sid),
       roleId: "",
+      roleIds: [],
     }));
   };
 
@@ -11156,11 +11171,21 @@ function OpsTeamMemberFormModal({
     return { groups, unassigned };
   }, [rolesInStore]);
 
-  // Auto-derive the department from the selected role
-  const selectedRole = rolesInStore.find(r => r.id === form.roleId) || null;
+  // Auto-derive the department from the FIRST selected role (department stays
+  // single even when the employee holds multiple roles).
+  const selectedRoles = (form.roleIds || []).map(id => rolesInStore.find(r => r.id === id)).filter(Boolean);
+  const selectedRole = selectedRoles[0] || null;
   const derivedDept = selectedRole?.departmentId
     ? storeDepartments.find(d => d.id === selectedRole.departmentId)
     : null;
+
+  const toggleRole = (id) => {
+    setFormState(f => {
+      const has = (f.roleIds || []).includes(id);
+      const next = has ? f.roleIds.filter(x => x !== id) : [...(f.roleIds || []), id];
+      return { ...f, roleIds: next, roleId: next[0] || "" };
+    });
+  };
 
   // When a role is picked AND it has an hourly rate, suggest it (only if
   // current value is 0 / empty — don't clobber a manually-entered rate)
@@ -11169,7 +11194,7 @@ function OpsTeamMemberFormModal({
       setFormState(f => ({ ...f, hourlyRate: selectedRole.hourlyRate }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.roleId]);
+  }, [form.roleIds]);
 
   // Stores allowed for the "also works at" multi-select: anything in scope
   // except the primary.
@@ -11195,8 +11220,8 @@ function OpsTeamMemberFormModal({
   const handleSave = () => {
     if (!form.firstName.trim()) return;
     if (!form.primaryStoreId)   { alert("Please pick a primary store."); return; }
-    if (rolesInStore.length > 0 && !form.roleId) {
-      alert("Please pick a role. (If this store has no roles defined yet, add one under Ops Setup → Structure first.)");
+    if (rolesInStore.length > 0 && (form.roleIds || []).length === 0) {
+      alert("Please pick at least one role. (If this store has no roles defined yet, add one under Ops Setup → Structure first.)");
       return;
     }
     // Q6: PIN uniqueness check across the whole org. The kiosk identifies
@@ -11232,7 +11257,7 @@ function OpsTeamMemberFormModal({
     // Team list, nudging manager to complete later. Manual add/edit doesn't
     // touch status (keeps existing behaviour intact for non-hire flows).
     const isHireFlow = !!prefillApplication;
-    const hasRoleAssigned = !!(selectedRole?.id || form.roleText?.trim());
+    const hasRoleAssigned = !!((form.roleIds || []).length || form.roleText?.trim());
     const computedStatus = isHireFlow
       ? (hasRoleAssigned ? "active" : "pending_setup")
       : (item?.status || "active");
@@ -11248,10 +11273,11 @@ function OpsTeamMemberFormModal({
       color:     item?.color || COLORS[Math.floor(Math.random() * COLORS.length)],
       brandId,
       storeIds,
+      roleIds:       (form.roleIds || []).filter(Boolean),
       roleId:        selectedRole?.id || null,
       departmentId:  derivedDept?.id   || null,
       // Mirror the text fields too — keeps old reports/badges working until
-      // they migrate to FK-based lookups.
+      // they migrate to FK-based lookups. role text = first role's name.
       role:       selectedRole?.name || form.roleText || "",
       department: derivedDept?.name  || form.deptText || "",
       // ── Slice 5 HR fields ──────────────────────────────────────────────
@@ -11406,41 +11432,58 @@ function OpsTeamMemberFormModal({
         {form.primaryStoreId && (
           <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-3 space-y-3">
             <div>
-              <label className={labelCls}>Role *</label>
+              <label className={labelCls}>Roles * <span className="text-slate-600 normal-case font-normal">(pick one or more)</span></label>
               {rolesInStore.length === 0 ? (
                 <div className="text-xs text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">
                   This store has no roles defined yet. Go to <strong>Ops Setup → Structure</strong> to add some, then come back.
                 </div>
               ) : (
-                <select value={form.roleId} onChange={e => set("roleId", e.target.value)} className={inputCls}>
-                  <option value="">— Pick a role —</option>
-                  {/* Roles grouped by department */}
+                <div className="space-y-2">
                   {storeDepartments
                     .filter(d => d.storeId === form.primaryStoreId && !d.archivedAt)
                     .filter(d => rolesGrouped.groups.has(d.id))
                     .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name))
                     .map(d => (
-                      <optgroup key={d.id} label={d.name}>
-                        {rolesGrouped.groups.get(d.id).map(r => (
-                          <option key={r.id} value={r.id}>{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)}/hr)` : ""}</option>
-                        ))}
-                      </optgroup>
+                      <div key={d.id}>
+                        <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">{d.name}</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {rolesGrouped.groups.get(d.id).map(r => {
+                            const on = (form.roleIds || []).includes(r.id);
+                            return (
+                              <button key={r.id} type="button" onClick={() => toggleRole(r.id)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${on ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600"}`}>
+                                {on ? "✓ " : ""}{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)})` : ""}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     ))
                   }
-                  {/* Unassigned-to-department roles */}
                   {rolesGrouped.unassigned.length > 0 && (
-                    <optgroup label="Other">
-                      {rolesGrouped.unassigned.map(r => (
-                        <option key={r.id} value={r.id}>{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)}/hr)` : ""}</option>
-                      ))}
-                    </optgroup>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1">Other</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {rolesGrouped.unassigned.map(r => {
+                          const on = (form.roleIds || []).includes(r.id);
+                          return (
+                            <button key={r.id} type="button" onClick={() => toggleRole(r.id)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${on ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600"}`}>
+                              {on ? "✓ " : ""}{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)})` : ""}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
-                </select>
+                </div>
               )}
             </div>
             {selectedRole && (
               <div className="text-xs text-slate-500">
+                {selectedRoles.length > 1 ? <>Roles: <strong className="text-slate-300">{selectedRoles.map(r => r.name).join(", ")}</strong> · </> : null}
                 Department: <strong className="text-slate-300">{derivedDept?.name || "—"}</strong>
+                {selectedRoles.length > 1 && <span className="text-slate-600"> (from first role)</span>}
                 {selectedRole.isManagement && <span className="ml-2"><Badge label="Management" color="indigo"/></span>}
               </div>
             )}
@@ -12241,10 +12284,12 @@ function OpsTeamView({
 
   // Resolve role/department/store labels for a member.
   const memberMeta = (m) => {
-    const roleLabel = storeRoles.find(r => r.id === m.roleId)?.name || m.role || "";
+    const ids = (m.roleIds && m.roleIds.length) ? m.roleIds : (m.roleId ? [m.roleId] : []);
+    const roleNames = ids.map(id => storeRoles.find(r => r.id === id)?.name).filter(Boolean);
+    const roleLabel = roleNames.length ? roleNames.join(", ") : (m.role || "");
     const deptLabel = storeDepartments.find(d => d.id === m.departmentId)?.name || m.department || "";
     const storeIds = m.storeIds || [];
-    return { roleLabel, deptLabel, storeIds };
+    return { roleLabel, deptLabel, storeIds, roleIds: ids };
   };
 
   // Active employees (not archived), with optional pending filter.
@@ -12262,10 +12307,10 @@ function OpsTeamView({
     const q = search.trim().toLowerCase();
     return base.filter(m => {
       if (showOnlyPending && m.status !== "pending_setup") return false;
-      const { roleLabel, deptLabel, storeIds } = memberMeta(m);
+      const { roleLabel, deptLabel, storeIds, roleIds } = memberMeta(m);
       if (filterStore && !storeIds.includes(filterStore)) return false;
       if (filterDept && (m.departmentId || "") !== filterDept && deptLabel !== filterDept) return false;
-      if (filterRole && (m.roleId || "") !== filterRole && roleLabel !== filterRole) return false;
+      if (filterRole && !roleIds.includes(filterRole) && roleLabel !== filterRole) return false;
       if (q) {
         const hay = `${m.firstName} ${m.lastName} ${m.nickname || ""} ${roleLabel} ${deptLabel}`.toLowerCase();
         if (!hay.includes(q)) return false;
