@@ -3332,3 +3332,67 @@ export async function acknowledgePolicy({ employeeId, policyKey, policyLabel, st
   if (error) throw error;
   return data ? dbPolicyAckToApp(data) : dbPolicyAckToApp(row);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// ADVERTISED ROLES (hiring — advert titles, separate from store roles)
+// ════════════════════════════════════════════════════════════════════════════
+function dbAdvertisedRoleToApp(r) {
+  return {
+    id:          r.id,
+    title:       r.title,
+    description: r.description || "",
+    active:      r.active ?? true,
+    sortOrder:   r.sort_order ?? 0,
+    createdAt:   r.created_at,
+    updatedAt:   r.updated_at,
+    archivedAt:  r.archived_at || null,
+  };
+}
+
+export async function fetchAdvertisedRoles() {
+  const { data, error } = await supabase
+    .from("advertised_roles")
+    .select("*")
+    .is("archived_at", null)
+    .order("sort_order", { ascending: true })
+    .order("title", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbAdvertisedRoleToApp);
+}
+
+export async function createAdvertisedRole({ title, description, sortOrder }) {
+  if (!title?.trim()) throw new Error("Title is required");
+  const row = {
+    id:          `adr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    title:       title.trim(),
+    description: description?.trim() || null,
+    active:      true,
+    sort_order:  sortOrder ?? 0,
+  };
+  const { data, error } = await supabase
+    .from("advertised_roles").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbAdvertisedRoleToApp(data) : dbAdvertisedRoleToApp(row);
+}
+
+export async function updateAdvertisedRole(id, fields) {
+  if (!id) throw new Error("id required");
+  const row = { updated_at: new Date().toISOString() };
+  if (fields.title       !== undefined) row.title       = fields.title.trim();
+  if (fields.description !== undefined) row.description = fields.description?.trim() || null;
+  if (fields.active      !== undefined) row.active      = !!fields.active;
+  if (fields.sortOrder   !== undefined) row.sort_order  = fields.sortOrder;
+  const { data, error } = await supabase
+    .from("advertised_roles").update(row).eq("id", id).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbAdvertisedRoleToApp(data) : null;
+}
+
+export async function archiveAdvertisedRole(id) {
+  if (!id) throw new Error("id required");
+  const { error } = await supabase
+    .from("advertised_roles")
+    .update({ archived_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}

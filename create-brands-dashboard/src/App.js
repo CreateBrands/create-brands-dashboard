@@ -22,6 +22,7 @@ import {
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
+  fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
   insertStoreDepartment, updateStoreDepartment, archiveStoreDepartment, unarchiveStoreDepartment,
   insertStoreRole, updateStoreRole, archiveStoreRole, unarchiveStoreRole,
   copyStoreStructure,
@@ -75,7 +76,7 @@ import {
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
-  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign,
+  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap
 } from "lucide-react";
 
@@ -7153,15 +7154,98 @@ function getCertExpiryStatus(expiresDate) {
 }
 
 
+// Manage the advertised-roles list (hiring advert titles). Add / rename /
+// toggle active / remove. Separate from store roles by design.
+function AdvertisedRolesModal({ advertisedRoles, onAdd, onUpdate, onArchive, onClose }) {
+  const [newTitle, setNewTitle] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [editTitle, setEditTitle] = useState("");
+
+  const add = async () => {
+    if (!newTitle.trim()) return;
+    setBusy(true);
+    try { await onAdd({ title: newTitle, description: newDesc, sortOrder: advertisedRoles.length }); setNewTitle(""); setNewDesc(""); }
+    catch (err) { alert(`Could not add: ${err?.message || err}`); }
+    finally { setBusy(false); }
+  };
+  const saveEdit = async (r) => {
+    if (!editTitle.trim()) return;
+    try { await onUpdate(r.id, { title: editTitle }); setEditId(null); }
+    catch (err) { alert(`Could not update: ${err?.message || err}`); }
+  };
+  const toggleActive = async (r) => {
+    try { await onUpdate(r.id, { active: !r.active }); }
+    catch (err) { alert(`Could not update: ${err?.message || err}`); }
+  };
+  const remove = async (r) => {
+    if (!window.confirm(`Remove "${r.title}" from advertised roles? Existing applications keep their position; this just stops it being offered to new applicants.`)) return;
+    try { await onArchive(r.id); }
+    catch (err) { alert(`Could not remove: ${err?.message || err}`); }
+  };
+
+  const inputCls = "w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <Modal title="Advertised roles" onClose={onClose} maxW="max-w-xl"
+      footer={<div className="flex justify-end"><button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Done</button></div>}
+    >
+      <div className="space-y-4">
+        <p className="text-[11px] text-slate-500">These are the job titles candidates can apply for. They're advert titles only — when you hire someone you'll assign their actual role(s) on the Team side.</p>
+
+        {/* Add new */}
+        <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Add a role</div>
+          <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="e.g. Weekend Barista" className={inputCls}/>
+          <input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Optional one-line description" className={inputCls}/>
+          <button onClick={add} disabled={busy || !newTitle.trim()} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{busy ? "Adding…" : "Add role"}</button>
+        </div>
+
+        {/* List */}
+        {advertisedRoles.length === 0 ? (
+          <div className="text-sm text-slate-500 text-center py-4">No advertised roles yet. Add one above.</div>
+        ) : (
+          <div className="space-y-2">
+            {advertisedRoles.map(r => (
+              <div key={r.id} className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
+                {editId === r.id ? (
+                  <>
+                    <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className={`${inputCls} flex-1`}/>
+                    <button onClick={() => saveEdit(r)} className="px-2 py-1 rounded bg-indigo-600 text-white text-[11px] font-semibold">Save</button>
+                    <button onClick={() => setEditId(null)} className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px] font-semibold">Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-slate-200">{r.title}{!r.active && <span className="text-[10px] text-slate-500 ml-2">(hidden)</span>}</div>
+                      {r.description && <div className="text-[11px] text-slate-600">{r.description}</div>}
+                    </div>
+                    <button onClick={() => toggleActive(r)} title={r.active ? "Hide from applicants" : "Show to applicants"} className={`px-2 py-1 rounded text-[11px] font-semibold ${r.active ? "bg-emerald-950/40 text-emerald-300 border border-emerald-800" : "bg-slate-800 text-slate-400"}`}>{r.active ? "Active" : "Hidden"}</button>
+                    <button onClick={() => { setEditId(r.id); setEditTitle(r.title); }} className="p-1.5 rounded bg-slate-800 text-slate-400 hover:text-white"><Edit size={12}/></button>
+                    <button onClick={() => remove(r)} className="p-1.5 rounded bg-slate-800 text-slate-600 hover:text-red-400"><Trash2 size={12}/></button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function HiringView({
   brands, stores, storeRoles, storeDepartments, visibleStoreIds,
   applications, opsTeam, currentUser,
   onAdd, onUpdate, onSetStatus, onDelete,
   onAddOpsTeam, onOpenEmployeeProfile,
+  advertisedRoles = [], onAddAdvertisedRole, onUpdateAdvertisedRole, onArchiveAdvertisedRole,
 }) {
   const [showForm, setShowForm]   = useState(false);
   const [editItem, setEditItem]   = useState(null);
   const [deleteId, setDeleteId]   = useState(null);
+  const [showAdRoles, setShowAdRoles] = useState(false);   // manage advertised roles modal
   const [storeScope, setStoreScope] = useState("all");   // "all" or a specific store id
   const [statusFilter, setStatusFilter] = useState("active");   // "active" (non-terminal) | "all" | specific status
   const [expandedId, setExpandedId] = useState(null);
@@ -7471,10 +7555,18 @@ function HiringView({
               : "Candidates applying to your stores."}
           </p>
         </div>
-        <button onClick={() => { setEditItem(null); setShowForm(true); }}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold">
-          <Plus size={14}/> Add Candidate
-        </button>
+        <div className="flex gap-2">
+          {isHqOrAbove(currentUser?.role) && (
+            <button onClick={() => setShowAdRoles(true)}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold">
+              <Briefcase size={14}/> Advertised roles
+            </button>
+          )}
+          <button onClick={() => { setEditItem(null); setShowForm(true); }}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold">
+            <Plus size={14}/> Add Candidate
+          </button>
+        </div>
       </div>
 
       {/* Slice 6 — search + sort row. Sits above the existing scope/status
@@ -7788,6 +7880,14 @@ function HiringView({
             );
           })}
         </div>
+      )}
+
+      {showAdRoles && (
+        <AdvertisedRolesModal
+          advertisedRoles={advertisedRoles}
+          onAdd={onAddAdvertisedRole} onUpdate={onUpdateAdvertisedRole} onArchive={onArchiveAdvertisedRole}
+          onClose={() => setShowAdRoles(false)}
+        />
       )}
 
       {showForm && <ApplicationFormModal
@@ -18415,7 +18515,8 @@ const APPLY_RATE_LIMIT_MS  = 5 * 60 * 1000;   // 5 minutes between submissions
 function ApplyShell() {
   const [stores,      setStores]      = useState([]);
   const [brands,      setBrands]      = useState([]);
-  const [storeRoles,  setStoreRoles]  = useState([]);   // per-store roles, used to populate the position dropdown
+  const [storeRoles,  setStoreRoles]  = useState([]);   // per-store roles (legacy; kept for hire-side matching)
+  const [advertisedRoles, setAdvertisedRoles] = useState([]);  // the advert titles candidates pick from
   const [existingApps, setExistingApps] = useState([]);  // for duplicate detection
   const [ready,       setReady]       = useState(false);
   const [loadError,   setLoadError]   = useState(null);
@@ -18465,10 +18566,12 @@ function ApplyShell() {
       fetchBrands(),
       fetchStoreRoles().catch(() => []),
       fetchApplications().catch(() => []),
-    ]).then(([sts, brs, roles, apps]) => {
+      fetchAdvertisedRoles().catch(() => []),
+    ]).then(([sts, brs, roles, apps, adroles]) => {
       setStores(sts || []);
       setBrands(brs || []);
       setStoreRoles(roles || []);
+      setAdvertisedRoles((adroles || []).filter(r => r.active !== false));
       // Only keep recent applications to limit memory + irrelevant matches
       const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
       setExistingApps((apps || []).filter(a => new Date(a.createdAt).getTime() > cutoff));
@@ -18510,28 +18613,23 @@ function ApplyShell() {
   // unintentionally show up as a vacancy). HQ/managers toggle the
   // advertise_for_hiring checkbox in Ops Setup → Structure to control what's
   // open for applications.
+  // Advertised roles are the managed list of advert titles (separate from store
+  // roles). Candidates pick from these regardless of store; the manager assigns
+  // the real store role at hire time.
   const availableRoles = useMemo(
-    () => (storeRoles || []).filter(r =>
-      r.storeId === form.storeId &&
-      !r.archivedAt &&
-      r.advertiseForHiring === true
-    ),
-    [storeRoles, form.storeId]
+    () => (advertisedRoles || []).filter(r => r.active !== false && !r.archivedAt),
+    [advertisedRoles]
   );
-  // Whether to render the position field as a dropdown vs an empty state.
-  // Slice 3: per spec, there's no "Other (specify)" fallback — if no role
-  // is advertised for this store, candidate cannot apply for an arbitrary
-  // position. They'd see an empty-state message and pick a different store.
-  const useRoleDropdown = !!form.storeId && availableRoles.length > 0;
+  // Show the dropdown whenever there are advertised roles (no longer store-gated).
+  const useRoleDropdown = availableRoles.length > 0;
 
-  // When the user changes store, their previously-chosen role no longer makes
-  // sense (it belonged to a different store). Reset the position choice so
-  // they pick again. Cheap to do reactively rather than threading through
-  // every store-change handler.
+  // Reset position choice if the advertised list changes such that the pick is
+  // no longer valid (rare; keeps state honest).
   useEffect(() => {
-    setForm(f => ({ ...f, positionChoice: "", position: f.positionChoice === "__other__" ? f.position : "" }));
+    setForm(f => f.positionChoice && !availableRoles.some(r => r.title === f.positionChoice)
+      ? { ...f, positionChoice: "", position: "" } : f);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.storeId]);
+  }, [availableRoles]);
 
   // Validate form. All slice 3 fields are required for public submissions per
   // product spec; the only optional field on the public form is the existing
@@ -18817,7 +18915,7 @@ function ApplyShell() {
             label="Position you're applying for *"
             hint={useRoleDropdown
               ? "Pick the role you'd like to apply for."
-              : "No open positions at this store right now. Try another store."
+              : "No positions are currently open. Please check back soon."
             }
           >
             {useRoleDropdown ? (
@@ -18825,17 +18923,13 @@ function ApplyShell() {
                 style={applyInputStyle}
                 value={form.positionChoice}
                 onChange={e => {
-                  // Slice 3: positionChoice and position always mirror — no
-                  // "Other" fallback. Candidate can only apply for advertised
-                  // roles. If their role isn't listed, they pick a different
-                  // store or wait until it's advertised.
                   const v = e.target.value;
                   setForm(f => ({ ...f, positionChoice: v, position: v }));
                 }}
               >
                 <option value="">— Choose a position —</option>
                 {availableRoles.map(r => (
-                  <option key={r.id} value={r.name}>{r.name}</option>
+                  <option key={r.id} value={r.title}>{r.title}</option>
                 ))}
               </select>
             ) : (
@@ -18844,10 +18938,7 @@ function ApplyShell() {
                 background: "#1e293b", border: "1px solid #334155",
                 color: "#94a3b8", fontSize: 13,
               }}>
-                {form.storeId
-                  ? "No open positions at this store right now. Please pick a different store."
-                  : "Pick a store first to see available positions."
-                }
+                No positions are currently open for applications. Please check back soon.
               </div>
             )}
           </ApplyField>
@@ -19166,6 +19257,7 @@ export default function App() {
   const [punchRecords,    setPunchRecords]   = useState([]);
   // Hiring / Onboarding (slice 1)
   const [applications,    setApplications]   = useState([]);
+  const [advertisedRoles, setAdvertisedRoles] = useState([]);
   const [stores,            setStores]            = useState([]);
   const [storeDepartments,  setStoreDepartments]  = useState([]);
   const [storeRoles,        setStoreRoles]        = useState([]);
@@ -19243,11 +19335,12 @@ export default function App() {
       fetchStores(), fetchFlipdishStores(), fetchFlipdishSyncLog(),
       fetchStoreDepartments(), fetchStoreRoles(),
       fetchApplications(),
+      fetchAdvertisedRoles().catch(() => []),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -19257,6 +19350,7 @@ export default function App() {
       setStores(st); setFlipdishStores(fs); setFlipdishSyncLog(fsl);
       setStoreDepartments(sdepts || []); setStoreRoles(sroles || []);
       setApplications(apps || []);
+      setAdvertisedRoles(adroles || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -19559,6 +19653,25 @@ export default function App() {
     setStoreRoles(prev => prev.map(x => x.id === id ? saved : x));
     showToast("Role restored");
     return saved;
+  }, [showToast]);
+
+  // Advertised roles (hiring advert titles — separate from store roles)
+  const addAdvertisedRole = useCallback(async r => {
+    const saved = await createAdvertisedRole(r);
+    setAdvertisedRoles(prev => [...prev, saved]);
+    showToast("Advertised role added");
+    return saved;
+  }, [showToast]);
+  const updateAdvertisedRoleRow = useCallback(async (id, patch) => {
+    const saved = await updateAdvertisedRole(id, patch);
+    setAdvertisedRoles(prev => prev.map(x => x.id === id ? saved : x));
+    showToast("Advertised role updated");
+    return saved;
+  }, [showToast]);
+  const archiveAdvertisedRoleRow = useCallback(async id => {
+    await archiveAdvertisedRole(id);
+    setAdvertisedRoles(prev => prev.filter(x => x.id !== id));
+    showToast("Advertised role removed");
   }, [showToast]);
 
   // Copy from another store, then refetch to get new IDs + parent links
@@ -19964,6 +20077,8 @@ export default function App() {
               onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
               onAddOpsTeam={addOpsTeam}
               onOpenEmployeeProfile={openEmployeeProfile}
+              advertisedRoles={advertisedRoles}
+              onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
             />}
             {effectiveActiveView === "training"       && <TrainingAdminView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
