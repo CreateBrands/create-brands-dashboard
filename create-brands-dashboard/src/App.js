@@ -1639,6 +1639,15 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
   const [studentLoan, setStudentLoan] = useState(!!employee?.studentLoan);
   const [savedTax, setSavedTax] = useState(!!employee?.taxStarterStatement);
   const [busy, setBusy] = useState(false);
+  // Bank — employee submits their own + accuracy declaration
+  const [bankName, setBankName] = useState(employee?.bankAccountName || "");
+  const [bankSort, setBankSort] = useState(employee?.bankSortCode || "");
+  const [bankNo, setBankNo] = useState(employee?.bankAccountNo || "");
+  const [bankAgree, setBankAgree] = useState(false);
+  const [bankSaved, setBankSaved] = useState(!!employee?.bankDeclaredAt);
+  const [bankEditing, setBankEditing] = useState(false);
+  const [bankBusy, setBankBusy] = useState(false);
+  const BANK_DECLARATION = "I confirm these bank details are correct and authorise payment of my wages to this account.";
 
   const meName = currentUser?.name || "";
 
@@ -1666,6 +1675,24 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
     finally { setBusy(false); }
   };
 
+  const submitBank = async () => {
+    if (!bankName.trim() || !bankSort.trim() || !bankNo.trim() || !bankAgree) return;
+    if (!window.confirm("Submit your bank details with this declaration? Your wages will be paid to this account.")) return;
+    setBankBusy(true);
+    try {
+      const now = new Date().toISOString();
+      await updateOpsTeamMember(employeeId, {
+        bankAccountName: bankName, bankSortCode: bankSort, bankAccountNo: bankNo,
+        bankProvidedAt: now,
+        bankDeclaredByName: meName,
+        bankDeclaration: BANK_DECLARATION,
+        bankDeclaredAt: now,
+      });
+      setBankSaved(true); setBankEditing(false); setBankAgree(false);
+    } catch (err) { alert(`Could not submit bank details: ${err?.message || err}`); }
+    finally { setBankBusy(false); }
+  };
+
   const ack = async (p) => {
     try {
       const updated = await acknowledgePolicy({
@@ -1679,11 +1706,11 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
 
   if (loading) return null;
   const allAcked = ONBOARDING_POLICIES.every(p => acks.some(a => a.policyKey === p.key));
-  if (savedTax && allAcked) {
+  if (savedTax && allAcked && bankSaved) {
     return (
       <div>
         <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">Onboarding</div>
-        <div className="bg-slate-900 border border-emerald-800 rounded-2xl p-4 text-sm text-emerald-300">✓ You've completed your tax declaration and policy acknowledgements. Thank you.</div>
+        <div className="bg-slate-900 border border-emerald-800 rounded-2xl p-4 text-sm text-emerald-300">✓ You've completed your tax declaration, bank details, and policy acknowledgements. Thank you.</div>
       </div>
     );
   }
@@ -1711,6 +1738,33 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
                 <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" checked={studentLoan} onChange={e => setStudentLoan(e.target.checked)}/> Repaying a student loan</label>
               </div>
               <button onClick={saveTax} disabled={busy || !taxStmt} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{busy ? "Saving…" : "Save"}</button>
+            </div>
+          )}
+        </div>
+        {/* Bank details — employee submits their own + declaration */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-sm font-semibold text-slate-200 mb-2">Bank details for wages</div>
+          {bankSaved && !bankEditing ? (
+            <div className="space-y-1">
+              <div className="text-sm text-emerald-300">✓ Submitted. Your wages will be paid to the account ending {(bankNo || "").slice(-4) || "••••"}.</div>
+              <button onClick={() => { setBankEditing(true); setBankAgree(false); }} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 mt-1">Update bank details</button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-[11px] text-slate-500">Enter the account your wages should be paid into. Only HR/payroll can see these details.</div>
+              <div><label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Account holder name</label><input value={bankName} onChange={e => setBankName(e.target.value)} className={inputCls} placeholder="Name on your account"/></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Sort code</label><input value={bankSort} onChange={e => setBankSort(e.target.value)} className={inputCls} placeholder="12-34-56"/></div>
+                <div><label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Account number</label><input value={bankNo} onChange={e => setBankNo(e.target.value)} className={inputCls} placeholder="12345678"/></div>
+              </div>
+              <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer pt-1">
+                <input type="checkbox" checked={bankAgree} onChange={e => setBankAgree(e.target.checked)} className="mt-0.5"/>
+                <span>{BANK_DECLARATION}</span>
+              </label>
+              <div className="flex gap-2">
+                <button onClick={submitBank} disabled={bankBusy || !bankName.trim() || !bankSort.trim() || !bankNo.trim() || !bankAgree} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{bankBusy ? "Submitting…" : "Submit bank details"}</button>
+                {bankEditing && <button onClick={() => setBankEditing(false)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Cancel</button>}
+              </div>
             </div>
           )}
         </div>
@@ -8426,6 +8480,12 @@ function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) 
         ) : (
           <div className="space-y-3">
             <div className="text-[11px] text-amber-400/80 bg-amber-950/20 border border-amber-900/40 rounded-lg p-2">Sensitive. Visible to HR/owner only — never shown to the employee or other staff.</div>
+            {employee.bankDeclaredAt && (
+              <div className="text-[11px] text-emerald-300/90 bg-emerald-950/20 border border-emerald-900 rounded-lg px-2.5 py-2">
+                ✓ Declared by {employee.bankDeclaredByName || "employee"} on {new Date(employee.bankDeclaredAt).toLocaleString("en-GB", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" })}
+                {employee.bankDeclaration && <div className="text-slate-500 italic mt-0.5">"{employee.bankDeclaration}"</div>}
+              </div>
+            )}
             <div><label className={labelCls}>Account holder name</label><input value={bankName} onChange={e => setBankName(e.target.value)} className={inputCls} placeholder="Name on the account"/></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Sort code</label><input value={bankSort} onChange={e => setBankSort(e.target.value)} className={inputCls} placeholder="12-34-56"/></div>

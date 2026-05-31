@@ -487,6 +487,9 @@ function appOpsTeamToDb(m) {
   if (m.bankSortCode    !== undefined) row.bank_sort_code    = m.bankSortCode?.trim() || null;
   if (m.bankAccountNo   !== undefined) row.bank_account_no   = m.bankAccountNo?.trim() || null;
   if (m.bankProvidedAt  !== undefined) row.bank_provided_at  = m.bankProvidedAt || null;
+  if (m.bankDeclaredByName !== undefined) row.bank_declared_by_name = m.bankDeclaredByName || null;
+  if (m.bankDeclaration    !== undefined) row.bank_declaration      = m.bankDeclaration || null;
+  if (m.bankDeclaredAt     !== undefined) row.bank_declared_at      = m.bankDeclaredAt || null;
   return row;
 }
 function dbOpsTeamToApp(m) {
@@ -529,6 +532,9 @@ function dbOpsTeamToApp(m) {
     bankSortCode:    m.bank_sort_code || "",
     bankAccountNo:   m.bank_account_no || "",
     bankProvidedAt:  m.bank_provided_at || null,
+    bankDeclaredByName: m.bank_declared_by_name || null,
+    bankDeclaration:    m.bank_declaration || null,
+    bankDeclaredAt:     m.bank_declared_at || null,
   };
 }
 
