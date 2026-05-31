@@ -19327,6 +19327,7 @@ function SelfFillShell() {
           emergencyContactName: emp.emergencyContactName,
           emergencyContactPhone: emp.emergencyContactPhone,
           emergencyContactRelationship: emp.emergencyContactRelationship,
+          pin: emp.pin || "",
         });
         if (emp.completedAt) setSaved(false); // allow re-edit; show form pre-filled
       })
@@ -19339,6 +19340,7 @@ function SelfFillShell() {
   const submit = async () => {
     setErr("");
     if (!form.firstName?.trim() || !form.lastName?.trim()) { setErr("Please enter your first and last name."); return; }
+    if (form.pin && !/^\d{4,6}$/.test(form.pin)) { setErr("Your PIN must be 4 to 6 digits."); return; }
     setSaving(true);
     try {
       await submitSelfFill(token, form);
@@ -19409,6 +19411,22 @@ function SelfFillShell() {
                 <ApplyField label="Relationship"><input style={applyInputStyle} value={form.emergencyContactRelationship} onChange={e => set("emergencyContactRelationship", e.target.value)}/></ApplyField>
               </div>
             </div>
+          </div>
+          <div style={{ borderTop: "1px solid #1e293b", paddingTop: 14 }}>
+            <div style={{ color: "#cbd5e1", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Choose your clock-in PIN</div>
+            <div style={{ color: "#64748b", fontSize: 12, marginBottom: 8 }}>You'll use this 4–6 digit PIN to clock in and out at the kiosk. Pick something memorable but not obvious.</div>
+            <ApplyField label="PIN (4–6 digits)">
+              <input
+                style={applyInputStyle}
+                inputMode="numeric"
+                value={form.pin || ""}
+                onChange={e => set("pin", e.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="e.g. 4821"
+              />
+            </ApplyField>
+            {form.pin && !/^\d{4,6}$/.test(form.pin) && (
+              <div style={{ color: "#fbbf24", fontSize: 12, marginTop: 4 }}>PIN must be 4 to 6 digits.</div>
+            )}
           </div>
           {err && <div style={{ color: "#f87171", fontSize: 13 }}>{err}</div>}
           <button onClick={submit} disabled={saving} style={{ padding: "14px", borderRadius: 12, background: saving ? "#475569" : "#6366f1", color: "white", border: "none", fontSize: 16, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>{saving ? "Saving…" : "Save my details"}</button>

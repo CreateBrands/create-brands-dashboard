@@ -3439,7 +3439,7 @@ export async function fetchEmployeeBySelfFillToken(token) {
   if (!token) throw new Error("token required");
   const { data, error } = await supabase
     .from("ops_team")
-    .select("id, first_name, last_name, nickname, email, phone, dob, gender, address, legal_status, ni_number, photo_url, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, selffill_token, selffill_completed_at")
+    .select("id, first_name, last_name, nickname, email, phone, dob, gender, address, legal_status, ni_number, photo_url, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, pin, selffill_token, selffill_completed_at")
     .eq("selffill_token", token)
     .maybeSingle();
   if (error) throw error;
@@ -3460,6 +3460,7 @@ export async function fetchEmployeeBySelfFillToken(token) {
     emergencyContactName: data.emergency_contact_name || "",
     emergencyContactPhone: data.emergency_contact_phone || "",
     emergencyContactRelationship: data.emergency_contact_relationship || "",
+    pin: data.pin || "",
     completedAt: data.selffill_completed_at || null,
   };
 }
@@ -3475,9 +3476,26 @@ const SELFFILL_ALLOWED = {
   emergencyContactName: "emergency_contact_name",
   emergencyContactPhone: "emergency_contact_phone",
   emergencyContactRelationship: "emergency_contact_relationship",
+  pin: "pin",
 };
+export async function isPinAvailable(pin, selfToken) {
+  if (!pin) return false;
+  const { data, error } = await supabase
+    .from("ops_team").select("id, selffill_token").eq("pin", pin);
+  if (error) throw error;
+  // Free if nobody else holds it (allow the owner of this token to keep theirs)
+  return !(data || []).some(r => r.selffill_token !== selfToken);
+}
+
 export async function submitSelfFill(token, fields) {
   if (!token) throw new Error("token required");
+  // If a PIN is being set, enforce global uniqueness (the kiosk identifies
+  // people by PIN, so two people cannot share one).
+  if (fields.pin) {
+    if (!/^\d{4,6}$/.test(String(fields.pin))) throw new Error("PIN must be 4 to 6 digits.");
+    const free = await isPinAvailable(String(fields.pin), token);
+    if (!free) throw new Error("That PIN is already in use. Please choose a different one.");
+  }
   const row = { selffill_completed_at: new Date().toISOString() };
   for (const [appKey, dbCol] of Object.entries(SELFFILL_ALLOWED)) {
     if (fields[appKey] !== undefined) {
