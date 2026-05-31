@@ -477,6 +477,16 @@ function appOpsTeamToDb(m) {
   // Slice 7 — probation
   if (m.probationEndDate !== undefined) row.probation_end_date = m.probationEndDate || null;
   if (m.probationStatus  !== undefined) row.probation_status   = m.probationStatus  || "in_progress";
+  // Onboarding — HMRC tax starter checklist
+  if (m.taxStarterStatement !== undefined) row.tax_starter_statement = m.taxStarterStatement || "";
+  if (m.hasP45              !== undefined) row.has_p45               = !!m.hasP45;
+  if (m.studentLoan         !== undefined) row.student_loan          = !!m.studentLoan;
+  if (m.taxCompletedAt      !== undefined) row.tax_completed_at      = m.taxCompletedAt || null;
+  // Onboarding — bank details (owner/HR only; app-gated)
+  if (m.bankAccountName !== undefined) row.bank_account_name = m.bankAccountName?.trim() || null;
+  if (m.bankSortCode    !== undefined) row.bank_sort_code    = m.bankSortCode?.trim() || null;
+  if (m.bankAccountNo   !== undefined) row.bank_account_no   = m.bankAccountNo?.trim() || null;
+  if (m.bankProvidedAt  !== undefined) row.bank_provided_at  = m.bankProvidedAt || null;
   return row;
 }
 function dbOpsTeamToApp(m) {
@@ -509,6 +519,16 @@ function dbOpsTeamToApp(m) {
     // Slice 7 — probation
     probationEndDate: m.probation_end_date || null,
     probationStatus:  m.probation_status   || "in_progress",
+    // Onboarding — HMRC tax
+    taxStarterStatement: m.tax_starter_statement || "",
+    hasP45:              m.has_p45 ?? false,
+    studentLoan:         m.student_loan ?? false,
+    taxCompletedAt:      m.tax_completed_at || null,
+    // Onboarding — bank (owner/HR only; UI must gate display)
+    bankAccountName: m.bank_account_name || "",
+    bankSortCode:    m.bank_sort_code || "",
+    bankAccountNo:   m.bank_account_no || "",
+    bankProvidedAt:  m.bank_provided_at || null,
   };
 }
 
@@ -3248,4 +3268,53 @@ export async function voidContract(id) {
     .select().maybeSingle();
   if (error) throw error;
   return data ? dbEmployeeContractToApp(data) : null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// POLICY ACKNOWLEDGEMENTS (onboarding)
+// ════════════════════════════════════════════════════════════════════════════
+// One row per (employee, policy). The employee ticks to confirm they've read a
+// policy; we record who/when/the statement — same audit shape as signing.
+
+function dbPolicyAckToApp(a) {
+  return {
+    id:                 a.id,
+    employeeId:         a.employee_id,
+    policyKey:          a.policy_key,
+    policyLabel:        a.policy_label,
+    statement:          a.statement || null,
+    acknowledgedByName: a.acknowledged_by_name || null,
+    acknowledgedAt:     a.acknowledged_at,
+  };
+}
+
+export async function fetchPolicyAcknowledgements(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("policy_acknowledgements")
+    .select("*")
+    .eq("employee_id", employeeId);
+  if (error) throw error;
+  return (data || []).map(dbPolicyAckToApp);
+}
+
+// Record an acknowledgement. Upserts on (employee_id, policy_key) so re-ack
+// updates rather than duplicates.
+export async function acknowledgePolicy({ employeeId, policyKey, policyLabel, statement, byName }) {
+  if (!employeeId || !policyKey) throw new Error("employeeId and policyKey required");
+  const row = {
+    id:          `pack-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id: employeeId,
+    policy_key:  policyKey,
+    policy_label: policyLabel || policyKey,
+    statement:   statement || null,
+    acknowledged_by_name: byName || null,
+    acknowledged_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("policy_acknowledgements")
+    .upsert(row, { onConflict: "employee_id,policy_key" })
+    .select().maybeSingle();
+  if (error) throw error;
+  return data ? dbPolicyAckToApp(data) : dbPolicyAckToApp(row);
 }

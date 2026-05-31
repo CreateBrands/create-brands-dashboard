@@ -58,6 +58,7 @@ import {
   archiveTrainingTemplate, instantiateTemplate,
   fetchContractTemplates, createContractTemplate, updateContractTemplate, archiveContractTemplate,
   fetchEmployeeContracts, sendContract, signEmployeeContract, voidContract,
+  fetchPolicyAcknowledgements, acknowledgePolicy,
   // Training progress (trainee consumption + manager verify)
   fetchTrainingProgress, setModuleCompletion, setModuleVerification,
 } from "./supabase";
@@ -1628,6 +1629,113 @@ function SafeMarkdown({ text }) {
   );
 }
 
+// Employee self-service onboarding: their own tax declaration + policy
+// acknowledgements. Bank details are NOT here (owner/HR only). Shown in portal.
+function EmployeeOnboardingSection({ employeeId, currentUser, employee = null }) {
+  const [acks, setAcks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [taxStmt, setTaxStmt] = useState(employee?.taxStarterStatement || "");
+  const [hasP45, setHasP45] = useState(!!employee?.hasP45);
+  const [studentLoan, setStudentLoan] = useState(!!employee?.studentLoan);
+  const [savedTax, setSavedTax] = useState(!!employee?.taxStarterStatement);
+  const [busy, setBusy] = useState(false);
+
+  const meName = currentUser?.name || "";
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPolicyAcknowledgements(employeeId)
+      .then(a => { if (!cancelled) setAcks(a); })
+      .catch(err => console.error("Employee onboarding load failed:", err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  const inputCls = "w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  const saveTax = async () => {
+    if (!taxStmt) return;
+    setBusy(true);
+    try {
+      await updateOpsTeamMember(employeeId, {
+        taxStarterStatement: taxStmt, hasP45, studentLoan,
+        taxCompletedAt: new Date().toISOString(),
+      });
+      setSavedTax(true);
+    } catch (err) { alert(`Could not save: ${err?.message || err}`); }
+    finally { setBusy(false); }
+  };
+
+  const ack = async (p) => {
+    try {
+      const updated = await acknowledgePolicy({
+        employeeId, policyKey: p.key, policyLabel: p.label,
+        statement: "I confirm I have read and understood this policy.",
+        byName: meName,
+      });
+      setAcks(prev => [...prev.filter(a => a.policyKey !== p.key), updated]);
+    } catch (err) { alert(`Could not record: ${err?.message || err}`); }
+  };
+
+  if (loading) return null;
+  const allAcked = ONBOARDING_POLICIES.every(p => acks.some(a => a.policyKey === p.key));
+  if (savedTax && allAcked) {
+    return (
+      <div>
+        <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">Onboarding</div>
+        <div className="bg-slate-900 border border-emerald-800 rounded-2xl p-4 text-sm text-emerald-300">✓ You've completed your tax declaration and policy acknowledgements. Thank you.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-2">Onboarding</div>
+      <div className="space-y-3">
+        {/* Tax */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-sm font-semibold text-slate-200 mb-2">Tax declaration</div>
+          {savedTax ? (
+            <div className="text-sm text-emerald-300">✓ Saved — statement {taxStmt}.</div>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-[11px] text-slate-500">Pick the statement that applies to you (HMRC starter checklist):</div>
+              {TAX_STATEMENTS.map(s => (
+                <label key={s.value} className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input type="radio" name="taxstmt" checked={taxStmt === s.value} onChange={() => setTaxStmt(s.value)} className="mt-0.5"/>
+                  <span>{s.label}</span>
+                </label>
+              ))}
+              <div className="flex gap-6 pt-1">
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" checked={hasP45} onChange={e => setHasP45(e.target.checked)}/> I have a P45</label>
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" checked={studentLoan} onChange={e => setStudentLoan(e.target.checked)}/> Repaying a student loan</label>
+              </div>
+              <button onClick={saveTax} disabled={busy || !taxStmt} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{busy ? "Saving…" : "Save"}</button>
+            </div>
+          )}
+        </div>
+        {/* Policies */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-sm font-semibold text-slate-200 mb-2">Policies to acknowledge</div>
+          <div className="space-y-2">
+            {ONBOARDING_POLICIES.map(p => {
+              const done = acks.some(a => a.policyKey === p.key);
+              return (
+                <div key={p.key} className="flex items-center justify-between gap-3 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                  <span className="text-sm text-slate-200">{p.label}</span>
+                  {done
+                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold flex-shrink-0">✓ Acknowledged</span>
+                    : <button onClick={() => ack(p)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700 flex-shrink-0">I have read this</button>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Contracts sent to an employee — read, sign, and print. Shown in their portal.
 // Also reused (read-only-ish) on the manager profile via ContractsForEmployee.
 function EmployeeContractsSection({ employeeId, currentUser, managerView = false, asPage = false }) {
@@ -1966,6 +2074,9 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
           </div>
         )}
 
+        {/* Employee self-service onboarding: tax + policy acknowledgements */}
+        <EmployeeOnboardingSection employeeId={employeeId} currentUser={currentUser} employee={(opsTeam || []).find(m => m.id === employeeId)}/>
+
         {/* Contracts sent to this employee for signing */}
         <EmployeeContractsSection employeeId={employeeId} currentUser={currentUser}/>
 
@@ -2224,11 +2335,18 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
           )}
 
           {activeView === "emp-contracts" && (
-            <EmployeeContractsSection
-              employeeId={currentUser.opsTeamMemberId || currentUser.id}
-              currentUser={currentUser}
-              asPage
-            />
+            <div className="space-y-6">
+              <EmployeeOnboardingSection
+                employeeId={currentUser.opsTeamMemberId || currentUser.id}
+                currentUser={currentUser}
+                employee={(opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id))}
+              />
+              <EmployeeContractsSection
+                employeeId={currentUser.opsTeamMemberId || currentUser.id}
+                currentUser={currentUser}
+                asPage
+              />
+            </div>
           )}
         </main>
       </div>
@@ -8043,6 +8161,7 @@ function EmployeeProfileView({
         {[
           { key: "personal",    label: "Personal & HR" },
           { key: "job",         label: "Job & Pay" },
+          { key: "onboarding",  label: "Onboarding" },
           { key: "certs",       label: "Certifications" },
           { key: "documents",   label: "Documents" },
           { key: "application", label: linkedApp ? "Linked Application" : "Application (none)" },
@@ -8109,6 +8228,15 @@ function EmployeeProfileView({
         />
       )}
 
+      {tab === "onboarding" && (
+        <OnboardingTab
+          employee={employee}
+          employeeId={employeeId}
+          currentUser={currentUser}
+          onUpdateEmployee={onUpdateEmployee}
+        />
+      )}
+
       {tab === "documents" && (
         <div className="space-y-6">
           <DocumentsTab
@@ -8135,6 +8263,207 @@ function EmployeeProfileView({
 }
 
 // Tab 1 — Personal & HR
+// Required onboarding policies (acknowledged by the employee). Allergen matters
+// for a food business; keep this list short and meaningful.
+const ONBOARDING_POLICIES = [
+  { key: "handbook",     label: "Employee handbook" },
+  { key: "allergen",     label: "Allergen & food safety policy" },
+  { key: "health_safety",label: "Health & safety policy" },
+  { key: "gdpr",         label: "Data protection (GDPR) policy" },
+];
+
+const TAX_STATEMENTS = [
+  { value: "A", label: "A — First job since 6 April, no other income or pension" },
+  { value: "B", label: "B — Only/main job now, but had another job or taxable benefit since 6 April" },
+  { value: "C", label: "C — Have another job or receive a pension" },
+];
+
+// Manager/HR onboarding management for one employee: completion gate, tax,
+// bank (owner/HR only), policy acknowledgements.
+function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) {
+  const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+  const [acks, setAcks] = useState([]);
+  const [contracts, setContracts] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [savingTax, setSavingTax] = useState(false);
+  const [savingBank, setSavingBank] = useState(false);
+  const [showBank, setShowBank] = useState(false);
+
+  // Tax form
+  const [taxStmt, setTaxStmt] = useState(employee.taxStarterStatement || "");
+  const [hasP45, setHasP45] = useState(!!employee.hasP45);
+  const [studentLoan, setStudentLoan] = useState(!!employee.studentLoan);
+  // Bank form
+  const [bankName, setBankName] = useState(employee.bankAccountName || "");
+  const [bankSort, setBankSort] = useState(employee.bankSortCode || "");
+  const [bankNo, setBankNo] = useState(employee.bankAccountNo || "");
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetchPolicyAcknowledgements(employeeId),
+      fetchEmployeeContracts(employeeId),
+      fetchEmployeeDocuments(employeeId),
+    ]).then(([a, c, d]) => { if (!cancelled) { setAcks(a); setContracts(c); setDocs(d); } })
+      .catch(err => console.error("Onboarding load failed:", err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
+  const inputCls = "w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const sectionCls = "text-[11px] text-slate-400 font-semibold uppercase tracking-wider mb-3";
+
+  // ── Completion gate ──
+  const bySlot = {};
+  docs.forEach(d => { if (d.requiredDocKey) bySlot[d.requiredDocKey] = d; });
+  const docsApproved = REQUIRED_DOC_SLOTS.filter(s => {
+    const doc = bySlot[s.key];
+    return s.kind === "sign" ? doc?.reviewStage === "signed" : doc?.reviewStage === "hr_approved";
+  }).length === REQUIRED_DOC_SLOTS.length;
+  const contractSigned = contracts.some(c => c.status === "signed");
+  const taxDone = !!employee.taxStarterStatement;
+  const bankDone = !!employee.bankProvidedAt;
+  const policiesDone = ONBOARDING_POLICIES.every(p => acks.some(a => a.policyKey === p.key));
+  const checks = [
+    { label: "Required documents approved", done: docsApproved },
+    { label: "Contract signed",             done: contractSigned },
+    { label: "Tax checklist completed",     done: taxDone },
+    { label: "Bank details provided",       done: bankDone },
+    { label: "Policies acknowledged",       done: policiesDone },
+  ];
+  const allDone = checks.every(c => c.done);
+
+  const saveTax = async () => {
+    setSavingTax(true);
+    try {
+      await onUpdateEmployee({
+        id: employee.id,
+        taxStarterStatement: taxStmt,
+        hasP45, studentLoan,
+        taxCompletedAt: taxStmt ? new Date().toISOString() : null,
+      });
+    } catch (err) { alert(`Could not save tax info: ${err?.message || err}`); }
+    finally { setSavingTax(false); }
+  };
+
+  const saveBank = async () => {
+    setSavingBank(true);
+    try {
+      const provided = !!(bankName.trim() && bankSort.trim() && bankNo.trim());
+      await onUpdateEmployee({
+        id: employee.id,
+        bankAccountName: bankName, bankSortCode: bankSort, bankAccountNo: bankNo,
+        bankProvidedAt: provided ? new Date().toISOString() : null,
+      });
+    } catch (err) { alert(`Could not save bank details: ${err?.message || err}`); }
+    finally { setSavingBank(false); }
+  };
+
+  const ackPolicy = async (p) => {
+    try {
+      const updated = await acknowledgePolicy({
+        employeeId, policyKey: p.key, policyLabel: p.label,
+        statement: `Acknowledged on behalf by ${currentUser?.name || "manager"}`,
+        byName: currentUser?.name || null,
+      });
+      setAcks(prev => [...prev.filter(a => a.policyKey !== p.key), updated]);
+    } catch (err) { alert(`Could not record: ${err?.message || err}`); }
+  };
+
+  if (loading) return <div className="text-sm text-slate-500 text-center py-8">Loading onboarding…</div>;
+
+  return (
+    <div className="space-y-5">
+      {/* Completion gate */}
+      <div className={`rounded-2xl border p-4 ${allDone ? "bg-emerald-950/30 border-emerald-800" : "bg-slate-900 border-slate-800"}`}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold text-slate-200">{allDone ? "✓ Onboarding complete" : "Onboarding progress"}</h3>
+          <span className="text-xs text-slate-400">{checks.filter(c => c.done).length}/{checks.length}</span>
+        </div>
+        <div className="space-y-1.5">
+          {checks.map(c => (
+            <div key={c.label} className="flex items-center gap-2 text-sm">
+              <span className={c.done ? "text-emerald-400" : "text-slate-600"}>{c.done ? "✓" : "○"}</span>
+              <span className={c.done ? "text-slate-300" : "text-slate-500"}>{c.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tax */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div className={sectionCls}>HMRC starter checklist</div>
+        <div className="space-y-3">
+          <div>
+            <label className={labelCls}>Starter declaration</label>
+            <select value={taxStmt} onChange={e => setTaxStmt(e.target.value)} className={inputCls}>
+              <option value="">— Select statement —</option>
+              {TAX_STATEMENTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-6">
+            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer"><input type="checkbox" checked={hasP45} onChange={e => setHasP45(e.target.checked)}/> Provided a P45</label>
+            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer"><input type="checkbox" checked={studentLoan} onChange={e => setStudentLoan(e.target.checked)}/> Repaying a student loan</label>
+          </div>
+          <button onClick={saveTax} disabled={savingTax} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{savingTax ? "Saving…" : "Save tax info"}</button>
+        </div>
+      </div>
+
+      {/* Bank — owner/HR only */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div className={sectionCls}>Bank details {!isHqOrOwner && <span className="text-slate-600 normal-case font-normal">· owner/HR only</span>}</div>
+        {!isHqOrOwner ? (
+          <div className="text-sm text-slate-500">
+            {employee.bankProvidedAt ? "✓ Bank details on file (visible to HR/owner only)." : "Not yet provided. Only HR/owner can enter or view bank details."}
+          </div>
+        ) : !showBank ? (
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-slate-400">{employee.bankProvidedAt ? "✓ Bank details on file." : "Not yet provided."}</div>
+            <button onClick={() => setShowBank(true)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold hover:bg-slate-700">{employee.bankProvidedAt ? "View / edit" : "Add bank details"}</button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-[11px] text-amber-400/80 bg-amber-950/20 border border-amber-900/40 rounded-lg p-2">Sensitive. Visible to HR/owner only — never shown to the employee or other staff.</div>
+            <div><label className={labelCls}>Account holder name</label><input value={bankName} onChange={e => setBankName(e.target.value)} className={inputCls} placeholder="Name on the account"/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Sort code</label><input value={bankSort} onChange={e => setBankSort(e.target.value)} className={inputCls} placeholder="12-34-56"/></div>
+              <div><label className={labelCls}>Account number</label><input value={bankNo} onChange={e => setBankNo(e.target.value)} className={inputCls} placeholder="12345678"/></div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={saveBank} disabled={savingBank} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">{savingBank ? "Saving…" : "Save bank details"}</button>
+              <button onClick={() => setShowBank(false)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Close</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Policy acknowledgements */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div className={sectionCls}>Policy acknowledgements</div>
+        <div className="space-y-2">
+          {ONBOARDING_POLICIES.map(p => {
+            const ack = acks.find(a => a.policyKey === p.key);
+            return (
+              <div key={p.key} className="flex items-center justify-between gap-3 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-sm text-slate-200">{p.label}</div>
+                  {ack && <div className="text-[10px] text-emerald-400/70 mt-0.5">✓ Acknowledged {ack.acknowledgedAt ? new Date(ack.acknowledgedAt).toLocaleDateString("en-GB") : ""}{ack.acknowledgedByName ? ` · ${ack.acknowledgedByName}` : ""}</div>}
+                </div>
+                {ack
+                  ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold flex-shrink-0">✓ Done</span>
+                  : <button onClick={() => ackPolicy(p)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700 flex-shrink-0">Mark acknowledged</button>}
+              </div>
+            );
+          })}
+        </div>
+        <div className="text-[10px] text-slate-600 mt-2">Employees can also acknowledge these themselves in their portal. Recording here is for in-person sign-off.</div>
+      </div>
+    </div>
+  );
+}
+
 function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, saving }) {
   const set = (k, v) => setEditHr(s => ({ ...s, [k]: v }));
   const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
