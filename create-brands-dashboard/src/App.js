@@ -16679,12 +16679,16 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 // KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], onPunchIn, onPunchOut, onLogout }) {
+function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], assignments = [], checklists = [], cleaningTasks = [], storeRoles = [], onPunchIn, onPunchOut, onLogout }) {
   const [pin,         setPin]       = useState("");
   const [matched,     setMatched]   = useState(null); // ops_team member
   const [error,       setError]     = useState("");
   const [shake,       setShake]     = useState(false);
   const [lastAction,  setLastAction]= useState(null); // { type:"in"|"out", name, time }
+  // Stage 1 — post-punch menu + task viewing.
+  // overlayView: null | "menu" (clocked-in 3-option) | "tasks" (task list)
+  const [overlayView, setOverlayView] = useState(null);
+  const [breakMsg, setBreakMsg] = useState("");
   const [clock,       setClock]     = useState(new Date());
   const [submitting,  setSubmitting]= useState(false);
   const submittingRef = useRef(false);
@@ -16760,15 +16764,19 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     } catch { resolve(null); }
   });
 
-  // Auto-clear last action message after 5 seconds
+  // Auto-clear last action message. Skipped while a menu/tasks overlay is open
+  // (the employee is mid-interaction). Punch-in gets a longer window so they
+  // can tap "View tasks".
   useEffect(() => {
     if (!lastAction) return;
+    if (overlayView) return; // don't clear out from under an open overlay
+    const delay = lastAction.type === "in" ? 10000 : 5000;
     const t = setTimeout(() => {
-      setLastAction(null); setPin(""); setMatched(null);
+      setLastAction(null); setPin(""); setMatched(null); setBreakMsg("");
       submittingRef.current = false; setSubmitting(false);
-    }, 5000);
+    }, delay);
     return () => clearTimeout(t);
-  }, [lastAction]);
+  }, [lastAction, overlayView]);
 
   const handleDigit = (d) => {
     if (matched) return; // already confirmed — waiting for auto-clear
@@ -16804,6 +16812,17 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       setTimeout(() => { setShake(false); setPin(""); }, 600);
       return;
     }
+    // If already clocked in, show the menu (break / tasks / punch out) instead
+    // of punching out immediately. Stage 1.
+    const todayStrNow = toLocalDate();
+    const alreadyOpen = punchRecords.find(r => r.employeeId === matched.id && r.date === todayStrNow && r.status === "open");
+    if (alreadyOpen) { setOverlayView("menu"); return; }
+    await doPunch();
+  };
+
+  const doPunch = async () => {
+    if (submittingRef.current) return;
+    if (!matched) return;
     submittingRef.current = true;
     setSubmitting(true);
 
@@ -16916,6 +16935,40 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     r.employeeId === matched.id && r.date === todayStr && r.status === "open"
   ) : null;
   const isClockedIn = !!openRecord;
+
+  // Stage 1 — resolve the matched employee's tasks for today: assignments
+  // targeted at them personally (personId) OR at any of their roles, at this
+  // store, due today. Read-only list for now (marking is Stage 2).
+  const todaysTasks = useMemo(() => {
+    if (!matched) return [];
+    const myRoleIds = (matched.roleIds && matched.roleIds.length) ? matched.roleIds : (matched.roleId ? [matched.roleId] : []);
+    const myRoleNames = myRoleIds.map(id => storeRoles.find(r => r.id === id)?.name).filter(Boolean);
+    const dow = new Date().getDay(); // 0=Sun
+    const todayISO = toLocalDate();
+    const dueToday = (a) => {
+      if (a.freq === "daily" || !a.freq) return true;
+      if (a.freq === "once") return a.date === todayISO;
+      if (a.freq === "weekly") return Number(a.weekday) === dow;
+      if (a.freq === "custom") return (a.customDays || []).map(Number).includes(dow);
+      return true;
+    };
+    return (assignments || []).filter(a => {
+      // Scope to this kiosk's store (or brand-legacy)
+      const storeOk = a.storeId ? a.storeId === currentStore?.id : true;
+      if (!storeOk) return false;
+      const mine = (a.personId && a.personId === matched.id) ||
+                   (a.role && myRoleNames.includes(a.role));
+      if (!mine) return false;
+      return dueToday(a);
+    }).map(a => {
+      // Resolve a friendly task label from checklist or cleaning task
+      const cl = checklists.find(c => c.id === a.taskId);
+      const clean = cleaningTasks.find(c => c.id === a.taskId);
+      const label = cl?.name || clean?.name || a.notes || a.type || "Task";
+      const items = cl?.items || [];
+      return { id: a.id, label, items, winStart: a.winStart, winEnd: a.winEnd, priority: a.priority, notes: a.notes };
+    });
+  }, [matched, assignments, checklists, cleaningTasks, storeRoles, currentStore]);
 
   // Q10: small store name in corner. Long-press (1.5s) starts a logout
   // confirmation — manager can switch tablet to a different store.
@@ -17131,7 +17184,73 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 )}
               </div>
             )}
+            {successIsIn && todaysTasks.length > 0 && (
+              <button onClick={() => { setLastAction(null); setOverlayView("tasks"); }}
+                className="w-full py-4 rounded-2xl bg-emerald-600 text-white text-lg font-bold hover:bg-emerald-500">
+                View today's tasks ({todaysTasks.length})
+              </button>
+            )}
             <div className="text-slate-600 text-sm">Returning to kiosk in a moment…</div>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 1 — clocked-in menu: break / tasks / punch out */}
+      {overlayView === "menu" && matched && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center p-8 z-50 bg-slate-950">
+          <div className="text-center space-y-6 max-w-sm w-full">
+            <div>
+              <div className="text-2xl font-black text-white">{matched.firstName} {matched.lastName}</div>
+              <div className="text-sm text-slate-500 mt-1">You're clocked in{openRecord ? ` since ${new Date(openRecord.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}` : ""}. What would you like to do?</div>
+            </div>
+            {breakMsg && <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-4 py-2 text-amber-300 text-sm">{breakMsg}</div>}
+            <div className="space-y-3">
+              <button onClick={() => { setBreakMsg("Break feature is coming soon."); }}
+                className="w-full py-4 rounded-2xl bg-slate-800 text-white text-lg font-bold hover:bg-slate-700">☕ Go on a break</button>
+              <button onClick={() => setOverlayView("tasks")}
+                className="w-full py-4 rounded-2xl bg-indigo-600 text-white text-lg font-bold hover:bg-indigo-500">✓ View today's tasks{todaysTasks.length ? ` (${todaysTasks.length})` : ""}</button>
+              <button onClick={() => { setOverlayView(null); doPunch(); }}
+                className="w-full py-4 rounded-2xl bg-red-600 text-white text-lg font-bold hover:bg-red-500">⏹ Punch out</button>
+            </div>
+            <button onClick={() => { setOverlayView(null); setBreakMsg(""); setPin(""); setMatched(null); }}
+              className="text-slate-500 text-sm hover:text-slate-300">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 1 — task list (read-only for now; marking is Stage 2) */}
+      {overlayView === "tasks" && matched && (
+        <div className="absolute inset-0 flex flex-col p-6 z-50 bg-slate-950 overflow-y-auto">
+          <div className="max-w-md w-full mx-auto space-y-4">
+            <div className="text-center">
+              <div className="text-2xl font-black text-white">Today's tasks</div>
+              <div className="text-sm text-slate-500">{matched.firstName} · {todaysTasks.length} {todaysTasks.length === 1 ? "task" : "tasks"}</div>
+            </div>
+            {todaysTasks.length === 0 ? (
+              <div className="text-center text-slate-500 py-10">No tasks assigned to you today.</div>
+            ) : (
+              <div className="space-y-2">
+                {todaysTasks.map(t => (
+                  <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-white font-semibold">{t.label}</div>
+                      {(t.winStart || t.winEnd) && <div className="text-[11px] text-slate-500">{t.winStart || ""}{t.winStart && t.winEnd ? "–" : ""}{t.winEnd || ""}</div>}
+                    </div>
+                    {t.items && t.items.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {t.items.map(it => (
+                          <li key={it.id} className="text-sm text-slate-400 flex items-start gap-2"><span className="text-slate-600 mt-0.5">○</span> {it.text}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {t.notes && !t.items?.length && <div className="text-sm text-slate-500 mt-1">{t.notes}</div>}
+                  </div>
+                ))}
+                <div className="text-[11px] text-slate-600 text-center pt-1">Marking tasks complete from the kiosk is coming soon. For now, complete them in the app.</div>
+              </div>
+            )}
+            <button onClick={() => { setOverlayView(null); setPin(""); setMatched(null); setBreakMsg(""); }}
+              className="w-full py-4 rounded-2xl bg-slate-800 text-white text-lg font-bold hover:bg-slate-700 mt-2">Done</button>
           </div>
         </div>
       )}
@@ -18168,6 +18287,10 @@ function KioskShell() {
   const [stores,       setStores]       = useState([]);
   const [punchRecords, setPunchRecords] = useState([]);
   const [schedules,    setSchedules]    = useState([]);
+  const [assignments,  setAssignments]  = useState([]);
+  const [checklists,   setChecklists]   = useState([]);
+  const [cleaningTasks, setCleaningTasks] = useState([]);
+  const [storeRoles,   setStoreRoles]   = useState([]);
   const [ready,        setReady]        = useState(false);
   // Kiosk registration: which store does this tablet currently represent?
   // null = needs to register; set = locked to that store.
@@ -18175,10 +18298,15 @@ function KioskShell() {
   const inFlightRef = useRef(new Set()); // employees currently being punched in
 
   useEffect(() => {
-    Promise.all([fetchOpsTeam(), fetchBrands(), fetchStores(), fetchPunchRecords(), fetchSchedules()])
-      .then(([team, br, sts, punches, scheds]) => {
+    Promise.all([fetchOpsTeam(), fetchBrands(), fetchStores(), fetchPunchRecords(), fetchSchedules(),
+      fetchAssignments().catch(() => []), fetchChecklists().catch(() => []), fetchCleaningTasks().catch(() => []), fetchStoreRoles().catch(() => [])])
+      .then(([team, br, sts, punches, scheds, assigns, cls, clean, sroles]) => {
         setOpsTeam(team); setBrands(br); setStores(sts);
         setPunchRecords(punches); setSchedules(scheds || []);
+        setAssignments(assigns || []);
+        setChecklists(cls || []);
+        setCleaningTasks(clean || []);
+        setStoreRoles(sroles || []);
         // Hydrate any previously-registered storeId from localStorage,
         // but only if that store still exists. (Store may have been deleted
         // or archived since tablet was last used.)
@@ -18338,6 +18466,10 @@ function KioskShell() {
       currentStore={currentStore}
       punchRecords={punchRecords}
       schedules={schedules}
+      assignments={assignments}
+      checklists={checklists}
+      cleaningTasks={cleaningTasks}
+      storeRoles={storeRoles}
       onPunchIn={handlePunchIn}
       onPunchOut={handlePunchOut}
       onLogout={handleLogout}
