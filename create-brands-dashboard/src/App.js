@@ -4517,6 +4517,316 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
   );
 }
 
+// ─── Payroll Run screen (owner-only; Admin → Payroll) ─────────────────────────
+// The central calculation + export. Pick a custom date range; for every active
+// employee it sums APPROVED punch hours, resolves the rate per punch (fixed or
+// minimum-wage by age on the work date), computes gross, applies each person's
+// default bank-hours split (overridable per row), and shows the working. Saves
+// each row to payroll_periods and exports a clean Excel package for the accountant
+// (loans are NEVER included). Loudly flags any employee whose rate can't be
+// resolved (e.g. minimum-wage with no configured band rate or missing DOB).
+function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [running, setRunning] = useState(false);
+  const [rows, setRows] = useState(null);   // computed rows, or null before a run
+  const [err, setErr] = useState("");
+  const [savedMsg, setSavedMsg] = useState("");
+  const [overlapWarn, setOverlapWarn] = useState("");
+
+  const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
+  const brandName = (id) => brands?.find(b => b.id === id)?.name || "";
+  const storeName = (id) => {
+    const s = stores?.find(x => x.id === id);
+    return s ? (s.shortName || s.name) : "";
+  };
+
+  const activeEmployees = useMemo(
+    () => (opsTeam || []).filter(e => e.status !== "archived" && !e.archivedAt),
+    [opsTeam]
+  );
+
+  const run = async () => {
+    setErr(""); setSavedMsg(""); setOverlapWarn("");
+    if (!from || !to) return setErr("Pick both a start and end date.");
+    if (new Date(from) > new Date(to)) return setErr("Start date must be on or before end date.");
+    setRunning(true);
+    try {
+      const [punches, rates, existing] = await Promise.all([
+        fetchPunchRecords({ from, to }),
+        fetchMinimumWageRates(),
+        fetchPayrollPeriods({ periodStart: from, periodEnd: to }),
+      ]);
+
+      if (existing && existing.length) {
+        setOverlapWarn(`A payroll run for ${from} → ${to} was already saved (${existing.length} record${existing.length > 1 ? "s" : ""}). Saving again will overwrite those records.`);
+      }
+
+      const computed = activeEmployees.map(emp => {
+        // approved punches for this employee in range
+        const empPunches = (punches || []).filter(
+          p => p.employeeId === emp.id && p.approved && p.hoursWorked
+        );
+        let totalHours = 0, totalPay = 0;
+        const lines = [];
+        let rowError = "";
+        for (const p of empPunches) {
+          const hrs = Number(p.hoursWorked) || 0;
+          const res = resolveHourlyRate(emp, p.date, rates);
+          if (res.error) {
+            rowError = res.error;
+            continue;
+          }
+          const pay = hrs * res.rate;
+          totalHours += hrs;
+          totalPay += pay;
+          // accumulate working by (rate, basis, band)
+          const key = `${res.rate}|${res.band || "fixed"}`;
+          const existingLine = lines.find(l => l.key === key);
+          if (existingLine) { existingLine.hours += hrs; existingLine.pay += pay; }
+          else lines.push({ key, hours: hrs, pay, rate: res.rate, band: res.band, basis: res.basis, age: res.age });
+        }
+        // default split: bank hours from employee default (capped at total), cash = remainder
+        const defBank = emp.defaultBankHours != null ? Number(emp.defaultBankHours) : totalHours;
+        const bankHours = Math.min(defBank, totalHours);
+        const cashHours = Math.max(0, totalHours - bankHours);
+        return {
+          employeeId: emp.id,
+          name: `${emp.firstName} ${emp.lastName || ""}`.trim(),
+          niNumber: emp.niNumber || "",
+          dob: emp.dob || "",
+          under18: emp.dob ? (ageOnDate(emp.dob, to) < 18) : false,
+          basis: emp.payBasis || "fixed",
+          totalHours, totalPay,
+          bankHours, cashHours,
+          payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
+          accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
+          lines, rowError,
+        };
+      });
+      setRows(computed);
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // Per-row edits (override the default bank split + locations before saving)
+  const updateRow = (employeeId, patch) => {
+    setRows(rs => rs.map(r => {
+      if (r.employeeId !== employeeId) return r;
+      const next = { ...r, ...patch };
+      if (patch.bankHours != null) {
+        const bh = Math.max(0, Math.min(Number(patch.bankHours) || 0, r.totalHours));
+        next.bankHours = bh;
+        next.cashHours = Math.max(0, r.totalHours - bh);
+      }
+      return next;
+    }));
+  };
+
+  const proportion = (row, hours) => (row.totalHours > 0 ? (hours / row.totalHours) * row.totalPay : 0);
+
+  const flagged = rows ? rows.filter(r => r.rowError) : [];
+
+  const saveRun = async () => {
+    setErr(""); setSavedMsg("");
+    if (!rows) return;
+    const toSave = rows.filter(r => !r.rowError);   // never save rows we couldn't compute
+    try {
+      for (const r of toSave) {
+        await upsertPayrollPeriod({
+          brand_id: null,
+          employee_id: r.employeeId,
+          period_start: from,
+          period_end: to,
+          total_hours: r.totalHours,
+          total_pay: r.totalPay,
+          bank_hours: r.bankHours,
+          cash_hours: r.cashHours,
+          payroll_location: r.payrollLocation || null,
+          accounting_location: r.accountingLocation || null,
+          rate_snapshot: r.lines.map(l => ({ hours: l.hours, rate: l.rate, band: l.band, basis: l.basis })),
+        });
+      }
+      setSavedMsg(`Saved ${toSave.length} payroll record${toSave.length === 1 ? "" : "s"} for ${from} → ${to}.${flagged.length ? ` ${flagged.length} flagged row(s) were NOT saved.` : ""}`);
+    } catch (e) {
+      setErr(e?.message || String(e));
+    }
+  };
+
+  const exportExcel = () => {
+    if (!rows) return;
+    const exportable = rows.filter(r => !r.rowError);
+    const header = [
+      "Employee", "NI Number", "DOB", "Under 18",
+      "Pay basis", "Total hours", "Gross pay (£)",
+      "Bank hours", "Bank amount (£)", "Cash hours", "Cash amount (£)",
+      "Payroll location", "Accounting location",
+    ];
+    const aoa = [header];
+    for (const r of exportable) {
+      aoa.push([
+        r.name, r.niNumber, r.dob, r.under18 ? "YES" : "",
+        r.basis === "minimum_wage" ? "Minimum wage" : "Fixed",
+        Number(r.totalHours.toFixed(2)), Number(r.totalPay.toFixed(2)),
+        Number(r.bankHours.toFixed(2)), Number(proportion(r, r.bankHours).toFixed(2)),
+        Number(r.cashHours.toFixed(2)), Number(proportion(r, r.cashHours).toFixed(2)),
+        storeName(r.payrollLocation), storeName(r.accountingLocation),
+      ]);
+    }
+    // Totals row
+    const n = exportable.length;
+    if (n) {
+      const startRow = 2;             // data starts at Excel row 2
+      const endRow = startRow + n - 1;
+      aoa.push([
+        "TOTAL", "", "", "", "",
+        { f: `SUM(F${startRow}:F${endRow})` }, { f: `SUM(G${startRow}:G${endRow})` },
+        { f: `SUM(H${startRow}:H${endRow})` }, { f: `SUM(I${startRow}:I${endRow})` },
+        { f: `SUM(J${startRow}:J${endRow})` }, { f: `SUM(K${startRow}:K${endRow})` },
+        "", "",
+      ]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [
+      { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 9 }, { wch: 13 },
+      { wch: 11 }, { wch: 13 }, { wch: 11 }, { wch: 14 }, { wch: 11 }, { wch: 14 },
+      { wch: 18 }, { wch: 18 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Payroll");
+    XLSX.writeFile(wb, `payroll_${from}_to_${to}.xlsx`);
+  };
+
+  const totalGross = rows ? rows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
+
+  return (
+    <div className="space-y-5">
+      <div className="text-xs text-slate-500">
+        Pick a date range, run the calculation, review, then save &amp; export for the accountant.
+        Pay rate comes from each employee's basis (Job &amp; Pay tab); the bank/cash split defaults
+        from their profile and can be overridden per row here. Loans are never included.
+      </div>
+
+      {/* Controls */}
+      <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Period start</label>
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Period end</label>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} />
+        </div>
+        <button onClick={run} disabled={running}
+          className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
+          {running ? "Calculating…" : "Run payroll"}
+        </button>
+        {rows && (
+          <>
+            <button onClick={saveRun}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
+              Save run
+            </button>
+            <button onClick={exportExcel}
+              className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
+              <Download size={14} /> Export Excel
+            </button>
+          </>
+        )}
+      </div>
+
+      {err && <div className="text-sm text-red-400 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-2">{err}</div>}
+      {overlapWarn && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-xl px-4 py-2">{overlapWarn}</div>}
+      {savedMsg && <div className="text-sm text-emerald-300 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 py-2">{savedMsg}</div>}
+
+      {flagged.length > 0 && (
+        <div className="text-xs text-red-300 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-3">
+          <strong>{flagged.length} employee(s) could not be calculated</strong> and will be excluded from save/export:
+          <ul className="mt-1 list-disc list-inside space-y-0.5">
+            {flagged.map(r => <li key={r.employeeId}>{r.name}: {r.rowError}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {rows && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-slate-400">{rows.filter(r => !r.rowError).length} employees · total gross <span className="font-bold text-slate-200">{fmtGBP(totalGross)}</span></div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-800">
+                  <th className="py-2 pr-3">Employee</th>
+                  <th className="py-2 pr-3">Hours</th>
+                  <th className="py-2 pr-3">Gross</th>
+                  <th className="py-2 pr-3">Bank hrs</th>
+                  <th className="py-2 pr-3">Cash hrs</th>
+                  <th className="py-2 pr-3">Payroll loc</th>
+                  <th className="py-2 pr-3">Acct loc</th>
+                  <th className="py-2 pr-3">Working</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.employeeId} className={`border-b border-slate-800/60 ${r.rowError ? "bg-red-950/20" : ""}`}>
+                    <td className="py-2 pr-3 font-medium text-slate-200">
+                      {r.name}
+                      {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">U18</span>}
+                    </td>
+                    {r.rowError ? (
+                      <td colSpan={7} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
+                    ) : (
+                      <>
+                        <td className="py-2 pr-3 text-slate-300">{r.totalHours.toFixed(2)}</td>
+                        <td className="py-2 pr-3 text-slate-100 font-semibold">{fmtGBP(r.totalPay)}</td>
+                        <td className="py-2 pr-3">
+                          <input type="number" step="0.25" min="0" max={r.totalHours} value={r.bankHours}
+                            onChange={e => updateRow(r.employeeId, { bankHours: e.target.value })}
+                            className="w-20 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
+                          <div className="text-[10px] text-slate-600">{fmtGBP(proportion(r, r.bankHours))}</div>
+                        </td>
+                        <td className="py-2 pr-3 text-slate-300">
+                          {r.cashHours.toFixed(2)}
+                          <div className="text-[10px] text-slate-600">{fmtGBP(proportion(r, r.cashHours))}</div>
+                        </td>
+                        <td className="py-2 pr-3">
+                          <select value={r.payrollLocation} onChange={e => updateRow(r.employeeId, { payrollLocation: e.target.value })}
+                            className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
+                            <option value="">—</option>
+                            {stores.filter(s => !s.archivedAt).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
+                          </select>
+                        </td>
+                        <td className="py-2 pr-3">
+                          <select value={r.accountingLocation} onChange={e => updateRow(r.employeeId, { accountingLocation: e.target.value })}
+                            className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
+                            <option value="">—</option>
+                            {stores.filter(s => !s.archivedAt).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
+                          </select>
+                        </td>
+                        <td className="py-2 pr-3 text-[10px] text-slate-500">
+                          {r.lines.map((l, i) => (
+                            <div key={i}>{l.hours.toFixed(2)}h @ {fmtGBP(l.rate)}{l.band ? ` [${l.band.replace("_", "–")}${l.age != null ? `, age ${l.age}` : ""}]` : " [fixed]"}</div>
+                          ))}
+                          {r.lines.length === 0 && <span className="text-slate-600">no approved hours</span>}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Minimum Wage Admin (owner-only; under Admin Panel) ───────────────────────
 // Manage UK NMW/NLW rates by age band, effective-dated. Owner enters figures
 // from gov.uk; never overwrite — add a new row each April so history is kept and
@@ -4659,6 +4969,7 @@ function MinimumWageAdmin() {
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
+  opsTeam = [], currentUser,
   onAddBrand, onUpdateBrand, onDeleteBrand,
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
@@ -4677,6 +4988,7 @@ function AdminPanelView({
     {key:"managers", label:"Managers & Access"},
     {key:"kpis",     label:"KPI Targets"},
     {key:"minwage",  label:"Minimum Wage"},
+    {key:"payroll",  label:"Payroll"},
   ];
 
   return (
@@ -4780,6 +5092,10 @@ function AdminPanelView({
 
       {tab==="minwage"&&(
         <MinimumWageAdmin />
+      )}
+
+      {tab==="payroll"&&(
+        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -21006,6 +21322,7 @@ export default function App() {
             {effectiveActiveView === "admin"          && currentUser.role === "owner" && <AdminPanelView
               brands={brands} users={users} entries={entries}
               stores={stores} flipdishStores={flipdishStores}
+              opsTeam={opsTeam} currentUser={currentUser}
               onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand}
               onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser}
               onAddStore={addStore} onUpdateStore={updateStoreRow} onDeleteStore={deleteStoreRow}
