@@ -484,6 +484,11 @@ function appOpsTeamToDb(m) {
   // Payroll — how the pay RATE is determined: 'minimum_wage' (live NMW lookup by
   // age on work date) or 'fixed' (use hourly_rate). Defaults handled in DB.
   if (m.payBasis      !== undefined) row.pay_basis     = m.payBasis || "fixed";
+  // Payroll — per-employee DEFAULT attributes (read by the calc screen; actual
+  // per-run values are saved in payroll_periods).
+  if (m.defaultBankHours   !== undefined) row.default_bank_hours  = (m.defaultBankHours === "" || m.defaultBankHours == null) ? null : Number(m.defaultBankHours);
+  if (m.payrollLocation    !== undefined) row.payroll_location    = m.payrollLocation || null;
+  if (m.accountingLocation !== undefined) row.accounting_location = m.accountingLocation || null;
   // Slice 7 — emergency contact (single contact per employee)
   if (m.emergencyContactName         !== undefined) row.emergency_contact_name         = m.emergencyContactName?.trim() || null;
   if (m.emergencyContactPhone        !== undefined) row.emergency_contact_phone        = m.emergencyContactPhone?.trim() || null;
@@ -535,6 +540,9 @@ function dbOpsTeamToApp(m) {
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
     payBasis:    m.pay_basis || "fixed",
+    defaultBankHours:   m.default_bank_hours != null ? parseFloat(m.default_bank_hours) : null,
+    payrollLocation:    m.payroll_location || null,
+    accountingLocation: m.accounting_location || null,
     // Slice 7 — emergency contact
     emergencyContactName:         m.emergency_contact_name         || null,
     emergencyContactPhone:        m.emergency_contact_phone        || null,

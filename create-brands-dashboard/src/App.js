@@ -8378,6 +8378,206 @@ function FilterChip({ active, onClick, label }) {
 //     original application, they navigate back to Hiring view
 //   - For legacy employees with no linked application, the tab shows an
 //     empty state explaining "added manually, no application history"
+// ─── Payroll attributes tab (per-employee; owner-only) ────────────────────────
+// Sets the DEFAULTS the central payroll calc screen reads: default bank hours
+// (cash = remainder, overridable per run), payroll location (PAYE entity),
+// accounting location (cost centre). Plus the internal loan ledger (never in the
+// accountant export). No pay calculation happens here — that's the calc screen.
+function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateEmployee }) {
+  const [bankHours, setBankHours] = useState(employee?.defaultBankHours ?? "");
+  const [payrollLoc, setPayrollLoc] = useState(employee?.payrollLocation || "");
+  const [acctLoc, setAcctLoc] = useState(employee?.accountingLocation || "");
+  const [savingAttrs, setSavingAttrs] = useState(false);
+  const [attrErr, setAttrErr] = useState("");
+
+  // Loans
+  const [loans, setLoans] = useState([]);
+  const [loansLoading, setLoansLoading] = useState(true);
+  const [loanType, setLoanType] = useState("advance");
+  const [loanAmt, setLoanAmt] = useState("");
+  const [loanNote, setLoanNote] = useState("");
+  const [loanBusy, setLoanBusy] = useState(false);
+  const [loanErr, setLoanErr] = useState("");
+
+  useEffect(() => {
+    setBankHours(employee?.defaultBankHours ?? "");
+    setPayrollLoc(employee?.payrollLocation || "");
+    setAcctLoc(employee?.accountingLocation || "");
+  }, [employee?.id]);
+
+  const loadLoans = useCallback(() => {
+    if (!employee?.id) return;
+    setLoansLoading(true);
+    fetchEmployeeLoans(employee.id)
+      .then(setLoans)
+      .catch(e => setLoanErr(e?.message || String(e)))
+      .finally(() => setLoansLoading(false));
+  }, [employee?.id]);
+  useEffect(() => { loadLoans(); }, [loadLoans]);
+
+  const balance = loanBalance(loans);
+
+  const inputCls = "w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const labelCls = "block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1";
+  const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
+
+  // Store options (with brand prefix for clarity across the chain)
+  const brandName = (id) => brands?.find(b => b.id === id)?.name || "";
+  const storeOpts = (stores || [])
+    .filter(s => !s.archivedAt)
+    .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || ""));
+  const storeLabel = (s) => `${brandName(s.brandId) ? brandName(s.brandId) + " · " : ""}${s.shortName || s.name}`;
+
+  const saveAttrs = async () => {
+    setAttrErr("");
+    const bh = bankHours === "" ? null : Number(bankHours);
+    if (bh != null && (!isFinite(bh) || bh < 0)) return setAttrErr("Default bank hours must be 0 or more (or blank).");
+    setSavingAttrs(true);
+    try {
+      await onUpdateEmployee?.({
+        id: employee.id,
+        defaultBankHours: bh,
+        payrollLocation: payrollLoc || null,
+        accountingLocation: acctLoc || null,
+      });
+    } catch (e) {
+      setAttrErr(e?.message || String(e));
+    } finally {
+      setSavingAttrs(false);
+    }
+  };
+
+  const addLoan = async () => {
+    setLoanErr("");
+    const amt = parseFloat(loanAmt);
+    if (!(amt > 0)) return setLoanErr("Enter an amount greater than 0.");
+    if (loanType === "repayment" && amt > balance) {
+      if (!window.confirm(`Repayment (${fmtGBP(amt)}) is more than the outstanding balance (${fmtGBP(balance)}). Record it anyway?`)) return;
+    }
+    setLoanBusy(true);
+    try {
+      await addLoanEntry({
+        employee_id: employee.id,
+        brand_id: employee.brandId || null,
+        entry_type: loanType,
+        amount: amt,
+        note: loanNote || null,
+        created_by: currentUser?.name || null,
+      });
+      setLoanAmt(""); setLoanNote("");
+      loadLoans();
+    } catch (e) {
+      setLoanErr(e?.message || String(e));
+    } finally {
+      setLoanBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="text-xs text-slate-500">
+        These are <strong className="text-slate-400">defaults</strong> used by the Payroll calculation screen.
+        The pay <em>rate</em> (fixed vs minimum wage) is set on the <strong className="text-slate-400">Job &amp; Pay</strong> tab.
+      </div>
+
+      {/* Default attributes */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
+        <h3 className="text-sm font-bold text-slate-200">Default payroll attributes</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className={labelCls}>Default bank hours</label>
+            <input type="number" step="0.25" min="0" value={bankHours}
+              onChange={e => setBankHours(e.target.value)} placeholder="e.g. 20" className={inputCls} />
+            <div className="text-[10px] text-slate-600 mt-1">Usual hours paid by bank transfer. Cash = total worked − bank. Leave blank to default all hours to bank.</div>
+          </div>
+          <div>
+            <label className={labelCls}>Payroll location (PAYE)</label>
+            <select value={payrollLoc} onChange={e => setPayrollLoc(e.target.value)} className={inputCls}>
+              <option value="">— none —</option>
+              {storeOpts.map(s => <option key={s.id} value={s.id}>{storeLabel(s)}</option>)}
+            </select>
+            <div className="text-[10px] text-slate-600 mt-1">The entity this employee is payrolled under.</div>
+          </div>
+          <div>
+            <label className={labelCls}>Accounting location (cost)</label>
+            <select value={acctLoc} onChange={e => setAcctLoc(e.target.value)} className={inputCls}>
+              <option value="">— none —</option>
+              {storeOpts.map(s => <option key={s.id} value={s.id}>{storeLabel(s)}</option>)}
+            </select>
+            <div className="text-[10px] text-slate-600 mt-1">Where the wage cost is booked. May differ from payroll location.</div>
+          </div>
+        </div>
+        {attrErr && <div className="text-xs text-red-400">{attrErr}</div>}
+        <div className="flex justify-end">
+          <button onClick={saveAttrs} disabled={savingAttrs}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
+            {savingAttrs ? "Saving…" : "Save attributes"}
+          </button>
+        </div>
+      </div>
+
+      {/* Loan ledger (internal only) */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold text-slate-200">Staff loan (internal only)</h3>
+          <div className="text-sm">
+            <span className="text-slate-500 text-xs mr-2">Outstanding balance</span>
+            <span className={`font-bold ${balance > 0 ? "text-amber-300" : "text-slate-300"}`}>{fmtGBP(balance)}</span>
+          </div>
+        </div>
+        <div className="text-[10px] text-slate-600 -mt-2">Never included in the accountant export. For your own records.</div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div>
+            <label className={labelCls}>Type</label>
+            <select value={loanType} onChange={e => setLoanType(e.target.value)} className={inputCls}>
+              <option value="advance">Advance (lent)</option>
+              <option value="repayment">Repayment (paid back)</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Amount (£)</label>
+            <input type="number" step="0.01" min="0" value={loanAmt}
+              onChange={e => setLoanAmt(e.target.value)} placeholder="0.00" className={inputCls} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className={labelCls}>Note (optional)</label>
+            <input value={loanNote} onChange={e => setLoanNote(e.target.value)} placeholder="e.g. advance on June wages" className={inputCls} />
+          </div>
+        </div>
+        {loanErr && <div className="text-xs text-red-400">{loanErr}</div>}
+        <div className="flex justify-end">
+          <button onClick={addLoan} disabled={loanBusy}
+            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
+            <Plus size={14} /> {loanBusy ? "Saving…" : "Add entry"}
+          </button>
+        </div>
+
+        {/* Ledger */}
+        {loansLoading ? (
+          <div className="text-sm text-slate-500">Loading…</div>
+        ) : loans.length === 0 ? (
+          <div className="text-xs text-slate-600">No loan entries.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {[...loans].reverse().map(l => (
+              <div key={l.id} className="flex items-center justify-between text-sm bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${l.entry_type === "advance" ? "bg-amber-950/60 border border-amber-800 text-amber-300" : "bg-emerald-950/60 border border-emerald-800 text-emerald-300"}`}>
+                    {l.entry_type === "advance" ? "Advance" : "Repayment"}
+                  </span>
+                  <span className="font-semibold text-slate-100">{l.entry_type === "advance" ? "+" : "−"}{fmtGBP(l.amount)}</span>
+                  <span className="text-slate-500 text-xs truncate">{l.entry_date}{l.note ? ` · ${l.note}` : ""}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EmployeeProfileView({
   employeeId, brands, stores, storeRoles, storeDepartments,
   opsTeam, currentUser, onUpdateEmployee, onClose,
@@ -8611,6 +8811,7 @@ function EmployeeProfileView({
           { key: "documents",   label: "Documents" },
           { key: "application", label: linkedApp ? "Linked Application" : "Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
+          ...(isOwnerRole(currentUser?.role) ? [{ key: "payroll", label: "Payroll" }] : []),
         ].map(t => (
           <button
             key={t.key}
@@ -8701,6 +8902,16 @@ function EmployeeProfileView({
           notes={notes} setNotes={setNotes}
           loading={notesLoading}
           currentUser={currentUser}
+        />
+      )}
+
+      {tab === "payroll" && isOwnerRole(currentUser?.role) && (
+        <PayrollAttributesTab
+          employee={employee}
+          stores={stores}
+          brands={brands}
+          currentUser={currentUser}
+          onUpdateEmployee={onUpdateEmployee}
         />
       )}
     </div>
