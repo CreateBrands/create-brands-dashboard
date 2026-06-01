@@ -19,7 +19,7 @@ import {
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
-  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync,
+  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -2599,6 +2599,40 @@ function LoginScreen({ users, onLogin, onSwitchToEmployee }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // CHAIN PERFORMANCE VIEW — Chocoberry HQ rollup dashboard
 // ═══════════════════════════════════════════════════════════════════════════════
+// Small ranked-items table used by the Items Sold section.
+function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald-400", rankByRevenue = false }) {
+  return (
+    <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-800/60">
+        <h4 className="text-xs font-bold text-white">{title}</h4>
+        {subtitle && <div className="text-[10px] text-slate-500">{subtitle}</div>}
+      </div>
+      {(!rows || rows.length === 0) ? (
+        <div className="text-center py-6 text-slate-500 text-xs">No items.</div>
+      ) : (
+        <table className="w-full text-xs">
+          <thead className="bg-slate-900/60"><tr>
+            <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest w-6">#</th>
+            <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Item</th>
+            <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Qty</th>
+            <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Revenue</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((it, idx) => (
+              <tr key={`${it.caption}-${idx}`} className="border-b border-slate-800/30">
+                <td className="px-3 py-2 text-slate-500 font-bold">{idx + 1}</td>
+                <td className="px-3 py-2 text-white">{it.caption}<span className="text-slate-600 ml-1 text-[10px]">{it.category}</span></td>
+                <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{it.quantity.toLocaleString("en-GB")}</td>
+                <td className={`px-3 py-2 text-right font-semibold tabular-nums ${accent}`}>{fmtMoney(it.revenue)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog, entries, currentUser, onRefreshSync }) {
   // Self-fetched sales (lazy-loaded, cached for 5 min). When the user clicks
   // Sync Now, invalidateFlipdishSalesCache() bumps the cache buster, which
@@ -2699,7 +2733,45 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
     return { fromDate: from, toDate: to, prevFromDate: prevFrom, prevToDate: prevTo, periodLabel: label };
   }, [period, customFrom, customTo, today.getTime()]);
 
-  // ── Filter orders to this period ─────────────────────────────────────────
+  // ── Items sold (product mix) — period-scoped, separate heavy fetch ────────
+  const [itemsData, setItemsData] = useState(null);     // { items, totalUnits, totalRevenue }
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsError, setItemsError] = useState(null);
+  const [showItems, setShowItems] = useState(false);    // lazy — only fetch when opened
+  useEffect(() => {
+    if (!showItems) return;
+    let cancelled = false;
+    setItemsLoading(true); setItemsError(null);
+    fetchItemsSold({ from: toLocalDate(fromDate), to: toLocalDate(toDate) })
+      .then(d => { if (!cancelled) setItemsData(d); })
+      .catch(e => { if (!cancelled) setItemsError(e.message || String(e)); })
+      .finally(() => { if (!cancelled) setItemsLoading(false); });
+    return () => { cancelled = true; };
+  }, [showItems, fromDate.getTime(), toDate.getTime()]);
+
+  // Rankings derived from itemsData
+  const itemRankings = useMemo(() => {
+    if (!itemsData?.items?.length) return null;
+    const byQty = [...itemsData.items].sort((a, b) => b.quantity - a.quantity);
+    const byRev = [...itemsData.items].sort((a, b) => b.revenue - a.revenue);
+    // Category breakdown
+    const catMap = new Map();
+    itemsData.items.forEach(i => {
+      const c = catMap.get(i.category) || { category: i.category, quantity: 0, revenue: 0 };
+      c.quantity += i.quantity; c.revenue += i.revenue;
+      catMap.set(i.category, c);
+    });
+    const byCat = Array.from(catMap.values()).sort((a, b) => b.quantity - a.quantity);
+    return {
+      top10:    byQty.slice(0, 10),
+      bottom10: [...byQty].reverse().slice(0, 10),   // least sold (still > 0)
+      byRevenue: byRev.slice(0, 10),
+      categories: byCat,
+      distinctItems: itemsData.items.length,
+    };
+  }, [itemsData]);
+
+
   const periodOrders = useMemo(() => flipdishOrders.filter(o => {
     if (!o.orderPlacedTime) return false;
     const t = new Date(o.orderPlacedTime);
@@ -2892,8 +2964,6 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   // 30-day window. To re-enable cleanly, build a Postgres RPC that aggregates
   // top items server-side and returns ~10 rows. Until then, return [] so the
   // section renders as empty (caller already gates on .length > 0).
-  const topItems = useMemo(() => [], []);
-
   // ── EOD reconciliation: compare flipdish revenue vs eod_entries.net_sales ──
   const reconciliation = useMemo(() => {
     const fromStr = toLocalDate(fromDate);
@@ -3273,35 +3343,67 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
         </div>
       </div>
 
-      {/* ── Top items table ──────────────────────────────────────────────── */}
+      {/* ── Items sold (product mix) ─────────────────────────────────────── */}
       <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-800/60">
-          <h3 className="text-sm font-bold text-white">Top items chain-wide</h3>
-          <div className="text-xs text-slate-500 mt-0.5">Bestsellers across all visible stores · {periodLabel}</div>
+        <div className="px-4 py-3 border-b border-slate-800/60 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-bold text-white">Items sold</h3>
+            <div className="text-xs text-slate-500 mt-0.5">Product mix across all visible stores · {periodLabel}</div>
+          </div>
+          {!showItems
+            ? <button onClick={() => setShowItems(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500">Load items sold</button>
+            : <button onClick={() => { invalidateFlipdishSalesCache?.(); setShowItems(false); setTimeout(() => setShowItems(true), 0); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Refresh</button>}
         </div>
-        {topItems.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 text-sm">No item data this period</div>
+
+        {!showItems ? (
+          <div className="text-center py-8 text-slate-500 text-sm">Item-level data is heavier to load — tap "Load items sold" to see the breakdown for this period.</div>
+        ) : itemsLoading ? (
+          <div className="text-center py-8 text-slate-500 text-sm">Loading items for {periodLabel}…</div>
+        ) : itemsError ? (
+          <div className="text-center py-8 text-red-400 text-sm">Couldn't load items: {itemsError}</div>
+        ) : !itemRankings ? (
+          <div className="text-center py-8 text-slate-500 text-sm">No item data for this period.</div>
         ) : (
-          <table className="w-full text-xs">
-            <thead className="bg-slate-900/60 border-b border-slate-800/40">
-              <tr>
-                <th className="text-left px-4 py-2 text-slate-500 font-semibold uppercase tracking-widest w-8">#</th>
-                <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Item</th>
-                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Sold</th>
-                <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Revenue</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topItems.map((it, idx) => (
-                <tr key={it.name} className="border-b border-slate-800/30">
-                  <td className="px-4 py-2 text-slate-500 font-bold">{idx + 1}</td>
-                  <td className="px-3 py-2 text-white">{it.name}</td>
-                  <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{it.qty}</td>
-                  <td className="px-3 py-2 text-right text-emerald-400 font-semibold tabular-nums">{fmtMoney(it.revenue)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="p-4 space-y-6">
+            {/* Summary line */}
+            <div className="flex gap-6 text-sm flex-wrap">
+              <div><span className="text-slate-500">Units sold: </span><span className="text-white font-bold tabular-nums">{itemsData.totalUnits.toLocaleString("en-GB")}</span></div>
+              <div><span className="text-slate-500">Item revenue: </span><span className="text-emerald-400 font-bold tabular-nums">{fmtMoneyDec(itemsData.totalRevenue)}</span></div>
+              <div><span className="text-slate-500">Distinct items: </span><span className="text-white font-bold tabular-nums">{itemRankings.distinctItems}</span></div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Top 10 by quantity */}
+              <ItemRankTable title="Top 10 — best sellers" subtitle="By units sold" rows={itemRankings.top10} fmtMoney={fmtMoneyDec} accent="text-emerald-400"/>
+              {/* Bottom 10 by quantity */}
+              <ItemRankTable title="Bottom 10 — least sold" subtitle="By units sold (excludes zero)" rows={itemRankings.bottom10} fmtMoney={fmtMoneyDec} accent="text-amber-400"/>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Top by revenue */}
+              <ItemRankTable title="Top 10 — by revenue" subtitle="By money taken" rows={itemRankings.byRevenue} fmtMoney={fmtMoneyDec} accent="text-emerald-400" rankByRevenue/>
+              {/* Category breakdown */}
+              <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+                <div className="px-3 py-2 border-b border-slate-800/60"><h4 className="text-xs font-bold text-white">By category</h4><div className="text-[10px] text-slate-500">Units &amp; revenue per category</div></div>
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-900/60"><tr>
+                    <th className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Category</th>
+                    <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Units</th>
+                    <th className="text-right px-3 py-2 text-slate-500 font-semibold uppercase tracking-widest">Revenue</th>
+                  </tr></thead>
+                  <tbody>
+                    {itemRankings.categories.map(c => (
+                      <tr key={c.category} className="border-b border-slate-800/30">
+                        <td className="px-3 py-2 text-white">{c.category}</td>
+                        <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{c.quantity.toLocaleString("en-GB")}</td>
+                        <td className="px-3 py-2 text-right text-emerald-400 font-semibold tabular-nums">{fmtMoneyDec(c.revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

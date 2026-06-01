@@ -1560,6 +1560,81 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
   return out.map(dbFlipdishSaleToApp);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// ITEMS SOLD — period-scoped fetch of sale_items, aggregated for product-mix.
+// Deliberately SEPARATE from fetchFlipdishSales (which excludes sale_items for
+// performance). This pulls sale_items ONLY for the chosen window and aggregates
+// in-app, so the heavy JSON never loads for the whole 35-day range.
+// Returns { items: [{caption, category, quantity, revenue, refunds}], totalUnits, totalRevenue }.
+// ────────────────────────────────────────────────────────────────────────────
+export async function fetchItemsSold({ from, to, brandId = "chocoberry", limit = 20000 } = {}) {
+  const toIsoDate = (v) => {
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "string") return v.slice(0, 10);
+    return v;
+  };
+  const fromD = toIsoDate(from);
+  const toD   = toIsoDate(to);
+
+  // Page through, pulling only sale_items + a couple of context cols. Skip
+  // cancelled/refunded-at-sale-level rows.
+  const PAGE = 2000;   // smaller pages — rows are heavy (sale_items JSON)
+  let offset = 0;
+  const rows = [];
+  while (offset < limit) {
+    let q = supabase
+      .from("flipdish_sales")
+      .select("sale_id, business_date, sale_items, is_cancelled")
+      .order("business_date", { ascending: false })
+      .range(offset, offset + PAGE - 1);
+    if (brandId) q = q.eq("brand_id", brandId);
+    if (fromD) q = q.gte("business_date", fromD);
+    if (toD)   q = q.lte("business_date", toD);
+    const { data, error } = await q;
+    if (error) throw error;
+    const batch = data || [];
+    rows.push(...batch);
+    if (batch.length < PAGE) break;
+    offset += PAGE;
+  }
+
+  // Aggregate. sale_items is a JSON array; each item has caption, category,
+  // quantity, netRetailPrice/retailPrice, isRefunded. Items can nest modifiers
+  // in their own saleItems[] — we count top-level items only for the product
+  // mix (modifiers are add-ons, usually £0, and would distort unit counts).
+  const agg = new Map();   // key: caption||category
+  let totalUnits = 0;
+  let totalRevenue = 0;
+
+  for (const r of rows) {
+    if (r.is_cancelled) continue;
+    let items = r.sale_items;
+    if (typeof items === "string") { try { items = JSON.parse(items); } catch { items = []; } }
+    if (!Array.isArray(items)) continue;
+    for (const it of items) {
+      if (it.isRefunded) continue;
+      const caption  = it.caption || "(unnamed)";
+      const category = it.category || "Uncategorised";
+      const qty      = Number(it.quantity) || 0;
+      const price    = (it.netRetailPrice != null ? Number(it.netRetailPrice)
+                       : it.retailPrice != null ? Number(it.retailPrice)
+                       : Number(it.unitPrice) || 0);
+      const revenue  = price * qty;
+      const key = `${caption}|||${category}`;
+      const cur = agg.get(key) || { caption, category, quantity: 0, revenue: 0 };
+      cur.quantity += qty;
+      cur.revenue  += revenue;
+      agg.set(key, cur);
+      totalUnits   += qty;
+      totalRevenue += revenue;
+    }
+  }
+
+  const itemsArr = Array.from(agg.values());
+  return { items: itemsArr, totalUnits, totalRevenue, saleCount: rows.length };
+}
+
+
 // ════════════════════════════════════════════════════════════════════════════
 // HIRING / ONBOARDING (slice 1)
 // ════════════════════════════════════════════════════════════════════════════
