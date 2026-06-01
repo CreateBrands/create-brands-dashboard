@@ -63,6 +63,11 @@ import {
   fetchPolicyAcknowledgements, acknowledgePolicy,
   // Training progress (trainee consumption + manager verify)
   fetchTrainingProgress, setModuleCompletion, setModuleVerification,
+  // Payroll
+  fetchMinimumWageRates, upsertMinimumWageRate, removeMinimumWageRate,
+  fetchPayrollPeriods, upsertPayrollPeriod,
+  fetchEmployeeLoans, addLoanEntry, loanBalance,
+  resolveHourlyRate, ageOnDate, bandForAge,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4512,6 +4517,144 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
   );
 }
 
+// ─── Minimum Wage Admin (owner-only; under Admin Panel) ───────────────────────
+// Manage UK NMW/NLW rates by age band, effective-dated. Owner enters figures
+// from gov.uk; never overwrite — add a new row each April so history is kept and
+// historical pay periods resolve to the correct rate. Three bands only.
+const NMW_BANDS = [
+  { key: "21_over",  label: "21 and over (National Living Wage)" },
+  { key: "18_20",    label: "18 to 20" },
+  { key: "under_18", label: "Under 18 (16–17)" },
+];
+function MinimumWageAdmin() {
+  const [rates, setRates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [band, setBand] = useState("21_over");
+  const [rate, setRate] = useState("");
+  const [effectiveFrom, setEffectiveFrom] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchMinimumWageRates()
+      .then(setRates)
+      .catch(e => setErr(e?.message || String(e)))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    setErr("");
+    const r = parseFloat(rate);
+    if (!band) return setErr("Pick an age band.");
+    if (!(r > 0)) return setErr("Enter a valid rate (e.g. 12.71).");
+    if (!effectiveFrom) return setErr("Pick the date this rate takes effect (e.g. 2026-04-01).");
+    setSaving(true);
+    try {
+      await upsertMinimumWageRate({ band, rate: r, effective_from: effectiveFrom });
+      setRate(""); setEffectiveFrom("");
+      load();
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this rate? Only do this if it was entered in error — deleting a real historical rate will make past pay periods unresolvable.")) return;
+    try { await removeMinimumWageRate(id); load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+  };
+
+  const inputCls = "w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const labelCls = "block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1";
+  const fmtRate = (n) => `£${Number(n).toFixed(2)}`;
+
+  // Group by band for display
+  const byBand = NMW_BANDS.map(b => ({
+    ...b,
+    rows: rates.filter(r => r.band === b.key)
+               .sort((a, c) => new Date(c.effective_from) - new Date(a.effective_from)),
+  }));
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-amber-950/30 border border-amber-800/40 rounded-xl px-4 py-3 text-xs text-amber-200/90">
+        <strong>These figures drive real wages.</strong> Enter the exact current rates from
+        gov.uk (search “National Minimum Wage rates”). Rates change each April — when they do,
+        <strong> add a new row</strong> with the new effective date rather than editing the old one,
+        so past pay periods stay correct. The most recent rate on or before each work date is used.
+      </div>
+
+      {/* Add a rate */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+        <h3 className="text-sm font-bold text-slate-200 mb-3">Add / update a rate</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="sm:col-span-2">
+            <label className={labelCls}>Age band</label>
+            <select value={band} onChange={e => setBand(e.target.value)} className={inputCls}>
+              {NMW_BANDS.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Rate (£/hour)</label>
+            <input type="number" step="0.01" min="0" value={rate}
+              onChange={e => setRate(e.target.value)} placeholder="12.71" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Effective from</label>
+            <input type="date" value={effectiveFrom}
+              onChange={e => setEffectiveFrom(e.target.value)} className={inputCls} />
+          </div>
+        </div>
+        {err && <div className="text-xs text-red-400 mt-2">{err}</div>}
+        <div className="flex justify-end mt-3">
+          <button onClick={add} disabled={saving}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
+            <Plus size={14} /> {saving ? "Saving…" : "Save rate"}
+          </button>
+        </div>
+        <div className="text-[10px] text-slate-600 mt-2">
+          Entering the same band + effective date again updates that rate (no duplicates).
+        </div>
+      </div>
+
+      {/* Current rates by band */}
+      {loading ? (
+        <div className="text-sm text-slate-500">Loading rates…</div>
+      ) : (
+        <div className="space-y-4">
+          {byBand.map(b => (
+            <div key={b.key} className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4">
+              <div className="text-sm font-bold text-slate-200 mb-2">{b.label}</div>
+              {b.rows.length === 0 ? (
+                <div className="text-xs text-amber-400">No rate set yet — payroll for minimum-wage employees in this band will be flagged until you add one.</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {b.rows.map((r, i) => (
+                    <div key={r.id} className="flex items-center justify-between text-sm bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-3">
+                        <span className="font-semibold text-slate-100">{fmtRate(r.rate)}</span>
+                        <span className="text-slate-500 text-xs">from {r.effective_from}</span>
+                        {i === 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 font-semibold">current</span>}
+                      </div>
+                      <button onClick={() => del(r.id)} className="text-slate-600 hover:text-red-400 transition-colors" title="Delete rate">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
 function AdminPanelView({
   brands, users, entries,
@@ -4533,6 +4676,7 @@ function AdminPanelView({
     {key:"stores",   label:"Stores"},
     {key:"managers", label:"Managers & Access"},
     {key:"kpis",     label:"KPI Targets"},
+    {key:"minwage",  label:"Minimum Wage"},
   ];
 
   return (
@@ -4632,6 +4776,10 @@ function AdminPanelView({
             return onUpdateStore(storeId, { kpiTargets });
           }}
         />
+      )}
+
+      {tab==="minwage"&&(
+        <MinimumWageAdmin />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -9087,6 +9235,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
     deptText:       employee.department || "",
     payType:        employee.payType || "hourly",
     hourlyRate:     employee.hourlyRate || 0,
+    payBasis:       employee.payBasis || "fixed",
     pin:            employee.pin || "",
     color:          employee.color || COLORS[0],
     // We don't expose isManagement here because it's derived from the role
@@ -9108,6 +9257,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
       deptText:       employee.department || "",
       payType:        employee.payType || "hourly",
       hourlyRate:     employee.hourlyRate || 0,
+      payBasis:       employee.payBasis || "fixed",
       pin:            employee.pin || "",
       color:          employee.color || COLORS[0],
     });
@@ -9183,6 +9333,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
         department:   derivedDept?.name || form.deptText.trim() || "",
         payType:      form.payType,
         hourlyRate:   parseFloat(form.hourlyRate) || 0,
+        payBasis:     form.payBasis || "fixed",
         pin:          form.pin || "",
         color:        form.color,
         ...(newStatus ? { status: newStatus } : {}),
@@ -9344,6 +9495,25 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
             placeholder={getPayTypeMeta(form.payType).placeholder}
             className={inputCls}
           />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls}>Payroll basis</label>
+          <select
+            value={form.payBasis}
+            onChange={e => set("payBasis", e.target.value)}
+            className={inputCls}
+          >
+            <option value="fixed">Fixed rate (use the amount above)</option>
+            <option value="minimum_wage">Minimum wage (auto by age)</option>
+          </select>
+          <div className="text-[10px] text-slate-600 mt-1">
+            {form.payBasis === "minimum_wage"
+              ? "Payroll uses the current legal minimum wage for the employee's age on each work date (set rates in Minimum Wage admin)."
+              : "Payroll uses the fixed amount above for every hour worked."}
+          </div>
         </div>
       </div>
 

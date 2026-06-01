@@ -481,6 +481,9 @@ function appOpsTeamToDb(m) {
   // Slice 6 follow-up — pay type. The hourly_rate column is reused as the
   // "amount" regardless of type, so no separate "pay_amount" column.
   if (m.payType       !== undefined) row.pay_type      = m.payType || "hourly";
+  // Payroll — how the pay RATE is determined: 'minimum_wage' (live NMW lookup by
+  // age on work date) or 'fixed' (use hourly_rate). Defaults handled in DB.
+  if (m.payBasis      !== undefined) row.pay_basis     = m.payBasis || "fixed";
   // Slice 7 — emergency contact (single contact per employee)
   if (m.emergencyContactName         !== undefined) row.emergency_contact_name         = m.emergencyContactName?.trim() || null;
   if (m.emergencyContactPhone        !== undefined) row.emergency_contact_phone        = m.emergencyContactPhone?.trim() || null;
@@ -531,6 +534,7 @@ function dbOpsTeamToApp(m) {
     archivedAt:  m.archived_at || null,
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
+    payBasis:    m.pay_basis || "fixed",
     // Slice 7 — emergency contact
     emergencyContactName:         m.emergency_contact_name         || null,
     emergencyContactPhone:        m.emergency_contact_phone        || null,
@@ -3601,4 +3605,143 @@ export async function submitSelfFill(token, fields) {
   if (error) throw error;
   if (!data) throw new Error("This link is no longer valid.");
   return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PAYROLL (Stage 2: NMW rates + rate resolver; Stage 3/4 add periods + export)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Minimum wage rates ──────────────────────────────────────────────────────
+export async function fetchMinimumWageRates() {
+  const { data, error } = await supabase
+    .from("minimum_wage_rates")
+    .select("*")
+    .order("effective_from", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function upsertMinimumWageRate(rate) {
+  // rate: { id?, band, rate, effective_from }
+  const { data, error } = await supabase
+    .from("minimum_wage_rates")
+    .upsert(rate, { onConflict: "band,effective_from" })
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function removeMinimumWageRate(id) {
+  const { error } = await supabase.from("minimum_wage_rates").delete().eq("id", id);
+  if (error) throw error;
+  return true;
+}
+
+// ── Rate resolver ───────────────────────────────────────────────────────────
+// Compute exact age on a given date.
+export function ageOnDate(dob, onDate) {
+  if (!dob) return null;
+  const b = new Date(dob);
+  const d = new Date(onDate);
+  if (isNaN(b) || isNaN(d)) return null;
+  let age = d.getFullYear() - b.getFullYear();
+  const m = d.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && d.getDate() < b.getDate())) age--;
+  return age;
+}
+
+// Map an age to an NMW band. Returns '21_over' | '18_20' | 'under_18'.
+export function bandForAge(age) {
+  if (age == null) return null;
+  if (age >= 21) return "21_over";
+  if (age >= 18) return "18_20";
+  return "under_18";
+}
+
+// From a preloaded rates array, find the rate for a band effective on a date.
+// rates: array of { band, rate, effective_from }. Returns number or null.
+export function rateForBandOnDate(rates, band, onDate) {
+  if (!rates || !band) return null;
+  const d = new Date(onDate);
+  const candidates = rates
+    .filter((r) => r.band === band && new Date(r.effective_from) <= d)
+    .sort((a, b) => new Date(b.effective_from) - new Date(a.effective_from));
+  return candidates.length ? Number(candidates[0].rate) : null;
+}
+
+// Resolve the hourly rate for an employee on a specific work date.
+// employee: ops_team row (needs pay_basis, hourly_rate, dob).
+// rates: preloaded minimum_wage_rates array.
+// Returns { rate, basis, band, age, error }. error is set (and rate null) when
+// a minimum-wage employee has no configured rate for their band on that date,
+// or DOB is missing — we FLAG, never guess.
+export function resolveHourlyRate(employee, workDate, rates) {
+  const basis = employee?.pay_basis || "fixed";
+  if (basis === "fixed") {
+    const r = Number(employee?.hourly_rate);
+    if (!employee?.hourly_rate && employee?.hourly_rate !== 0) {
+      return { rate: null, basis, band: null, age: null, error: "No fixed hourly_rate set for this employee." };
+    }
+    return { rate: r, basis, band: null, age: null, error: null };
+  }
+  // minimum_wage
+  if (!employee?.dob) {
+    return { rate: null, basis, band: null, age: null, error: "Minimum-wage employee has no date of birth set — cannot determine age band." };
+  }
+  const age = ageOnDate(employee.dob, workDate);
+  const band = bandForAge(age);
+  if (!band) {
+    return { rate: null, basis, band: null, age, error: "Could not determine age band." };
+  }
+  const rate = rateForBandOnDate(rates, band, workDate);
+  if (rate == null) {
+    return { rate: null, basis, band, age, error: `No minimum-wage rate configured for band ${band} effective on ${workDate}. Add it in the Minimum Wage admin.` };
+  }
+  return { rate, basis, band, age, error: null };
+}
+
+// ── Payroll periods (used in Stage 3/4) ─────────────────────────────────────
+export async function fetchPayrollPeriods({ employeeId, periodStart, periodEnd } = {}) {
+  let q = supabase.from("payroll_periods").select("*");
+  if (employeeId) q = q.eq("employee_id", employeeId);
+  if (periodStart) q = q.eq("period_start", periodStart);
+  if (periodEnd) q = q.eq("period_end", periodEnd);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function upsertPayrollPeriod(period) {
+  const row = { ...period, updated_at: new Date().toISOString() };
+  const { data, error } = await supabase
+    .from("payroll_periods")
+    .upsert(row, { onConflict: "employee_id,period_start,period_end" })
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// ── Employee loans (internal only) ──────────────────────────────────────────
+export async function fetchEmployeeLoans(employeeId) {
+  const { data, error } = await supabase
+    .from("employee_loans")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("entry_date", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addLoanEntry(entry) {
+  // entry: { employee_id, entry_type: 'advance'|'repayment', amount, entry_date?, note?, created_by?, brand_id? }
+  const { data, error } = await supabase.from("employee_loans").insert(entry).select().maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export function loanBalance(entries) {
+  if (!entries) return 0;
+  return entries.reduce((bal, e) => bal + (e.entry_type === "advance" ? Number(e.amount) : -Number(e.amount)), 0);
 }
