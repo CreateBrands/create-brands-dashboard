@@ -4526,6 +4526,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
 function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
+  const XLSX = useXLSX();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [running, setRunning] = useState(false);
@@ -4658,6 +4659,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   };
 
   const exportExcel = () => {
+    if (!XLSX) { alert("Excel library still loading — try again in a moment."); return; }
     if (!rows) return;
     const exportable = rows.filter(r => !r.rowError);
     const header = [
@@ -4698,7 +4700,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Payroll");
-    XLSX.writeFile(wb, `payroll_${from}_to_${to}.xlsx`);
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    downloadBlob(new Blob([buf], { type: "application/octet-stream" }), `payroll_${from}_to_${to}.xlsx`);
   };
 
   const totalGross = rows ? rows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
