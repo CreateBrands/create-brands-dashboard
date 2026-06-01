@@ -3052,8 +3052,8 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
             {minsSinceSync !== null && (
               <>
                 <span className="text-slate-700">·</span>
-                <span className={minsSinceSync > 360 ? "text-amber-400" : "text-emerald-400"}
-                      title="Time since the latest sale we have data for. Stays green during quiet hours.">
+                <span className={minsSinceSync > 1800 ? "text-red-400" : minsSinceSync > 1080 ? "text-amber-400" : "text-emerald-400"}
+                      title="Time since the latest sale we have data for. Stays green during quiet hours; turns red if the sync has likely stopped.">
                   {minsSinceSync < 60
                     ? `Latest sale ${minsSinceSync}m ago`
                     : `Latest sale ${Math.floor(minsSinceSync / 60)}h ${minsSinceSync % 60}m ago`}
@@ -3101,6 +3101,27 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
           )}
         </div>
       </div>
+
+      {/* ── Stale-data alarm ─────────────────────────────────────────────────
+          The Flipdish sync depends on a portal token that expires ~daily and
+          must be refreshed manually (captcha + SMS 2FA block automation). If it
+          lapses, sync silently stops. This banner makes that loud: if no new
+          sale in >30h, something is wrong. (30h tolerates a normal quiet night
+          plus buffer, so it won't false-alarm overnight.) */}
+      {minsSinceSync !== null && minsSinceSync > 1800 && (
+        <div className="rounded-2xl border border-red-500/40 bg-red-950/30 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="text-red-400 flex-shrink-0 mt-0.5"/>
+            <div className="text-sm">
+              <div className="font-bold text-red-300">Sales data looks stale — sync may have stopped</div>
+              <div className="text-red-200/80 mt-0.5">
+                No new sales in {minsSinceSync >= 1440 ? `${Math.floor(minsSinceSync / 1440)}d ${Math.floor((minsSinceSync % 1440) / 60)}h` : `${Math.floor(minsSinceSync / 60)}h`}.
+                The Flipdish token has most likely expired (it lasts ~24h). To fix: log into the Flipdish RMS portal, copy the fresh <code className="text-red-100">rms-token</code> cookie, update the <code className="text-red-100">FLIPDISH_RMS_TOKEN</code> secret in Supabase, then run the sync with a backfill from the last good date.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Top stat cards ───────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
