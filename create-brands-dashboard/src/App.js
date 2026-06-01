@@ -19,7 +19,7 @@ import {
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
-  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold,
+  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -2637,19 +2637,14 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   // Self-fetched sales (lazy-loaded, cached for 5 min). When the user clicks
   // Sync Now, invalidateFlipdishSalesCache() bumps the cache buster, which
   // re-runs this effect and fetches fresh.
-  const [flipdishSales, setFlipdishSales] = useState([]);
+  const [salesAgg,     setSalesAgg]     = useState([]);     // current-period per store×channel (complete, server-side)
+  const [prevSalesAgg, setPrevSalesAgg] = useState([]);     // prior-period per store×channel
   const [salesLoading, setSalesLoading] = useState(true);
   const [salesError, setSalesError] = useState(null);
   const cacheBuster = getFlipdishSalesCacheBuster();
-  useEffect(() => {
-    let cancelled = false;
-    setSalesLoading(true);
-    fetchFlipdishSalesCached()
-      .then(data => { if (!cancelled) { setFlipdishSales(data); setSalesError(null); }})
-      .catch(err  => { if (!cancelled) { setSalesError(err.message || String(err)); }})
-      .finally(()  => { if (!cancelled) { setSalesLoading(false); }});
-    return () => { cancelled = true; };
-  }, [cacheBuster]);
+  // NOTE: sales now load via the period-scoped aggregated fetch below (after
+  // the period dates are computed). This fixes the prior raw-row fetch that
+  // truncated at the statement timeout and undercounted revenue ~13%.
 
   // Webhook-era orders are no longer fetched anywhere. Kept as an empty array
   // so the few remaining .filter()/.forEach() references downstream (in dead
@@ -2733,6 +2728,23 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
     return { fromDate: from, toDate: to, prevFromDate: prevFrom, prevToDate: prevTo, periodLabel: label };
   }, [period, customFrom, customTo, today.getTime()]);
 
+  // ── Aggregated sales fetch (server-side, complete) ────────────────────────
+  // Fetches current + prior period totals per store×channel via RPC. Replaces
+  // the raw-row load that truncated at the timeout. Re-runs when the period
+  // window changes or on manual refresh (cacheBuster).
+  useEffect(() => {
+    let cancelled = false;
+    setSalesLoading(true); setSalesError(null);
+    Promise.all([
+      fetchSalesAggregated({ from: toLocalDate(fromDate), to: toLocalDate(toDate) }),
+      fetchSalesAggregated({ from: toLocalDate(prevFromDate), to: toLocalDate(prevToDate) }),
+    ])
+      .then(([cur, prev]) => { if (!cancelled) { setSalesAgg(cur); setPrevSalesAgg(prev); } })
+      .catch(err => { if (!cancelled) setSalesError(err.message || String(err)); })
+      .finally(() => { if (!cancelled) setSalesLoading(false); });
+    return () => { cancelled = true; };
+  }, [fromDate.getTime(), toDate.getTime(), prevFromDate.getTime(), prevToDate.getTime(), cacheBuster]);
+
   // ── Items sold (product mix) — period-scoped, separate heavy fetch ────────
   const [itemsData, setItemsData] = useState(null);     // { items, totalUnits, totalRevenue }
   const [itemsLoading, setItemsLoading] = useState(false);
@@ -2788,17 +2800,8 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   // Filter on businessDate (the trading day) to match the server-side query
   // and operator intent. Using firstEventAt instead would mis-bucket late-night
   // sales that spill across midnight UTC.
-  const periodSales = useMemo(() => flipdishSales.filter(s => {
-    if (!s.businessDate) return false;
-    const t = new Date(s.businessDate + "T12:00:00");   // noon avoids TZ-edge bugs
-    return t >= fromDate && t <= toDate;
-  }), [flipdishSales, fromDate.getTime(), toDate.getTime()]);
-
-  const prevSales = useMemo(() => flipdishSales.filter(s => {
-    if (!s.businessDate) return false;
-    const t = new Date(s.businessDate + "T12:00:00");
-    return t >= prevFromDate && t <= prevToDate;
-  }), [flipdishSales, prevFromDate.getTime(), prevToDate.getTime()]);
+  // (periodSales/prevSales raw-row memos removed — totals now come from the
+  // server-side aggregation in salesAgg/prevSalesAgg.)
 
   // ── Map flipdish_store_id → physical store ───────────────────────────────
   const fsToStore = useMemo(() => {
@@ -2853,28 +2856,30 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
       m[link.storeId].prevOrders += 1;
     });
 
-    // RMS sales: count + sum amount_total per channel per store
-    periodSales.forEach(s => {
-      if (!s.storeId || !m[s.storeId]) return;
-      const amt = s.amountTotal || 0;
-      m[s.storeId].totalSales   += 1;
-      m[s.storeId].salesRevenue += amt;
-      switch (s.channel) {
-        case "POS":            m[s.storeId].salePos++;   m[s.storeId].revPos   += amt; break;
-        case "UberEats":       m[s.storeId].saleUber++;  m[s.storeId].revUber  += amt; break;
-        case "Deliveroo":      m[s.storeId].saleDeli++;  m[s.storeId].revDeli  += amt; break;
-        case "JustEats":       m[s.storeId].saleJe++;    m[s.storeId].revJe    += amt; break;
-        case "FlipdishWebApp": m[s.storeId].saleFda++;   m[s.storeId].revFda   += amt; break;
-        case "FlipdishKIOSK":  m[s.storeId].saleKiosk++; m[s.storeId].revKiosk += amt; break;
+    // RMS sales: now from server-side aggregation (per store×channel),
+    // complete and not truncated. Each row: { storeId, channel, saleCount, revenue }.
+    salesAgg.forEach(a => {
+      if (!a.storeId || !m[a.storeId]) return;
+      const amt = a.revenue || 0;
+      const cnt = a.saleCount || 0;
+      m[a.storeId].totalSales   += cnt;
+      m[a.storeId].salesRevenue += amt;
+      switch (a.channel) {
+        case "POS":            m[a.storeId].salePos   += cnt; m[a.storeId].revPos   += amt; break;
+        case "UberEats":       m[a.storeId].saleUber  += cnt; m[a.storeId].revUber  += amt; break;
+        case "Deliveroo":      m[a.storeId].saleDeli  += cnt; m[a.storeId].revDeli  += amt; break;
+        case "JustEats":       m[a.storeId].saleJe    += cnt; m[a.storeId].revJe    += amt; break;
+        case "FlipdishWebApp": m[a.storeId].saleFda   += cnt; m[a.storeId].revFda   += amt; break;
+        case "FlipdishKIOSK":  m[a.storeId].saleKiosk += cnt; m[a.storeId].revKiosk += amt; break;
       }
     });
-    prevSales.forEach(s => {
-      if (!s.storeId || !m[s.storeId]) return;
-      m[s.storeId].prevTotalSales   += 1;
-      m[s.storeId].prevSalesRevenue += s.amountTotal || 0;
+    prevSalesAgg.forEach(a => {
+      if (!a.storeId || !m[a.storeId]) return;
+      m[a.storeId].prevTotalSales   += a.saleCount || 0;
+      m[a.storeId].prevSalesRevenue += a.revenue || 0;
     });
     return m;
-  }, [visibleStores, periodOrders, prevOrders, periodSales, prevSales, fsToStore]);
+  }, [visibleStores, periodOrders, prevOrders, salesAgg, prevSalesAgg, fsToStore]);
 
   // Sortable rows for the leaderboard
   const leaderboard = useMemo(() => {
@@ -2942,19 +2947,20 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
     };
   }, [leaderboard]);
 
-  // ── Hour-of-day heatmap ──────────────────────────────────────────────────
-  // Reads from periodSales (RMS) using sale_time. Webhook orders are no longer
-  // the source of truth.
-  const hourHeatmap = useMemo(() => {
-    const grid = Array.from({ length: 7 }, () => Array(24).fill(0));  // [dayOfWeek][hour] = order count
-    periodSales.forEach(s => {
-      if (!s.saleTime) return;
-      const t = new Date(s.saleTime);
-      const dow = (t.getDay() + 6) % 7;  // Monday=0
-      grid[dow][t.getHours()] += 1;
-    });
-    return grid;
-  }, [periodSales]);
+  // ── Hour-of-day heatmap (server-side) ─────────────────────────────────────
+  const [hourHeatmap, setHourHeatmap] = useState(() => Array.from({ length: 7 }, () => Array(24).fill(0)));
+  useEffect(() => {
+    let cancelled = false;
+    fetchSalesHeatmap({ from: toLocalDate(fromDate), to: toLocalDate(toDate) })
+      .then(rows => {
+        if (cancelled) return;
+        const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
+        rows.forEach(r => { if (grid[r.dow] && r.hour >= 0 && r.hour < 24) grid[r.dow][r.hour] = r.cnt; });
+        setHourHeatmap(grid);
+      })
+      .catch(() => { /* heatmap is non-critical; leave empty on error */ });
+    return () => { cancelled = true; };
+  }, [fromDate.getTime(), toDate.getTime(), cacheBuster]);
   const maxHourCount = useMemo(() => Math.max(1, ...hourHeatmap.flat()), [hourHeatmap]);
 
   // ── Top items chain-wide ─────────────────────────────────────────────────
@@ -2984,15 +2990,12 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   // returned data, in one number.
   // Note: flipdishSales rows don't include rms_synced_at in the lean column
   // set, so we use sale_time (the latest sale we know about) as a proxy.
-  const lastSyncDate = useMemo(() => {
-    let maxTs = 0;
-    for (const s of flipdishSales) {
-      if (!s.saleTime) continue;
-      const t = new Date(s.saleTime).getTime();
-      if (t > maxTs) maxTs = t;
-    }
-    return maxTs ? new Date(maxTs) : null;
-  }, [flipdishSales]);
+  const [lastSyncDate, setLastSyncDate] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchLastSaleTime().then(d => { if (!cancelled) setLastSyncDate(d); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [cacheBuster]);
   const minsSinceSync = lastSyncDate ? Math.floor((Date.now() - lastSyncDate.getTime()) / 60000) : null;
 
   const handleSync = async () => {
@@ -3004,9 +3007,8 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   // ── Open store detail modal ──────────────────────────────────────────────
   const detailStore = storeDetailId ? stores.find(s => s.id === storeDetailId) : null;
 
-  // Loading & error guards — show before the main dashboard renders, since
-  // every section below depends on flipdishSales being populated.
-  if (salesLoading && flipdishSales.length === 0) {
+  // Loading & error guards — show before the main dashboard renders.
+  if (salesLoading && salesAgg.length === 0) {
     return (
       <div className="space-y-6">
         <div>
@@ -3014,7 +3016,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
           <div className="text-xs text-slate-500 mt-0.5">Loading sales data…</div>
         </div>
         <div className="flex items-center justify-center py-20">
-          <div className="text-slate-400 text-sm">⏳ Fetching ~40k rows · this takes a few seconds on first open</div>
+          <div className="text-slate-400 text-sm">⏳ Loading…</div>
         </div>
       </div>
     );
@@ -3412,7 +3414,6 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
         <StoreDetailModal
           store={detailStore}
           flipdishStores={flipdishStores}
-          flipdishSales={flipdishSales}
           fromDate={fromDate}
           toDate={toDate}
           periodLabel={periodLabel}
@@ -3442,7 +3443,7 @@ function ChannelRow({ label, value, total, color, textColor }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Per-store drill-down modal
 // ═══════════════════════════════════════════════════════════════════════════════
-function StoreDetailModal({ store, flipdishStores, flipdishSales, fromDate, toDate, periodLabel, onClose }) {
+function StoreDetailModal({ store, flipdishStores, fromDate, toDate, periodLabel, onClose }) {
   const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -3451,15 +3452,20 @@ function StoreDetailModal({ store, flipdishStores, flipdishSales, fromDate, toDa
     flipdishStores.filter(fs => fs.storeId === store.id).map(fs => fs.id),
   [flipdishStores, store.id]);
 
-  // Sales for THIS store in the period — match on internal store_id (already
-  // resolved upstream by the sync from property_id), filter by businessDate
-  // to match the trading-day semantics used everywhere else on the dashboard.
-  const sales = useMemo(() => flipdishSales.filter(s => {
-    if (s.storeId !== store.id) return false;
-    if (!s.businessDate) return false;
-    const t = new Date(s.businessDate + "T12:00:00");
-    return t >= fromDate && t <= toDate;
-  }), [flipdishSales, store.id, fromDate.getTime(), toDate.getTime()]);
+  // Sales for THIS store in the period — fetched on demand (scoped to one store
+  // + period, so it's a small query), rather than from a global 44k-row load.
+  const toLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const [sales, setSales] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setSalesLoading(true);
+    fetchStoreSales({ storeId: store.id, from: toLocalDate(fromDate), to: toLocalDate(toDate) })
+      .then(rows => { if (!cancelled) setSales(rows); })
+      .catch(() => { if (!cancelled) setSales([]); })
+      .finally(() => { if (!cancelled) setSalesLoading(false); });
+    return () => { cancelled = true; };
+  }, [store.id, fromDate.getTime(), toDate.getTime()]);
 
   const revenue = sales.reduce((a, s) => a + (s.amountTotal || 0), 0);
   const atv = sales.length > 0 ? revenue / sales.length : 0;

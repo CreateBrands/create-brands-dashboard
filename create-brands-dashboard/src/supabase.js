@@ -1567,71 +1567,89 @@ export async function fetchFlipdishSales({ from, to, limit = 50000, brandId = "c
 // in-app, so the heavy JSON never loads for the whole 35-day range.
 // Returns { items: [{caption, category, quantity, revenue, refunds}], totalUnits, totalRevenue }.
 // ────────────────────────────────────────────────────────────────────────────
-export async function fetchItemsSold({ from, to, brandId = "chocoberry", limit = 20000 } = {}) {
+// Hour×day heatmap grid for the period (server-side).
+export async function fetchSalesHeatmap({ from, to, brandId = "chocoberry" } = {}) {
+  const toIsoDate = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === "string" ? v.slice(0, 10) : v);
+  const { data, error } = await supabase.rpc("agg_flipdish_heatmap", {
+    p_brand_id: brandId, p_from: toIsoDate(from), p_to: toIsoDate(to),
+  });
+  if (error) throw error;
+  return (data || []).map(r => ({ dow: Number(r.dow), hour: Number(r.hour), cnt: Number(r.cnt) || 0 }));
+}
+
+// Latest sale timestamp for a brand (for the "latest sale Xm ago" indicator).
+export async function fetchLastSaleTime(brandId = "chocoberry") {
+  const { data, error } = await supabase.rpc("agg_flipdish_last_sale", { p_brand_id: brandId });
+  if (error) throw error;
+  return data ? new Date(data) : null;
+}
+
+// Per-store raw sales for the store-detail modal — scoped to ONE store + period
+// (small, lazy; only runs when a store is opened). Uses the lean column set.
+export async function fetchStoreSales({ storeId, from, to, brandId = "chocoberry" } = {}) {
+  if (!storeId) return [];
+  const toIsoDate = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === "string" ? v.slice(0, 10) : v);
+  const { data, error } = await supabase
+    .from("flipdish_sales")
+    .select("sale_id, channel, amount_total, business_date, sale_time, store_id, is_cancelled")
+    .eq("brand_id", brandId)
+    .eq("store_id", storeId)
+    .gte("business_date", toIsoDate(from))
+    .lte("business_date", toIsoDate(to))
+    .order("sale_time", { ascending: false });
+  if (error) throw error;
+  return (data || [])
+    .filter(s => !s.is_cancelled)
+    .map(s => ({
+      saleId: s.sale_id, channel: s.channel, amountTotal: Number(s.amount_total) || 0,
+      businessDate: s.business_date, saleTime: s.sale_time, storeId: s.store_id,
+    }));
+}
+
+export async function fetchItemsSold({ from, to, brandId = "chocoberry" } = {}) {
   const toIsoDate = (v) => {
     if (v instanceof Date) return v.toISOString().slice(0, 10);
     if (typeof v === "string") return v.slice(0, 10);
     return v;
   };
-  const fromD = toIsoDate(from);
-  const toD   = toIsoDate(to);
+  const { data, error } = await supabase.rpc("agg_flipdish_items", {
+    p_brand_id: brandId,
+    p_from: toIsoDate(from),
+    p_to:   toIsoDate(to),
+  });
+  if (error) throw error;
+  const items = (data || []).map(r => ({
+    caption:  r.caption,
+    category: r.category,
+    quantity: Number(r.quantity) || 0,
+    revenue:  Number(r.revenue) || 0,
+  }));
+  const totalUnits   = items.reduce((a, i) => a + i.quantity, 0);
+  const totalRevenue = items.reduce((a, i) => a + i.revenue, 0);
+  return { items, totalUnits, totalRevenue, saleCount: items.length };
+}
 
-  // Page through, pulling only sale_items + a couple of context cols. Skip
-  // cancelled/refunded-at-sale-level rows.
-  const PAGE = 2000;   // smaller pages — rows are heavy (sale_items JSON)
-  let offset = 0;
-  const rows = [];
-  while (offset < limit) {
-    let q = supabase
-      .from("flipdish_sales")
-      .select("sale_id, business_date, sale_items, is_cancelled")
-      .order("business_date", { ascending: false })
-      .range(offset, offset + PAGE - 1);
-    if (brandId) q = q.eq("brand_id", brandId);
-    if (fromD) q = q.gte("business_date", fromD);
-    if (toD)   q = q.lte("business_date", toD);
-    const { data, error } = await q;
-    if (error) throw error;
-    const batch = data || [];
-    rows.push(...batch);
-    if (batch.length < PAGE) break;
-    offset += PAGE;
-  }
-
-  // Aggregate. sale_items is a JSON array; each item has caption, category,
-  // quantity, netRetailPrice/retailPrice, isRefunded. Items can nest modifiers
-  // in their own saleItems[] — we count top-level items only for the product
-  // mix (modifiers are add-ons, usually £0, and would distort unit counts).
-  const agg = new Map();   // key: caption||category
-  let totalUnits = 0;
-  let totalRevenue = 0;
-
-  for (const r of rows) {
-    if (r.is_cancelled) continue;
-    let items = r.sale_items;
-    if (typeof items === "string") { try { items = JSON.parse(items); } catch { items = []; } }
-    if (!Array.isArray(items)) continue;
-    for (const it of items) {
-      if (it.isRefunded) continue;
-      const caption  = it.caption || "(unnamed)";
-      const category = it.category || "Uncategorised";
-      const qty      = Number(it.quantity) || 0;
-      const price    = (it.netRetailPrice != null ? Number(it.netRetailPrice)
-                       : it.retailPrice != null ? Number(it.retailPrice)
-                       : Number(it.unitPrice) || 0);
-      const revenue  = price * qty;
-      const key = `${caption}|||${category}`;
-      const cur = agg.get(key) || { caption, category, quantity: 0, revenue: 0 };
-      cur.quantity += qty;
-      cur.revenue  += revenue;
-      agg.set(key, cur);
-      totalUnits   += qty;
-      totalRevenue += revenue;
-    }
-  }
-
-  const itemsArr = Array.from(agg.values());
-  return { items: itemsArr, totalUnits, totalRevenue, saleCount: rows.length };
+// Server-side per-store × channel sales aggregation (complete, fast — replaces
+// the raw-row fetch that was truncating at the statement timeout and
+// undercounting). Returns rows: { store_id, channel, sale_count, revenue }.
+export async function fetchSalesAggregated({ from, to, brandId = "chocoberry" } = {}) {
+  const toIsoDate = (v) => {
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "string") return v.slice(0, 10);
+    return v;
+  };
+  const { data, error } = await supabase.rpc("agg_flipdish_sales", {
+    p_brand_id: brandId,
+    p_from: toIsoDate(from),
+    p_to:   toIsoDate(to),
+  });
+  if (error) throw error;
+  return (data || []).map(r => ({
+    storeId:   r.store_id,
+    channel:   r.channel,
+    saleCount: Number(r.sale_count) || 0,
+    revenue:   Number(r.revenue) || 0,
+  }));
 }
 
 
