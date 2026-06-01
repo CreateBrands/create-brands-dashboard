@@ -3685,19 +3685,23 @@ export function rateForBandOnDate(rates, band, onDate) {
 // a minimum-wage employee has no configured rate for their band on that date,
 // or DOB is missing — we FLAG, never guess.
 export function resolveHourlyRate(employee, workDate, rates) {
-  const basis = employee?.pay_basis || "fixed";
+  // Accept BOTH the camelCase app shape (payBasis, hourlyRate, dob) and the
+  // snake_case DB shape (pay_basis, hourly_rate) — callers pass either.
+  const basis = employee?.payBasis ?? employee?.pay_basis ?? "fixed";
+  const hourly = employee?.hourlyRate ?? employee?.hourly_rate;
+  const dob = employee?.dob;
   if (basis === "fixed") {
-    const r = Number(employee?.hourly_rate);
-    if (!employee?.hourly_rate && employee?.hourly_rate !== 0) {
+    const r = Number(hourly);
+    if ((hourly == null) || isNaN(r)) {
       return { rate: null, basis, band: null, age: null, error: "No fixed hourly_rate set for this employee." };
     }
     return { rate: r, basis, band: null, age: null, error: null };
   }
   // minimum_wage
-  if (!employee?.dob) {
+  if (!dob) {
     return { rate: null, basis, band: null, age: null, error: "Minimum-wage employee has no date of birth set — cannot determine age band." };
   }
-  const age = ageOnDate(employee.dob, workDate);
+  const age = ageOnDate(dob, workDate);
   const band = bandForAge(age);
   if (!band) {
     return { rate: null, basis, band: null, age, error: "Could not determine age band." };
