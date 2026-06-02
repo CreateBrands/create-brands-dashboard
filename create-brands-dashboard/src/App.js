@@ -4597,6 +4597,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           name: `${emp.firstName} ${emp.lastName || ""}`.trim(),
           niNumber: emp.niNumber || "",
           dob: emp.dob || "",
+          gender: emp.gender || "",
+          address: emp.address || "",
+          hireDate: emp.hireDate || "",
+          taxStarterStatement: emp.taxStarterStatement || "",
           under18: emp.dob ? (ageOnDate(emp.dob, to) < 18) : false,
           basis: emp.payBasis || "fixed",
           totalHours, totalPay,
@@ -4661,7 +4665,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     if (!rows) return;
     const exportable = rows.filter(r => !r.rowError);
     const header = [
-      "Employee", "NI Number", "DOB", "Under 18",
+      "Employee", "NI Number", "DOB", "Gender", "Address", "Start date", "Starter statement", "Under 18",
       "Pay basis", "Total hours", "Gross pay (£)",
       "Bank transfer (£)", "Cash paid (£)",
       "Payroll location", "Accounting location",
@@ -4669,29 +4673,29 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     const aoa = [header];
     for (const r of exportable) {
       aoa.push([
-        r.name, r.niNumber, r.dob, r.under18 ? "YES" : "",
+        r.name, r.niNumber, r.dob, r.gender, r.address, r.hireDate, r.taxStarterStatement, r.under18 ? "YES" : "",
         r.basis === "minimum_wage" ? "Minimum wage" : "Fixed",
         Number(r.totalHours.toFixed(2)), Number(r.totalPay.toFixed(2)),
         Number(r.bankAmount.toFixed(2)), Number(r.cashAmount.toFixed(2)),
         storeName(r.payrollLocation), storeName(r.accountingLocation),
       ]);
     }
-    // Totals row
+    // Totals row — money columns are now J(hours) K(gross) L(bank) M(cash)
     const n = exportable.length;
     if (n) {
       const startRow = 2;             // data starts at Excel row 2
       const endRow = startRow + n - 1;
       aoa.push([
-        "TOTAL", "", "", "", "",
-        { f: `SUM(F${startRow}:F${endRow})` }, { f: `SUM(G${startRow}:G${endRow})` },
-        { f: `SUM(H${startRow}:H${endRow})` }, { f: `SUM(I${startRow}:I${endRow})` },
+        "TOTAL", "", "", "", "", "", "", "", "",
+        { f: `SUM(J${startRow}:J${endRow})` }, { f: `SUM(K${startRow}:K${endRow})` },
+        { f: `SUM(L${startRow}:L${endRow})` }, { f: `SUM(M${startRow}:M${endRow})` },
         "", "",
       ]);
     }
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [
-      { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 9 }, { wch: 13 },
-      { wch: 11 }, { wch: 13 }, { wch: 16 }, { wch: 14 },
+      { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 8 }, { wch: 30 }, { wch: 12 }, { wch: 16 }, { wch: 9 },
+      { wch: 13 }, { wch: 11 }, { wch: 13 }, { wch: 16 }, { wch: 14 },
       { wch: 18 }, { wch: 18 },
     ];
     const wb = XLSX.utils.book_new();
@@ -8832,7 +8836,28 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
         </div>
       </div>
 
-      {/* Loan ledger (internal only) */}
+      {/* Starter / tax declaration (read-only summary; edit on Personal & HR) */}
+      <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4">
+        <h3 className="text-sm font-bold text-slate-200 mb-3">Starter &amp; tax details</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+          {[
+            ["NI number", employee?.niNumber],
+            ["Date of birth", employee?.dob],
+            ["Gender", employee?.gender],
+            ["Start date", employee?.hireDate],
+            ["Starter statement", employee?.taxStarterStatement],
+            ["Address", employee?.address],
+          ].map(([label, val]) => (
+            <div key={label} className={label === "Address" ? "col-span-2 sm:col-span-3" : ""}>
+              <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{label}</div>
+              <div className={`${val ? "text-slate-200" : "text-amber-400"}`}>{val || "— not set —"}</div>
+            </div>
+          ))}
+        </div>
+        <div className="text-[10px] text-slate-600 mt-2">Read-only here. Edit these on the Personal &amp; HR tab. Included in the payroll export.</div>
+      </div>
+
+      {/* Staff loan (internal only) */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-slate-200">Staff loan (internal only)</h3>
