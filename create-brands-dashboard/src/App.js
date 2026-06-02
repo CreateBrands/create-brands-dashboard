@@ -579,6 +579,20 @@ function useXLSX() {
   return XLSX;
 }
 
+// ExcelJS — full cell styling (bold, fills, borders, number formats) for the
+// payroll export. Community SheetJS can't style cells; ExcelJS (free) can.
+function useExcelJS() {
+  const [ExcelJS, setExcelJS] = useState(null);
+  useEffect(() => {
+    if (window.ExcelJS) { setExcelJS(window.ExcelJS); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js";
+    script.onload = () => setExcelJS(window.ExcelJS);
+    document.head.appendChild(script);
+  }, []);
+  return ExcelJS;
+}
+
 const EOD_COLUMNS = [
   { key: "date",                  label: "Date (YYYY-MM-DD)",     hint: "2024-01-15", required: true  },
   { key: "brandId",               label: "Brand ID",               hint: "cb-kitchen", required: true  },
@@ -4526,7 +4540,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
 function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
-  const XLSX = useXLSX();
+  const ExcelJS = useExcelJS();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [running, setRunning] = useState(false);
@@ -4595,6 +4609,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         return {
           employeeId: emp.id,
           name: `${emp.firstName} ${emp.lastName || ""}`.trim(),
+          firstName: emp.firstName || "",
+          lastName: emp.lastName || "",
+          email: emp.email || "",
           niNumber: emp.niNumber || "",
           dob: emp.dob || "",
           gender: emp.gender || "",
@@ -4660,48 +4677,113 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     }
   };
 
-  const exportExcel = () => {
-    if (!XLSX) { alert("Excel library still loading — try again in a moment."); return; }
+  const exportExcel = async () => {
+    if (!ExcelJS) { alert("Excel library still loading — try again in a moment."); return; }
     if (!rows) return;
     const exportable = rows.filter(r => !r.rowError);
-    const header = [
-      "Employee", "NI Number", "DOB", "Gender", "Address", "Start date", "Starter statement", "Under 18",
-      "Pay basis", "Total hours", "Gross pay (£)",
-      "Bank transfer (£)", "Cash paid (£)",
-      "Payroll location", "Accounting location",
+
+    // Exact column spec for the accountant, in order.
+    const columns = [
+      { header: "Accounting Location", key: "acctLoc",  width: 20 },
+      { header: "Start Date",          key: "startDate", width: 13, kind: "date" },
+      { header: "End Date",            key: "endDate",   width: 13, kind: "date" },
+      { header: "First Name",          key: "firstName", width: 16 },
+      { header: "Last Name",           key: "lastName",  width: 16 },
+      { header: "Gender",              key: "gender",    width: 9 },
+      { header: "DOB",                 key: "dob",       width: 13, kind: "date" },
+      { header: "NI Number",           key: "ni",        width: 14 },
+      { header: "Email",               key: "email",     width: 26 },
+      { header: "Address",             key: "address",   width: 32 },
+      { header: "Starter Statement A", key: "stA",       width: 10, kind: "center" },
+      { header: "Starter Statement B", key: "stB",       width: 10, kind: "center" },
+      { header: "Starter Statement C", key: "stC",       width: 10, kind: "center" },
+      { header: "Salary Term",         key: "term",      width: 12 },
+      { header: "Gross Pay",           key: "gross",     width: 13, kind: "money" },
+      { header: "Bank Transfer",       key: "bank",      width: 14, kind: "money" },
+      { header: "Cash Paid",           key: "cash",      width: 13, kind: "money" },
     ];
-    const aoa = [header];
-    for (const r of exportable) {
-      aoa.push([
-        r.name, r.niNumber, r.dob, r.gender, r.address, r.hireDate, r.taxStarterStatement, r.under18 ? "YES" : "",
-        r.basis === "minimum_wage" ? "Minimum wage" : "Fixed",
-        Number(r.totalHours.toFixed(2)), Number(r.totalPay.toFixed(2)),
-        Number(r.bankAmount.toFixed(2)), Number(r.cashAmount.toFixed(2)),
-        storeName(r.payrollLocation), storeName(r.accountingLocation),
-      ]);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Chocoberry Dashboard";
+    wb.created = new Date();
+    const ws = wb.addWorksheet("Payroll", {
+      views: [{ state: "frozen", ySplit: 1 }],   // freeze header row
+    });
+    ws.columns = columns.map(c => ({ header: c.header, key: c.key, width: c.width }));
+
+    // Header styling
+    const headerRow = ws.getRow(1);
+    headerRow.height = 22;
+    headerRow.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } };
+      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF3730A3" } },
+        bottom: { style: "thin", color: { argb: "FF3730A3" } },
+        left: { style: "thin", color: { argb: "FF3730A3" } },
+        right: { style: "thin", color: { argb: "FF3730A3" } },
+      };
+    });
+
+    const stMark = (r, letter) => (String(r.taxStarterStatement || "").toUpperCase() === letter ? "Yes" : "");
+
+    exportable.forEach((r, i) => {
+      const row = ws.addRow({
+        acctLoc: storeName(r.accountingLocation),
+        startDate: r.hireDate || "",
+        endDate: "",                                   // no contract-end field; left blank
+        firstName: r.firstName || "",
+        lastName: r.lastName || "",
+        gender: r.gender || "",
+        dob: r.dob || "",
+        ni: r.niNumber || "",
+        email: r.email || "",
+        address: r.address || "",
+        stA: stMark(r, "A"),
+        stB: stMark(r, "B"),
+        stC: stMark(r, "C"),
+        term: r.basis === "minimum_wage" ? "Hourly" : "Fixed",
+        gross: Number(r.totalPay.toFixed(2)),
+        bank: Number(r.bankAmount.toFixed(2)),
+        cash: Number(r.cashAmount.toFixed(2)),
+      });
+      // zebra striping
+      if (i % 2 === 1) {
+        row.eachCell(cell => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } }; });
+      }
+      row.eachCell((cell, col) => {
+        const spec = columns[col - 1];
+        cell.border = {
+          top: { style: "hair", color: { argb: "FFD1D5DB" } },
+          bottom: { style: "hair", color: { argb: "FFD1D5DB" } },
+          left: { style: "hair", color: { argb: "FFD1D5DB" } },
+          right: { style: "hair", color: { argb: "FFD1D5DB" } },
+        };
+        if (spec?.kind === "money") { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
+        if (spec?.kind === "center") cell.alignment = { horizontal: "center" };
+      });
+    });
+
+    // Totals row
+    if (exportable.length) {
+      const totalRow = ws.addRow({
+        acctLoc: "TOTAL",
+        gross: { formula: `SUM(O2:O${exportable.length + 1})` },
+        bank:  { formula: `SUM(P2:P${exportable.length + 1})` },
+        cash:  { formula: `SUM(Q2:Q${exportable.length + 1})` },
+      });
+      totalRow.eachCell((cell, col) => {
+        cell.font = { bold: true };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+        const spec = columns[col - 1];
+        if (spec?.kind === "money") { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
+        cell.border = { top: { style: "thin", color: { argb: "FF9CA3AF" } } };
+      });
     }
-    // Totals row — money columns are now J(hours) K(gross) L(bank) M(cash)
-    const n = exportable.length;
-    if (n) {
-      const startRow = 2;             // data starts at Excel row 2
-      const endRow = startRow + n - 1;
-      aoa.push([
-        "TOTAL", "", "", "", "", "", "", "", "",
-        { f: `SUM(J${startRow}:J${endRow})` }, { f: `SUM(K${startRow}:K${endRow})` },
-        { f: `SUM(L${startRow}:L${endRow})` }, { f: `SUM(M${startRow}:M${endRow})` },
-        "", "",
-      ]);
-    }
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [
-      { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 8 }, { wch: 30 }, { wch: 12 }, { wch: 16 }, { wch: 9 },
-      { wch: 13 }, { wch: 11 }, { wch: 13 }, { wch: 16 }, { wch: 14 },
-      { wch: 18 }, { wch: 18 },
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Payroll");
-    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    downloadBlob(new Blob([buf], { type: "application/octet-stream" }), `payroll_${from}_to_${to}.xlsx`);
+
+    const buf = await wb.xlsx.writeBuffer();
+    downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `payroll_${from}_to_${to}.xlsx`);
   };
 
   const totalGross = rows ? rows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
