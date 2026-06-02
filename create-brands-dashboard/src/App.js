@@ -6528,7 +6528,7 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
 }
 
 // ─── Assignments View ─────────────────────────────────────────────────────────
-function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, item, onSave, onClose }) {
+function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, opsTeam = [], storeRoles = [], storeDepartments = [], item, onSave, onClose }) {
   const allowedStores = useMemo(
     () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
     [stores]
@@ -6539,7 +6539,9 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
     brandId: item?.brandId || "",   // derived from store on save
     type: item?.type || "checklist",
     taskId: item?.taskId || "",
+    assignTo: item?.assignTo || "role",
     role: item?.role || "",
+    department: item?.department || "",
     personId: item?.personId || "",
     freq: item?.freq || "daily",
     weekday: item?.weekday || "Monday",
@@ -6552,6 +6554,24 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const selectedStore = allowedStores.find(s => s.id === form.storeId);
+
+  // Targets for the assignment picker, filtered to the selected store.
+  const assignTargets = useMemo(() => {
+    const sid = form.storeId;
+    const depts = (storeDepartments || []).filter(d => !d.archivedAt && (!sid || d.storeId === sid));
+    const roles = (storeRoles || []).filter(r => !r.archivedAt && (!sid || r.storeId === sid));
+    const emps = (opsTeam || []).filter(p => (p.status !== "archived" && !p.archivedAt) && (!sid || (p.storeIds || []).includes(sid)));
+    // de-dupe department/role names (same name can exist across stores)
+    const uniqByName = (arr) => {
+      const seen = new Set();
+      return arr.filter(x => { const k = (x.name || "").toLowerCase(); if (seen.has(k) || !k) return false; seen.add(k); return true; });
+    };
+    return {
+      departments: uniqByName(depts),
+      roles: uniqByName(roles),
+      employees: emps.sort((a, b) => (a.firstName || "").localeCompare(b.firstName || "")),
+    };
+  }, [form.storeId, storeDepartments, storeRoles, opsTeam]);
 
   // Filter equipment/tasks to the selected store. Checklists + cleaning tasks
   // are currently chain-wide (no store_id yet) — show all of them. Temp units
@@ -6576,11 +6596,22 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
   const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
   const handleSave = () => {
-    if (!form.taskId || !form.role) return;
     if (!form.storeId) { alert("Please pick a store."); return; }
+    if (!form.taskId) { alert("Please select a task."); return; }
+    // Validate the assignment target based on what it's assigned to.
+    if (form.assignTo === "role" && !form.role) { alert("Please pick a role."); return; }
+    if (form.assignTo === "department" && !form.department) { alert("Please pick a department."); return; }
+    if (form.assignTo === "employee" && !form.personId) { alert("Please pick an employee."); return; }
+    // Clear the non-selected target fields so only the chosen one is stored.
+    const cleaned = {
+      ...form,
+      role:       form.assignTo === "role" ? form.role : "",
+      department: form.assignTo === "department" ? form.department : "",
+      personId:   form.assignTo === "employee" ? form.personId : "",
+    };
     onSave({
       id: item?.id || `as-${Date.now()}`,
-      ...form,
+      ...cleaned,
       brandId: selectedStore?.brandId || form.brandId,
     });
   };
@@ -6604,7 +6635,33 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
           )}
         </div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Task Type</label><select value={form.type} onChange={e => { set("type", e.target.value); set("taskId", ""); }} className={inputCls}><option value="checklist">Checklist</option><option value="cleaning">Cleaning</option><option value="temp">Temperature</option><option value="delivery">Delivery</option></select></div><div><label className={labelCls}>Task</label><select value={form.taskId} onChange={e => set("taskId", e.target.value)} className={inputCls}><option value="">— Select —</option>{taskOptions().map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
-        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Role *</label><input value={form.role} onChange={e => set("role", e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>
+        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Assign to *</label><select value={form.assignTo} onChange={e => { set("assignTo", e.target.value); set("role", ""); set("department", ""); set("personId", ""); }} className={inputCls}><option value="department">Department</option><option value="role">Role</option><option value="employee">Employee</option></select></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>
+        <div>
+          {form.assignTo === "department" && (
+            <><label className={labelCls}>Department *</label>
+            <select value={form.department} onChange={e => set("department", e.target.value)} className={inputCls}>
+              <option value="">— Select department —</option>
+              {assignTargets.departments.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+            </select>
+            {assignTargets.departments.length === 0 && <div className="text-[10px] text-amber-400 mt-1">No departments set for this store.</div>}</>
+          )}
+          {form.assignTo === "role" && (
+            <><label className={labelCls}>Role *</label>
+            <select value={form.role} onChange={e => set("role", e.target.value)} className={inputCls}>
+              <option value="">— Select role —</option>
+              {assignTargets.roles.map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
+            </select>
+            {assignTargets.roles.length === 0 && <div className="text-[10px] text-amber-400 mt-1">No roles set for this store.</div>}</>
+          )}
+          {form.assignTo === "employee" && (
+            <><label className={labelCls}>Employee *</label>
+            <select value={form.personId} onChange={e => set("personId", e.target.value)} className={inputCls}>
+              <option value="">— Select employee —</option>
+              {assignTargets.employees.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName || ""}</option>)}
+            </select>
+            {assignTargets.employees.length === 0 && <div className="text-[10px] text-amber-400 mt-1">No employees at this store.</div>}</>
+          )}
+        </div>
         <div><label className={labelCls}>Frequency</label><select value={form.freq} onChange={e => set("freq", e.target.value)} className={inputCls}><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="weekly">Weekly</option><option value="once">One-off</option><option value="custom">Custom days</option></select></div>
         {form.freq === "weekly" && <div><label className={labelCls}>Day of week</label><select value={form.weekday} onChange={e => set("weekday", e.target.value)} className={inputCls}>{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d => <option key={d}>{d}</option>)}</select></div>}
         {form.freq === "once" && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
@@ -6616,7 +6673,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
   );
 }
 
-function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, cleaningTasks, opsTeam, auditTrail, onAdd, onEdit, onDelete }) {
+function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, cleaningTasks, opsTeam, storeRoles = [], storeDepartments = [], auditTrail, onAdd, onEdit, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filter, setFilter] = useState("all");
@@ -6669,7 +6726,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
           </div>
         );
       })}</div>
-      {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
+      {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
       {deleteId && <OpsConfirmModal message="Delete this assignment?" onConfirm={() => onDelete(deleteId)} onClose={() => setDeleteId(null)}/>}
     </div>
   );
@@ -21368,7 +21425,7 @@ export default function App() {
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "hiring"         && <HiringView
               brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
               applications={applications} opsTeam={opsTeam} currentUser={currentUser}
