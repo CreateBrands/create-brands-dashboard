@@ -4588,10 +4588,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           if (existingLine) { existingLine.hours += hrs; existingLine.pay += pay; }
           else lines.push({ key, hours: hrs, pay, rate: res.rate, band: res.band, basis: res.basis, age: res.age });
         }
-        // default split: bank hours from employee default (capped at total), cash = remainder
-        const defBank = emp.defaultBankHours != null ? Number(emp.defaultBankHours) : totalHours;
-        const bankHours = Math.min(defBank, totalHours);
-        const cashHours = Math.max(0, totalHours - bankHours);
+        // default split BY AMOUNT: bank £ from employee default (capped at gross), cash = remainder
+        const defBank = emp.defaultBankAmount != null ? Number(emp.defaultBankAmount) : totalPay;
+        const bankAmount = Math.min(defBank, totalPay);
+        const cashAmount = Math.max(0, totalPay - bankAmount);
         return {
           employeeId: emp.id,
           name: `${emp.firstName} ${emp.lastName || ""}`.trim(),
@@ -4600,7 +4600,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           under18: emp.dob ? (ageOnDate(emp.dob, to) < 18) : false,
           basis: emp.payBasis || "fixed",
           totalHours, totalPay,
-          bankHours, cashHours,
+          bankAmount, cashAmount,
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
           lines, rowError,
@@ -4619,16 +4619,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     setRows(rs => rs.map(r => {
       if (r.employeeId !== employeeId) return r;
       const next = { ...r, ...patch };
-      if (patch.bankHours != null) {
-        const bh = Math.max(0, Math.min(Number(patch.bankHours) || 0, r.totalHours));
-        next.bankHours = bh;
-        next.cashHours = Math.max(0, r.totalHours - bh);
+      if (patch.bankAmount != null) {
+        const ba = Math.max(0, Math.min(Number(patch.bankAmount) || 0, r.totalPay));
+        next.bankAmount = ba;
+        next.cashAmount = Math.max(0, r.totalPay - ba);
       }
       return next;
     }));
   };
-
-  const proportion = (row, hours) => (row.totalHours > 0 ? (hours / row.totalHours) * row.totalPay : 0);
 
   const flagged = rows ? rows.filter(r => r.rowError) : [];
 
@@ -4645,8 +4643,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           period_end: to,
           total_hours: r.totalHours,
           total_pay: r.totalPay,
-          bank_hours: r.bankHours,
-          cash_hours: r.cashHours,
+          bank_amount: r.bankAmount,
+          cash_amount: r.cashAmount,
           payroll_location: r.payrollLocation || null,
           accounting_location: r.accountingLocation || null,
           rate_snapshot: r.lines.map(l => ({ hours: l.hours, rate: l.rate, band: l.band, basis: l.basis })),
@@ -4665,7 +4663,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     const header = [
       "Employee", "NI Number", "DOB", "Under 18",
       "Pay basis", "Total hours", "Gross pay (£)",
-      "Bank hours", "Bank amount (£)", "Cash hours", "Cash amount (£)",
+      "Bank transfer (£)", "Cash paid (£)",
       "Payroll location", "Accounting location",
     ];
     const aoa = [header];
@@ -4674,8 +4672,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         r.name, r.niNumber, r.dob, r.under18 ? "YES" : "",
         r.basis === "minimum_wage" ? "Minimum wage" : "Fixed",
         Number(r.totalHours.toFixed(2)), Number(r.totalPay.toFixed(2)),
-        Number(r.bankHours.toFixed(2)), Number(proportion(r, r.bankHours).toFixed(2)),
-        Number(r.cashHours.toFixed(2)), Number(proportion(r, r.cashHours).toFixed(2)),
+        Number(r.bankAmount.toFixed(2)), Number(r.cashAmount.toFixed(2)),
         storeName(r.payrollLocation), storeName(r.accountingLocation),
       ]);
     }
@@ -4688,14 +4685,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         "TOTAL", "", "", "", "",
         { f: `SUM(F${startRow}:F${endRow})` }, { f: `SUM(G${startRow}:G${endRow})` },
         { f: `SUM(H${startRow}:H${endRow})` }, { f: `SUM(I${startRow}:I${endRow})` },
-        { f: `SUM(J${startRow}:J${endRow})` }, { f: `SUM(K${startRow}:K${endRow})` },
         "", "",
       ]);
     }
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [
       { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 9 }, { wch: 13 },
-      { wch: 11 }, { wch: 13 }, { wch: 11 }, { wch: 14 }, { wch: 11 }, { wch: 14 },
+      { wch: 11 }, { wch: 13 }, { wch: 16 }, { wch: 14 },
       { wch: 18 }, { wch: 18 },
     ];
     const wb = XLSX.utils.book_new();
@@ -4767,8 +4763,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Employee</th>
                   <th className="py-2 pr-3">Hours</th>
                   <th className="py-2 pr-3">Gross</th>
-                  <th className="py-2 pr-3">Bank hrs</th>
-                  <th className="py-2 pr-3">Cash hrs</th>
+                  <th className="py-2 pr-3">Bank transfer</th>
+                  <th className="py-2 pr-3">Cash paid</th>
                   <th className="py-2 pr-3">Payroll loc</th>
                   <th className="py-2 pr-3">Acct loc</th>
                   <th className="py-2 pr-3">Working</th>
@@ -4788,14 +4784,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                         <td className="py-2 pr-3 text-slate-300">{r.totalHours.toFixed(2)}</td>
                         <td className="py-2 pr-3 text-slate-100 font-semibold">{fmtGBP(r.totalPay)}</td>
                         <td className="py-2 pr-3">
-                          <input type="number" step="0.25" min="0" max={r.totalHours} value={r.bankHours}
-                            onChange={e => updateRow(r.employeeId, { bankHours: e.target.value })}
-                            className="w-20 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
-                          <div className="text-[10px] text-slate-600">{fmtGBP(proportion(r, r.bankHours))}</div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-slate-500 text-xs">£</span>
+                            <input type="number" step="0.01" min="0" max={r.totalPay} value={Number(r.bankAmount.toFixed(2))}
+                              onChange={e => updateRow(r.employeeId, { bankAmount: e.target.value })}
+                              className="w-24 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
+                          </div>
                         </td>
-                        <td className="py-2 pr-3 text-slate-300">
-                          {r.cashHours.toFixed(2)}
-                          <div className="text-[10px] text-slate-600">{fmtGBP(proportion(r, r.cashHours))}</div>
+                        <td className="py-2 pr-3 text-slate-300 font-medium">
+                          {fmtGBP(r.cashAmount)}
                         </td>
                         <td className="py-2 pr-3">
                           <select value={r.payrollLocation} onChange={e => updateRow(r.employeeId, { payrollLocation: e.target.value })}
@@ -8703,7 +8700,7 @@ function FilterChip({ active, onClick, label }) {
 // accounting location (cost centre). Plus the internal loan ledger (never in the
 // accountant export). No pay calculation happens here — that's the calc screen.
 function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateEmployee }) {
-  const [bankHours, setBankHours] = useState(employee?.defaultBankHours ?? "");
+  const [bankAmount, setBankAmount] = useState(employee?.defaultBankAmount ?? "");
   const [payrollLoc, setPayrollLoc] = useState(employee?.payrollLocation || "");
   const [acctLoc, setAcctLoc] = useState(employee?.accountingLocation || "");
   const [savingAttrs, setSavingAttrs] = useState(false);
@@ -8719,7 +8716,7 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   const [loanErr, setLoanErr] = useState("");
 
   useEffect(() => {
-    setBankHours(employee?.defaultBankHours ?? "");
+    setBankAmount(employee?.defaultBankAmount ?? "");
     setPayrollLoc(employee?.payrollLocation || "");
     setAcctLoc(employee?.accountingLocation || "");
   }, [employee?.id]);
@@ -8749,13 +8746,13 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
 
   const saveAttrs = async () => {
     setAttrErr("");
-    const bh = bankHours === "" ? null : Number(bankHours);
-    if (bh != null && (!isFinite(bh) || bh < 0)) return setAttrErr("Default bank hours must be 0 or more (or blank).");
+    const ba = bankAmount === "" ? null : Number(bankAmount);
+    if (ba != null && (!isFinite(ba) || ba < 0)) return setAttrErr("Default bank transfer must be 0 or more (or blank).");
     setSavingAttrs(true);
     try {
       await onUpdateEmployee?.({
         id: employee.id,
-        defaultBankHours: bh,
+        defaultBankAmount: ba,
         payrollLocation: payrollLoc || null,
         accountingLocation: acctLoc || null,
       });
@@ -8804,10 +8801,10 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
         <h3 className="text-sm font-bold text-slate-200">Default payroll attributes</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
-            <label className={labelCls}>Default bank hours</label>
-            <input type="number" step="0.25" min="0" value={bankHours}
-              onChange={e => setBankHours(e.target.value)} placeholder="e.g. 20" className={inputCls} />
-            <div className="text-[10px] text-slate-600 mt-1">Usual hours paid by bank transfer. Cash = total worked − bank. Leave blank to default all hours to bank.</div>
+            <label className={labelCls}>Default bank transfer (£)</label>
+            <input type="number" step="0.01" min="0" value={bankAmount}
+              onChange={e => setBankAmount(e.target.value)} placeholder="e.g. 200" className={inputCls} />
+            <div className="text-[10px] text-slate-600 mt-1">Usual amount paid by bank transfer. Cash paid = gross − bank. Leave blank to default all pay to bank.</div>
           </div>
           <div>
             <label className={labelCls}>Payroll location (PAYE)</label>
