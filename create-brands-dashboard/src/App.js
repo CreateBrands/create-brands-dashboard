@@ -2272,6 +2272,16 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
+  // Store scope for this employee: stores in their brand(s), plus any store
+  // their ops_team record lists. TodaysTasks needs this to scope assignments —
+  // without it, nothing shows (every store-scoped assignment fails the filter).
+  const myOpsMember = (opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+  const myVisibleStoreIds = useMemo(() => {
+    const ids = new Set();
+    (stores || []).forEach(s => { if (currentUser.brandIds?.includes(s.brandId)) ids.add(s.id); });
+    (myOpsMember?.storeIds || []).forEach(id => ids.add(id));
+    return [...ids];
+  }, [stores, currentUser.brandIds, myOpsMember]);
   const [activeView, setActiveView] = useState("ops-tasks");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const overdueCount = assignments.filter(a =>
@@ -2358,7 +2368,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
         <main className="flex-1 overflow-auto p-4 lg:p-6">
           {activeView === "ops-tasks" && (
             <TodaysTasks
-              brands={myBrands} assignments={assignments} checklists={checklists}
+              brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
+              assignments={assignments} checklists={checklists}
               tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
               checklistStates={checklistStates} onSignOff={onSignOff}
               onChecklistItemToggle={onChecklistItemToggle}
