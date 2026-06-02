@@ -17756,7 +17756,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 // KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], assignments = [], checklists = [], cleaningTasks = [], storeRoles = [], onPunchIn, onPunchOut, onLogout }) {
+function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], assignments = [], checklists = [], cleaningTasks = [], storeRoles = [], storeDepartments = [], onPunchIn, onPunchOut, onLogout }) {
   const [pin,         setPin]       = useState("");
   const [matched,     setMatched]   = useState(null); // ops_team member
   const [error,       setError]     = useState("");
@@ -18019,7 +18019,18 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
   const todaysTasks = useMemo(() => {
     if (!matched) return [];
     const myRoleIds = (matched.roleIds && matched.roleIds.length) ? matched.roleIds : (matched.roleId ? [matched.roleId] : []);
-    const myRoleNames = myRoleIds.map(id => storeRoles.find(r => r.id === id)?.name).filter(Boolean);
+    const myRoles = myRoleIds.map(id => storeRoles.find(r => r.id === id)).filter(Boolean);
+    const myRoleNames = myRoles.map(r => r.name).filter(Boolean);
+    // The employee's department name(s): from their own department field, plus
+    // the departments of any roles they hold (resolved via storeDepartments).
+    const myDeptNames = new Set();
+    if (matched.department) myDeptNames.add(String(matched.department).toLowerCase());
+    myRoles.forEach(r => {
+      if (r.departmentId) {
+        const d = (storeDepartments || []).find(dep => dep.id === r.departmentId);
+        if (d?.name) myDeptNames.add(String(d.name).toLowerCase());
+      }
+    });
     const dow = new Date().getDay(); // 0=Sun
     const todayISO = toLocalDate();
     const dueToday = (a) => {
@@ -18033,8 +18044,13 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       // Scope to this kiosk's store (or brand-legacy)
       const storeOk = a.storeId ? a.storeId === currentStore?.id : true;
       if (!storeOk) return false;
-      const mine = (a.personId && a.personId === matched.id) ||
-                   (a.role && myRoleNames.includes(a.role));
+      // Match the assignment target. Respect assignTo when set; otherwise infer
+      // from whichever field is populated (back-compat for older rows).
+      const target = a.assignTo || (a.personId ? "employee" : (a.department ? "department" : "role"));
+      let mine = false;
+      if (target === "employee") mine = a.personId && a.personId === matched.id;
+      else if (target === "department") mine = a.department && myDeptNames.has(String(a.department).toLowerCase());
+      else mine = a.role && myRoleNames.includes(a.role);
       if (!mine) return false;
       return dueToday(a);
     }).map(a => {
@@ -18045,7 +18061,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       const items = cl?.items || [];
       return { id: a.id, label, items, winStart: a.winStart, winEnd: a.winEnd, priority: a.priority, notes: a.notes };
     });
-  }, [matched, assignments, checklists, cleaningTasks, storeRoles, currentStore]);
+  }, [matched, assignments, checklists, cleaningTasks, storeRoles, storeDepartments, currentStore]);
 
   // Q10: small store name in corner. Long-press (1.5s) starts a logout
   // confirmation — manager can switch tablet to a different store.
@@ -19368,6 +19384,7 @@ function KioskShell() {
   const [checklists,   setChecklists]   = useState([]);
   const [cleaningTasks, setCleaningTasks] = useState([]);
   const [storeRoles,   setStoreRoles]   = useState([]);
+  const [storeDepartments, setStoreDepartments] = useState([]);
   const [ready,        setReady]        = useState(false);
   // Kiosk registration: which store does this tablet currently represent?
   // null = needs to register; set = locked to that store.
@@ -19376,14 +19393,15 @@ function KioskShell() {
 
   useEffect(() => {
     Promise.all([fetchOpsTeam(), fetchBrands(), fetchStores(), fetchPunchRecords(), fetchSchedules(),
-      fetchAssignments().catch(() => []), fetchChecklists().catch(() => []), fetchCleaningTasks().catch(() => []), fetchStoreRoles().catch(() => [])])
-      .then(([team, br, sts, punches, scheds, assigns, cls, clean, sroles]) => {
+      fetchAssignments().catch(() => []), fetchChecklists().catch(() => []), fetchCleaningTasks().catch(() => []), fetchStoreRoles().catch(() => []), fetchStoreDepartments().catch(() => [])])
+      .then(([team, br, sts, punches, scheds, assigns, cls, clean, sroles, sdepts]) => {
         setOpsTeam(team); setBrands(br); setStores(sts);
         setPunchRecords(punches); setSchedules(scheds || []);
         setAssignments(assigns || []);
         setChecklists(cls || []);
         setCleaningTasks(clean || []);
         setStoreRoles(sroles || []);
+        setStoreDepartments(sdepts || []);
         // Hydrate any previously-registered storeId from localStorage,
         // but only if that store still exists. (Store may have been deleted
         // or archived since tablet was last used.)
@@ -19547,6 +19565,7 @@ function KioskShell() {
       checklists={checklists}
       cleaningTasks={cleaningTasks}
       storeRoles={storeRoles}
+      storeDepartments={storeDepartments}
       onPunchIn={handlePunchIn}
       onPunchOut={handlePunchOut}
       onLogout={handleLogout}
