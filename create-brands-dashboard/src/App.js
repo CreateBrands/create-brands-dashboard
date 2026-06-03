@@ -12526,12 +12526,13 @@ function OpsTeamMemberFormModal({
       hireDate:    isHireFlow
                      ? new Date().toISOString().slice(0, 10)
                      : (item?.hireDate || undefined),
-      // Trainee portal: new HIRES start as trainees (is_trainee = true); a
-      // manager converts them to staff later via the profile. Keyed off
-      // isHireFlow (not `item`) — the hire modal may receive a constructed
-      // item, so "no item" is the wrong discriminator. On a plain edit/add,
-      // preserve the existing flag (default false) and never auto-flip.
-      isTrainee:   isHireFlow ? true : (item?.isTrainee ?? false),
+      // Trainee portal / onboarding: new employees start in ONBOARDING
+      // (is_trainee = true) until a manager converts them to full staff via
+      // the profile. This applies to BOTH pipeline hires (isHireFlow) and
+      // manually-added employees (no existing `item`). On an EDIT of an
+      // existing employee, preserve whatever flag they already have — never
+      // auto-flip (that would wrongly re-trainee someone already converted).
+      isTrainee:   isHireFlow ? true : (item ? (item.isTrainee ?? false) : true),
     });
   };
 
