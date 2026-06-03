@@ -6688,6 +6688,9 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filter, setFilter] = useState("all");
+  const [storeFilter, setStoreFilter] = useState("all");
+  const [targetFilter, setTargetFilter] = useState("all");
+  const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
@@ -6697,10 +6700,25 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
     if (type === "cleaning") return cleaningTasks.find(t => t.id === taskId)?.name || taskId;
     return "Delivery check";
   };
+  // Stores in scope for this user, grouped for the store dropdown.
+  const scopedStores = (stores || [])
+    .filter(s => !s.archivedAt && vb.some(b => b.id === s.brandId))
+    .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || ""));
+  const targetOf = (a) => a.assignTo || (a.personId ? "employee" : (a.department ? "department" : "role"));
   const visible = assignments.filter(a => {
     if (!vb.some(b => b.id === a.brandId)) return false;
-    if (filter === "overdue") return isActiveToday(a) && isOverdue(a);
-    if (filter !== "all") return a.type === filter;
+    // Type filter (existing)
+    if (filter === "overdue") { if (!(isActiveToday(a) && isOverdue(a))) return false; }
+    else if (filter !== "all" && a.type !== filter) return false;
+    // Store filter
+    if (storeFilter !== "all" && a.storeId !== storeFilter) return false;
+    // Target-type filter
+    if (targetFilter !== "all" && targetOf(a) !== targetFilter) return false;
+    // Search by task name
+    if (search.trim()) {
+      const name = getTaskName(a.type, a.taskId).toLowerCase();
+      if (!name.includes(search.trim().toLowerCase())) return false;
+    }
     return true;
   });
   const overdueCnt = assignments.filter(a => vb.some(b => b.id === a.brandId) && isActiveToday(a) && isOverdue(a)).length;
@@ -6708,16 +6726,36 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <SelectDropdown value={filter} onChange={setFilter} className="w-44">
-          {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-        </SelectDropdown>
-        {/* Issue 1: Managers can CREATE assignments for their stores; only
-            HQ/owner can edit or delete existing ones. The store picker in
-            AssignmentFormModal already limits options to owned stores for
-            managers, so they can't create assignments at stores they don't
-            manage. */}
-        <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> New Assignment</button>
+        <div className="flex items-center gap-2 flex-wrap flex-1">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search task…"
+              className="w-48 pl-9 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500"/>
+          </div>
+          <SelectDropdown value={storeFilter} onChange={setStoreFilter} className="w-48">
+            <option value="all">All stores</option>
+            {scopedStores.map(s => {
+              const brand = brands.find(b => b.id === s.brandId);
+              return <option key={s.id} value={s.id}>{brand ? `${brand.name} · ` : ""}{s.shortName || s.name}</option>;
+            })}
+          </SelectDropdown>
+          <SelectDropdown value={filter} onChange={setFilter} className="w-40">
+            {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+          </SelectDropdown>
+          <SelectDropdown value={targetFilter} onChange={setTargetFilter} className="w-40">
+            <option value="all">All targets</option>
+            <option value="department">Department</option>
+            <option value="role">Role</option>
+            <option value="employee">Employee</option>
+          </SelectDropdown>
+          {(storeFilter !== "all" || targetFilter !== "all" || filter !== "all" || search) && (
+            <button onClick={() => { setStoreFilter("all"); setTargetFilter("all"); setFilter("all"); setSearch(""); }}
+              className="text-xs text-slate-500 hover:text-white px-2 py-1">Clear</button>
+          )}
+        </div>
+        <button onClick={() => { setEditItem(null); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors flex-shrink-0"><Plus size={14}/> New Assignment</button>
       </div>
+      <div className="text-xs text-slate-500">{visible.length} assignment{visible.length === 1 ? "" : "s"}</div>
       {visible.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm">No assignments found</div></div>}
       <div className="space-y-3">{visible.map(a => {
         const brand = brands.find(b => b.id === a.brandId);
