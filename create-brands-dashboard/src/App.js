@@ -19,7 +19,7 @@ import {
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
-  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales,
+  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -2669,6 +2669,369 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+// ─── Manager Store Dashboard — wraps StoreAnalytics for a manager's store(s) ──
+// Resolves the manager's assigned store(s), offers a picker if they manage more
+// than one, a period selector, then renders the comprehensive StoreAnalytics.
+function ManagerStoreDashboard({ stores, brands, currentUser }) {
+  const myStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && (currentUser?.storeIds || []).includes(s.id)),
+    [stores, currentUser]
+  );
+  const [storeId, setStoreId] = useState(myStores[0]?.id || null);
+  const [period, setPeriod] = useState("week");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+
+  useEffect(() => {
+    if (!storeId && myStores.length) setStoreId(myStores[0].id);
+  }, [myStores, storeId]);
+
+  const { fromDate, toDate, prevFromDate, prevToDate, periodLabel } = useMemo(() => {
+    const now = new Date();
+    const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+    const endOfDay = (d) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+    let from, to, label;
+    if (period === "today") { from = startOfDay(now); to = endOfDay(now); label = "Today"; }
+    else if (period === "yesterday") { const y = new Date(now); y.setDate(y.getDate()-1); from = startOfDay(y); to = endOfDay(y); label = "Yesterday"; }
+    else if (period === "month") { from = startOfDay(now); from.setDate(now.getDate()-29); to = endOfDay(now); label = "Last 30 days"; }
+    else if (period === "custom" && customFrom && customTo) { from = startOfDay(new Date(customFrom)); to = endOfDay(new Date(customTo)); label = `${customFrom} → ${customTo}`; }
+    else { from = startOfDay(now); from.setDate(now.getDate()-6); to = endOfDay(now); label = "Last 7 days"; }   // default week
+    const span = to.getTime() - from.getTime();
+    const prevTo = new Date(from.getTime() - 1);
+    const prevFrom = new Date(prevTo.getTime() - span);
+    return { fromDate: from, toDate: to, prevFromDate: prevFrom, prevToDate: prevTo, periodLabel: label };
+  }, [period, customFrom, customTo]);
+
+  const store = myStores.find(s => s.id === storeId) || myStores[0];
+  const brand = store ? brands.find(b => b.id === store.brandId) : null;
+  const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  if (myStores.length === 0) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+        <BarChart2 size={28} className="mx-auto mb-3 text-slate-700"/>
+        <div className="font-semibold text-slate-300 mb-1">No store assigned</div>
+        <div className="text-xs text-slate-500">Ask an owner to assign you to a store to see its analytics.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><BarChart2 size={18}/> Store Analytics</h2>
+          <p className="text-xs text-slate-500 mt-0.5">{brand?.name ? `${brand.name} · ` : ""}{store?.shortName || store?.name} · {periodLabel}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {myStores.length > 1 && (
+            <select value={storeId || ""} onChange={e => setStoreId(e.target.value)} className={inputCls}>
+              {myStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            </select>
+          )}
+          <select value={period} onChange={e => setPeriod(e.target.value)} className={inputCls}>
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="week">Last 7 days</option>
+            <option value="month">Last 30 days</option>
+            <option value="custom">Custom…</option>
+          </select>
+          {period === "custom" && (
+            <>
+              <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} className={inputCls}/>
+              <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} className={inputCls}/>
+            </>
+          )}
+        </div>
+      </div>
+
+      {store && (
+        <StoreAnalytics
+          store={store} brand={brand}
+          fromDate={fromDate} toDate={toDate}
+          prevFromDate={prevFromDate} prevToDate={prevToDate}
+          periodLabel={periodLabel}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Store Analytics — comprehensive per-store Flipdish dashboard ─────────────
+// Manager-facing (and reused by the owner/HQ store drill-down). Everything is
+// computed TRULY store-scoped from fetchStoreSalesDetailed (one store + period).
+// Sections: KPIs (+ vs prev period), revenue trend, channel mix, day×hour
+// heatmap, top items, payment methods, refunds/cancellations.
+function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDate, periodLabel }) {
+  const toLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const [sales, setSales] = useState([]);
+  const [prevSales, setPrevSales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(null);
+    Promise.all([
+      fetchStoreSalesDetailed({ storeId: store.id, from: toLocalDate(fromDate), to: toLocalDate(toDate) }),
+      fetchStoreSalesDetailed({ storeId: store.id, from: toLocalDate(prevFromDate), to: toLocalDate(prevToDate) }),
+    ])
+      .then(([cur, prev]) => { if (!cancelled) { setSales(cur); setPrevSales(prev); } })
+      .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [store.id, fromDate.getTime(), toDate.getTime(), prevFromDate.getTime(), prevToDate.getTime()]);
+
+  const valid = useMemo(() => sales.filter(s => !s.isCancelled), [sales]);
+  const prevValid = useMemo(() => prevSales.filter(s => !s.isCancelled), [prevSales]);
+
+  const kpis = useMemo(() => {
+    const revenue = valid.reduce((a, s) => a + s.amountTotal, 0);
+    const orders = valid.length;
+    const atv = orders ? revenue / orders : 0;
+    const discount = valid.reduce((a, s) => a + (s.amountDiscount || 0), 0);
+    const pRev = prevValid.reduce((a, s) => a + s.amountTotal, 0);
+    const pOrders = prevValid.length;
+    const pAtv = pOrders ? pRev / pOrders : 0;
+    const pct = (cur, prev) => (prev > 0 ? ((cur - prev) / prev) * 100 : null);
+    return { revenue, orders, atv, discount, revDelta: pct(revenue, pRev), ordersDelta: pct(orders, pOrders), atvDelta: pct(atv, pAtv) };
+  }, [valid, prevValid]);
+
+  const daily = useMemo(() => {
+    const m = {};
+    valid.forEach(s => {
+      const d = s.businessDate; if (!d) return;
+      if (!m[d]) m[d] = { date: d, revenue: 0, orders: 0 };
+      m[d].revenue += s.amountTotal; m[d].orders += 1;
+    });
+    return Object.values(m).sort((a, b) => a.date.localeCompare(b.date))
+      .map(r => ({ ...r, label: r.date.slice(5) }));
+  }, [valid]);
+
+  const channels = useMemo(() => {
+    const m = {};
+    valid.forEach(s => {
+      const ch = s.channel || "Other";
+      if (!m[ch]) m[ch] = { name: ch, revenue: 0, orders: 0 };
+      m[ch].revenue += s.amountTotal; m[ch].orders += 1;
+    });
+    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
+  }, [valid]);
+
+  const payments = useMemo(() => {
+    const m = {};
+    valid.forEach(s => {
+      const p = s.paymentMethod || "Unknown";
+      if (!m[p]) m[p] = { name: p, revenue: 0, orders: 0 };
+      m[p].revenue += s.amountTotal; m[p].orders += 1;
+    });
+    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
+  }, [valid]);
+
+  const heatmap = useMemo(() => {
+    const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
+    let max = 0;
+    valid.forEach(s => {
+      const t = s.saleTime ? new Date(s.saleTime) : null;
+      if (!t || isNaN(t)) return;
+      const dow = t.getDay(), hr = t.getHours();
+      grid[dow][hr] += 1;
+      if (grid[dow][hr] > max) max = grid[dow][hr];
+    });
+    return { grid, max };
+  }, [valid]);
+
+  const topItems = useMemo(() => {
+    const m = {};
+    valid.forEach(s => {
+      (s.saleItems || []).forEach(it => {
+        const name = it.caption || it.name || it.title || it.product || "Unknown item";
+        const qty = Number(it.quantity ?? it.qty ?? it.count ?? 1) || 0;
+        const rev = Number(it.revenue ?? it.amount ?? it.price ?? it.total ?? 0) || 0;
+        if (!m[name]) m[name] = { name, quantity: 0, revenue: 0 };
+        m[name].quantity += qty; m[name].revenue += rev;
+      });
+    });
+    return Object.values(m).sort((a, b) => b.quantity - a.quantity).slice(0, 15);
+  }, [valid]);
+
+  const refunds = useMemo(() => {
+    const cancelled = sales.filter(s => s.isCancelled);
+    const refunded = sales.filter(s => s.isFullyRefunded);
+    return {
+      cancelledCount: cancelled.length,
+      refundedCount: refunded.length,
+      refundedValue: refunded.reduce((a, s) => a + s.amountTotal, 0),
+    };
+  }, [sales]);
+
+  const CH_COLORS = ["#6366f1", "#06b6d4", "#f59e0b", "#ec4899", "#10b981", "#8b5cf6", "#ef4444", "#64748b"];
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  const Delta = ({ v }) => {
+    if (v == null) return <span className="text-slate-600 text-xs">—</span>;
+    const up = v >= 0;
+    return <span className={`text-xs font-semibold ${up ? "text-emerald-400" : "text-red-400"}`}>{up ? "▲" : "▼"} {Math.abs(v).toFixed(1)}%</span>;
+  };
+
+  if (loading) return <div className="text-sm text-slate-500 text-center py-12">Loading store analytics…</div>;
+  if (error) return <div className="text-sm text-red-400 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-3">Couldn't load analytics: {error}</div>;
+  if (valid.length === 0) return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+      <BarChart2 size={28} className="mx-auto mb-3 text-slate-700"/>
+      <div className="font-semibold text-slate-300 mb-1">No sales in this period</div>
+      <div className="text-xs text-slate-500">{periodLabel} · {store.shortName || store.name}</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Revenue</div>
+          <div className="text-2xl font-bold text-white mt-1">{fmtMoney(kpis.revenue)}</div>
+          <div className="mt-1"><Delta v={kpis.revDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Orders</div>
+          <div className="text-2xl font-bold text-white mt-1">{kpis.orders.toLocaleString()}</div>
+          <div className="mt-1"><Delta v={kpis.ordersDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Avg order (ATV)</div>
+          <div className="text-2xl font-bold text-white mt-1">{fmtMoneyDec(kpis.atv)}</div>
+          <div className="mt-1"><Delta v={kpis.atvDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Discounts given</div>
+          <div className="text-2xl font-bold text-white mt-1">{fmtMoney(kpis.discount)}</div>
+          <div className="mt-1 text-[10px] text-slate-600">{periodLabel}</div>
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <h3 className="text-sm font-bold text-white mb-3">Revenue trend</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <ComposedChart data={daily}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
+            <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 11 }}/>
+            <YAxis tick={{ fill: "#64748b", fontSize: 11 }}/>
+            <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 11 }}/>
+            <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => n === "revenue" ? fmtMoneyDec(v) : v}/>
+            <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]}/>
+            <Line type="monotone" dataKey="orders" stroke="#f59e0b" strokeWidth={2} dot={false} yAxisId="right"/>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Channel mix</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={channels} dataKey="revenue" nameKey="name" cx="50%" cy="50%" outerRadius={75} innerRadius={40}>
+                {channels.map((c, i) => <Cell key={c.name} fill={CH_COLORS[i % CH_COLORS.length]}/>)}
+              </Pie>
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={v => fmtMoneyDec(v)}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="space-y-1 mt-2">
+            {channels.map((c, i) => (
+              <div key={c.name} className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-2 text-slate-300"><span className="w-2.5 h-2.5 rounded-full" style={{ background: CH_COLORS[i % CH_COLORS.length] }}/>{c.name}</span>
+                <span className="text-slate-400">{fmtMoneyDec(c.revenue)} · {c.orders} orders</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Payment methods</h3>
+          <div className="space-y-2">
+            {payments.map((p, i) => {
+              const pct = kpis.revenue > 0 ? (p.revenue / kpis.revenue) * 100 : 0;
+              return (
+                <div key={p.name}>
+                  <div className="flex items-center justify-between text-xs mb-0.5">
+                    <span className="text-slate-300">{p.name}</span>
+                    <span className="text-slate-400">{fmtMoneyDec(p.revenue)} · {pct.toFixed(0)}%</span>
+                  </div>
+                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${pct}%`, background: CH_COLORS[i % CH_COLORS.length] }}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 overflow-x-auto">
+        <h3 className="text-sm font-bold text-white mb-3">Busiest times (orders by day &amp; hour)</h3>
+        <div className="min-w-[640px]">
+          <div className="flex">
+            <div className="w-10 flex-shrink-0"/>
+            {Array.from({ length: 24 }).map((_, h) => (
+              <div key={h} className="flex-1 text-center text-[9px] text-slate-600">{h}</div>
+            ))}
+          </div>
+          {heatmap.grid.map((row, dow) => (
+            <div key={dow} className="flex items-center">
+              <div className="w-10 flex-shrink-0 text-[10px] text-slate-500 font-semibold">{DOW[dow]}</div>
+              {row.map((cnt, h) => {
+                const intensity = heatmap.max > 0 ? cnt / heatmap.max : 0;
+                const bg = cnt === 0 ? "#0f172a" : `rgba(99,102,241,${0.15 + intensity * 0.85})`;
+                return <div key={h} className="flex-1 aspect-square m-[1px] rounded-sm" style={{ background: bg }} title={`${DOW[dow]} ${h}:00 — ${cnt} orders`}/>;
+              })}
+            </div>
+          ))}
+        </div>
+        <div className="text-[10px] text-slate-600 mt-2">Darker = busier. Hover a cell for the order count.</div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Top items</h3>
+          {topItems.length === 0 ? (
+            <div className="text-xs text-slate-600">No item-level data in this period.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {topItems.map((it, i) => (
+                <div key={it.name} className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300 truncate flex-1"><span className="text-slate-600 mr-1.5">{i + 1}.</span>{it.name}</span>
+                  <span className="text-slate-400 flex-shrink-0 ml-2">{it.quantity} sold{it.revenue ? ` · ${fmtMoneyDec(it.revenue)}` : ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Refunds &amp; cancellations</h3>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <div className="text-2xl font-bold text-amber-300">{refunds.cancelledCount}</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-0.5">Cancelled</div>
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-red-300">{refunds.refundedCount}</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-0.5">Refunded</div>
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-red-300">{fmtMoney(refunds.refundedValue)}</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-0.5">Refund £</div>
+            </div>
+          </div>
+          <div className="text-[10px] text-slate-600 mt-3">Out of {sales.length} total transactions in {periodLabel}.</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -21486,6 +21849,7 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
+      { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
@@ -21605,6 +21969,7 @@ export default function App() {
           <main className="flex-1 overflow-y-auto p-6">
             {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
+            {effectiveActiveView === "store-analytics" && currentUser.role === "manager" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}

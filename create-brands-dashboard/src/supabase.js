@@ -1672,6 +1672,39 @@ export async function fetchStoreSales({ storeId, from, to, brandId = "chocoberry
     }));
 }
 
+// Richer per-store sales for the comprehensive Store Analytics dashboard.
+// Includes payment method, refund flags, discount, and sale_items so the
+// dashboard can compute channel mix, heatmap, payments, refunds, and top items
+// TRULY store-scoped (not brand-wide). Scoped to one store + period so the
+// heavier sale_items column is bounded. KEEPS cancelled rows (flagged) so the
+// dashboard can report cancellations/refunds.
+export async function fetchStoreSalesDetailed({ storeId, from, to, brandId = "chocoberry" } = {}) {
+  if (!storeId) return [];
+  const toIsoDate = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === "string" ? v.slice(0, 10) : v);
+  const { data, error } = await supabase
+    .from("flipdish_sales")
+    .select("sale_id, channel, amount_total, amount_discount, business_date, sale_time, store_id, payment_method, is_cancelled, is_fully_refunded, sale_items")
+    .eq("brand_id", brandId)
+    .eq("store_id", storeId)
+    .gte("business_date", toIsoDate(from))
+    .lte("business_date", toIsoDate(to))
+    .order("sale_time", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(s => ({
+    saleId:         s.sale_id,
+    channel:        s.channel,
+    amountTotal:    Number(s.amount_total) || 0,
+    amountDiscount: Number(s.amount_discount) || 0,
+    businessDate:   s.business_date,
+    saleTime:       s.sale_time,
+    storeId:        s.store_id,
+    paymentMethod:  s.payment_method || "Unknown",
+    isCancelled:    !!s.is_cancelled,
+    isFullyRefunded:!!s.is_fully_refunded,
+    saleItems:      Array.isArray(s.sale_items) ? s.sale_items : [],
+  }));
+}
+
 export async function fetchItemsSold({ from, to, brandId = "chocoberry" } = {}) {
   const toIsoDate = (v) => {
     if (v instanceof Date) return v.toISOString().slice(0, 10);
