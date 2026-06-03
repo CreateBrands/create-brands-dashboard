@@ -5942,6 +5942,36 @@ const TEMP_ICON = { fridge: "🧊", freezer: "❄️", hot: "🔥" };
 
 function getTodayStr() { return new Date().toISOString().split("T")[0]; }
 function nowTimeStr() { const n = new Date(); return n.getHours().toString().padStart(2,"0") + ":" + n.getMinutes().toString().padStart(2,"0"); }
+
+// ─── PROFILE COMPLETENESS ─────────────────────────────────────────────────────
+// Fields that must be filled before a manager can mark a profile "complete".
+// hourlyRate: £0 is a VALID rate (not "missing") — only undefined/null/"" fails.
+const PROFILE_REQUIRED_FIELDS = [
+  { label: "First name",        test: m => !!m.firstName },
+  { label: "Last name",         test: m => !!m.lastName },
+  { label: "Date of birth",     test: m => !!m.dob },
+  { label: "NI number",         test: m => !!m.niNumber },
+  { label: "Email",             test: m => !!m.email },
+  { label: "Phone",             test: m => !!m.phone },
+  { label: "Address",           test: m => !!m.address },
+  { label: "Role",              test: m => !!(m.role || (m.roleIds && m.roleIds.length) || m.roleId) },
+  { label: "Store",             test: m => !!(m.storeIds && m.storeIds.length) },
+  { label: "Hire date",         test: m => !!m.hireDate },
+  { label: "Pay basis",         test: m => !!m.payBasis },
+  { label: "Pay rate",          test: m => m.hourlyRate !== undefined && m.hourlyRate !== null && m.hourlyRate !== "" },
+  { label: "Tax starter statement", test: m => !!m.taxStarterStatement },
+  { label: "Right to work (legal status)", test: m => !!m.legalStatus },
+  { label: "Emergency contact name",  test: m => !!m.emergencyContactName },
+  { label: "Emergency contact phone", test: m => !!m.emergencyContactPhone },
+  { label: "PIN",               test: m => !!m.pin },
+];
+
+// Returns the list of missing required-field labels (empty array = ready to complete).
+function missingProfileFields(member) {
+  if (!member) return PROFILE_REQUIRED_FIELDS.map(f => f.label);
+  return PROFILE_REQUIRED_FIELDS.filter(f => !f.test(member)).map(f => f.label);
+}
+
 function isActiveToday(a) {
   const f = a.freq, d = new Date().getDay();
   const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -9072,6 +9102,7 @@ function EmployeeProfileView({
   const [editHr, setEditHr] = useState(null);
   const [savingHr, setSavingHr] = useState(false);
   const [converting, setConverting] = useState(false);  // trainee→staff conversion in progress
+  const [profileBusy, setProfileBusy] = useState(false); // profile-status update in progress
 
   useEffect(() => {
     if (!employee) return;
@@ -9205,6 +9236,32 @@ function EmployeeProfileView({
     }
   };
 
+  // Profile completion gate (separate from trainee status).
+  const profileMissing = missingProfileFields(employee);
+  const canManageProfile = isOwnerRole(currentUser?.role) || currentUser?.role === "manager";
+  const handleMarkComplete = async () => {
+    if (!employee) return;
+    if (profileMissing.length) {
+      alert(`Cannot mark complete — ${profileMissing.length} required field(s) still missing:\n\n• ${profileMissing.join("\n• ")}`);
+      return;
+    }
+    setProfileBusy(true);
+    try {
+      await onUpdateEmployee({ id: employee.id, profileStatus: "complete" });
+    } catch (err) {
+      alert(`Could not update: ${err?.message || err}`);
+    } finally { setProfileBusy(false); }
+  };
+  const handleRevertPending = async () => {
+    if (!employee) return;
+    setProfileBusy(true);
+    try {
+      await onUpdateEmployee({ id: employee.id, profileStatus: "pending" });
+    } catch (err) {
+      alert(`Could not update: ${err?.message || err}`);
+    } finally { setProfileBusy(false); }
+  };
+
   return (
     <div className="space-y-4">
       {/* Back button */}
@@ -9248,6 +9305,15 @@ function EmployeeProfileView({
                   🎓 Trainee
                 </span>
               )}
+              {employee.profileStatus === "complete" ? (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 font-semibold">
+                  ✓ Profile complete
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">
+                  ● Profile pending
+                </span>
+              )}
             </div>
             {employee.nickname && <div className="text-sm text-slate-500 mb-2">"{employee.nickname}"</div>}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-xs mt-2">
@@ -9273,6 +9339,48 @@ function EmployeeProfileView({
           </div>
         </div>
       </div>
+
+      {/* Profile completion status (separate from trainee). Manager confirms once
+          all required fields are filled. */}
+      {canManageProfile && (
+        <div className={`rounded-2xl border p-4 ${employee.profileStatus === "complete" ? "bg-emerald-950/20 border-emerald-800/40" : "bg-amber-950/15 border-amber-800/40"}`}>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white flex items-center gap-2">
+                {employee.profileStatus === "complete"
+                  ? <><span className="text-emerald-400">✓</span> Profile complete</>
+                  : <><span className="text-amber-400">●</span> Profile pending</>}
+              </div>
+              {employee.profileStatus !== "complete" && (
+                profileMissing.length
+                  ? <div className="text-xs text-amber-300/90 mt-1">{profileMissing.length} required field{profileMissing.length === 1 ? "" : "s"} still to fill before this can be marked complete.</div>
+                  : <div className="text-xs text-emerald-300/90 mt-1">All required fields are filled — ready to mark complete.</div>
+              )}
+            </div>
+            <div className="flex-shrink-0">
+              {employee.profileStatus === "complete" ? (
+                <button onClick={handleRevertPending} disabled={profileBusy}
+                  className="px-3 py-1.5 rounded-xl bg-slate-700 text-white text-xs font-semibold hover:bg-slate-600 disabled:opacity-50">
+                  {profileBusy ? "…" : "Set back to pending"}
+                </button>
+              ) : (
+                <button onClick={handleMarkComplete} disabled={profileBusy || profileMissing.length > 0}
+                  title={profileMissing.length ? "Fill all required fields first" : "Mark this profile complete"}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed">
+                  {profileBusy ? "…" : "Mark complete"}
+                </button>
+              )}
+            </div>
+          </div>
+          {employee.profileStatus !== "complete" && profileMissing.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {profileMissing.map(f => (
+                <span key={f} className="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 border border-amber-800/50 text-amber-300/90">{f}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-800 flex-wrap mt-1">

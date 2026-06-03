@@ -534,6 +534,7 @@ function appOpsTeamToDb(m) {
   // Payroll — how the pay RATE is determined: 'minimum_wage' (live NMW lookup by
   // age on work date) or 'fixed' (use hourly_rate). Defaults handled in DB.
   if (m.payBasis      !== undefined) row.pay_basis     = m.payBasis || "fixed";
+  if (m.profileStatus !== undefined) row.profile_status = m.profileStatus || "pending";
   // Payroll — per-employee DEFAULT attributes (read by the calc screen; actual
   // per-run values are saved in payroll_periods).
   if (m.defaultBankHours   !== undefined) row.default_bank_hours  = (m.defaultBankHours === "" || m.defaultBankHours == null) ? null : Number(m.defaultBankHours);
@@ -591,6 +592,7 @@ function dbOpsTeamToApp(m) {
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
     payBasis:    m.pay_basis || "fixed",
+    profileStatus: m.profile_status || "pending",
     defaultBankHours:   m.default_bank_hours != null ? parseFloat(m.default_bank_hours) : null,
     defaultBankAmount:  m.default_bank_amount != null ? parseFloat(m.default_bank_amount) : null,
     payrollLocation:    m.payroll_location || null,
