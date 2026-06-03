@@ -7702,7 +7702,9 @@ Text that sits beside the image.
 // ─── Hiring View ──────────────────────────────────────────────────────────────
 // Slice 1 of the staff onboarding pipeline. Lets managers + HQ + owner:
 //   - Capture candidates manually (walk-ins, referrals, phone enquiries)
-//   - Move them through the workflow: applied → reviewing → in_training → hired
+//   - Move them through the workflow: applied → reviewing → in_training ("Onboarding") → hired
+//     (the in_training key is displayed as "Onboarding"; convert-to-full-staff
+//      acts separately on the ops_team trainee record)
 //   - Reject/withdraw at any stage
 //   - See timeline of status changes per candidate
 //
@@ -7723,7 +7725,7 @@ Text that sits beside the image.
 const APPLICATION_STATUSES = [
   { key: "applied",            label: "Applied",          color: "slate"   },
   { key: "manager_reviewing",  label: "Reviewing",        color: "amber"   },
-  { key: "in_training",        label: "In Training",      color: "indigo"  },
+  { key: "in_training",        label: "Onboarding",       color: "indigo"  },
   { key: "hired",              label: "Hired",            color: "green"   },
   { key: "rejected",           label: "Rejected",         color: "red"     },
   { key: "withdrawn",          label: "Withdrawn",        color: "slate"   },
