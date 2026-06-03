@@ -1594,6 +1594,74 @@ function SafeMarkdown({ text }) {
 
 // Employee self-service onboarding: their own tax declaration + policy
 // acknowledgements. Bank details are NOT here (owner/HR only). Shown in portal.
+function SteppedModuleContent({ content }) {
+  // Split a module's Markdown into steps on a horizontal-rule line (--- on its
+  // own line). 2+ steps → guided card flow with a progress bar; otherwise the
+  // content renders as a single block (fully backward-compatible with existing
+  // modules authored as one body).
+  const steps = React.useMemo(() => {
+    if (!content) return [];
+    return content
+      .split(/\n\s*---+\s*\n/)        // split on a line that is just dashes
+      .map(s => s.trim())
+      .filter(Boolean);
+  }, [content]);
+
+  const [i, setI] = React.useState(0);
+  // If the module shrinks (re-edited) keep the index in range.
+  React.useEffect(() => { if (i > steps.length - 1) setI(0); }, [steps.length, i]);
+
+  if (steps.length === 0) return <div className="text-xs text-slate-600">No content for this module.</div>;
+  if (steps.length === 1) return <SafeMarkdown text={steps[0]}/>;
+
+  const pct = Math.round(((i + 1) / steps.length) * 100);
+  return (
+    <div className="space-y-3">
+      {/* Progress bar */}
+      <div>
+        <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+          <span>Step {i + 1} of {steps.length}</span>
+          <span>{pct}%</span>
+        </div>
+        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${pct}%` }}/>
+        </div>
+      </div>
+
+      {/* Current step */}
+      <div className="min-h-[60px]">
+        <SafeMarkdown text={steps[i]}/>
+      </div>
+
+      {/* Step dots */}
+      <div className="flex items-center justify-center gap-1.5">
+        {steps.map((_, idx) => (
+          <button key={idx} onClick={() => setI(idx)} aria-label={`Go to step ${idx + 1}`}
+            className={`h-2 rounded-full transition-all ${idx === i ? "w-5 bg-indigo-500" : "w-2 bg-slate-700 hover:bg-slate-600"}`}/>
+        ))}
+      </div>
+
+      {/* Prev / Next */}
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => setI(n => Math.max(0, n - 1))} disabled={i === 0}
+          className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed">
+          <ChevronLeft size={14}/> Back
+        </button>
+        {i < steps.length - 1 ? (
+          <button onClick={() => setI(n => Math.min(steps.length - 1, n + 1))}
+            className="flex items-center gap-1 px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500">
+            Next <ChevronRight size={14}/>
+          </button>
+        ) : (
+          <span className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-400 font-semibold">
+            <CheckCircle size={14}/> End of module
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EmployeeOnboardingSection({ employeeId, currentUser, employee = null }) {
   const [acks, setAcks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2079,7 +2147,7 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                         </div>
                         {open && mod.content && (
                           <div className="px-3 pb-3 pt-1 border-t border-slate-800/60">
-                            <SafeMarkdown text={mod.content}/>
+                            <SteppedModuleContent content={mod.content}/>
                           </div>
                         )}
                       </div>
@@ -2187,7 +2255,7 @@ function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
                       </div>
                       {open && mod.content && (
                         <div className="px-3 pb-3 pt-1 border-t border-slate-800/60">
-                          <SafeMarkdown text={mod.content}/>
+                          <SteppedModuleContent content={mod.content}/>
                         </div>
                       )}
                       {open && !mod.content && (
@@ -7633,7 +7701,7 @@ Text that sits beside the image.
             className={`${inputCls} font-mono text-xs leading-relaxed`}
             placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
           />
-          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown — click "Formatting help" for the full list. The trainee sees this formatted in their portal.</div>
+          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown — click "Formatting help" for the full list. The trainee sees this formatted in their portal. <span className="text-indigo-400/80">Tip: put <code className="text-indigo-300">---</code> on its own line to split the module into guided step-by-step cards with a progress bar.</span></div>
         </div>
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
