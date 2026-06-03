@@ -9,6 +9,56 @@ export const supabase = createClient(
   process.env.REACT_APP_SUPABASE_ANON_KEY
 );
 
+// ── EMPLOYEE PASSWORD AUTH (Supabase Auth) ───────────────────────────────────
+// Website employee login by email + password, backed by Supabase Auth so we
+// never store passwords ourselves. On success we look up the matching ops_team
+// record by email and return it so the app can build its currentUser object.
+// (The manager/owner login is separate and unchanged. The kiosk stays on PIN.)
+
+// Sign in an employee. Returns { ok, opsMember? , error? }.
+export async function employeeSignIn(email, password) {
+  const e = (email || "").trim().toLowerCase();
+  if (!e || !password) return { ok: false, error: "Enter your email and password." };
+  const { data, error } = await supabase.auth.signInWithPassword({ email: e, password });
+  if (error) return { ok: false, error: error.message || "Invalid email or password." };
+  // Find the ops_team member whose email matches the signed-in auth user.
+  const { data: rows, error: qErr } = await supabase
+    .from("ops_team").select("*").ilike("email", e).limit(1);
+  if (qErr) return { ok: false, error: qErr.message };
+  if (!rows || rows.length === 0) {
+    // Authenticated but no matching employee record — sign back out to avoid a
+    // dangling session, and report clearly.
+    await supabase.auth.signOut();
+    return { ok: false, error: "No employee record is linked to this email. Ask your manager." };
+  }
+  return { ok: true, opsMember: dbOpsTeamToApp(rows[0]) };
+}
+
+// Send a password-reset email (Supabase handles the secure token + link).
+export async function employeeResetPassword(email) {
+  const e = (email || "").trim().toLowerCase();
+  if (!e) return { ok: false, error: "Enter your email first." };
+  const { error } = await supabase.auth.resetPasswordForEmail(e, {
+    redirectTo: `${window.location.origin}/reset`,
+  });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+// Set a new password for the currently-authenticated user (used on the reset
+// landing page after they click the email link).
+export async function employeeSetPassword(newPassword) {
+  if (!newPassword || newPassword.length < 8) return { ok: false, error: "Password must be at least 8 characters." };
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+// Sign out of Supabase Auth (call alongside the app's own logout).
+export async function employeeAuthSignOut() {
+  try { await supabase.auth.signOut(); } catch { /* ignore */ }
+}
+
 // ── BRANDS ───────────────────────────────────────────────────────────────────
 export async function fetchBrands() {
   const { data, error } = await supabase.from("brands").select("*").order("name");

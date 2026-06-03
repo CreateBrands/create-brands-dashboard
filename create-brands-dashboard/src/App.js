@@ -1350,12 +1350,34 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
 // ─── Employee Login Screen ────────────────────────────────────────────────────
 // PIN-based login: pick your name from a list, enter your 4–6 digit PIN.
 function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
-  const [selectedMember, setSelectedMember] = useState(null);
+  const [email, setEmail] = useState("");
+  const [selectedMember, setSelectedMember] = useState(null);  // resolved from email
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
 
   const brand = selectedMember ? brands.find(b => b.id === selectedMember.brandId) : null;
+
+  // Step 1: look up the active employee by email, then move to PIN entry.
+  const handleEmailContinue = () => {
+    const e = email.trim().toLowerCase();
+    if (!e) { setError("Enter your email."); return; }
+    const member = (opsTeam || []).find(
+      m => (m.email || "").trim().toLowerCase() === e && m.status !== "archived" && !m.archivedAt
+    );
+    if (!member) {
+      // Deliberately vague — don't reveal whether an email exists.
+      setError("We couldn't sign you in. Check your email, or ask your manager.");
+      return;
+    }
+    if (!member.pin) {
+      setError("No PIN is set for your account yet. Ask your manager to set one.");
+      return;
+    }
+    setSelectedMember(member);
+    setPin("");
+    setError("");
+  };
 
   const handlePinDigit = (digit) => {
     if (pin.length >= 6) return;
@@ -1389,12 +1411,6 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
 
   const handleClear = () => { setSelectedMember(null); setPin(""); setError(""); };
 
-  // Group team members by brand
-  const byBrand = brands.map(b => ({
-    brand: b,
-    members: opsTeam.filter(m => m.brandId === b.id),
-  })).filter(g => g.members.length > 0);
-
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
@@ -1405,40 +1421,32 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
             <span className="text-indigo-300 font-bold text-sm tracking-wide">CREATE BRANDS</span>
           </div>
           <h1 className="text-2xl font-bold text-white">Team Sign In</h1>
-          <p className="text-slate-600 text-sm mt-1">Select your name and enter your PIN</p>
+          <p className="text-slate-600 text-sm mt-1">{selectedMember ? "Enter your PIN" : "Enter your email to continue"}</p>
         </div>
 
         {!selectedMember ? (
-          /* ── Step 1: Pick name ── */
+          /* ── Step 1: Enter email ── */
           <div className="space-y-4">
-            {byBrand.map(({ brand: b, members }) => (
-              <div key={b.id}>
-                <div className="flex items-center gap-2 mb-2 px-1">
-                  <div className="w-2 h-2 rounded-full" style={{ background: b.color }}/>
-                  <span className="text-xs font-bold text-slate-600 uppercase tracking-widest">{b.name}</span>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {members.map(m => (
-                    <button key={m.id} onClick={() => { setSelectedMember(m); setPin(""); setError(""); }}
-                      className="flex items-center gap-3 bg-slate-900 border border-slate-700 hover:border-indigo-500/30 hover:bg-slate-800 rounded-2xl p-4 transition-all text-left group">
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0 transition-all"
-                        style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>
-                        {m.firstName[0]}{m.lastName?.[0] || ""}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold text-white truncate">{m.firstName} {m.lastName}</div>
-                        <div className="text-xs text-slate-500 truncate">{m.role}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {opsTeam.length === 0 && (
-              <div className="text-center py-8 text-slate-500 text-sm">
-                No team members set up yet. Ask your manager to add staff in Ops Settings.
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Email</label>
+              <input
+                type="email" inputMode="email" autoComplete="email" autoFocus
+                value={email}
+                onChange={e => { setEmail(e.target.value); setError(""); }}
+                onKeyDown={e => { if (e.key === "Enter") handleEmailContinue(); }}
+                placeholder="you@example.com"
+                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-2xl text-white text-base focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+            {error && (
+              <div className="flex items-center justify-center gap-2 text-red-400 text-sm font-semibold">
+                <AlertTriangle size={13}/> {error}
               </div>
             )}
+            <button onClick={handleEmailContinue} disabled={!email.trim()}
+              className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base transition-all active:scale-98">
+              Continue
+            </button>
           </div>
         ) : (
           /* ── Step 2: Enter PIN ── */
