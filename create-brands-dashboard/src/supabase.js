@@ -1683,7 +1683,7 @@ export async function fetchStoreSalesDetailed({ storeId, from, to, brandId = "ch
   const toIsoDate = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === "string" ? v.slice(0, 10) : v);
   const { data, error } = await supabase
     .from("flipdish_sales")
-    .select("sale_id, channel, amount_total, amount_discount, business_date, sale_time, store_id, payment_method, is_cancelled, is_fully_refunded, sale_items")
+    .select("sale_id, channel, amount_total, amount_subtotal, amount_tax, amount_discount, business_date, sale_time, store_id, payment_method, is_cancelled, is_fully_refunded, sale_items")
     .eq("brand_id", brandId)
     .eq("store_id", storeId)
     .gte("business_date", toIsoDate(from))
@@ -1694,6 +1694,8 @@ export async function fetchStoreSalesDetailed({ storeId, from, to, brandId = "ch
     saleId:         s.sale_id,
     channel:        s.channel,
     amountTotal:    Number(s.amount_total) || 0,
+    amountSubtotal: s.amount_subtotal != null ? Number(s.amount_subtotal) : null,
+    amountTax:      s.amount_tax != null ? Number(s.amount_tax) : null,
     amountDiscount: Number(s.amount_discount) || 0,
     businessDate:   s.business_date,
     saleTime:       s.sale_time,

@@ -2775,6 +2775,8 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
   const [prevSales, setPrevSales] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [basis, setBasis] = useState("gross");   // gross (total) | net (ex-VAT)
+  const [heatMetric, setHeatMetric] = useState("orders"); // orders | revenue
 
   useEffect(() => {
     let cancelled = false;
@@ -2792,48 +2794,88 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
   const valid = useMemo(() => sales.filter(s => !s.isCancelled), [sales]);
   const prevValid = useMemo(() => prevSales.filter(s => !s.isCancelled), [prevSales]);
 
+  // Whether net (ex-VAT) is actually available in the feed (subtotal populated).
+  const netAvailable = useMemo(() => valid.some(s => s.amountSubtotal != null), [valid]);
+  // Basis-aware per-sale amount: net uses subtotal when present, else falls back to total.
+  const amt = (s) => (basis === "net" && s.amountSubtotal != null ? s.amountSubtotal : s.amountTotal);
+
   const kpis = useMemo(() => {
-    const revenue = valid.reduce((a, s) => a + s.amountTotal, 0);
+    const gross = valid.reduce((a, s) => a + s.amountTotal, 0);
+    const net = valid.reduce((a, s) => a + (s.amountSubtotal != null ? s.amountSubtotal : s.amountTotal), 0);
+    const vat = valid.reduce((a, s) => a + (s.amountTax != null ? s.amountTax : 0), 0);
+    const revenue = basis === "net" ? net : gross;
     const orders = valid.length;
     const atv = orders ? revenue / orders : 0;
     const discount = valid.reduce((a, s) => a + (s.amountDiscount || 0), 0);
-    const pRev = prevValid.reduce((a, s) => a + s.amountTotal, 0);
+    const discountRate = gross > 0 ? (discount / (gross + discount)) * 100 : 0;
+    const pGross = prevValid.reduce((a, s) => a + s.amountTotal, 0);
+    const pNet = prevValid.reduce((a, s) => a + (s.amountSubtotal != null ? s.amountSubtotal : s.amountTotal), 0);
+    const pRev = basis === "net" ? pNet : pGross;
     const pOrders = prevValid.length;
     const pAtv = pOrders ? pRev / pOrders : 0;
     const pct = (cur, prev) => (prev > 0 ? ((cur - prev) / prev) * 100 : null);
-    return { revenue, orders, atv, discount, revDelta: pct(revenue, pRev), ordersDelta: pct(orders, pOrders), atvDelta: pct(atv, pAtv) };
-  }, [valid, prevValid]);
+    return { revenue, gross, net, vat, orders, atv, discount, discountRate,
+      revDelta: pct(revenue, pRev), ordersDelta: pct(orders, pOrders), atvDelta: pct(atv, pAtv) };
+  }, [valid, prevValid, basis]);
 
   const daily = useMemo(() => {
-    const m = {};
+    const cur = {};
     valid.forEach(s => {
       const d = s.businessDate; if (!d) return;
-      if (!m[d]) m[d] = { date: d, revenue: 0, orders: 0 };
-      m[d].revenue += s.amountTotal; m[d].orders += 1;
+      if (!cur[d]) cur[d] = { date: d, revenue: 0, orders: 0 };
+      cur[d].revenue += amt(s); cur[d].orders += 1;
     });
-    return Object.values(m).sort((a, b) => a.date.localeCompare(b.date))
-      .map(r => ({ ...r, label: r.date.slice(5) }));
-  }, [valid]);
+    const curArr = Object.values(cur).sort((a, b) => a.date.localeCompare(b.date));
+    // Previous-period daily totals, aligned by position (day 1 vs day 1, etc.)
+    // so the overlay compares like-for-like regardless of calendar dates.
+    const prev = {};
+    prevValid.forEach(s => {
+      const d = s.businessDate; if (!d) return;
+      if (!prev[d]) prev[d] = 0;
+      prev[d] += amt(s);
+    });
+    const prevByIdx = Object.entries(prev).sort((a, b) => a[0].localeCompare(b[0])).map(e => e[1]);
+    return curArr.map((r, i) => ({ ...r, label: r.date.slice(5), prevRevenue: prevByIdx[i] ?? null }));
+  }, [valid, prevValid, basis]);
 
   const channels = useMemo(() => {
     const m = {};
     valid.forEach(s => {
       const ch = s.channel || "Other";
       if (!m[ch]) m[ch] = { name: ch, revenue: 0, orders: 0 };
-      m[ch].revenue += s.amountTotal; m[ch].orders += 1;
+      m[ch].revenue += amt(s); m[ch].orders += 1;
     });
-    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
-  }, [valid]);
+    return Object.values(m).map(c => ({ ...c, atv: c.orders ? c.revenue / c.orders : 0 }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [valid, basis]);
+
+  // Day-part buckets — more actionable for staffing than the 24-col heatmap.
+  const dayparts = useMemo(() => {
+    const buckets = [
+      { name: "Morning", range: "6am–12pm", from: 6,  to: 12, revenue: 0, orders: 0 },
+      { name: "Afternoon", range: "12–5pm", from: 12, to: 17, revenue: 0, orders: 0 },
+      { name: "Evening", range: "5–9pm",   from: 17, to: 21, revenue: 0, orders: 0 },
+      { name: "Late",    range: "9pm–6am", from: 21, to: 30, revenue: 0, orders: 0 },
+    ];
+    valid.forEach(s => {
+      const t = s.saleTime ? new Date(s.saleTime) : null;
+      if (!t || isNaN(t)) return;
+      let h = t.getHours(); if (h < 6) h += 24;   // wrap small hours into "Late"
+      const b = buckets.find(b => h >= b.from && h < b.to);
+      if (b) { b.revenue += amt(s); b.orders += 1; }
+    });
+    return buckets;
+  }, [valid, basis]);
 
   const payments = useMemo(() => {
     const m = {};
     valid.forEach(s => {
       const p = s.paymentMethod || "Unknown";
       if (!m[p]) m[p] = { name: p, revenue: 0, orders: 0 };
-      m[p].revenue += s.amountTotal; m[p].orders += 1;
+      m[p].revenue += amt(s); m[p].orders += 1;
     });
     return Object.values(m).sort((a, b) => b.revenue - a.revenue);
-  }, [valid]);
+  }, [valid, basis]);
 
   const heatmap = useMemo(() => {
     const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
@@ -2842,11 +2884,11 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
       const t = s.saleTime ? new Date(s.saleTime) : null;
       if (!t || isNaN(t)) return;
       const dow = t.getDay(), hr = t.getHours();
-      grid[dow][hr] += 1;
+      grid[dow][hr] += heatMetric === "revenue" ? amt(s) : 1;
       if (grid[dow][hr] > max) max = grid[dow][hr];
     });
     return { grid, max };
-  }, [valid]);
+  }, [valid, heatMetric, basis]);
 
   const topItems = useMemo(() => {
     const m = {};
@@ -2893,11 +2935,32 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
 
   return (
     <div className="space-y-5">
+      {/* Basis toggle */}
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-[11px] text-slate-500">Showing:</span>
+        <div className="inline-flex rounded-lg border border-slate-800 overflow-hidden">
+          <button onClick={() => setBasis("gross")}
+            className={`px-3 py-1 text-xs font-semibold ${basis === "gross" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>
+            Gross
+          </button>
+          <button onClick={() => netAvailable && setBasis("net")} disabled={!netAvailable}
+            title={netAvailable ? "Net of VAT" : "Net not available in this data"}
+            className={`px-3 py-1 text-xs font-semibold ${basis === "net" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"} ${!netAvailable ? "opacity-40 cursor-not-allowed" : ""}`}>
+            Net (ex-VAT)
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Revenue</div>
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{basis === "net" ? "Net revenue" : "Gross revenue"}</div>
           <div className="text-2xl font-bold text-white mt-1">{fmtMoney(kpis.revenue)}</div>
           <div className="mt-1"><Delta v={kpis.revDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
+          {netAvailable && (
+            <div className="text-[10px] text-slate-600 mt-1">
+              {basis === "net" ? `Gross ${fmtMoney(kpis.gross)}` : `Net ${fmtMoney(kpis.net)}`} · VAT {fmtMoney(kpis.vat)}
+            </div>
+          )}
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Orders</div>
@@ -2910,25 +2973,42 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
           <div className="mt-1"><Delta v={kpis.atvDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Discounts given</div>
-          <div className="text-2xl font-bold text-white mt-1">{fmtMoney(kpis.discount)}</div>
-          <div className="mt-1 text-[10px] text-slate-600">{periodLabel}</div>
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Discount rate</div>
+          <div className="text-2xl font-bold text-white mt-1">{kpis.discountRate.toFixed(1)}%</div>
+          <div className="mt-1 text-[10px] text-slate-600">{fmtMoney(kpis.discount)} given · {periodLabel}</div>
         </div>
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-        <h3 className="text-sm font-bold text-white mb-3">Revenue trend</h3>
+        <h3 className="text-sm font-bold text-white mb-3">Revenue trend <span className="text-[11px] font-normal text-slate-500">({basis === "net" ? "net" : "gross"} · bar = this period, line = previous)</span></h3>
         <ResponsiveContainer width="100%" height={220}>
           <ComposedChart data={daily}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
             <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 11 }}/>
             <YAxis tick={{ fill: "#64748b", fontSize: 11 }}/>
-            <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 11 }}/>
-            <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => n === "revenue" ? fmtMoneyDec(v) : v}/>
+            <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmtMoneyDec(v), n === "prevRevenue" ? "Previous" : "This period"]}/>
             <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]}/>
-            <Line type="monotone" dataKey="orders" stroke="#f59e0b" strokeWidth={2} dot={false} yAxisId="right"/>
+            <Line type="monotone" dataKey="prevRevenue" stroke="#64748b" strokeWidth={2} strokeDasharray="4 3" dot={false}/>
           </ComposedChart>
         </ResponsiveContainer>
+      </div>
+
+      {/* Day-part summary */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <h3 className="text-sm font-bold text-white mb-3">Trading by time of day</h3>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {dayparts.map(d => {
+            const share = kpis.revenue > 0 ? (d.revenue / kpis.revenue) * 100 : 0;
+            return (
+              <div key={d.name} className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                <div className="text-xs font-semibold text-slate-300">{d.name}</div>
+                <div className="text-[10px] text-slate-600 mb-1">{d.range}</div>
+                <div className="text-lg font-bold text-white">{fmtMoney(d.revenue)}</div>
+                <div className="text-[10px] text-slate-500">{d.orders} orders · {share.toFixed(0)}%</div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -2942,13 +3022,32 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
               <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={v => fmtMoneyDec(v)}/>
             </PieChart>
           </ResponsiveContainer>
-          <div className="space-y-1 mt-2">
-            {channels.map((c, i) => (
-              <div key={c.name} className="flex items-center justify-between text-xs">
-                <span className="flex items-center gap-2 text-slate-300"><span className="w-2.5 h-2.5 rounded-full" style={{ background: CH_COLORS[i % CH_COLORS.length] }}/>{c.name}</span>
-                <span className="text-slate-400">{fmtMoneyDec(c.revenue)} · {c.orders} orders</span>
-              </div>
-            ))}
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-500 text-left">
+                  <th className="font-semibold pb-1">Channel</th>
+                  <th className="font-semibold pb-1 text-right">Revenue</th>
+                  <th className="font-semibold pb-1 text-right">Orders</th>
+                  <th className="font-semibold pb-1 text-right">ATV</th>
+                  <th className="font-semibold pb-1 text-right">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {channels.map((c, i) => {
+                  const pct = kpis.revenue > 0 ? (c.revenue / kpis.revenue) * 100 : 0;
+                  return (
+                    <tr key={c.name} className="border-t border-slate-800/50">
+                      <td className="py-1.5 text-slate-300"><span className="inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle" style={{ background: CH_COLORS[i % CH_COLORS.length] }}/>{c.name}</td>
+                      <td className="py-1.5 text-right text-slate-300">{fmtMoneyDec(c.revenue)}</td>
+                      <td className="py-1.5 text-right text-slate-400">{c.orders}</td>
+                      <td className="py-1.5 text-right text-slate-400">{fmtMoneyDec(c.atv)}</td>
+                      <td className="py-1.5 text-right text-slate-400">{pct.toFixed(0)}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -2974,7 +3073,15 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 overflow-x-auto">
-        <h3 className="text-sm font-bold text-white mb-3">Busiest times (orders by day &amp; hour)</h3>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className="text-sm font-bold text-white">Busiest times (by day &amp; hour)</h3>
+          <div className="inline-flex rounded-lg border border-slate-800 overflow-hidden">
+            <button onClick={() => setHeatMetric("orders")}
+              className={`px-2.5 py-1 text-[11px] font-semibold ${heatMetric === "orders" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Orders</button>
+            <button onClick={() => setHeatMetric("revenue")}
+              className={`px-2.5 py-1 text-[11px] font-semibold ${heatMetric === "revenue" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Revenue</button>
+          </div>
+        </div>
         <div className="min-w-[640px]">
           <div className="flex">
             <div className="w-10 flex-shrink-0"/>
@@ -2985,15 +3092,16 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
           {heatmap.grid.map((row, dow) => (
             <div key={dow} className="flex items-center">
               <div className="w-10 flex-shrink-0 text-[10px] text-slate-500 font-semibold">{DOW[dow]}</div>
-              {row.map((cnt, h) => {
-                const intensity = heatmap.max > 0 ? cnt / heatmap.max : 0;
-                const bg = cnt === 0 ? "#0f172a" : `rgba(99,102,241,${0.15 + intensity * 0.85})`;
-                return <div key={h} className="flex-1 aspect-square m-[1px] rounded-sm" style={{ background: bg }} title={`${DOW[dow]} ${h}:00 — ${cnt} orders`}/>;
+              {row.map((val, h) => {
+                const intensity = heatmap.max > 0 ? val / heatmap.max : 0;
+                const bg = val === 0 ? "#0f172a" : `rgba(99,102,241,${0.15 + intensity * 0.85})`;
+                const label = heatMetric === "revenue" ? fmtMoney(val) : `${val} orders`;
+                return <div key={h} className="flex-1 aspect-square m-[1px] rounded-sm" style={{ background: bg }} title={`${DOW[dow]} ${h}:00 — ${label}`}/>;
               })}
             </div>
           ))}
         </div>
-        <div className="text-[10px] text-slate-600 mt-2">Darker = busier. Hover a cell for the order count.</div>
+        <div className="text-[10px] text-slate-600 mt-2">Darker = busier ({heatMetric}). Hover a cell for detail.</div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
