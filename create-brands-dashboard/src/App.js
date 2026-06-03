@@ -1351,65 +1351,39 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
 // PIN-based login: pick your name from a list, enter your 4–6 digit PIN.
 function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
   const [email, setEmail] = useState("");
-  const [selectedMember, setSelectedMember] = useState(null);  // resolved from email
   const [pin, setPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
 
-  const brand = selectedMember ? brands.find(b => b.id === selectedMember.brandId) : null;
-
-  // Step 1: look up the active employee by email, then move to PIN entry.
-  const handleEmailContinue = () => {
+  const handleSubmit = () => {
     const e = email.trim().toLowerCase();
     if (!e) { setError("Enter your email."); return; }
+    if (!pin) { setError("Enter your PIN."); return; }
     const member = (opsTeam || []).find(
       m => (m.email || "").trim().toLowerCase() === e && m.status !== "archived" && !m.archivedAt
     );
-    if (!member) {
-      // Deliberately vague — don't reveal whether an email exists.
-      setError("We couldn't sign you in. Check your email, or ask your manager.");
-      return;
-    }
-    if (!member.pin) {
-      setError("No PIN is set for your account yet. Ask your manager to set one.");
-      return;
-    }
-    setSelectedMember(member);
-    setPin("");
-    setError("");
-  };
-
-  const handlePinDigit = (digit) => {
-    if (pin.length >= 6) return;
-    setPin(p => p + digit);
-    setError("");
-  };
-
-  const handleBackspace = () => setPin(p => p.slice(0, -1));
-
-  const handleSubmit = () => {
-    if (!selectedMember) return;
-    if (pin === selectedMember.pin) {
-      onLogin({
-        id: selectedMember.id,
-        name: `${selectedMember.firstName} ${selectedMember.lastName}`.trim(),
-        role: "employee",
-        brandIds: [selectedMember.brandId],
-        avatar: (selectedMember.firstName[0] + (selectedMember.lastName?.[0] || "")).toUpperCase(),
-        opsTeamMemberId: selectedMember.id,
-        employeeRole: selectedMember.role,
-        isTrainee: selectedMember.isTrainee || false,
-        color: selectedMember.color,
-      });
-    } else {
-      setError("Incorrect PIN. Try again.");
+    // Single combined check — deliberately vague so we never reveal whether an
+    // email exists or whether it was the email vs the PIN that was wrong.
+    if (!member || !member.pin || pin !== member.pin) {
+      setError("Incorrect email or PIN.");
       setShake(true);
       setPin("");
       setTimeout(() => setShake(false), 600);
+      return;
     }
+    onLogin({
+      id: member.id,
+      name: `${member.firstName} ${member.lastName}`.trim(),
+      role: "employee",
+      brandIds: [member.brandId],
+      avatar: (member.firstName[0] + (member.lastName?.[0] || "")).toUpperCase(),
+      opsTeamMemberId: member.id,
+      employeeRole: member.role,
+      isTrainee: member.isTrainee || false,
+      color: member.color,
+    });
   };
-
-  const handleClear = () => { setSelectedMember(null); setPin(""); setError(""); };
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
@@ -1421,92 +1395,52 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
             <span className="text-indigo-300 font-bold text-sm tracking-wide">CREATE BRANDS</span>
           </div>
           <h1 className="text-2xl font-bold text-white">Team Sign In</h1>
-          <p className="text-slate-600 text-sm mt-1">{selectedMember ? "Enter your PIN" : "Enter your email to continue"}</p>
+          <p className="text-slate-600 text-sm mt-1">Sign in with your email and PIN</p>
         </div>
 
-        {!selectedMember ? (
-          /* ── Step 1: Enter email ── */
-          <div className="space-y-4">
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Email</label>
-              <input
-                type="email" inputMode="email" autoComplete="email" autoFocus
-                value={email}
-                onChange={e => { setEmail(e.target.value); setError(""); }}
-                onKeyDown={e => { if (e.key === "Enter") handleEmailContinue(); }}
-                placeholder="you@example.com"
-                className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-2xl text-white text-base focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-            {error && (
-              <div className="flex items-center justify-center gap-2 text-red-400 text-sm font-semibold">
-                <AlertTriangle size={13}/> {error}
-              </div>
-            )}
-            <button onClick={handleEmailContinue} disabled={!email.trim()}
-              className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base transition-all active:scale-98">
-              Continue
-            </button>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Email</label>
+            <input
+              type="email" inputMode="email" autoComplete="email" autoFocus
+              value={email}
+              onChange={e => { setEmail(e.target.value); setError(""); }}
+              onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
+              placeholder="you@example.com"
+              className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-2xl text-white text-base focus:outline-none focus:border-indigo-500"
+            />
           </div>
-        ) : (
-          /* ── Step 2: Enter PIN ── */
-          <div className="space-y-5">
-            {/* Selected user */}
-            <div className="flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-2xl p-4">
-              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-base font-bold flex-shrink-0"
-                style={{ background: (selectedMember.color || "#6366f1") + "30", color: selectedMember.color || "#6366f1" }}>
-                {selectedMember.firstName[0]}{selectedMember.lastName?.[0] || ""}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-base font-bold text-white">{selectedMember.firstName} {selectedMember.lastName}</div>
-                <div className="text-xs text-slate-600">{selectedMember.role} · {brand?.name}</div>
-              </div>
-              <button onClick={handleClear} className="text-slate-500 hover:text-slate-700 transition-colors p-1">
-                <X size={16}/>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">PIN</label>
+            <div className="relative">
+              <input
+                type={showPin ? "text" : "password"} inputMode="numeric" autoComplete="off"
+                value={pin}
+                onChange={e => { setPin(e.target.value.replace(/[^0-9]/g, "").slice(0, 6)); setError(""); }}
+                onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
+                placeholder="Enter your PIN"
+                className={`w-full px-4 py-3 pr-12 bg-slate-900 border rounded-2xl text-white text-base tracking-widest focus:outline-none focus:border-indigo-500 ${shake ? "border-red-500 animate-bounce" : "border-slate-700"}`}
+              />
+              <button type="button" onClick={() => setShowPin(s => !s)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors p-1"
+                aria-label={showPin ? "Hide PIN" : "Show PIN"}>
+                {showPin ? <EyeOff size={16}/> : <Eye size={16}/>}
               </button>
             </div>
-
-            {/* PIN dots */}
-            <div className="flex justify-center gap-3">
-              {Array.from({ length: Math.max(4, pin.length + (pin.length < 6 ? 1 : 0)) }).map((_, i) => (
-                <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${
-                  i < pin.length
-                    ? "bg-indigo-500 border-indigo-500"
-                    : "bg-transparent border-slate-600"
-                } ${shake ? "animate-bounce" : ""}`}/>
-              ))}
-            </div>
-
-            {error && (
-              <div className="flex items-center justify-center gap-2 text-red-400 text-sm font-semibold">
-                <AlertTriangle size={13}/> {error}
-              </div>
-            )}
-
-            {/* Numpad */}
-            <div className="grid grid-cols-3 gap-3">
-              {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
-                if (key === "") return <div key={idx}/>;
-                return (
-                  <button key={key} onClick={() => key === "⌫" ? handleBackspace() : handlePinDigit(key)}
-                    className={`h-16 rounded-2xl text-xl font-bold transition-all active:scale-95 ${
-                      key === "⌫"
-                        ? "bg-slate-800 text-slate-600 hover:bg-slate-700 hover:text-white"
-                        : "bg-slate-800 text-white hover:bg-slate-700"
-                    }`}>
-                    {key}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Submit */}
-            <button onClick={handleSubmit} disabled={pin.length < 4}
-              className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base transition-all active:scale-98">
-              Sign In
-            </button>
           </div>
-        )}
+
+          {error && (
+            <div className="flex items-center justify-center gap-2 text-red-400 text-sm font-semibold">
+              <AlertTriangle size={13}/> {error}
+            </div>
+          )}
+
+          <button onClick={handleSubmit} disabled={!email.trim() || !pin}
+            className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base transition-all active:scale-98">
+            Sign In
+          </button>
+        </div>
 
         {/* Switch to manager login */}
         <div className="text-center">
