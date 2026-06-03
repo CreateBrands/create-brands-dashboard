@@ -1599,7 +1599,7 @@ function SteppedModuleContent({ content }) {
   // own line). 2+ steps → guided card flow with a progress bar; otherwise the
   // content renders as a single block (fully backward-compatible with existing
   // modules authored as one body).
-  const steps = React.useMemo(() => {
+  const steps = useMemo(() => {
     if (!content) return [];
     return content
       .split(/\n\s*---+\s*\n/)        // split on a line that is just dashes
@@ -1607,9 +1607,9 @@ function SteppedModuleContent({ content }) {
       .filter(Boolean);
   }, [content]);
 
-  const [i, setI] = React.useState(0);
+  const [i, setI] = useState(0);
   // If the module shrinks (re-edited) keep the index in range.
-  React.useEffect(() => { if (i > steps.length - 1) setI(0); }, [steps.length, i]);
+  useEffect(() => { if (i > steps.length - 1) setI(0); }, [steps.length, i]);
 
   if (steps.length === 0) return <div className="text-xs text-slate-600">No content for this module.</div>;
   if (steps.length === 1) return <SafeMarkdown text={steps[0]}/>;
