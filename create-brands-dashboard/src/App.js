@@ -21810,13 +21810,14 @@ export default function App() {
   const handleFlipdishSync = useCallback(async () => {
     try {
       showToast("Starting Flipdish sync…");
-      await runFlipdishSync({});  // default: last 7 days
+      const result = await runFlipdishSync({});  // {} = rolling window: yesterday + today
       // Bust the lazy-load cache so the next Chain Performance render fetches fresh.
       // If the user is currently *on* Chain Performance, the view re-reads via
       // its own effect (keyed on the cache-bust counter) and shows new data.
       invalidateFlipdishSalesCache();
       setFlipdishSyncLog(await fetchFlipdishSyncLog());
-      showToast("Sync complete");
+      const n = result?.totalUpserted;
+      showToast(n != null ? `Sync complete — ${n.toLocaleString()} sales updated` : "Sync complete");
     } catch (err) {
       showToast("Sync failed: " + err.message, "error");
     }

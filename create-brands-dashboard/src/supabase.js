@@ -1514,7 +1514,15 @@ export async function fetchFlipdishSyncLog(limit = 10) {
 
 // Trigger a manual flipdish sync from the UI
 export async function runFlipdishSync(body = {}) {
-  const { data, error } = await supabase.functions.invoke("flipdish-sync", { body });
+  // Calls the LIVE RMS sales sync (flipdish-rms-sync). The old "flipdish-sync"
+  // function (webhook /orders pipeline) is dead — do not invoke it.
+  // The function requires the shared secret (x-sync-secret); provide it via the
+  // REACT_APP_SYNC_SECRET env var (set in Vercel). Note: CRA env vars are baked
+  // into the public bundle — this guards against scanners, not bundle readers.
+  // Empty body {} = rolling window (yesterday + today).
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("flipdish-rms-sync", { body, headers });
   if (error) throw error;
   return data;
 }
