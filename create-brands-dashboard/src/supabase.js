@@ -1512,6 +1512,83 @@ export async function fetchFlipdishSyncLog(limit = 10) {
   return data || [];
 }
 
+// ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+// One stream feeds the in-app bell now and a future email layer later.
+// recipient_type 'user' = users table (managers/owners/HQ); 'ops' = ops_team.
+function dbNotificationToApp(n) {
+  return {
+    id: n.id, recipientType: n.recipient_type, recipientId: n.recipient_id,
+    kind: n.kind, title: n.title, body: n.body || "", linkView: n.link_view || null,
+    createdAt: n.created_at, readAt: n.read_at,
+  };
+}
+
+export async function fetchNotifications({ recipientType, recipientId, limit = 30 } = {}) {
+  if (!recipientType || !recipientId) return [];
+  const { data, error } = await supabase.from("notifications").select("*")
+    .eq("recipient_type", recipientType).eq("recipient_id", recipientId)
+    .order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return (data || []).map(dbNotificationToApp);
+}
+
+export async function markNotificationRead(id) {
+  const { error } = await supabase.from("notifications")
+    .update({ read_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function markAllNotificationsRead({ recipientType, recipientId } = {}) {
+  if (!recipientType || !recipientId) return;
+  const { error } = await supabase.from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("recipient_type", recipientType).eq("recipient_id", recipientId)
+    .is("read_at", null);
+  if (error) throw error;
+}
+
+export async function insertNotifications(rows) {
+  if (!rows || rows.length === 0) return;
+  const payload = rows.map(r => ({
+    recipient_type: r.recipientType, recipient_id: r.recipientId,
+    kind: r.kind, title: r.title, body: r.body || null, link_view: r.linkView || null,
+  }));
+  const { error } = await supabase.from("notifications").insert(payload);
+  if (error) throw error;
+}
+
+// Notify the relevant managers/owners/HQ. Owners + hq_staff always receive;
+// managers receive when the brand/store matches their assignment (or when no
+// brand/store is given). FIRE-AND-FORGET: never throws — a notification
+// failure must never break the action that triggered it.
+export async function notifyManagers({ brandId, storeId, kind, title, body, linkView, excludeUserId } = {}) {
+  try {
+    const { data, error } = await supabase.from("users").select("id, role, brand_ids, store_ids");
+    if (error) throw error;
+    const recipients = (data || []).filter(u => {
+      if (excludeUserId && u.id === excludeUserId) return false;
+      if (u.role === "owner" || u.role === "hq_staff") return true;
+      if (u.role === "manager") {
+        const brandOk = !brandId || (u.brand_ids || []).includes(brandId);
+        const storeOk = !storeId || (u.store_ids || []).includes(storeId);
+        return brandOk && storeOk;
+      }
+      return false;
+    });
+    await insertNotifications(recipients.map(u => ({
+      recipientType: "user", recipientId: u.id, kind, title, body, linkView,
+    })));
+  } catch (e) { console.error("notifyManagers failed:", e); }
+}
+
+// Notify a single employee (ops_team member). FIRE-AND-FORGET like above.
+export async function notifyOpsMember(opsMemberId, { kind, title, body, linkView } = {}) {
+  try {
+    if (!opsMemberId) return;
+    await insertNotifications([{ recipientType: "ops", recipientId: opsMemberId, kind, title, body, linkView }]);
+  } catch (e) { console.error("notifyOpsMember failed:", e); }
+}
+
 // Trigger a manual flipdish sync from the UI
 export async function runFlipdishSync(body = {}) {
   // Calls the LIVE RMS sales sync (flipdish-rms-sync). The old "flipdish-sync"

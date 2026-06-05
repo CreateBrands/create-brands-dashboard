@@ -20,6 +20,7 @@ import {
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
+  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -1979,6 +1980,117 @@ function contractBodyToPrintHtml(body) {
   return out.join("\n");
 }
 
+// ─── NotificationBell — self-contained in-app notifications ──────────────────
+// Drop into any header: fetches its own items, polls every 60s, shows unread
+// badge, panel with mark-read / mark-all-read. recipientType: 'user' (managers/
+// owners/HQ from the users table) or 'ops' (ops_team member). panelClass
+// positions the dropdown (default opens down-right; sidebar passes an
+// upward-opening class).
+function NotificationBell({ recipientType, recipientId, panelClass = "top-full right-0 mt-2" }) {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const wrapRef = useRef(null);
+
+  const load = useCallback(async () => {
+    if (!recipientId) return;
+    try { setItems(await fetchNotifications({ recipientType, recipientId })); }
+    catch (e) { console.error("Notifications fetch failed:", e); }
+  }, [recipientType, recipientId]);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const unread = items.filter(n => !n.readAt).length;
+
+  const timeAgo = (iso) => {
+    if (!iso) return "";
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 1) return "now";
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h`;
+    return `${Math.floor(hrs / 24)}d`;
+  };
+
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤" };
+
+  const handleItemClick = async (n) => {
+    if (n.readAt) return;
+    try {
+      await markNotificationRead(n.id);
+      setItems(prev => prev.map(x => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x));
+    } catch (e) { console.error("Mark read failed:", e); }
+  };
+
+  const handleMarkAll = async () => {
+    setBusy(true);
+    try {
+      await markAllNotificationsRead({ recipientType, recipientId });
+      const now = new Date().toISOString();
+      setItems(prev => prev.map(x => ({ ...x, readAt: x.readAt || now })));
+    } catch (e) { console.error("Mark all read failed:", e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button onClick={() => setOpen(o => !o)} aria-label="Notifications"
+        className="relative p-1.5 text-slate-500 hover:text-white transition-colors rounded-lg hover:bg-slate-800">
+        <Bell size={14}/>
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className={`absolute ${panelClass} w-80 max-h-96 overflow-y-auto bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl z-50`}>
+          <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 sticky top-0 bg-slate-900">
+            <span className="text-xs font-bold text-white">Notifications</span>
+            {unread > 0 && (
+              <button onClick={handleMarkAll} disabled={busy}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50">
+                {busy ? "…" : "Mark all read"}
+              </button>
+            )}
+          </div>
+          {items.length === 0 ? (
+            <div className="px-3 py-6 text-center text-xs text-slate-600">No notifications yet</div>
+          ) : (
+            items.map(n => (
+              <button key={n.id} onClick={() => handleItemClick(n)}
+                className={`w-full text-left px-3 py-2.5 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors ${n.readAt ? "opacity-60" : ""}`}>
+                <div className="flex items-start gap-2">
+                  <span className="text-sm flex-shrink-0">{KIND_ICON[n.kind] || "🔔"}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className={`text-xs ${n.readAt ? "text-slate-400" : "text-white font-semibold"} leading-snug`}>{n.title}</span>
+                      <span className="text-[9px] text-slate-600 flex-shrink-0">{timeAgo(n.createdAt)}</span>
+                    </div>
+                    {n.body && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug">{n.body}</div>}
+                  </div>
+                  {!n.readAt && <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0 mt-1"/>}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) {
   // Resolve the trainee's own ops_team record (for their store/brand context).
   const me = opsTeam.find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
@@ -2019,6 +2131,17 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
         const others = prev.filter(p => p.moduleId !== mod.id);
         return [...others, updated];
       });
+      // Tell managers when a module is completed (fire-and-forget; un-ticking is silent).
+      if (done) {
+        const me = (opsTeam || []).find(m => m.id === employeeId);
+        const name = me ? `${me.firstName} ${me.lastName}`.trim() : (currentUser?.name || "A trainee");
+        notifyManagers({
+          brandId: me?.brandId, storeId: me?.storeIds?.[0], kind: "training",
+          title: `${name} completed "${mod.title}"`,
+          body: "Training module marked complete in the trainee portal.",
+          linkView: "training-admin",
+        });
+      }
     } catch (err) {
       console.error("Toggle completion failed:", err);
       alert(`Could not update: ${err?.message || err}`);
@@ -2064,12 +2187,15 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
               </div>
             </div>
           </div>
-          <button
-            onClick={onLogout}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 flex-shrink-0"
-          >
-            Sign out
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2"/>
+            <button
+              onClick={onLogout}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 flex-shrink-0"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -2365,6 +2491,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-700"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
+            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2"/>
             <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 text-xs font-semibold transition-all">
               <LogOut size={13}/> Sign out
             </button>
@@ -9767,6 +9894,13 @@ function EmployeeProfileView({
     setConverting(true);
     try {
       await onUpdateEmployee({ id: employee.id, isTrainee: false });
+      // Tell owners/managers (fire-and-forget; excludes the converter).
+      notifyManagers({
+        brandId: employee.brandId, storeId: employee.storeIds?.[0], kind: "staff",
+        title: `${employee.firstName} ${employee.lastName} converted to full staff`,
+        body: "They now have normal employee access instead of the trainee portal.",
+        linkView: "ops-team", excludeUserId: currentUser?.id,
+      });
     } catch (err) {
       console.error("Convert to staff failed:", err);
       alert(`Could not convert: ${err?.message || err}`);
@@ -21225,6 +21359,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
           <div className="w-7 h-7 rounded-lg bg-indigo-600/20 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">{currentUser.avatar || currentUser.name?.[0] || "?"}</div>
           {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-indigo-400 font-semibold uppercase">{currentUser.role}</div></div>}
+          {!collapsed && <NotificationBell recipientType="user" recipientId={currentUser.id} panelClass="bottom-full left-0 mb-2"/>}
           {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
         </div>
       </div>
@@ -21547,6 +21682,13 @@ export default function App() {
     const saved = await insertApplication({ ...app, createdBy: currentUser?.id });
     setApplications(prev => [saved, ...prev]);
     showToast("Application added");
+    // Notify managers/owners of the store (fire-and-forget — never blocks the save).
+    notifyManagers({
+      brandId: saved.brandId, storeId: saved.storeId, kind: "application",
+      title: `New application: ${`${saved.firstName || ""} ${saved.lastName || ""}`.trim() || "Unnamed"}`,
+      body: "A new job application was added to the hiring pipeline.",
+      linkView: "hiring", excludeUserId: currentUser?.id,
+    });
     return saved;
   }, [currentUser?.id, showToast]);
   const updateApplicationRow = useCallback(async (id, patch) => {
@@ -21710,7 +21852,12 @@ export default function App() {
   const addCleanTask    = useCallback(async t=>{const s=await upsertCleaningTask(t);setCleaningTasks(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved");}, [showToast]);
   const updateCleanTask = useCallback(async t=>{const s=await upsertCleaningTask(t);setCleaningTasks(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteCleanTask = useCallback(async id=>{await removeCleaningTask(id);setCleaningTasks(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
-  const addAssignment    = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.some(x=>x.id===s.id)?as.map(x=>x.id===s.id?s:x):[...as,s]);showToast("Saved");}, [showToast]);
+  const addAssignment    = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.some(x=>x.id===s.id)?as.map(x=>x.id===s.id?s:x):[...as,s]);showToast("Saved");
+    // If assigned directly to a specific employee, notify them (fire-and-forget).
+    if (s.assignTo === "employee" && s.personId) {
+      notifyOpsMember(s.personId, { kind: "task", title: "New task assigned to you", body: s.notes || "Open your tasks to see the details.", linkView: "tasks" });
+    }
+  }, [showToast]);
   const updateAssignment = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved"); return s;}, [showToast]);
