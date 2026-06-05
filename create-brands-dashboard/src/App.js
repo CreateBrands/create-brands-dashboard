@@ -1987,14 +1987,47 @@ function contractBodyToPrintHtml(body) {
 // positions the dropdown (default opens down-right; sidebar passes an
 // upward-opening class).
 function NotificationBell({ recipientType, recipientId, panelClass = "top-full right-0 mt-2" }) {
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState([]);   // unread only — read items are kept in DB but not shown
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const wrapRef = useRef(null);
+  const prevUnreadRef = useRef(0);
+  const firstLoadRef = useRef(true);
+
+  // Soft two-tone chime via Web Audio (no audio file). Browsers block sound
+  // until the user has interacted with the page — fails silently in that case.
+  const playDing = () => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      if (ctx.state === "suspended") { ctx.resume().catch(() => {}); }
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.type = "sine";
+      o.frequency.setValueAtTime(880, ctx.currentTime);
+      o.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.1);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+      o.start(ctx.currentTime); o.stop(ctx.currentTime + 0.55);
+      setTimeout(() => { ctx.close().catch(() => {}); }, 700);
+    } catch { /* autoplay blocked or unsupported — stay silent */ }
+  };
 
   const load = useCallback(async () => {
     if (!recipientId) return;
-    try { setItems(await fetchNotifications({ recipientType, recipientId })); }
+    try {
+      const fetched = await fetchNotifications({ recipientType, recipientId });
+      const unreadList = fetched.filter(n => !n.readAt);
+      // Ding only when NEW notifications arrive on a background poll — never on
+      // the initial page load (would chime on every refresh).
+      if (!firstLoadRef.current && unreadList.length > prevUnreadRef.current) playDing();
+      prevUnreadRef.current = unreadList.length;
+      firstLoadRef.current = false;
+      setItems(unreadList);
+    }
     catch (e) { console.error("Notifications fetch failed:", e); }
   }, [recipientType, recipientId]);
 
@@ -2011,7 +2044,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
-  const unread = items.filter(n => !n.readAt).length;
+  const unread = items.length;
 
   const timeAgo = (iso) => {
     if (!iso) return "";
@@ -2025,21 +2058,25 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
 
   const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤" };
 
+  // Clicking a notification DISMISSES it: removed from the list immediately,
+  // marked read in the DB (kept there for history / future email layer).
   const handleItemClick = async (n) => {
-    if (n.readAt) return;
-    try {
-      await markNotificationRead(n.id);
-      setItems(prev => prev.map(x => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x));
-    } catch (e) { console.error("Mark read failed:", e); }
+    setItems(prev => prev.filter(x => x.id !== n.id));
+    prevUnreadRef.current = Math.max(0, prevUnreadRef.current - 1);
+    try { await markNotificationRead(n.id); }
+    catch (e) { console.error("Mark read failed:", e); }
   };
 
   const handleMarkAll = async () => {
     setBusy(true);
-    try {
-      await markAllNotificationsRead({ recipientType, recipientId });
-      const now = new Date().toISOString();
-      setItems(prev => prev.map(x => ({ ...x, readAt: x.readAt || now })));
-    } catch (e) { console.error("Mark all read failed:", e); }
+    const cleared = items;
+    setItems([]);
+    prevUnreadRef.current = 0;
+    try { await markAllNotificationsRead({ recipientType, recipientId }); }
+    catch (e) {
+      console.error("Mark all read failed:", e);
+      setItems(cleared);   // restore on failure so nothing is silently lost
+    }
     finally { setBusy(false); }
   };
 
@@ -2061,26 +2098,26 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
             {unread > 0 && (
               <button onClick={handleMarkAll} disabled={busy}
                 className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50">
-                {busy ? "…" : "Mark all read"}
+                {busy ? "…" : "Clear all"}
               </button>
             )}
           </div>
           {items.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-slate-600">No notifications yet</div>
+            <div className="px-3 py-6 text-center text-xs text-slate-600">You're all caught up 🎉</div>
           ) : (
             items.map(n => (
-              <button key={n.id} onClick={() => handleItemClick(n)}
-                className={`w-full text-left px-3 py-2.5 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors ${n.readAt ? "opacity-60" : ""}`}>
+              <button key={n.id} onClick={() => handleItemClick(n)} title="Click to dismiss"
+                className="w-full text-left px-3 py-2.5 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
                 <div className="flex items-start gap-2">
                   <span className="text-sm flex-shrink-0">{KIND_ICON[n.kind] || "🔔"}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
-                      <span className={`text-xs ${n.readAt ? "text-slate-400" : "text-white font-semibold"} leading-snug`}>{n.title}</span>
+                      <span className="text-xs text-white font-semibold leading-snug">{n.title}</span>
                       <span className="text-[9px] text-slate-600 flex-shrink-0">{timeAgo(n.createdAt)}</span>
                     </div>
                     {n.body && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug">{n.body}</div>}
                   </div>
-                  {!n.readAt && <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0 mt-1"/>}
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0 mt-1"/>
                 </div>
               </button>
             ))
