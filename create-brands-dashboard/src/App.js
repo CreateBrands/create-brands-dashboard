@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -3267,6 +3267,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   const [aggRows, setAggRows] = useState([]);
   const [accRows, setAccRows] = useState([]);
   const [payRows, setPayRows] = useState([]);
+  const [itemRows, setItemRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
   const ExcelJS = useExcelJS();
@@ -3285,6 +3286,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     { key: "forecast-actual", label: "Forecast vs actual",        hint: "How 1-day-ahead forecasts scored" },
     { key: "cash-banking",    label: "Cash banking",              hint: "Expected till banking per store/day — for bank reconciliation" },
     { key: "payment-mix",     label: "Payment mix",               hint: "Takings by payment method, net of refunds" },
+    { key: "top-items",       label: "Top items",                 hint: "Menu items ranked by revenue — menu engineering" },
   ];
   const SALES_REPORTS = ["sales-summary", "channel-mix", "dow"];
   const PAYMENT_REPORTS = ["cash-banking", "payment-mix"];
@@ -3309,16 +3311,17 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       // zero rows with no explanation).
       const [lo, hi] = (!from || !to || from <= to) ? [from, to] : [to, from];
       const effFrom = lo, effTo = (reportType === "daily") ? lo : hi;
-      const needsPunches = !(reportType === "labour" || SALES_REPORTS.includes(reportType) || PAYMENT_REPORTS.includes(reportType) || reportType === "forecast-actual");
-      const [p, s, l, ag, ac, pay] = await Promise.all([
+      const needsPunches = !(reportType === "labour" || SALES_REPORTS.includes(reportType) || PAYMENT_REPORTS.includes(reportType) || reportType === "forecast-actual" || reportType === "top-items");
+      const [p, s, l, ag, ac, pay, itm] = await Promise.all([
         needsPunches ? fetchPunchRecords({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "variance" ? fetchSchedulesRange({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "labour" ? fetchLabourVsRevenue({ from: effFrom, to: effTo }) : Promise.resolve([]),
         SALES_REPORTS.includes(reportType) ? fetchStoreDayAggregates({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "forecast-actual" ? fetchForecastAccuracyRows({ from: effFrom, to: effTo }) : Promise.resolve([]),
         PAYMENT_REPORTS.includes(reportType) ? fetchStoreDayPayments({ from: effFrom, to: effTo }) : Promise.resolve([]),
+        reportType === "top-items" ? fetchItemDayAggregates({ from: effFrom, to: effTo }) : Promise.resolve([]),
       ]);
-      setPunches(p); setSchedules(s); setLabourRows(l); setAggRows(ag); setAccRows(ac); setPayRows(pay); setRan(true);
+      setPunches(p); setSchedules(s); setLabourRows(l); setAggRows(ag); setAccRows(ac); setPayRows(pay); setItemRows(itm); setRan(true);
     } catch (e) { alert(`Could not load report data: ${e?.message || e}`); }
     finally { setLoading(false); }
   };
@@ -3337,8 +3340,9 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       agg: aggRows.filter(r => inScope(r.storeId)),
       acc: accRows.filter(r => inScope(r.storeId)),
       pay: payRows.filter(r => inScope(r.storeId)),
+      items: itemRows.filter(r => inScope(r.storeId)),
     };
-  }, [punches, schedules, labourRows, aggRows, accRows, payRows, storeSel, isMgr, myStoreIds]);
+  }, [punches, schedules, labourRows, aggRows, accRows, payRows, itemRows, storeSel, isMgr, myStoreIds]);
 
   // ── Formatting helpers ──
   const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -3647,6 +3651,44 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
         rows,
         totals: { method: "TOTAL", net: gbp(totNet), share: rows.length ? "100%" : "—" },
         emptyHint: "No payment rows in this range — check the payments table has been backfilled.",
+      };
+    }
+    if (reportType === "top-items") {
+      // Menu engineering: items ranked by revenue across the range. Category
+      // names are normalised (case/whitespace) so POS duplicates like
+      // "CHOCOBERRY SPECIALS"/"Chocoberry Specials" merge in the report even
+      // before the POS itself is fixed.
+      const norm = (c) => (c || "").trim().toLowerCase().replace(/\s+/g, " ");
+      const titleCase = (c) => c.replace(/\b\w/g, (m) => m.toUpperCase());
+      const byItem = {};
+      scoped.items.forEach(r => {
+        const k = `${norm(r.category)}|${norm(r.item)}`;
+        if (!byItem[k]) byItem[k] = { category: titleCase(norm(r.category)), item: r.item, qty: 0, revenue: 0, refunded: 0, comped: 0 };
+        byItem[k].qty += r.qty; byItem[k].revenue += r.revenue;
+        byItem[k].refunded += r.refundedQty; byItem[k].comped += r.compedQty;
+      });
+      const list = Object.values(byItem).sort((a, b) => b.revenue - a.revenue).slice(0, 100);
+      const totRev = Object.values(byItem).reduce((a, i) => a + i.revenue, 0);
+      const rows = list.map((i, idx) => ({
+        rank: idx + 1,
+        item: i.item, category: i.category,
+        qty: Math.round(i.qty).toLocaleString("en-GB"),
+        revenue: gbp(i.revenue),
+        avg: i.qty > 0 ? gbp(i.revenue / i.qty) : "—",
+        share: totRev > 0 ? `${n2(100 * i.revenue / totRev)}%` : "—",
+        flags: [i.refunded > 0 ? `${Math.round(i.refunded)} ref` : "", i.comped > 0 ? `${Math.round(i.comped)} comp` : ""].filter(Boolean).join(" · "),
+      }));
+      return {
+        title: "Top items by revenue (top 100)",
+        columns: [
+          { key: "rank", label: "#", width: 5, num: true }, { key: "item", label: "Item", width: 26 },
+          { key: "category", label: "Category", width: 18 }, { key: "qty", label: "Sold", width: 9, num: true },
+          { key: "revenue", label: "Revenue", width: 12, num: true }, { key: "avg", label: "Avg price", width: 10, num: true },
+          { key: "share", label: "Share", width: 8, num: true }, { key: "flags", label: "Refunds/comps", width: 14 },
+        ],
+        rows,
+        totals: { rank: "", item: "TOTAL (all items)", revenue: gbp(totRev), share: rows.length ? "100%" : "—" },
+        emptyHint: "No item rows in this range — check item_day_aggregates has been backfilled.",
       };
     }
     if (reportType === "labour") {

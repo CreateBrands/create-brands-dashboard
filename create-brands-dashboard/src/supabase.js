@@ -2003,6 +2003,26 @@ export async function fetchStoreDayPayments({ from, to } = {}) {
   }));
 }
 
+// ── ITEM AGGREGATES (menu engineering, for ReportsView) ─────────────────────
+export async function fetchItemDayAggregates({ from, to } = {}) {
+  let q = supabase.from("item_day_aggregates").select("*").order("business_date");
+  if (from) q = q.gte("business_date", from);
+  if (to)   q = q.lte("business_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    brandId:     r.brand_id,
+    storeId:     r.store_id,
+    date:        r.business_date,
+    category:    r.category,
+    item:        r.item,
+    qty:         Number(r.qty) || 0,
+    revenue:     Number(r.revenue) || 0,
+    refundedQty: Number(r.refunded_qty) || 0,
+    compedQty:   Number(r.comped_qty) || 0,
+  }));
+}
+
 // ── WEEKLY NARRATIVE REPORTS (Phase 3) ──────────────────────────────────────
 export async function fetchNarrativeReports({ limit = 26 } = {}) {
   const { data, error } = await supabase.from("narrative_reports")
