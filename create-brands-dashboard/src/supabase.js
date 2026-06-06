@@ -2024,6 +2024,19 @@ export async function fetchItemDayAggregates({ from, to } = {}) {
   }));
 }
 
+// ── ASK THE DATA (Phase 3 slice 3) ──────────────────────────────────────────
+export async function askData(question) {
+  // Single-question Q&A against aggregates via the ask-data Edge Function.
+  // Same secret pattern as runFlipdishSync; the function sends AGGREGATES ONLY
+  // to the Claude API (no raw rows, no customer/employee data).
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("ask-data", { body: { question }, headers });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || "ask-data failed");
+  return data.answer;
+}
+
 // ── WEEKLY NARRATIVE REPORTS (Phase 3) ──────────────────────────────────────
 export async function fetchNarrativeReports({ limit = 26 } = {}) {
   const { data, error } = await supabase.from("narrative_reports")

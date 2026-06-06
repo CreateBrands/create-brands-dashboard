@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2952,6 +2952,81 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ─── AskDataView — single-question Q&A against aggregates (Phase 3 slice 3) ──
+// v1: one question, one answer, no conversation memory. The Edge Function
+// sends AGGREGATES ONLY to the Claude API. Owner/HQ only.
+function AskDataView() {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState(null);
+  const [asked, setAsked] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const SUGGESTIONS = [
+    "Which store grew the most over the last 4 weeks?",
+    "How much cash did we take last week, by store?",
+    "What are our top 5 items by revenue this month?",
+    "What's the forecast for next weekend?",
+    "How do UberEats and Deliveroo compare for us?",
+  ];
+
+  const ask = async (q) => {
+    const text = (q || question).trim();
+    if (!text || busy) return;
+    setBusy(true); setError(null); setAnswer(null); setAsked(text); setQuestion(text);
+    try {
+      const a = await askData(text);
+      setAnswer(a);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><MessageSquare size={18}/> Ask the Data</h2>
+        <p className="text-xs text-slate-500 mt-0.5">One question at a time, answered from your aggregates (8 weeks of store performance, payments, items, forecasts). No raw or personal data is shared. Answers are AI-generated — check important figures in Reports before acting.</p>
+      </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <textarea
+          value={question}
+          onChange={e => setQuestion(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } }}
+          rows={2}
+          placeholder="e.g. Which store had the best week, and was it ahead of forecast?"
+          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none"
+        />
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex gap-1.5 flex-wrap">
+            {SUGGESTIONS.map((sg, i) => (
+              <button key={i} onClick={() => ask(sg)} disabled={busy}
+                className="px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-400 hover:text-slate-200 hover:border-slate-500 disabled:opacity-40">
+                {sg}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => ask()} disabled={busy || !question.trim()}
+            className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">
+            {busy ? "Thinking…" : "Ask"}
+          </button>
+        </div>
+      </div>
+      {busy && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Reading the aggregates and composing an answer…</div>}
+      {error && <div className="bg-slate-900 border border-red-900/40 rounded-2xl p-4 text-xs text-red-300">Could not answer: {error}</div>}
+      {answer && !busy && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+          <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-2">Q: {asked}</div>
+          <MdBlock text={answer}/>
+          <div className="text-[10px] text-slate-600 mt-4 pt-3 border-t border-slate-800/60">Answered from aggregates only · figures worth acting on should be verified in Reports</div>
+        </div>
       )}
     </div>
   );
@@ -23569,6 +23644,7 @@ export default function App() {
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"] },
+      { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -23774,6 +23850,7 @@ export default function App() {
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "weekly-reports" && ["owner","hq_staff"].includes(currentUser.role) && <WeeklyReportsView/>}
+            {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
