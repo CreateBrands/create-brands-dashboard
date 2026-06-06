@@ -1985,6 +1985,24 @@ export async function fetchPolicyAcks() {
   return (data || []).map(r => ({ employeeId: r.employee_id, policyKey: r.policy_key }));
 }
 
+// ── PAYMENTS (per store/day/method, for banking reconciliation) ─────────────
+export async function fetchStoreDayPayments({ from, to } = {}) {
+  let q = supabase.from("store_day_payments").select("*").order("business_date");
+  if (from) q = q.gte("business_date", from);
+  if (to)   q = q.lte("business_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    brandId:       r.brand_id,
+    storeId:       r.store_id,
+    date:          r.business_date,
+    paymentMethod: r.payment_method,
+    lineType:      r.line_type,
+    lines:         Number(r.lines) || 0,
+    amount:        Number(r.amount) || 0,
+  }));
+}
+
 // ── WEEKLY NARRATIVE REPORTS (Phase 3) ──────────────────────────────────────
 export async function fetchNarrativeReports({ limit = 26 } = {}) {
   const { data, error } = await supabase.from("narrative_reports")

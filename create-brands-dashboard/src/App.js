@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -3266,6 +3266,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   const [labourRows, setLabourRows] = useState([]);
   const [aggRows, setAggRows] = useState([]);
   const [accRows, setAccRows] = useState([]);
+  const [payRows, setPayRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
   const ExcelJS = useExcelJS();
@@ -3282,8 +3283,11 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     { key: "channel-mix",     label: "Channel mix",               hint: "Revenue & orders by sales channel" },
     { key: "dow",             label: "Day-of-week performance",   hint: "Average revenue by weekday" },
     { key: "forecast-actual", label: "Forecast vs actual",        hint: "How 1-day-ahead forecasts scored" },
+    { key: "cash-banking",    label: "Cash banking",              hint: "Expected till banking per store/day — for bank reconciliation" },
+    { key: "payment-mix",     label: "Payment mix",               hint: "Takings by payment method, net of refunds" },
   ];
   const SALES_REPORTS = ["sales-summary", "channel-mix", "dow"];
+  const PAYMENT_REPORTS = ["cash-banking", "payment-mix"];
 
   // Employees pickable for the detail report — scoped to the selected store.
   const pickableEmployees = useMemo(() => {
@@ -3305,15 +3309,16 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       // zero rows with no explanation).
       const [lo, hi] = (!from || !to || from <= to) ? [from, to] : [to, from];
       const effFrom = lo, effTo = (reportType === "daily") ? lo : hi;
-      const needsPunches = !(reportType === "labour" || SALES_REPORTS.includes(reportType) || reportType === "forecast-actual");
-      const [p, s, l, ag, ac] = await Promise.all([
+      const needsPunches = !(reportType === "labour" || SALES_REPORTS.includes(reportType) || PAYMENT_REPORTS.includes(reportType) || reportType === "forecast-actual");
+      const [p, s, l, ag, ac, pay] = await Promise.all([
         needsPunches ? fetchPunchRecords({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "variance" ? fetchSchedulesRange({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "labour" ? fetchLabourVsRevenue({ from: effFrom, to: effTo }) : Promise.resolve([]),
         SALES_REPORTS.includes(reportType) ? fetchStoreDayAggregates({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "forecast-actual" ? fetchForecastAccuracyRows({ from: effFrom, to: effTo }) : Promise.resolve([]),
+        PAYMENT_REPORTS.includes(reportType) ? fetchStoreDayPayments({ from: effFrom, to: effTo }) : Promise.resolve([]),
       ]);
-      setPunches(p); setSchedules(s); setLabourRows(l); setAggRows(ag); setAccRows(ac); setRan(true);
+      setPunches(p); setSchedules(s); setLabourRows(l); setAggRows(ag); setAccRows(ac); setPayRows(pay); setRan(true);
     } catch (e) { alert(`Could not load report data: ${e?.message || e}`); }
     finally { setLoading(false); }
   };
@@ -3331,8 +3336,9 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       labour: labourRows.filter(r => inScope(r.storeId)),
       agg: aggRows.filter(r => inScope(r.storeId)),
       acc: accRows.filter(r => inScope(r.storeId)),
+      pay: payRows.filter(r => inScope(r.storeId)),
     };
-  }, [punches, schedules, labourRows, aggRows, accRows, storeSel, isMgr, myStoreIds]);
+  }, [punches, schedules, labourRows, aggRows, accRows, payRows, storeSel, isMgr, myStoreIds]);
 
   // ── Formatting helpers ──
   const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -3580,6 +3586,67 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
         rows,
         totals: { date: "AVG", pct: scoredPct.length ? `±${n2(scoredPct.reduce((a, r) => a + r.absPctError, 0) / scoredPct.length)}%` : "—" },
         emptyHint: "No scored days yet — forecasts began 07 Jun; the first scores appear the morning after.",
+      };
+    }
+    if (reportType === "cash-banking") {
+      // Expected till banking: Cash charges minus cash refunds per store/day.
+      const cash = scoped.pay.filter(r => r.paymentMethod === "Cash");
+      const byKey = {};
+      cash.forEach(r => {
+        const k = `${r.date}|${r.storeId}`;
+        if (!byKey[k]) byKey[k] = { date: r.date, storeId: r.storeId, charges: 0, chargeLines: 0, refunds: 0 };
+        if (r.lineType === "Charge") { byKey[k].charges += r.amount; byKey[k].chargeLines += r.lines; }
+        else { byKey[k].refunds += r.amount; }
+      });
+      const list = Object.values(byKey).sort((a, b) => (b.date || "").localeCompare(a.date || "") || storeName(a.storeId).localeCompare(storeName(b.storeId)));
+      const rows = list.map(b => ({
+        date: fmtD(b.date),
+        store: b.storeId === "unmatched" ? "⚠ Unmatched" : storeName(b.storeId),
+        txns: b.chargeLines,
+        charges: gbp(b.charges),
+        refunds: b.refunds ? gbp(b.refunds) : "—",
+        banking: gbp(b.charges - b.refunds),
+      }));
+      const totCharges = list.reduce((a, b) => a + b.charges, 0);
+      const totRefunds = list.reduce((a, b) => a + b.refunds, 0);
+      return {
+        title: "Cash banking — expected till deposits",
+        columns: [
+          { key: "date", label: "Date", width: 16 }, { key: "store", label: "Store", width: 16 },
+          { key: "txns", label: "Cash txns", width: 10, num: true }, { key: "charges", label: "Cash taken", width: 12, num: true },
+          { key: "refunds", label: "Cash refunds", width: 12, num: true }, { key: "banking", label: "Expected banking", width: 15, num: true },
+        ],
+        rows,
+        totals: { date: "TOTAL", charges: gbp(totCharges), refunds: totRefunds ? gbp(totRefunds) : "—", banking: gbp(totCharges - totRefunds) },
+        emptyHint: "No cash payment rows in this range — check the payments table has been backfilled.",
+      };
+    }
+    if (reportType === "payment-mix") {
+      // All methods, net of refunds, with share of net takings.
+      const byM = {};
+      scoped.pay.forEach(r => {
+        if (!byM[r.paymentMethod]) byM[r.paymentMethod] = { method: r.paymentMethod, lines: 0, charges: 0, refunds: 0 };
+        if (r.lineType === "Charge") { byM[r.paymentMethod].charges += r.amount; byM[r.paymentMethod].lines += r.lines; }
+        else { byM[r.paymentMethod].refunds += r.amount; }
+      });
+      const list = Object.values(byM).map(m => ({ ...m, net: m.charges - m.refunds })).sort((a, b) => b.net - a.net);
+      const totNet = list.reduce((a, m) => a + m.net, 0);
+      const rows = list.map(m => ({
+        method: m.method, lines: m.lines.toLocaleString("en-GB"),
+        charges: gbp(m.charges), refunds: m.refunds ? gbp(m.refunds) : "—",
+        net: gbp(m.net),
+        share: totNet > 0 ? `${n2(100 * m.net / totNet)}%` : "—",
+      }));
+      return {
+        title: "Payment mix (net of refunds)",
+        columns: [
+          { key: "method", label: "Method", width: 14 }, { key: "lines", label: "Payment lines", width: 13, num: true },
+          { key: "charges", label: "Charges", width: 12, num: true }, { key: "refunds", label: "Refunds", width: 12, num: true },
+          { key: "net", label: "Net", width: 12, num: true }, { key: "share", label: "Share", width: 9, num: true },
+        ],
+        rows,
+        totals: { method: "TOTAL", net: gbp(totNet), share: rows.length ? "100%" : "—" },
+        emptyHint: "No payment rows in this range — check the payments table has been backfilled.",
       };
     }
     if (reportType === "labour") {
