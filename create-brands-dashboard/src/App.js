@@ -22038,7 +22038,24 @@ export default function App() {
     showToast("Updated");
     return s;
   }, [showToast]);
-  const deleteOpsTeam = useCallback(async id=>{await removeOpsTeamMember(id);setOpsTeam(ts=>ts.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
+  const deleteOpsTeam = useCallback(async id=>{
+    try {
+      await removeOpsTeamMember(id);
+      setOpsTeam(ts=>ts.filter(x=>x.id!==id));
+      showToast("Deleted");
+    } catch (err) {
+      // Hard deletes are blocked by Postgres when other rows reference this
+      // member (training progress, contracts, punches, a converted application…).
+      // Surface the real reason instead of failing silently.
+      const msg = err?.message || String(err);
+      showToast(
+        /foreign key|violates/i.test(msg)
+          ? "Can't delete: this member has linked records (training, contracts, punches…). Archive them instead, or remove the linked records first."
+          : `Delete failed: ${msg}`,
+        "error"
+      );
+    }
+  }, [showToast]);
   const handleTempLog     = useCallback(async l=>{const s=await insertTempLog(l);setTempLogs(ls=>[s,...ls]);}, []);
   const handleDeliveryAdd = useCallback(async d=>{const s=await insertDelivery(d);setDeliveries(ds=>[s,...ds]);}, []);
   const handleChecklistItemToggle = useCallback(async (stateKey,itemId,val)=>{
