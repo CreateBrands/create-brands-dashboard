@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2952,6 +2952,179 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ─── OnboardingBoard — read-only HR onboarding/compliance grid ───────────────
+// One row per person, one column per onboarding signal, owner/HQ only.
+// Chips: ✓ done · ● in progress · — missing · ✗ rejected. Data is fetched in
+// one burst on mount; the board never writes anything.
+function OnboardingBoard({ stores, opsTeam }) {
+  const [contracts, setContracts] = useState([]);
+  const [rtwDocs, setRtwDocs] = useState([]);
+  const [training, setTraining] = useState({ progress: [], modules: [] });
+  const [policyAcks, setPolicyAcks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [storeSel, setStoreSel] = useState("all");
+  const [scopeSel, setScopeSel] = useState("onboarding"); // onboarding | all
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchContractStatuses(), fetchRtwDocuments(), fetchTrainingOverview(), fetchPolicyAcks()])
+      .then(([c, r, t, p]) => { if (!cancelled) { setContracts(c); setRtwDocs(r); setTraining(t); setPolicyAcks(p); } })
+      .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const storeName = (sid) => stores.find(s => s.id === sid)?.shortName || stores.find(s => s.id === sid)?.name || "—";
+
+  // Status chip model: { state: 'done'|'progress'|'missing'|'rejected', label }
+  const CHIP_CLS = {
+    done:     "bg-emerald-600/15 text-emerald-300 border-emerald-600/30",
+    progress: "bg-amber-500/10 text-amber-300 border-amber-500/30",
+    missing:  "bg-slate-800/60 text-slate-500 border-slate-700/50",
+    rejected: "bg-red-600/15 text-red-300 border-red-600/30",
+  };
+  const Chip = ({ s }) => (
+    <span className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-semibold whitespace-nowrap ${CHIP_CLS[s.state]}`}>{s.label}</span>
+  );
+
+  const rows = useMemo(() => {
+    const byEmpContracts = {};
+    contracts.forEach(c => { (byEmpContracts[c.employeeId] = byEmpContracts[c.employeeId] || []).push(c); });
+    const byEmpRtw = {};
+    rtwDocs.forEach(d => { (byEmpRtw[d.employeeId] = byEmpRtw[d.employeeId] || []).push(d); });
+    const byEmpProg = {};
+    training.progress.forEach(p => { (byEmpProg[p.employeeId] = byEmpProg[p.employeeId] || []).push(p); });
+    const acksByEmp = {};
+    policyAcks.forEach(a => { acksByEmp[a.employeeId] = (acksByEmp[a.employeeId] || 0) + 1; });
+
+    return (opsTeam || [])
+      .filter(m => !m.archivedAt)
+      .filter(m => storeSel === "all" || (m.storeIds || []).includes(storeSel))
+      .filter(m => scopeSel === "all" || m.isTrainee || (m.profileStatus || "pending") !== "complete")
+      .map(m => {
+        // Profile
+        const profile = (m.profileStatus === "complete")
+          ? { state: "done", label: "Complete" }
+          : { state: "progress", label: "Pending" };
+        // RTW: HR-approved doc beats everything; else manager-approved; else any doc; else nothing
+        const docs = byEmpRtw[m.id] || [];
+        let rtw = { state: "missing", label: "—" };
+        if (docs.some(d => d.hrApprovedAt)) rtw = { state: "done", label: "Verified" };
+        else if (docs.some(d => d.rejectedAt && !d.hrApprovedAt)) rtw = { state: "rejected", label: "Rejected" };
+        else if (docs.some(d => d.managerApprovedAt)) rtw = { state: "progress", label: "HR review" };
+        else if (docs.length) rtw = { state: "progress", label: "Submitted" };
+        // Contract: signed > sent > none (voided excluded)
+        const live = (byEmpContracts[m.id] || []).filter(c => !c.voidedAt);
+        let contract = { state: "missing", label: "—" };
+        if (live.some(c => c.signedAt || c.status === "signed")) contract = { state: "done", label: "Signed" };
+        else if (live.length) contract = { state: "progress", label: "Sent" };
+        // Training: required modules for this member's store(s)
+        const myStores = m.storeIds || [];
+        const reqMods = training.modules.filter(mod => mod.required && (!mod.storeId || myStores.includes(mod.storeId)));
+        const doneIds = new Set((byEmpProg[m.id] || []).filter(p => p.completedAt).map(p => p.moduleId));
+        const doneCount = reqMods.filter(mod => doneIds.has(mod.id)).length;
+        let train;
+        if (reqMods.length === 0) train = { state: "missing", label: "No modules" };
+        else if (doneCount >= reqMods.length) train = { state: "done", label: `${doneCount}/${reqMods.length}` };
+        else if (doneCount > 0) train = { state: "progress", label: `${doneCount}/${reqMods.length}` };
+        else train = { state: "missing", label: `0/${reqMods.length}` };
+        // Policies: count of acknowledgements
+        const ackCount = acksByEmp[m.id] || 0;
+        const policies = ackCount > 0 ? { state: "done", label: `${ackCount} acked` } : { state: "missing", label: "—" };
+        // Starter (tax) & bank
+        const starter = m.taxCompletedAt ? { state: "done", label: "Done" } : { state: "missing", label: "—" };
+        const bank = m.bankProvidedAt ? { state: "done", label: "Provided" } : { state: "missing", label: "—" };
+        // Converted
+        const converted = m.isTrainee ? { state: "progress", label: "Trainee" } : { state: "done", label: "Staff" };
+        const openCount = [profile, rtw, contract, train, policies, starter, bank].filter(c => c.state !== "done").length;
+        return {
+          id: m.id,
+          name: `${m.firstName || ""} ${m.lastName || ""}`.trim() || m.nickname || m.id,
+          store: myStores.length ? storeName(myStores[0]) : "—",
+          hireDate: m.hireDate || null,
+          profile, rtw, contract, train, policies, starter, bank, converted, openCount,
+        };
+      })
+      .sort((a, b) => b.openCount - a.openCount || a.name.localeCompare(b.name));
+  }, [opsTeam, contracts, rtwDocs, training, policyAcks, storeSel, scopeSel, stores]);
+
+  const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const activeStores = (stores || []).filter(s => !s.archivedAt);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><UserCheck size={18}/> Onboarding Board</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Read-only compliance grid — who's stuck where. Sorted by most outstanding items.</p>
+        </div>
+        <div className="flex items-end gap-2">
+          <select value={scopeSel} onChange={e => setScopeSel(e.target.value)} className={inputCls}>
+            <option value="onboarding">Onboarding only</option>
+            <option value="all">Everyone (active)</option>
+          </select>
+          <select value={storeSel} onChange={e => setStoreSel(e.target.value)} className={inputCls}>
+            <option value="all">All stores</option>
+            {activeStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">Loading onboarding data…</div>
+      ) : error ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-amber-300">Could not load: {error}</div>
+      ) : rows.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">
+          {scopeSel === "onboarding" ? "Nobody is mid-onboarding — every active member has a complete profile." : "No active team members match."}
+        </div>
+      ) : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-slate-500 text-left border-b border-slate-800">
+                <th className="px-3 py-2 font-semibold">Person</th>
+                <th className="px-3 py-2 font-semibold">Store</th>
+                <th className="px-3 py-2 font-semibold">Profile</th>
+                <th className="px-3 py-2 font-semibold">RTW</th>
+                <th className="px-3 py-2 font-semibold">Contract</th>
+                <th className="px-3 py-2 font-semibold">Training</th>
+                <th className="px-3 py-2 font-semibold">Policies</th>
+                <th className="px-3 py-2 font-semibold">Starter (tax)</th>
+                <th className="px-3 py-2 font-semibold">Bank</th>
+                <th className="px-3 py-2 font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} className="border-b border-slate-800/40 hover:bg-slate-800/30">
+                  <td className="px-3 py-2">
+                    <div className="text-slate-200 font-semibold">{r.name}</div>
+                    {r.hireDate && <div className="text-[10px] text-slate-600">since {new Date(r.hireDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>}
+                  </td>
+                  <td className="px-3 py-2 text-slate-400">{r.store}</td>
+                  <td className="px-3 py-2"><Chip s={r.profile}/></td>
+                  <td className="px-3 py-2"><Chip s={r.rtw}/></td>
+                  <td className="px-3 py-2"><Chip s={r.contract}/></td>
+                  <td className="px-3 py-2"><Chip s={r.train}/></td>
+                  <td className="px-3 py-2"><Chip s={r.policies}/></td>
+                  <td className="px-3 py-2"><Chip s={r.starter}/></td>
+                  <td className="px-3 py-2"><Chip s={r.bank}/></td>
+                  <td className="px-3 py-2"><Chip s={r.converted}/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="px-3 py-2 text-[10px] text-slate-600 border-t border-slate-800/40">
+            {rows.length} {rows.length === 1 ? "person" : "people"} shown · Training counts required modules for the person's store · Policies shows acknowledgement count (no required set is defined yet) · This board is read-only — act on items via Team, Hiring, Training and Contracts.
+          </div>
+        </div>
       )}
     </div>
   );
@@ -23185,6 +23358,7 @@ export default function App() {
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, badgeClearOnView: true },
+      { key: "onboarding-board", label: "Onboarding Board", icon: UserCheck, roles: ["owner", "hq_staff"] },
       { key: "training",     label: "Training",          icon: GraduationCap },
       { key: "contracts",    label: "Contracts",         icon: FileText },
     ]},
@@ -23369,6 +23543,7 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}

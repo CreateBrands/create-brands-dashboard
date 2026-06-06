@@ -1946,6 +1946,45 @@ export async function fetchForecastAccuracyByMethod() {
   }));
 }
 
+// ── ONBOARDING BOARD (compact, all-employee fetches) ────────────────────────
+export async function fetchContractStatuses() {
+  const { data, error } = await supabase.from("employee_contracts")
+    .select("employee_id, status, signed_at, sent_at, voided_at");
+  if (error) throw error;
+  return (data || []).map(r => ({ employeeId: r.employee_id, status: r.status, signedAt: r.signed_at, sentAt: r.sent_at, voidedAt: r.voided_at }));
+}
+
+export async function fetchRtwDocuments() {
+  const { data, error } = await supabase.from("employee_documents")
+    .select("employee_id, doc_type, required_doc_key, status, hr_approved_at, manager_approved_at, rejected_at, archived_at")
+    .or("doc_type.ilike.%rtw%,required_doc_key.ilike.%rtw%");
+  if (error) throw error;
+  return (data || []).filter(r => !r.archived_at).map(r => ({
+    employeeId: r.employee_id, status: r.status,
+    hrApprovedAt: r.hr_approved_at, managerApprovedAt: r.manager_approved_at, rejectedAt: r.rejected_at,
+  }));
+}
+
+export async function fetchTrainingOverview() {
+  const [{ data: prog, error: e1 }, { data: mods, error: e2 }] = await Promise.all([
+    supabase.from("training_progress").select("employee_id, module_id, completed_at, archived_at"),
+    supabase.from("training_modules").select("id, store_id, required, archived_at"),
+  ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
+  return {
+    progress: (prog || []).filter(r => !r.archived_at).map(r => ({ employeeId: r.employee_id, moduleId: r.module_id, completedAt: r.completed_at })),
+    modules: (mods || []).filter(r => !r.archived_at).map(r => ({ id: r.id, storeId: r.store_id, required: !!r.required })),
+  };
+}
+
+export async function fetchPolicyAcks() {
+  const { data, error } = await supabase.from("policy_acknowledgements")
+    .select("employee_id, policy_key");
+  if (error) throw error;
+  return (data || []).map(r => ({ employeeId: r.employee_id, policyKey: r.policy_key }));
+}
+
 // ── SALES AGGREGATES (per store/day, for ReportsView) ───────────────────────
 export async function fetchStoreDayAggregates({ from, to } = {}) {
   let q = supabase.from("store_day_aggregates").select("*").order("business_date");
