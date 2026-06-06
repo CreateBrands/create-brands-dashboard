@@ -865,6 +865,16 @@ export async function fetchSchedules() {
   return data.map(dbScheduleToApp);
 }
 
+// Ranged variant for the Reports section (scheduled-vs-actual variance).
+export async function fetchSchedulesRange({ from, to } = {}) {
+  let q = supabase.from("schedules").select("*").order("date").order("start_time");
+  if (from) q = q.gte("date", from);
+  if (to)   q = q.lte("date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data.map(dbScheduleToApp);
+}
+
 export async function upsertSchedule(s) {
   const { data, error } = await supabase
     .from("schedules")

@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2952,6 +2952,366 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ─── ReportsView — timesheet reports (on-screen + Excel) ─────────────────────
+// Six report types over punch_records (+ schedules for variance). Owners/HQ see
+// all stores; managers are locked to their assigned store(s). One unified
+// report structure {title, columns, rows, totals} drives BOTH the on-screen
+// table and the styled ExcelJS export, so they can never drift apart.
+function ReportsView({ stores, brands, opsTeam, currentUser }) {
+  const isMgr = currentUser.role === "manager";
+  const myStores = useMemo(
+    () => (stores || []).filter(s => !s.archivedAt && (!isMgr || (currentUser.storeIds || []).includes(s.id))),
+    [stores, isMgr, currentUser]
+  );
+  const myStoreIds = useMemo(() => myStores.map(s => s.id), [myStores]);
+
+  const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+  const weekAgoStr = () => { const d = new Date(); d.setDate(d.getDate()-6); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+
+  const [reportType, setReportType] = useState("store-summary");
+  const [storeSel, setStoreSel] = useState(isMgr ? (myStores[0]?.id || "all") : "all");
+  const [employeeSel, setEmployeeSel] = useState("");
+  const [from, setFrom] = useState(weekAgoStr());
+  const [to, setTo] = useState(todayStr());
+  const [punches, setPunches] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [ran, setRan] = useState(false);
+  const ExcelJS = useExcelJS();
+
+  const REPORT_TYPES = [
+    { key: "store-summary",   label: "Store timesheet summary",   hint: "Total hours, overtime & pay per employee" },
+    { key: "employee-detail", label: "Employee timesheet",        hint: "Day-by-day for one employee" },
+    { key: "daily",           label: "Daily attendance",          hint: "Who worked on a given day" },
+    { key: "variance",        label: "Scheduled vs actual",       hint: "Rota hours vs punched hours" },
+    { key: "overtime",        label: "Overtime report",           hint: "All overtime + approval status" },
+    { key: "exceptions",      label: "Exceptions",                hint: "Missing punch-outs, amendments, unapproved" },
+  ];
+
+  // Employees pickable for the detail report — scoped to the selected store.
+  const pickableEmployees = useMemo(() => {
+    return (opsTeam || [])
+      .filter(m => !m.archivedAt)
+      .filter(m => {
+        const sid = m.storeIds?.[0];
+        if (storeSel !== "all") return sid === storeSel;
+        if (isMgr) return myStoreIds.includes(sid);
+        return true;
+      })
+      .sort((a, b) => (a.firstName || "").localeCompare(b.firstName || ""));
+  }, [opsTeam, storeSel, isMgr, myStoreIds]);
+
+  const runReport = async () => {
+    setLoading(true);
+    try {
+      const effFrom = from, effTo = (reportType === "daily") ? from : to;
+      const [p, s] = await Promise.all([
+        fetchPunchRecords({ from: effFrom, to: effTo }),
+        reportType === "variance" ? fetchSchedulesRange({ from: effFrom, to: effTo }) : Promise.resolve([]),
+      ]);
+      setPunches(p); setSchedules(s); setRan(true);
+    } catch (e) { alert(`Could not load report data: ${e?.message || e}`); }
+    finally { setLoading(false); }
+  };
+
+  // Store/role scoping applied to every report's source rows.
+  const scoped = useMemo(() => {
+    const inScope = (sid) => {
+      if (storeSel !== "all") return sid === storeSel;
+      if (isMgr) return myStoreIds.includes(sid);
+      return true;
+    };
+    return {
+      punches: punches.filter(p => inScope(p.storeId)),
+      schedules: schedules.filter(s => inScope(s.storeId)),
+    };
+  }, [punches, schedules, storeSel, isMgr, myStoreIds]);
+
+  // ── Formatting helpers ──
+  const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
+  const fmtD = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "";
+  const n2 = (v) => (v == null ? "" : (Math.round(v * 100) / 100));
+  const gbp = (v) => (v == null ? "" : `£${(Math.round(v * 100) / 100).toFixed(2)}`);
+  const schedHrs = (s) => {
+    const [sh, sm] = (s.startTime || "0:0").split(":").map(Number);
+    const [eh, em] = (s.endTime || "0:0").split(":").map(Number);
+    let h = (eh + em / 60) - (sh + sm / 60);
+    if (h < 0) h += 24;   // overnight shift wraps
+    return h;
+  };
+  // Late = punched in more than 5 minutes after scheduled start.
+  const isLate = (p) => {
+    if (!p.scheduledStart || !p.punchIn) return false;
+    const inMins = new Date(p.punchIn).getHours() * 60 + new Date(p.punchIn).getMinutes();
+    const [h, m] = p.scheduledStart.split(":").map(Number);
+    return inMins > h * 60 + m + 5;
+  };
+  const storeName = (sid) => stores.find(s => s.id === sid)?.shortName || stores.find(s => s.id === sid)?.name || "—";
+
+  // ── The unified report structure ──
+  const report = useMemo(() => {
+    const P = scoped.punches;
+    if (reportType === "employee-detail") {
+      const emp = pickableEmployees.find(m => m.id === employeeSel);
+      const rows = P.filter(p => p.employeeId === employeeSel)
+        .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+        .map(p => ({ date: fmtD(p.date), in: fmtT(p.punchIn), out: fmtT(p.punchOut),
+          hours: n2(p.hoursWorked), ot: n2(p.overtimeHours), gross: gbp(p.grossPay), store: storeName(p.storeId) }));
+      const tot = P.filter(p => p.employeeId === employeeSel);
+      return {
+        title: `Timesheet — ${emp ? `${emp.firstName} ${emp.lastName}` : "Select an employee"}`,
+        columns: [
+          { key: "date", label: "Date", width: 16 }, { key: "in", label: "In", width: 9 },
+          { key: "out", label: "Out", width: 9 }, { key: "hours", label: "Hours", width: 9, num: true },
+          { key: "ot", label: "Overtime", width: 10, num: true }, { key: "gross", label: "Gross pay", width: 11 },
+          { key: "store", label: "Store", width: 14 },
+        ],
+        rows,
+        totals: { date: "TOTAL", hours: n2(tot.reduce((a, p) => a + (p.hoursWorked || 0), 0)),
+          ot: n2(tot.reduce((a, p) => a + (p.overtimeHours || 0), 0)),
+          gross: gbp(tot.reduce((a, p) => a + (p.grossPay || 0), 0)) },
+        needsEmployee: !employeeSel,
+      };
+    }
+    if (reportType === "store-summary") {
+      const byEmp = {};
+      P.forEach(p => {
+        const k = p.employeeId || p.employeeName;
+        if (!byEmp[k]) byEmp[k] = { name: p.employeeName, days: new Set(), hours: 0, ot: 0, gross: 0, store: storeName(p.storeId) };
+        byEmp[k].days.add(p.date); byEmp[k].hours += p.hoursWorked || 0;
+        byEmp[k].ot += p.overtimeHours || 0; byEmp[k].gross += p.grossPay || 0;
+      });
+      const rows = Object.values(byEmp).sort((a, b) => b.hours - a.hours)
+        .map(r => ({ name: r.name, days: r.days.size, hours: n2(r.hours), ot: n2(r.ot), gross: gbp(r.gross), store: r.store }));
+      return {
+        title: "Store timesheet summary",
+        columns: [
+          { key: "name", label: "Employee", width: 22 }, { key: "days", label: "Days", width: 7, num: true },
+          { key: "hours", label: "Hours", width: 9, num: true }, { key: "ot", label: "Overtime", width: 10, num: true },
+          { key: "gross", label: "Gross pay", width: 12 }, { key: "store", label: "Store", width: 14 },
+        ],
+        rows,
+        totals: { name: "TOTAL", hours: n2(P.reduce((a, p) => a + (p.hoursWorked || 0), 0)),
+          ot: n2(P.reduce((a, p) => a + (p.overtimeHours || 0), 0)),
+          gross: gbp(P.reduce((a, p) => a + (p.grossPay || 0), 0)) },
+      };
+    }
+    if (reportType === "daily") {
+      const rows = P.sort((a, b) => (a.punchIn || "").localeCompare(b.punchIn || ""))
+        .map(p => ({ name: p.employeeName, in: fmtT(p.punchIn), out: fmtT(p.punchOut),
+          hours: n2(p.hoursWorked), late: isLate(p) ? "LATE" : "", store: storeName(p.storeId) }));
+      return {
+        title: `Daily attendance — ${fmtD(from)}`,
+        columns: [
+          { key: "name", label: "Employee", width: 22 }, { key: "in", label: "In", width: 9 },
+          { key: "out", label: "Out", width: 9 }, { key: "hours", label: "Hours", width: 9, num: true },
+          { key: "late", label: "Late?", width: 8 }, { key: "store", label: "Store", width: 14 },
+        ],
+        rows,
+        totals: { name: `${rows.length} worked`, hours: n2(P.reduce((a, p) => a + (p.hoursWorked || 0), 0)) },
+      };
+    }
+    if (reportType === "variance") {
+      const byEmp = {};
+      scoped.schedules.forEach(s => {
+        const k = s.employeeId || s.employeeName;
+        if (!byEmp[k]) byEmp[k] = { name: s.employeeName, sched: 0, actual: 0 };
+        byEmp[k].sched += schedHrs(s);
+      });
+      P.forEach(p => {
+        const k = p.employeeId || p.employeeName;
+        if (!byEmp[k]) byEmp[k] = { name: p.employeeName, sched: 0, actual: 0 };
+        byEmp[k].actual += p.hoursWorked || 0;
+      });
+      const rows = Object.values(byEmp).sort((a, b) => (b.sched - b.actual) - (a.sched - a.actual))
+        .map(r => ({ name: r.name, sched: n2(r.sched), actual: n2(r.actual), variance: n2(r.actual - r.sched) }));
+      return {
+        title: "Scheduled vs actual hours",
+        columns: [
+          { key: "name", label: "Employee", width: 22 }, { key: "sched", label: "Scheduled", width: 11, num: true },
+          { key: "actual", label: "Actual", width: 9, num: true }, { key: "variance", label: "Variance", width: 10, num: true },
+        ],
+        rows,
+        totals: { name: "TOTAL",
+          sched: n2(Object.values(byEmp).reduce((a, r) => a + r.sched, 0)),
+          actual: n2(Object.values(byEmp).reduce((a, r) => a + r.actual, 0)),
+          variance: n2(Object.values(byEmp).reduce((a, r) => a + (r.actual - r.sched), 0)) },
+      };
+    }
+    if (reportType === "overtime") {
+      const ot = P.filter(p => (p.overtimeHours || 0) > 0)
+        .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      const rows = ot.map(p => ({ name: p.employeeName, date: fmtD(p.date), hours: n2(p.overtimeHours),
+        reason: p.overtimeReason || "—",
+        status: p.overtimeApproved ? "Approved" : (p.overtimeRejectedReason ? "Rejected" : "Pending"),
+        store: storeName(p.storeId) }));
+      return {
+        title: "Overtime report",
+        columns: [
+          { key: "name", label: "Employee", width: 22 }, { key: "date", label: "Date", width: 16 },
+          { key: "hours", label: "OT hours", width: 10, num: true }, { key: "reason", label: "Reason", width: 26 },
+          { key: "status", label: "Status", width: 11 }, { key: "store", label: "Store", width: 14 },
+        ],
+        rows,
+        totals: { name: "TOTAL", hours: n2(ot.reduce((a, p) => a + (p.overtimeHours || 0), 0)) },
+      };
+    }
+    // exceptions
+    const ex = [];
+    P.forEach(p => {
+      const issues = [];
+      if (!p.punchOut) issues.push("Missing punch-out");
+      if (p.amendedBy) issues.push(`Amended by ${p.amendedBy}`);
+      if (!p.approved) issues.push("Not approved");
+      if (issues.length) ex.push({ name: p.employeeName, date: fmtD(p.date), in: fmtT(p.punchIn), out: fmtT(p.punchOut), issues: issues.join(" · "), store: storeName(p.storeId) });
+    });
+    return {
+      title: "Timesheet exceptions",
+      columns: [
+        { key: "name", label: "Employee", width: 22 }, { key: "date", label: "Date", width: 16 },
+        { key: "in", label: "In", width: 9 }, { key: "out", label: "Out", width: 9 },
+        { key: "issues", label: "Issues", width: 38 }, { key: "store", label: "Store", width: 14 },
+      ],
+      rows: ex.sort((a, b) => a.date.localeCompare(b.date)),
+      totals: { name: `${ex.length} exception${ex.length === 1 ? "" : "s"}` },
+    };
+  }, [reportType, scoped, employeeSel, pickableEmployees, from, stores]);
+
+  // ── Excel export (same structure the table renders) ──
+  const exportExcel = async () => {
+    if (!ExcelJS) { alert("Excel library still loading — try again in a moment."); return; }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Report");
+    const periodLabel = reportType === "daily" ? fmtD(from) : `${from} → ${to}`;
+    ws.addRow([report.title]); ws.getRow(1).font = { bold: true, size: 14 };
+    ws.addRow([`Period: ${periodLabel}` + (storeSel !== "all" ? ` · Store: ${storeName(storeSel)}` : " · All stores")]);
+    ws.getRow(2).font = { size: 10, color: { argb: "FF64748B" } };
+    ws.addRow([]);
+    const headerRow = ws.addRow(report.columns.map(c => c.label));
+    headerRow.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } };
+      cell.border = { bottom: { style: "thin" } };
+    });
+    report.rows.forEach(r => ws.addRow(report.columns.map(c => r[c.key] ?? "")));
+    if (report.totals) {
+      const tRow = ws.addRow(report.columns.map(c => report.totals[c.key] ?? ""));
+      tRow.font = { bold: true };
+      tRow.eachCell(cell => { cell.border = { top: { style: "thin" } }; });
+    }
+    report.columns.forEach((c, i) => { ws.getColumn(i + 1).width = c.width || 14; });
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${report.title.replace(/[^\w]+/g, "_")}_${from}_${reportType === "daily" ? "" : to}.xlsx`.replace(/_\.xlsx$/, ".xlsx");
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><FileText size={18}/> Reports</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Timesheet reports — on-screen, with Excel download</p>
+      </div>
+
+      {/* Report type cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+        {REPORT_TYPES.map(rt => (
+          <button key={rt.key} onClick={() => { setReportType(rt.key); setRan(false); }}
+            className={`text-left p-3 rounded-xl border transition-all ${reportType === rt.key ? "bg-indigo-600/15 border-indigo-500/50" : "bg-slate-900 border-slate-800 hover:border-slate-700"}`}>
+            <div className={`text-xs font-bold ${reportType === rt.key ? "text-indigo-300" : "text-white"}`}>{rt.label}</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">{rt.hint}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-end gap-2 flex-wrap bg-slate-900 border border-slate-800 rounded-2xl p-3">
+        <div>
+          <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Store</label>
+          <select value={storeSel} onChange={e => { setStoreSel(e.target.value); setEmployeeSel(""); setRan(false); }} className={inputCls}>
+            {(!isMgr || myStores.length > 1) && <option value="all">{isMgr ? "All my stores" : "All stores"}</option>}
+            {myStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+          </select>
+        </div>
+        {reportType === "employee-detail" && (
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Employee</label>
+            <select value={employeeSel} onChange={e => { setEmployeeSel(e.target.value); }} className={inputCls}>
+              <option value="">Select…</option>
+              {pickableEmployees.map(m => <option key={m.id} value={m.id}>{m.firstName} {m.lastName}</option>)}
+            </select>
+          </div>
+        )}
+        <div>
+          <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">{reportType === "daily" ? "Date" : "From"}</label>
+          <input type="date" value={from} onChange={e => { setFrom(e.target.value); setRan(false); }} className={inputCls}/>
+        </div>
+        {reportType !== "daily" && (
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">To</label>
+            <input type="date" value={to} onChange={e => { setTo(e.target.value); setRan(false); }} className={inputCls}/>
+          </div>
+        )}
+        <button onClick={runReport} disabled={loading}
+          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold disabled:opacity-50">
+          {loading ? "Running…" : "Run report"}
+        </button>
+        {ran && report.rows.length > 0 && (
+          <button onClick={exportExcel}
+            className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-bold flex items-center gap-1.5">
+            <Download size={14}/> Excel
+          </button>
+        )}
+      </div>
+
+      {/* Result */}
+      {!ran ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">
+          Choose a report, set the period, then Run report.
+        </div>
+      ) : report.needsEmployee ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">
+          Select an employee to run their timesheet.
+        </div>
+      ) : report.rows.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">
+          No records for this selection.
+        </div>
+      ) : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+          <div className="px-4 pt-3 pb-1 text-sm font-bold text-white">{report.title}</div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-slate-500 text-left border-b border-slate-800">
+                {report.columns.map(c => <th key={c.key} className={`px-4 py-2 font-semibold ${c.num ? "text-right" : ""}`}>{c.label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {report.rows.map((r, i) => (
+                <tr key={i} className="border-b border-slate-800/40 hover:bg-slate-800/30">
+                  {report.columns.map(c => (
+                    <td key={c.key} className={`px-4 py-2 ${c.num ? "text-right" : ""} ${r[c.key] === "LATE" || (c.key === "issues") ? "text-amber-300" : "text-slate-300"}`}>{r[c.key]}</td>
+                  ))}
+                </tr>
+              ))}
+              {report.totals && (
+                <tr className="border-t border-slate-700 font-bold">
+                  {report.columns.map(c => <td key={c.key} className={`px-4 py-2 text-white ${c.num ? "text-right" : ""}`}>{report.totals[c.key] ?? ""}</td>)}
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -22334,6 +22694,7 @@ export default function App() {
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
+      { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
@@ -22522,6 +22883,7 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
