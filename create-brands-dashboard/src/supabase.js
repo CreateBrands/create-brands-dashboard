@@ -1900,6 +1900,24 @@ export async function fetchStoreDayForecasts({ from, to } = {}) {
     forecastOrders:  r.forecast_orders == null ? null : Number(r.forecast_orders),
     basisPoints:     r.basis_points,
     method:          r.method,
+    factors:         r.factors || null,   // v2: {base_revenue, event_factor, event_name, weather_factor}
+  }));
+}
+
+// Hourly forecast curve for ONE store/day (drill-down). The view carries one
+// row set per horizon; we keep only the freshest (lowest) horizon's curve.
+export async function fetchStoreHourForecasts({ storeId, date } = {}) {
+  const { data, error } = await supabase.from("store_hour_forecasts").select("*")
+    .eq("store_id", storeId).eq("business_date", date)
+    .order("horizon_days").order("hour");
+  if (error) throw error;
+  const rows = data || [];
+  if (!rows.length) return [];
+  const freshest = rows[0].horizon_days;
+  return rows.filter(r => r.horizon_days === freshest).map(r => ({
+    hour:            r.hour,
+    forecastRevenue: Number(r.forecast_revenue) || 0,
+    typicalOrders:   r.typical_orders == null ? null : Number(r.typical_orders),
   }));
 }
 

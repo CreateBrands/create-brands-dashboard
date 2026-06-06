@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -3355,17 +3355,147 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   );
 }
 
+// ─── ForecastDayModal — drill-down for one forecast day (Phase 1 Stage B) ────
+// Level 1: every store's forecast for the date (sorted, thin flags). Click a
+// store → Level 2: hourly curve + "why this number" factor decomposition read
+// from the forecast row's factors jsonb (base × event × weather). When opened
+// from a manager's store-scoped panel it jumps straight to Level 2.
+function ForecastDayModal({ date, rows, stores, scopedStoreId, onClose }) {
+  const [selStore, setSelStore] = useState(scopedStoreId || null);
+  const [hourly, setHourly] = useState([]);
+  const [hourlyLoading, setHourlyLoading] = useState(false);
+
+  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const storeName = (sid) => {
+    const s = (stores || []).find(x => x.id === sid);
+    return s?.shortName || s?.name || sid;
+  };
+  const dayLabel = new Date(date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+
+  const dayRows = useMemo(
+    () => rows.filter(r => r.date === date).sort((a, b) => b.forecastRevenue - a.forecastRevenue),
+    [rows, date]
+  );
+  const sel = selStore ? dayRows.find(r => r.storeId === selStore) : null;
+  const maxRev = Math.max(...dayRows.map(r => r.forecastRevenue), 1);
+
+  useEffect(() => {
+    if (!selStore) { setHourly([]); return; }
+    let cancelled = false;
+    setHourlyLoading(true);
+    fetchStoreHourForecasts({ storeId: selStore, date })
+      .then(h => { if (!cancelled) setHourly(h); })
+      .catch(() => { if (!cancelled) setHourly([]); })
+      .finally(() => { if (!cancelled) setHourlyLoading(false); });
+    return () => { cancelled = true; };
+  }, [selStore, date]);
+
+  const maxHour = Math.max(...hourly.map(h => h.forecastRevenue), 1);
+  const f = sel?.factors || null;
+  const evF = f?.event_factor != null ? Number(f.event_factor) : 1;
+  const wxF = f?.weather_factor != null ? Number(f.weather_factor) : 1;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            {sel && !scopedStoreId && (
+              <button onClick={() => setSelStore(null)} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400" title="Back to all stores">
+                <ChevronLeft size={16}/>
+              </button>
+            )}
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Calendar size={15}/> {sel ? storeName(sel.storeId) : "Forecast"} — {dayLabel}
+              </h3>
+              {sel && <div className="text-[10px] text-slate-500 mt-0.5">{fmtMoney(sel.forecastRevenue)} forecast{sel.forecastOrders != null ? ` · ~${Math.round(sel.forecastOrders)} orders` : ""}{(sel.basisPoints || 0) < 3 ? " · thin history" : ""}</div>}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400"><X size={16}/></button>
+        </div>
+
+        {!sel ? (
+          /* Level 1 — per-store breakdown */
+          dayRows.length === 0 ? (
+            <div className="text-xs text-slate-600 py-6 text-center">No store forecasts for this day.</div>
+          ) : (
+            <div className="space-y-1">
+              {dayRows.map(r => (
+                <button key={r.storeId} onClick={() => setSelStore(r.storeId)}
+                  className="w-full flex items-center gap-2 text-xs p-1.5 rounded-lg hover:bg-slate-800/60 text-left">
+                  <div className="w-32 flex-shrink-0 text-slate-300 truncate">{storeName(r.storeId)}</div>
+                  <div className="flex-1 h-3.5 bg-slate-800/60 rounded overflow-hidden">
+                    <div className="h-full bg-indigo-600/70 rounded" style={{ width: `${Math.round(100 * r.forecastRevenue / maxRev)}%` }}/>
+                  </div>
+                  <div className="w-16 text-right text-slate-200 font-semibold tabular-nums">{fmtMoney(r.forecastRevenue)}</div>
+                  <div className="w-8 text-[9px] text-amber-400/80">{(r.basisPoints || 0) < 3 ? "thin" : ""}</div>
+                  <ChevronRight size={12} className="text-slate-600 flex-shrink-0"/>
+                </button>
+              ))}
+              <div className="text-[10px] text-slate-600 pt-2">Click a store for its hourly curve and forecast breakdown.</div>
+            </div>
+          )
+        ) : (
+          /* Level 2 — one store: factors + hourly curve */
+          <div className="space-y-4">
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Why this number</div>
+              {f ? (
+                <div className="text-xs text-slate-300 flex items-center gap-1.5 flex-wrap">
+                  <span>Base <span className="text-white font-semibold">{fmtMoney(Number(f.base_revenue))}</span></span>
+                  <span className="text-slate-600">(recent same-weekday average)</span>
+                  {evF !== 1 && <span>× <span className="text-indigo-300 font-semibold">{evF}</span> {f.event_name || "event"}</span>}
+                  {wxF !== 1 && <span>× <span className="text-sky-300 font-semibold">{wxF}</span> weather</span>}
+                  {evF === 1 && wxF === 1 && <span className="text-slate-500">· no event or weather adjustment</span>}
+                  <span>= <span className="text-white font-semibold">{fmtMoney(sel.forecastRevenue)}</span></span>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500">No breakdown stored for this forecast (generated by the v1 model).</div>
+              )}
+            </div>
+
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Expected hourly shape</div>
+              {hourlyLoading ? (
+                <div className="text-xs text-slate-600">Loading hourly curve…</div>
+              ) : hourly.length === 0 ? (
+                <div className="text-xs text-slate-600">No hourly profile yet for this store/day.</div>
+              ) : (
+                <div className="space-y-0.5">
+                  {hourly.map(h => (
+                    <div key={h.hour} className="flex items-center gap-2 text-[11px]">
+                      <div className="w-10 flex-shrink-0 text-slate-500 tabular-nums">{String(h.hour).padStart(2, "0")}:00</div>
+                      <div className="flex-1 h-3 bg-slate-800/60 rounded overflow-hidden">
+                        <div className="h-full bg-emerald-600/60 rounded" style={{ width: `${Math.round(100 * h.forecastRevenue / maxHour)}%` }}/>
+                      </div>
+                      <div className="w-14 text-right text-slate-300 tabular-nums">{fmtMoney(h.forecastRevenue)}</div>
+                      <div className="w-16 text-right text-slate-600 tabular-nums">{h.typicalOrders != null ? `~${Math.round(h.typicalOrders)} ord` : ""}</div>
+                    </div>
+                  ))}
+                  <div className="text-[10px] text-slate-600 pt-1.5">Daily forecast distributed by this store's typical {new Date(date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long" })} shape (last 8 weeks).</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── ForecastPanel — next-7-days revenue forecast (Phase 1) ──────────────────
 // Self-contained: fetches store_day_forecasts (freshest horizon per store/day)
 // plus the accuracy scoreboard. storeId scopes to one store; null = whole
 // chain (rows summed per day). Honesty rules: thin history (basis_points < 3)
 // is labelled per day; the accuracy badge says "warming up" until at least 14
 // scored days exist, then reports real 1-day-out MAPE.
-function ForecastPanel({ storeId }) {
+function ForecastPanel({ storeId, stores }) {
   const [rows, setRows] = useState([]);
   const [accuracy, setAccuracy] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -3422,17 +3552,28 @@ function ForecastPanel({ storeId }) {
       ) : (
         <div className="space-y-1.5">
           {days.map(d => (
-            <div key={d.date} className="flex items-center gap-2 text-xs">
+            <button key={d.date} onClick={() => setSelectedDate(d.date)}
+              className="w-full flex items-center gap-2 text-xs p-0.5 rounded-lg hover:bg-slate-800/50 text-left" title="Click for store-by-store and hourly detail">
               <div className="w-24 flex-shrink-0 text-slate-400">{dayLabel(d.date)}</div>
               <div className="flex-1 h-4 bg-slate-800/60 rounded overflow-hidden">
                 <div className="h-full bg-indigo-600/70 rounded" style={{ width: `${Math.round(100 * d.revenue / maxRev)}%` }}/>
               </div>
               <div className="w-20 text-right text-slate-200 font-semibold tabular-nums">{fmtMoney(d.revenue)}</div>
               <div className="w-9 text-[9px] text-amber-400/80" title="Limited history behind this figure — firms up automatically as weeks accrue">{d.thin ? "thin" : ""}</div>
-            </div>
+              <ChevronRight size={12} className="text-slate-600 flex-shrink-0"/>
+            </button>
           ))}
-          <div className="text-[10px] text-slate-600 pt-1.5">Weighted average of recent same weekdays, regenerated nightly. "thin" = limited history{storeId ? "" : " for at least one store"} that day.</div>
+          <div className="text-[10px] text-slate-600 pt-1.5">Weighted average of recent same weekdays, regenerated nightly. "thin" = limited history{storeId ? "" : " for at least one store"} that day. Click a day to drill down.</div>
         </div>
+      )}
+      {selectedDate && (
+        <ForecastDayModal
+          date={selectedDate}
+          rows={rows}
+          stores={stores}
+          scopedStoreId={storeId || null}
+          onClose={() => setSelectedDate(null)}
+        />
       )}
     </div>
   );
@@ -3906,7 +4047,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
         </div>
       </div>
 
-      <ForecastPanel storeId={store.id}/>
+      <ForecastPanel storeId={store.id} stores={[store]}/>
     </div>
   );
 }
@@ -4709,7 +4850,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
       </div>
 
       {/* ── Forecast — next 7 days (chain) ──────────────────────────────── */}
-      <ForecastPanel storeId={null}/>
+      <ForecastPanel storeId={null} stores={stores}/>
 
       {/* ── Store detail modal ───────────────────────────────────────────── */}
       {detailStore && (
