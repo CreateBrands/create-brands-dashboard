@@ -1986,7 +1986,7 @@ function contractBodyToPrintHtml(body) {
 // owners/HQ from the users table) or 'ops' (ops_team member). panelClass
 // positions the dropdown (default opens down-right; sidebar passes an
 // upward-opening class).
-function NotificationBell({ recipientType, recipientId, panelClass = "top-full right-0 mt-2" }) {
+function NotificationBell({ recipientType, recipientId, panelClass = "top-full right-0 mt-2", onNavigate, onViewAll }) {
   const [items, setItems] = useState([]);   // unread only — read items are kept in DB but not shown
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2058,11 +2058,12 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
 
   const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤" };
 
-  // Clicking a notification DISMISSES it: removed from the list immediately,
-  // marked read in the DB (kept there for history / future email layer).
+  // Clicking a notification DISMISSES it (removed from list, marked read in DB)
+  // and NAVIGATES to the relevant section when it has a linkView.
   const handleItemClick = async (n) => {
     setItems(prev => prev.filter(x => x.id !== n.id));
     prevUnreadRef.current = Math.max(0, prevUnreadRef.current - 1);
+    if (n.linkView && onNavigate) { setOpen(false); onNavigate(n.linkView); }
     try { await markNotificationRead(n.id); }
     catch (e) { console.error("Mark read failed:", e); }
   };
@@ -2122,6 +2123,125 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
               </button>
             ))
           )}
+          {onViewAll && (
+            <button onClick={() => { setOpen(false); onViewAll(); }}
+              className="w-full px-3 py-2 text-center text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 hover:bg-slate-800/50 sticky bottom-0 bg-slate-900 border-t border-slate-800">
+              View all notifications →
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NotificationsView — full notifications page (history + navigate) ────────
+// All notifications land here (read + unread). Clicking one marks it read and
+// navigates to its linked section. The bell's "View all" footer opens this.
+function NotificationsView({ currentUser, onNavigate }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("all");   // all | unread
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!currentUser?.id) return;
+    setLoading(true);
+    try { setItems(await fetchNotifications({ recipientType: "user", recipientId: currentUser.id, limit: 100 })); }
+    catch (e) { console.error("Notifications fetch failed:", e); }
+    finally { setLoading(false); }
+  }, [currentUser?.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const unreadCount = items.filter(n => !n.readAt).length;
+  const visible = filter === "unread" ? items.filter(n => !n.readAt) : items;
+
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤" };
+  const KIND_LABEL = { application: "Hiring", task: "Task", training: "Training", staff: "Team" };
+
+  const fmtWhen = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 1) return "Just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    if (hrs < 48) return "Yesterday";
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  };
+
+  const handleClick = async (n) => {
+    if (!n.readAt) {
+      setItems(prev => prev.map(x => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x));
+      try { await markNotificationRead(n.id); } catch (e) { console.error("Mark read failed:", e); }
+    }
+    if (n.linkView && onNavigate) onNavigate(n.linkView);
+  };
+
+  const handleMarkAll = async () => {
+    setBusy(true);
+    const now = new Date().toISOString();
+    setItems(prev => prev.map(x => ({ ...x, readAt: x.readAt || now })));
+    try { await markAllNotificationsRead({ recipientType: "user", recipientId: currentUser.id }); }
+    catch (e) { console.error("Mark all read failed:", e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><Bell size={18}/> Notifications</h2>
+          <p className="text-xs text-slate-500 mt-0.5">{unreadCount ? `${unreadCount} unread` : "All caught up"}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-800 overflow-hidden">
+            <button onClick={() => setFilter("all")}
+              className={`px-3 py-1 text-xs font-semibold ${filter === "all" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>All</button>
+            <button onClick={() => setFilter("unread")}
+              className={`px-3 py-1 text-xs font-semibold ${filter === "unread" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Unread{unreadCount ? ` (${unreadCount})` : ""}</button>
+          </div>
+          {unreadCount > 0 && (
+            <button onClick={handleMarkAll} disabled={busy}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50">
+              {busy ? "…" : "Mark all read"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-slate-500 text-center py-12">Loading notifications…</div>
+      ) : visible.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
+          <Bell size={28} className="mx-auto mb-3 text-slate-700"/>
+          <div className="font-semibold text-slate-300 mb-1">{filter === "unread" ? "No unread notifications" : "No notifications yet"}</div>
+          <div className="text-xs text-slate-500">New applications, task assignments, training completions and team changes will land here.</div>
+        </div>
+      ) : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
+          {visible.map(n => (
+            <button key={n.id} onClick={() => handleClick(n)}
+              className={`w-full text-left px-4 py-3 hover:bg-slate-800/50 transition-colors ${n.readAt ? "opacity-55" : ""}`}>
+              <div className="flex items-start gap-3">
+                <span className="text-lg flex-shrink-0">{KIND_ICON[n.kind] || "🔔"}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className={`text-sm leading-snug ${n.readAt ? "text-slate-400" : "text-white font-semibold"}`}>{n.title}</span>
+                    <span className="text-[10px] text-slate-600 flex-shrink-0 whitespace-nowrap">{fmtWhen(n.createdAt)}</span>
+                  </div>
+                  {n.body && <div className="text-xs text-slate-500 mt-0.5 leading-snug">{n.body}</div>}
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 font-semibold uppercase tracking-wide">{KIND_LABEL[n.kind] || n.kind}</span>
+                    {n.linkView && <span className="text-[9px] text-indigo-400/70">Click to open →</span>}
+                  </div>
+                </div>
+                {!n.readAt && <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0 mt-1.5"/>}
+              </div>
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -2176,7 +2296,7 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
           brandId: me?.brandId, storeId: me?.storeIds?.[0], kind: "training",
           title: `${name} completed "${mod.title}"`,
           body: "Training module marked complete in the trainee portal.",
-          linkView: "training-admin",
+          linkView: "training",
         });
       }
     } catch (err) {
@@ -2528,7 +2648,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-700"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
-            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2"/>
+            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
             <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 text-xs font-semibold transition-all">
               <LogOut size={13}/> Sign out
             </button>
@@ -9936,7 +10056,7 @@ function EmployeeProfileView({
         brandId: employee.brandId, storeId: employee.storeIds?.[0], kind: "staff",
         title: `${employee.firstName} ${employee.lastName} converted to full staff`,
         body: "They now have normal employee access instead of the trainee portal.",
-        linkView: "ops-team", excludeUserId: currentUser?.id,
+        linkView: "team", excludeUserId: currentUser?.id,
       });
     } catch (err) {
       console.error("Convert to staff failed:", err);
@@ -21396,7 +21516,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
           <div className="w-7 h-7 rounded-lg bg-indigo-600/20 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">{currentUser.avatar || currentUser.name?.[0] || "?"}</div>
           {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-indigo-400 font-semibold uppercase">{currentUser.role}</div></div>}
-          {!collapsed && <NotificationBell recipientType="user" recipientId={currentUser.id} panelClass="bottom-full left-0 mb-2"/>}
+          {!collapsed && <NotificationBell recipientType="user" recipientId={currentUser.id} panelClass="bottom-full left-0 mb-2" onNavigate={setActiveView} onViewAll={() => setActiveView("notifications")}/>}
           {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
         </div>
       </div>
@@ -21892,7 +22012,7 @@ export default function App() {
   const addAssignment    = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.some(x=>x.id===s.id)?as.map(x=>x.id===s.id?s:x):[...as,s]);showToast("Saved");
     // If assigned directly to a specific employee, notify them (fire-and-forget).
     if (s.assignTo === "employee" && s.personId) {
-      notifyOpsMember(s.personId, { kind: "task", title: "New task assigned to you", body: s.notes || "Open your tasks to see the details.", linkView: "tasks" });
+      notifyOpsMember(s.personId, { kind: "task", title: "New task assigned to you", body: s.notes || "Open your tasks to see the details.", linkView: "ops-tasks" });
     }
   }, [showToast]);
   const updateAssignment = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
@@ -22156,6 +22276,7 @@ export default function App() {
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
+      { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null },
       { key: "training",     label: "Training",          icon: GraduationCap },
@@ -22341,6 +22462,7 @@ export default function App() {
               onBackfillStoreSales={backfillStoreSales}
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
+            {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
