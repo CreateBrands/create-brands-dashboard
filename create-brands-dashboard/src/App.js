@@ -2056,7 +2056,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
     return `${Math.floor(hrs / 24)}d`;
   };
 
-  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤" };
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️" };
 
   // Clicking a notification DISMISSES it (removed from list, marked read in DB)
   // and NAVIGATES to the relevant section when it has a linkView.
@@ -2157,8 +2157,8 @@ function NotificationsView({ currentUser, onNavigate }) {
   const unreadCount = items.filter(n => !n.readAt).length;
   const visible = filter === "unread" ? items.filter(n => !n.readAt) : items;
 
-  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤" };
-  const KIND_LABEL = { application: "Hiring", task: "Task", training: "Training", staff: "Team" };
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️" };
+  const KIND_LABEL = { application: "Hiring", task: "Task", training: "Training", staff: "Team", sync: "Data health" };
 
   const fmtWhen = (iso) => {
     if (!iso) return "";
