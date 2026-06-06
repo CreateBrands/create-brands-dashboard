@@ -1934,6 +1934,18 @@ export async function fetchForecastAccuracySummary() {
   }));
 }
 
+// Accuracy split by model version — answers "did v2's factors beat plain v1?".
+export async function fetchForecastAccuracyByMethod() {
+  const { data, error } = await supabase.from("forecast_accuracy_by_method").select("*");
+  if (error) throw error;
+  return (data || []).map(r => ({
+    method:      r.method,
+    horizonDays: r.horizon_days,
+    daysScored:  Number(r.days_scored) || 0,
+    mapePct:     r.mape_pct == null ? null : Number(r.mape_pct),
+  }));
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // HIRING / ONBOARDING (slice 1)

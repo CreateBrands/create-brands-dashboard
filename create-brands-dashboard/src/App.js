@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2056,7 +2056,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
     return `${Math.floor(hrs / 24)}d`;
   };
 
-  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️" };
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️", anomaly: "⚡" };
 
   // Clicking a notification DISMISSES it (removed from list, marked read in DB)
   // and NAVIGATES to the relevant section when it has a linkView.
@@ -2157,7 +2157,7 @@ function NotificationsView({ currentUser, onNavigate }) {
   const unreadCount = items.filter(n => !n.readAt).length;
   const visible = filter === "unread" ? items.filter(n => !n.readAt) : items;
 
-  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️" };
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️", anomaly: "⚡" };
   const KIND_LABEL = { application: "Hiring", task: "Task", training: "Training", staff: "Team", sync: "Data health" };
 
   const fmtWhen = (iso) => {
@@ -3355,6 +3355,88 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   );
 }
 
+// ─── ForecastAccuracyModal — the honesty scoreboard ──────────────────────────
+// Per-horizon MAPE ("how far off are we, N days out") plus the v1-vs-v2 model
+// comparison. Empty-state explains itself until forecast days have been scored.
+function ForecastAccuracyModal({ onClose }) {
+  const [summary, setSummary] = useState([]);
+  const [byMethod, setByMethod] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchForecastAccuracySummary(), fetchForecastAccuracyByMethod()])
+      .then(([s, m]) => { if (!cancelled) { setSummary(s); setByMethod(m); } })
+      .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const methodLabel = (m) => m === "factored_v2" ? "v2 (events + weather)" : m === "wavg_same_weekday_v1" ? "v1 (plain average)" : m;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2"><Target size={15}/> Forecast accuracy</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400"><X size={16}/></button>
+        </div>
+        <p className="text-[10px] text-slate-500 mb-4">Every forecast is scored against the actual once the day completes. MAPE = average absolute error. Lower is better; expect this to improve as history accrues.</p>
+
+        {loading ? (
+          <div className="text-xs text-slate-600">Loading…</div>
+        ) : error ? (
+          <div className="text-xs text-amber-300">Could not load accuracy: {error}</div>
+        ) : summary.length === 0 ? (
+          <div className="text-xs text-slate-500 bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+            No scored days yet. The first forecast day completes soon — from then, every morning adds a score and this page fills in automatically.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">By lead time</div>
+              <table className="w-full text-xs">
+                <thead><tr className="text-slate-500 text-left border-b border-slate-800">
+                  <th className="py-1.5 font-semibold">Forecast made</th>
+                  <th className="py-1.5 font-semibold text-right">Days scored</th>
+                  <th className="py-1.5 font-semibold text-right">Avg error</th>
+                  <th className="py-1.5 font-semibold text-right">Median</th>
+                </tr></thead>
+                <tbody>
+                  {summary.sort((a,b) => a.horizonDays - b.horizonDays).map(r => (
+                    <tr key={r.horizonDays} className="border-b border-slate-800/40">
+                      <td className="py-1.5 text-slate-300">{r.horizonDays} day{r.horizonDays === 1 ? "" : "s"} ahead</td>
+                      <td className="py-1.5 text-right text-slate-400 tabular-nums">{r.daysScored}</td>
+                      <td className="py-1.5 text-right text-white font-semibold tabular-nums">{r.mapePct != null ? `±${r.mapePct}%` : "—"}</td>
+                      <td className="py-1.5 text-right text-slate-400 tabular-nums">{r.medianPctError != null ? `±${r.medianPctError}%` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {byMethod.length > 0 && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">By model version (1 day ahead)</div>
+                <div className="space-y-1">
+                  {byMethod.filter(r => r.horizonDays === 1).map(r => (
+                    <div key={r.method} className="flex items-center justify-between text-xs bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2">
+                      <span className="text-slate-300">{methodLabel(r.method)}</span>
+                      <span className="text-slate-500">{r.daysScored} days</span>
+                      <span className="text-white font-semibold tabular-nums">{r.mapePct != null ? `±${r.mapePct}%` : "—"}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[10px] text-slate-600 mt-1.5">If v2 isn't beating v1 after a few weeks, the factor priors need tuning.</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── ForecastDayModal — drill-down for one forecast day (Phase 1 Stage B) ────
 // Level 1: every store's forecast for the date (sorted, thin flags). Click a
 // store → Level 2: hourly curve + "why this number" factor decomposition read
@@ -3496,6 +3578,7 @@ function ForecastPanel({ storeId, stores }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
+  const [showAccuracy, setShowAccuracy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -3537,11 +3620,12 @@ function ForecastPanel({ storeId, stores }) {
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h3 className="text-sm font-bold text-white flex items-center gap-2"><TrendingUp size={15}/> Forecast — next 7 days</h3>
-        <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">
+        <button onClick={() => setShowAccuracy(true)} title="View the full accuracy scoreboard"
+          className="text-[10px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200">
           {accuracy && accuracy.daysScored >= 14 && accuracy.mapePct != null
             ? `typically ±${accuracy.mapePct}% one day out`
             : "accuracy warming up"}
-        </span>
+        </button>
       </div>
       {loading ? (
         <div className="text-xs text-slate-600">Loading forecast…</div>
@@ -3575,6 +3659,7 @@ function ForecastPanel({ storeId, stores }) {
           onClose={() => setSelectedDate(null)}
         />
       )}
+      {showAccuracy && <ForecastAccuracyModal onClose={() => setShowAccuracy(false)}/>}
     </div>
   );
 }
