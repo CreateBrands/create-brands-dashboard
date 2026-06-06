@@ -1996,6 +1996,7 @@ export async function fetchStoreDayPayments({ from, to } = {}) {
     brandId:       r.brand_id,
     storeId:       r.store_id,
     date:          r.business_date,
+    channel:       r.channel || "Unknown",
     paymentMethod: r.payment_method,
     lineType:      r.line_type,
     lines:         Number(r.lines) || 0,
