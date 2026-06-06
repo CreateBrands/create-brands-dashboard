@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2952,6 +2952,116 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ─── WeeklyReportsView — Claude-narrated weekly reports (Phase 3) ─────────────
+// Lists narrative_reports newest-first; renders the markdown body with a
+// compact renderer covering the narrative's controlled format (headings,
+// bold, hr, bullets, pipe tables, paragraphs). Owner/HQ only, read-only.
+function MdBlock({ text }) {
+  const inline = (s) => {
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) =>
+      p.startsWith("**") && p.endsWith("**")
+        ? <strong key={i} className="text-white font-semibold">{p.slice(2, -2)}</strong>
+        : <span key={i}>{p}</span>
+    );
+  };
+  const lines = (text || "").split("\n");
+  const out = [];
+  let i = 0, key = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    const t = ln.trim();
+    if (!t) { i++; continue; }
+    if (t.startsWith("|")) {
+      const tbl = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) { tbl.push(lines[i].trim()); i++; }
+      const rows = tbl.filter(r => !/^\|[\s:|-]+\|$/.test(r)).map(r => r.split("|").slice(1, -1).map(c => c.trim()));
+      if (rows.length) {
+        out.push(
+          <table key={key++} className="text-xs my-2 border-collapse">
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri} className={ri === 0 ? "text-slate-400 border-b border-slate-700" : "border-b border-slate-800/40"}>
+                  {r.map((c, ci) => <td key={ci} className="py-1 pr-5">{inline(c)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        );
+      }
+      continue;
+    }
+    if (t === "---") { out.push(<hr key={key++} className="border-slate-800 my-3"/>); i++; continue; }
+    if (t.startsWith("### ")) { out.push(<h4 key={key++} className="text-xs font-bold text-indigo-300 uppercase tracking-wider mt-4 mb-1.5">{inline(t.slice(4))}</h4>); i++; continue; }
+    if (t.startsWith("## ")) { out.push(<h3 key={key++} className="text-sm font-bold text-white mt-2 mb-2">{inline(t.slice(3))}</h3>); i++; continue; }
+    if (t.startsWith("# ")) { out.push(<h3 key={key++} className="text-sm font-bold text-white mt-2 mb-2">{inline(t.slice(2))}</h3>); i++; continue; }
+    if (t.startsWith("- ") || t.startsWith("* ")) {
+      const items = [];
+      while (i < lines.length && (lines[i].trim().startsWith("- ") || lines[i].trim().startsWith("* "))) { items.push(lines[i].trim().slice(2)); i++; }
+      out.push(<ul key={key++} className="list-disc pl-5 space-y-1 my-1.5 text-xs text-slate-300">{items.map((it, ii) => <li key={ii}>{inline(it)}</li>)}</ul>);
+      continue;
+    }
+    out.push(<p key={key++} className="text-xs text-slate-300 leading-relaxed my-1.5">{inline(t)}</p>);
+    i++;
+  }
+  return <div>{out}</div>;
+}
+
+function WeeklyReportsView() {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selId, setSelId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchNarrativeReports({ limit: 26 })
+      .then(r => { if (!cancelled) { setReports(r); if (r.length) setSelId(r[0].id); } })
+      .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const fmtD = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—";
+  const sel = reports.find(r => r.id === selId) || null;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><ScrollText size={18}/> Weekly Reports</h2>
+        <p className="text-xs text-slate-500 mt-0.5">AI-narrated weekly performance — written every Monday morning from the week's aggregates. Numbers are computed by the data pipeline; the narrative only interprets them.</p>
+      </div>
+      {loading ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">Loading reports…</div>
+      ) : error ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-amber-300">Could not load: {error}</div>
+      ) : reports.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">No reports yet — the first one is written the Monday after data exists.</div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <div className="lg:col-span-1 space-y-1.5">
+            {reports.map(r => (
+              <button key={r.id} onClick={() => setSelId(r.id)}
+                className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs ${r.id === selId ? "bg-indigo-600/15 border-indigo-500/40 text-white" : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600"}`}>
+                <div className="font-semibold">w/c {fmtD(r.weekStart)}</div>
+                <div className="text-[10px] opacity-70">{fmtD(r.weekStart)} – {fmtD(r.weekEnd)}</div>
+              </button>
+            ))}
+          </div>
+          <div className="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+            {sel ? (
+              <>
+                <MdBlock text={sel.body}/>
+                <div className="text-[10px] text-slate-600 mt-4 pt-3 border-t border-slate-800/60">Generated {new Date(sel.createdAt).toLocaleString("en-GB")} · {sel.model} · figures sourced from store_day_aggregates and the forecast engine</div>
+              </>
+            ) : <div className="text-xs text-slate-600">Select a report.</div>}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -23340,6 +23450,7 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
+      { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -23544,6 +23655,7 @@ export default function App() {
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "weekly-reports" && ["owner","hq_staff"].includes(currentUser.role) && <WeeklyReportsView/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}

@@ -1985,6 +1985,19 @@ export async function fetchPolicyAcks() {
   return (data || []).map(r => ({ employeeId: r.employee_id, policyKey: r.policy_key }));
 }
 
+// ── WEEKLY NARRATIVE REPORTS (Phase 3) ──────────────────────────────────────
+export async function fetchNarrativeReports({ limit = 26 } = {}) {
+  const { data, error } = await supabase.from("narrative_reports")
+    .select("id, week_start, week_end, body, model, created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: r.id, weekStart: r.week_start, weekEnd: r.week_end,
+    body: r.body, model: r.model, createdAt: r.created_at,
+  }));
+}
+
 // ── SALES AGGREGATES (per store/day, for ReportsView) ───────────────────────
 export async function fetchStoreDayAggregates({ from, to } = {}) {
   let q = supabase.from("store_day_aggregates").select("*").order("business_date");
