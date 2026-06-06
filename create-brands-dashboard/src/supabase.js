@@ -1874,6 +1874,48 @@ export async function fetchLabourVsRevenue({ from, to } = {}) {
   }));
 }
 
+// ── FORECASTS (Phase 1) ──────────────────────────────────────────────────────
+// store_day_forecasts keeps one row PER HORIZON per store/day (for honest
+// accuracy tracking). For display we want the freshest forecast only = the
+// LOWEST horizon_days row for each store/date.
+export async function fetchStoreDayForecasts({ from, to } = {}) {
+  let q = supabase.from("store_day_forecasts").select("*")
+    .order("business_date").order("horizon_days");
+  if (from) q = q.gte("business_date", from);
+  if (to)   q = q.lte("business_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  const best = new Map();
+  (data || []).forEach(r => {
+    const k = `${r.brand_id}|${r.store_id}|${r.business_date}`;
+    const prev = best.get(k);
+    if (!prev || r.horizon_days < prev.horizon_days) best.set(k, r);
+  });
+  return [...best.values()].map(r => ({
+    brandId:         r.brand_id,
+    storeId:         r.store_id,
+    date:            r.business_date,
+    horizonDays:     r.horizon_days,
+    forecastRevenue: Number(r.forecast_revenue) || 0,
+    forecastOrders:  r.forecast_orders == null ? null : Number(r.forecast_orders),
+    basisPoints:     r.basis_points,
+    method:          r.method,
+  }));
+}
+
+// Per-horizon accuracy scoreboard (MAPE). Empty until forecast days have
+// passed and been scored against actuals — the UI shows "warming up" then.
+export async function fetchForecastAccuracySummary() {
+  const { data, error } = await supabase.from("forecast_accuracy_summary").select("*");
+  if (error) throw error;
+  return (data || []).map(r => ({
+    horizonDays:    r.horizon_days,
+    daysScored:     Number(r.days_scored) || 0,
+    mapePct:        r.mape_pct == null ? null : Number(r.mape_pct),
+    medianPctError: r.median_pct_error == null ? null : Number(r.median_pct_error),
+  }));
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // HIRING / ONBOARDING (slice 1)

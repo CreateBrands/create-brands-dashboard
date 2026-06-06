@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -3355,6 +3355,89 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   );
 }
 
+// ─── ForecastPanel — next-7-days revenue forecast (Phase 1) ──────────────────
+// Self-contained: fetches store_day_forecasts (freshest horizon per store/day)
+// plus the accuracy scoreboard. storeId scopes to one store; null = whole
+// chain (rows summed per day). Honesty rules: thin history (basis_points < 3)
+// is labelled per day; the accuracy badge says "warming up" until at least 14
+// scored days exist, then reports real 1-day-out MAPE.
+function ForecastPanel({ storeId }) {
+  const [rows, setRows] = useState([]);
+  const [accuracy, setAccuracy] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fmt = (x) => `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
+    const base = new Date();
+    const from = new Date(base); from.setDate(base.getDate() + 1);
+    const to   = new Date(base); to.setDate(base.getDate() + 7);
+    setLoading(true); setError(null);
+    Promise.all([
+      fetchStoreDayForecasts({ from: fmt(from), to: fmt(to) }),
+      fetchForecastAccuracySummary(),
+    ])
+      .then(([f, acc]) => {
+        if (cancelled) return;
+        setRows(f);
+        setAccuracy(acc.find(a => a.horizonDays === 1) || null);
+      })
+      .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [storeId]);
+
+  const days = useMemo(() => {
+    const scoped = storeId ? rows.filter(r => r.storeId === storeId) : rows;
+    const byDate = {};
+    scoped.forEach(r => {
+      if (!byDate[r.date]) byDate[r.date] = { date: r.date, revenue: 0, thin: false };
+      byDate[r.date].revenue += r.forecastRevenue;
+      if ((r.basisPoints || 0) < 3) byDate[r.date].thin = true;
+    });
+    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+  }, [rows, storeId]);
+
+  const maxRev = Math.max(...days.map(d => d.revenue), 1);
+  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const dayLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2"><TrendingUp size={15}/> Forecast — next 7 days</h3>
+        <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">
+          {accuracy && accuracy.daysScored >= 14 && accuracy.mapePct != null
+            ? `typically ±${accuracy.mapePct}% one day out`
+            : "accuracy warming up"}
+        </span>
+      </div>
+      {loading ? (
+        <div className="text-xs text-slate-600">Loading forecast…</div>
+      ) : error ? (
+        <div className="text-xs text-amber-300">Forecast unavailable: {error}</div>
+      ) : days.length === 0 ? (
+        <div className="text-xs text-slate-600">No forecast yet — forecasts generate nightly once sales history exists.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {days.map(d => (
+            <div key={d.date} className="flex items-center gap-2 text-xs">
+              <div className="w-24 flex-shrink-0 text-slate-400">{dayLabel(d.date)}</div>
+              <div className="flex-1 h-4 bg-slate-800/60 rounded overflow-hidden">
+                <div className="h-full bg-indigo-600/70 rounded" style={{ width: `${Math.round(100 * d.revenue / maxRev)}%` }}/>
+              </div>
+              <div className="w-20 text-right text-slate-200 font-semibold tabular-nums">{fmtMoney(d.revenue)}</div>
+              <div className="w-9 text-[9px] text-amber-400/80" title="Limited history behind this figure — firms up automatically as weeks accrue">{d.thin ? "thin" : ""}</div>
+            </div>
+          ))}
+          <div className="text-[10px] text-slate-600 pt-1.5">Weighted average of recent same weekdays, regenerated nightly. "thin" = limited history{storeId ? "" : " for at least one store"} that day.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Manager Store Dashboard — wraps StoreAnalytics for a manager's store(s) ──
 // Resolves the manager's assigned store(s), offers a picker if they manage more
 // than one, a period selector, then renders the comprehensive StoreAnalytics.
@@ -3822,6 +3905,8 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
           <div className="text-[10px] text-slate-600 mt-3">Out of {sales.length} total transactions in {periodLabel}.</div>
         </div>
       </div>
+
+      <ForecastPanel storeId={store.id}/>
     </div>
   );
 }
@@ -4622,6 +4707,9 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
           </div>
         )}
       </div>
+
+      {/* ── Forecast — next 7 days (chain) ──────────────────────────────── */}
+      <ForecastPanel storeId={null}/>
 
       {/* ── Store detail modal ───────────────────────────────────────────── */}
       {detailStore && (
