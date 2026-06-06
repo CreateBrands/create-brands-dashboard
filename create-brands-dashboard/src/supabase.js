@@ -1946,6 +1946,52 @@ export async function fetchForecastAccuracyByMethod() {
   }));
 }
 
+// ── SALES AGGREGATES (per store/day, for ReportsView) ───────────────────────
+export async function fetchStoreDayAggregates({ from, to } = {}) {
+  let q = supabase.from("store_day_aggregates").select("*").order("business_date");
+  if (from) q = q.gte("business_date", from);
+  if (to)   q = q.lte("business_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    brandId:        r.brand_id,
+    storeId:        r.store_id,
+    date:           r.business_date,
+    orders:         Number(r.orders) || 0,
+    revenueGross:   Number(r.revenue_gross) || 0,
+    revenueNet:     Number(r.revenue_net) || 0,
+    tax:            Number(r.tax) || 0,
+    discounts:      Number(r.discounts) || 0,
+    atv:            r.atv == null ? null : Number(r.atv),
+    cancelledCount: Number(r.cancelled_count) || 0,
+    refundedCount:  Number(r.refunded_count) || 0,
+    byChannel:      r.by_channel || null,
+    byHour:         r.by_hour || null,
+  }));
+}
+
+// Scored forecast-vs-actual rows (default: 1-day-ahead forecasts only — the
+// most meaningful lead time for "how did we do" reporting).
+export async function fetchForecastAccuracyRows({ from, to, horizon = 1 } = {}) {
+  let q = supabase.from("forecast_accuracy").select("*")
+    .eq("horizon_days", horizon)
+    .order("business_date", { ascending: false });
+  if (from) q = q.gte("business_date", from);
+  if (to)   q = q.lte("business_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    brandId:         r.brand_id,
+    storeId:         r.store_id,
+    date:            r.business_date,
+    forecastRevenue: Number(r.forecast_revenue) || 0,
+    actualRevenue:   r.actual_revenue == null ? null : Number(r.actual_revenue),
+    error:           r.error == null ? null : Number(r.error),
+    absPctError:     r.abs_pct_error == null ? null : Number(r.abs_pct_error),
+    basisPoints:     r.basis_points,
+  }));
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // HIRING / ONBOARDING (slice 1)

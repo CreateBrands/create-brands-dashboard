@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2981,6 +2981,8 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   const [punches, setPunches] = useState([]);
   const [schedules, setSchedules] = useState([]);
   const [labourRows, setLabourRows] = useState([]);
+  const [aggRows, setAggRows] = useState([]);
+  const [accRows, setAccRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
   const ExcelJS = useExcelJS();
@@ -2993,7 +2995,12 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     { key: "overtime",        label: "Overtime report",           hint: "All overtime + approval status" },
     { key: "exceptions",      label: "Exceptions",                hint: "Missing punch-outs, amendments, unapproved" },
     { key: "labour",          label: "Labour vs revenue",         hint: "Labour cost as % of net revenue, per store/day" },
+    { key: "sales-summary",   label: "Sales by store",            hint: "Revenue, orders & ATV per store" },
+    { key: "channel-mix",     label: "Channel mix",               hint: "Revenue & orders by sales channel" },
+    { key: "dow",             label: "Day-of-week performance",   hint: "Average revenue by weekday" },
+    { key: "forecast-actual", label: "Forecast vs actual",        hint: "How 1-day-ahead forecasts scored" },
   ];
+  const SALES_REPORTS = ["sales-summary", "channel-mix", "dow"];
 
   // Employees pickable for the detail report — scoped to the selected store.
   const pickableEmployees = useMemo(() => {
@@ -3011,13 +3018,19 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   const runReport = async () => {
     setLoading(true);
     try {
-      const effFrom = from, effTo = (reportType === "daily") ? from : to;
-      const [p, s, l] = await Promise.all([
-        reportType === "labour" ? Promise.resolve([]) : fetchPunchRecords({ from: effFrom, to: effTo }),
+      // Date guard: silently fix inverted ranges (From > To used to return
+      // zero rows with no explanation).
+      const [lo, hi] = (!from || !to || from <= to) ? [from, to] : [to, from];
+      const effFrom = lo, effTo = (reportType === "daily") ? lo : hi;
+      const needsPunches = !(reportType === "labour" || SALES_REPORTS.includes(reportType) || reportType === "forecast-actual");
+      const [p, s, l, ag, ac] = await Promise.all([
+        needsPunches ? fetchPunchRecords({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "variance" ? fetchSchedulesRange({ from: effFrom, to: effTo }) : Promise.resolve([]),
         reportType === "labour" ? fetchLabourVsRevenue({ from: effFrom, to: effTo }) : Promise.resolve([]),
+        SALES_REPORTS.includes(reportType) ? fetchStoreDayAggregates({ from: effFrom, to: effTo }) : Promise.resolve([]),
+        reportType === "forecast-actual" ? fetchForecastAccuracyRows({ from: effFrom, to: effTo }) : Promise.resolve([]),
       ]);
-      setPunches(p); setSchedules(s); setLabourRows(l); setRan(true);
+      setPunches(p); setSchedules(s); setLabourRows(l); setAggRows(ag); setAccRows(ac); setRan(true);
     } catch (e) { alert(`Could not load report data: ${e?.message || e}`); }
     finally { setLoading(false); }
   };
@@ -3033,8 +3046,10 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       punches: punches.filter(p => inScope(p.storeId)),
       schedules: schedules.filter(s => inScope(s.storeId)),
       labour: labourRows.filter(r => inScope(r.storeId)),
+      agg: aggRows.filter(r => inScope(r.storeId)),
+      acc: accRows.filter(r => inScope(r.storeId)),
     };
-  }, [punches, schedules, labourRows, storeSel, isMgr, myStoreIds]);
+  }, [punches, schedules, labourRows, aggRows, accRows, storeSel, isMgr, myStoreIds]);
 
   // ── Formatting helpers ──
   const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -3165,6 +3180,125 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
         totals: { name: "TOTAL", hours: n2(ot.reduce((a, p) => a + (p.overtimeHours || 0), 0)) },
       };
     }
+    if (reportType === "sales-summary") {
+      // Per store over the range, from store_day_aggregates.
+      const byStore = {};
+      scoped.agg.forEach(r => {
+        if (!byStore[r.storeId]) byStore[r.storeId] = { storeId: r.storeId, days: 0, orders: 0, gross: 0, net: 0, disc: 0, canc: 0, ref: 0 };
+        const b = byStore[r.storeId];
+        b.days += 1; b.orders += r.orders; b.gross += r.revenueGross; b.net += r.revenueNet;
+        b.disc += r.discounts; b.canc += r.cancelledCount; b.ref += r.refundedCount;
+      });
+      const list = Object.values(byStore).sort((a, b) => b.net - a.net);
+      const rows = list.map(b => ({
+        store: b.storeId === "unmatched" ? "⚠ Unmatched" : storeName(b.storeId),
+        days: b.days, orders: b.orders.toLocaleString("en-GB"),
+        gross: gbp(b.gross), net: gbp(b.net),
+        atv: b.orders > 0 ? gbp(b.net / b.orders) : "—",
+        disc: gbp(b.disc), canc: b.canc, ref: b.ref,
+      }));
+      const T = list.reduce((a, b) => ({ orders: a.orders + b.orders, gross: a.gross + b.gross, net: a.net + b.net, disc: a.disc + b.disc, canc: a.canc + b.canc, ref: a.ref + b.ref }), { orders: 0, gross: 0, net: 0, disc: 0, canc: 0, ref: 0 });
+      return {
+        title: "Sales by store",
+        columns: [
+          { key: "store", label: "Store", width: 18 }, { key: "days", label: "Days", width: 7, num: true },
+          { key: "orders", label: "Orders", width: 9, num: true }, { key: "gross", label: "Gross", width: 12, num: true },
+          { key: "net", label: "Net", width: 12, num: true }, { key: "atv", label: "ATV (net)", width: 10, num: true },
+          { key: "disc", label: "Discounts", width: 11, num: true }, { key: "canc", label: "Canc.", width: 7, num: true },
+          { key: "ref", label: "Ref.", width: 7, num: true },
+        ],
+        rows,
+        totals: { store: "TOTAL", orders: T.orders.toLocaleString("en-GB"), gross: gbp(T.gross), net: gbp(T.net),
+          atv: T.orders > 0 ? gbp(T.net / T.orders) : "—", disc: gbp(T.disc), canc: T.canc, ref: T.ref },
+      };
+    }
+    if (reportType === "channel-mix") {
+      // Channels from by_channel jsonb. Tolerates both shapes:
+      // {"Web": {"orders":n,"revenue":x}} and {"Web": x}.
+      const byCh = {};
+      scoped.agg.forEach(r => {
+        if (!r.byChannel) return;
+        Object.entries(r.byChannel).forEach(([name, v]) => {
+          if (!byCh[name]) byCh[name] = { name, orders: 0, revenue: 0 };
+          if (v && typeof v === "object") {
+            byCh[name].orders += Number(v.orders) || 0;
+            byCh[name].revenue += Number(v.revenue) || 0;
+          } else {
+            byCh[name].revenue += Number(v) || 0;
+          }
+        });
+      });
+      const list = Object.values(byCh).sort((a, b) => b.revenue - a.revenue);
+      const totRev = list.reduce((a, c) => a + c.revenue, 0);
+      const rows = list.map(c => ({
+        channel: c.name, orders: c.orders ? c.orders.toLocaleString("en-GB") : "—",
+        revenue: gbp(c.revenue),
+        atv: c.orders > 0 ? gbp(c.revenue / c.orders) : "—",
+        share: totRev > 0 ? `${n2(100 * c.revenue / totRev)}%` : "—",
+      }));
+      return {
+        title: "Channel mix",
+        columns: [
+          { key: "channel", label: "Channel", width: 20 }, { key: "orders", label: "Orders", width: 10, num: true },
+          { key: "revenue", label: "Revenue", width: 13, num: true }, { key: "atv", label: "ATV", width: 10, num: true },
+          { key: "share", label: "Share", width: 9, num: true },
+        ],
+        rows,
+        totals: { channel: "TOTAL", revenue: gbp(totRev), share: rows.length ? "100%" : "—" },
+      };
+    }
+    if (reportType === "dow") {
+      // Average performance per weekday across the range.
+      const DOW_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const byDow = {};
+      scoped.agg.forEach(r => {
+        const dw = new Date(r.date + "T00:00:00").getDay();
+        if (!byDow[dw]) byDow[dw] = { dw, dates: new Set(), revenue: 0, orders: 0 };
+        byDow[dw].dates.add(r.date); byDow[dw].revenue += r.revenueNet; byDow[dw].orders += r.orders;
+      });
+      const order = [1, 2, 3, 4, 5, 6, 0]; // Mon-first, UK convention
+      const rows = order.filter(d => byDow[d]).map(d => {
+        const b = byDow[d]; const nDays = b.dates.size;
+        return { day: DOW_LABELS[d], days: nDays,
+          avgRev: gbp(b.revenue / nDays), avgOrders: Math.round(b.orders / nDays).toLocaleString("en-GB"),
+          total: gbp(b.revenue) };
+      });
+      const totRev = Object.values(byDow).reduce((a, b) => a + b.revenue, 0);
+      return {
+        title: "Day-of-week performance (net revenue)",
+        columns: [
+          { key: "day", label: "Day", width: 13 }, { key: "days", label: "Occurrences", width: 12, num: true },
+          { key: "avgRev", label: "Avg revenue", width: 13, num: true }, { key: "avgOrders", label: "Avg orders", width: 11, num: true },
+          { key: "total", label: "Total", width: 13, num: true },
+        ],
+        rows,
+        totals: { day: "TOTAL", total: gbp(totRev) },
+      };
+    }
+    if (reportType === "forecast-actual") {
+      // Scored 1-day-ahead forecasts vs actuals, newest first.
+      const A = scoped.acc;
+      const rows = A.map(r => ({
+        date: fmtD(r.date),
+        store: r.storeId === "unmatched" ? "⚠ Unmatched" : storeName(r.storeId),
+        forecast: gbp(r.forecastRevenue),
+        actual: r.actualRevenue == null ? "—" : gbp(r.actualRevenue),
+        err: r.error == null ? "—" : (r.error >= 0 ? "+" : "") + gbp(r.error).replace("£", "£"),
+        pct: r.absPctError == null ? "—" : `±${n2(r.absPctError)}%`,
+      }));
+      const scoredPct = A.filter(r => r.absPctError != null);
+      return {
+        title: "Forecast vs actual (1 day ahead)",
+        columns: [
+          { key: "date", label: "Date", width: 16 }, { key: "store", label: "Store", width: 16 },
+          { key: "forecast", label: "Forecast", width: 11, num: true }, { key: "actual", label: "Actual", width: 11, num: true },
+          { key: "err", label: "Error", width: 11, num: true }, { key: "pct", label: "Abs %", width: 9, num: true },
+        ],
+        rows,
+        totals: { date: "AVG", pct: scoredPct.length ? `±${n2(scoredPct.reduce((a, r) => a + r.absPctError, 0) / scoredPct.length)}%` : "—" },
+        emptyHint: "No scored days yet — forecasts began 07 Jun; the first scores appear the morning after.",
+      };
+    }
     if (reportType === "labour") {
       // Labour vs revenue (Phase 0.3) — reads labour_vs_revenue view, NOT punches.
       // '—' = side missing (labour with no sales row, or sales with no labour row).
@@ -3258,7 +3392,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-bold text-white flex items-center gap-2"><FileText size={18}/> Reports</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Timesheet & labour reports — on-screen, with Excel download</p>
+        <p className="text-xs text-slate-500 mt-0.5">Timesheet, labour, sales &amp; forecast reports — on-screen, with Excel download</p>
       </div>
 
       {/* Report type cards */}
@@ -3323,7 +3457,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
         </div>
       ) : report.rows.length === 0 ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500">
-          No records for this selection.
+          {report.emptyHint || "No records for this selection."}
         </div>
       ) : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
