@@ -1,14 +1,233 @@
 # Chocoberry Dashboard — Session Handoff
 
-**Last updated**: 2026-05-30 (evening, post contracts (e-sign + stage-1 templates))
+**Last updated**: 2026-06-06 (NOTIFICATION SYSTEM complete; Reports section 6 timesheet reports + Excel; clear-on-view badges; sync-health watchdog LIVE; AI/DATA ROADMAP agreed — Phase 0.1 done, 0.2 next)
 **Project**: create-brands-dashboard
 **Repo**: github.com/CreateBrands/create-brands-dashboard
-**Supabase project**: qtjsdbasoouslcpinqhu (PRODUCTION — building directly against prod, no staging)
+**Supabase project**: qtjsdbasoouslcpinqhu (PRODUCTION)
 **Production URL**: create-brands-dashboard.vercel.app
 **Owner**: Atif Razzaq, atifrazzaqfast@gmail.com
 **Local repo path**: `C:\dev\create-brands-dashboard\create-brands-dashboard` (DOUBLED folder is real)
 
 ---
+
+## 🎯 STRATEGIC: AI & DATA-DRIVEN OPS ROADMAP (agreed 2026-06-06)
+Atif's goal: world-class AI/data-driven ops + decision-making. Benchmark: Nory.ai. Agreed principles: data foundations FIRST; statistical forecasting (NOT LLM) for numbers; LLM (Claude API, server-side Edge Fn — approved) only for narrative/interpretation layer; forecast accuracy must be TRACKED & shown.
+**Decision sequencing**: 1) Site performance mgmt + anomaly alerts (least history needed, zero manager behaviour change, builds trust) → 2) Staffing/labour optimization (biggest lever; needs history + labour↔sales join + manager adoption) → 3) Prep/ordering & waste (noisiest item-level data, needs depth).
+**Phases**: 0.1 sync-health watchdog ✅DONE · 0.2 nightly aggregates table (store×day precomputed — substrate for everything) ←NEXT · 0.3 labour % per store/day (punch_records have store_id+hours+gross_pay; joinable with sales NOW, no store-level EOD needed) · 0.4 token hardening (tokens are portal SESSION COOKIES — no trivial server fix; path: monitoring✅ → always-on host for extension → investigate official API creds) · Phase 1 forecast engine + accuracy tracking (needs ~8-12wks history; clean data started ~mid-May) · Phase 2 anomaly alerts → staffing recommendations · Phase 3 Claude API: weekly narrative reports, ask-your-data chat, alert explanations.
+**Data constraints (honest)**: ~3wks clean sales history (mid-May+, 1-3 June repaired); flipdish_orders (customer/tips) DEAD = no customer-level AI; EOD is brand-level (labour% doesn't need it though).
+
+## 🆕 SESSION 2026-06-05/06 — what shipped (ALL DEPLOYED, latest commit 5d4b47c)
+
+### 1. IN-APP NOTIFICATION SYSTEM (complete arc)
+- **Table**: `notifications` (uuid id, recipient_type 'user'|'ops', recipient_id, kind, title, body, link_view, created_at, read_at; idx on recipient). notifications.sql RUN ✅. No RLS (matches schema).
+- **supabase.js**: dbNotificationToApp, fetchNotifications({recipientType,recipientId,limit}), markNotificationRead, markAllNotificationsRead, insertNotifications(bulk), **notifyManagers({brandId,storeId,kind,title,body,linkView,excludeUserId})** (queries users: owner/hq always, managers if brand+store match; FIRE-AND-FORGET, never throws), **notifyOpsMember(opsMemberId,{...})**.
+- **NotificationBell** component (self-contained: own fetch + 60s poll): unread badge, dropdown panel, **dismiss-on-click** (item removed from list, marked read in DB — list is UNREAD-ONLY; read kept in DB for history/email layer), "Clear all" (restores on failure), **sound** (Web Audio two-tone chime ONLY when count increases on background poll, never on first load; browsers block audio until first page interaction — unavoidable), **click-to-NAVIGATE** via onNavigate(linkView), "View all →" footer via onViewAll. Placed 3×: Sidebar (panelClass bottom-full left-0, onNavigate=setActiveView, onViewAll→"notifications"), EmployeeShell header (onNavigate=its INTERNAL setActiveView), TraineePortal header (dismiss-only, single page).
+- **NotificationsView** page: nav key "notifications" (Bell icon, after comms), latest 100 read+unread, All/Unread filter, mark-all, click = mark read + navigate. KIND_ICON/LABEL: application📋/task✅/training🎓/staff👤/**sync⚠️ "Data health"**.
+- **4 event hooks**: addApplication→notifyManagers(linkView **"hiring"**, excludes actor); addAssignment when assignTo==="employee"&&personId→notifyOpsMember(linkView **"ops-tasks"** = EmployeeShell internal key); TraineePortal handleToggle done→notifyManagers(linkView **"training"**); handleConvertToStaff→notifyManagers(linkView **"team"**). ⚠️ linkViews were initially WRONG guesses ("training-admin","ops-team","tasks") — fixed to real nav keys; always verify keys against NAV_GROUPS.
+- Recipient routing tested 8/8 (store-scoped managers, owners/hq always, actor excluded, staff never).
+
+### 2. Clear-on-view badges (Team + Hiring)
+- Those nav badges are WORK COUNTERS (Team = pending_setup members; Hiring = applications in applied/manager_reviewing) — NOT unread counts. User found red circles misleading; chose clear-on-view (option B, advised of trade-off: no standing nag).
+- Implemented in **Sidebar**: items flagged `badgeClearOnView: true` (team+hiring only); seen-counts per user in localStorage (`cb_badge_seen_<userId>`); badge hidden once visited, REAPPEARS when count increases past seen; **clamps seen down when count drops** (so next new item re-triggers — the subtle case). displayBadge() at render. 7/7 tests. Other badges (comms/issues/tasks/ops-settings) unchanged always-on.
+
+### 3. Member delete fix + cleanup
+- deleteOpsTeam had NO try/catch → FK-blocked deletes failed SILENTLY (user: "can't delete test name"). Fixed: error toast, FK-specific message ("has linked records — archive instead or remove linked records").
+- Hard deletes blocked by FK refs; Postgres names only the FIRST violating table. "test name" (ot-1780400184419) was blocked by **employee_loans** rows (test advance/repayment) — cleaned via SQL then deleted. Playbook: SELECT child rows by employee_id → DELETE children → DELETE member → repeat if new FK named. Archive is the right path for real ex-staff.
+
+### 4. REPORTS SECTION — 6 timesheet reports (nav "reports", FileText icon, roles owner/hq_staff/manager)
+- **ReportsView** (before ManagerStoreDashboard): report-type cards → filters (store/employee/period; single date for daily) → Run → on-screen table → **styled Excel** (ExcelJS via existing useExcelJS hook line ~585: title row, period row, indigo header, totals row, col widths). ONE unified {title,columns,rows,totals} structure drives BOTH render & export.
+- Reports: **store-summary** (per-employee hours/OT/gross/days + grand totals), **employee-detail** (day rows for one employee), **daily** (attendance + LATE flag = punch-in >5min after scheduledStart), **variance** (schedules table hours vs punched hours; overnight shifts wrap +24), **overtime** (OT rows + Approved/Pending/Rejected from overtimeApproved/overtimeRejectedReason), **exceptions** (missing punch-out / amendedBy / !approved).
+- Manager scoping: store picker limited to their storeIds, data filtered, employee dropdown store-scoped. ⚠️ punches with NULL store_id invisible to managers/store-filtered runs (owner "All stores" sees them).
+- Data: fetchPunchRecords({from,to}) existed; **NEW fetchSchedulesRange({from,to})** in supabase.js. 12/12 computation tests.
+
+### 5. PHASE 0.1 — SYNC-HEALTH WATCHDOG (LIVE & FIELD-PROVEN)
+- **sync_health_check.sql** RUN ✅: function `check_flipdish_sync_health()` + cron job **flipdish-health-check** ('30 6,12,18 * * *' — 30min AFTER each sync). Checks: (1) STALE >20h since max(sale_time) → "Flipdish sync may be down" alert; (2) PARTIAL yesterday (sales>0 but ZERO after 18:00 — the outage fingerprint) → "Yesterday's sales look incomplete" + backfill instruction. Inserts 'sync'-kind notifications to owner/hq bells. **DEDUPE: no new alert while an UNREAD same-title sync alert exists → USER MUST DISMISS alerts after handling or future ones are muffled.**
+- Field-proven day 1: manual test at 03:00 UTC fired "incomplete" for 5 June (613 sales, 0 after 6pm) — TIMING ARTIFACT (last sync 18:00; evening arrives via 06:00 rolling window). Verified after 06:00: 5 June = 2,586 sales, after_6pm 1,732, latest 02:58 ✅ self-healed. Scheduled :30 runs avoid this false positive by design. Lesson: manual tests before 06:30 will false-positive on yesterday.
+
+### CANONICAL FILES (deployed @ 5d4b47c)
+- **App_REPORTS.js (1,249,998 bytes — the (1) download!)** + **supabase_REPORTS.js (186,038)**. Cumulative: everything above + all prior sessions.
+- SQL run this session: notifications.sql ✅, sync_health_check.sql ✅. Lineage: App_NOTIFICATIONS(+supabase) → App_NOTIF_v2 (sound+dismiss) → App_NOTIF_v3 (page+navigate+delete-fix, 1,228,384) → App_BADGES_clearonview (1,230,336) → **App_REPORTS (1,249,998) = CURRENT**.
+
+### OPEN / NEXT (priority)
+1. **PHASE 0.2 — nightly aggregates table** (store×day: revenue/orders/atv/channel mix, maybe hourly) ← NEXT SESSION. Then 0.3 labour% join.
+2. Rotate service-role key (still exposed; check extension shared.js dependency first) + swap shared secret `chocoberryflipdishsync2026` (function secret + cron header + Vercel REACT_APP_SYNC_SECRET, all must match).
+3. Token hardening (0.4): extension needs Chrome open + portal login; recurs ~24h after logout.
+4. Future reports: sales/performance reports in same ReportsView framework (cards built to grow).
+5. Email notification layer (Resend) on the notifications table; HR onboarding/compliance dashboard (parked); real employee passwords (Supabase Auth, dormant fns); login background (parked).
+6. Badge question half-open: only team+hiring are clear-on-view; user may want others converted later.
+
+---
+
+
+## 🆕 SESSION 2026-06-04 — Store Analytics + SYNC OUTAGE incident
+
+### 1. Comprehensive per-store Flipdish dashboard (DEPLOYED)
+- NEW `StoreAnalytics` component (before ChainPerformanceView): KPIs w/ vs-prev deltas, revenue trend (ComposedChart), channel mix (Pie), 7×24 day-hour heatmap, top-15 items (defensive sale_items parsing: caption/name/title, quantity/qty/count, revenue/amount/price), payment methods, refunds/cancellations. Computed client-side from NEW `fetchStoreSalesDetailed({storeId,from,to})` in supabase.js (richer per-store fetch: payment_method, refund flags, discount, subtotal, tax, sale_items; KEEPS cancelled rows flagged; truly store-scoped, NOT brand-wide RPCs).
+- NEW `ManagerStoreDashboard` wrapper: resolves manager's stores from currentUser.storeIds, store picker if >1, period selector (today/yesterday/last7/last30/custom), computes prev-period dates, renders StoreAnalytics. Empty state if no store assigned.
+- Nav: `{ key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] }`; render gated `currentUser.role === "manager"`. Owners/HQ keep Chain Performance unchanged.
+
+### 2. Dashboard v2 — interpretation upgrades (DEPLOYED)
+After auditing what Flipdish data actually exists: live source = `flipdish_sales` only. **`flipdish_orders` (customer name/phone, tips, fees, vouchers, order_type) is DEPRECATED/not synced — `flipdishOrders=[]`. No customer-level analytics possible.**
+- **Gross/Net(ex-VAT) toggle** (`basis` state): net uses amount_subtotal w/ graceful fallback; Net button disabled if subtotal null in feed (`netAvailable`). VAT shown alongside.
+- **Discount RATE** (discount/(gross+discount)) replaces bare £ total.
+- **Channel table w/ ATV** (revenue/orders/ATV/% per channel) replaces donut legend.
+- **Prev-period overlay** on trend: bars=current, dashed line=previous, aligned by day index.
+- **Day-part summary** (Morning 6-12/Afternoon 12-17/Evening 17-21/Late 21-6 w/ hour-wrap): revenue/orders/share per bucket.
+- **Heatmap orders↔revenue toggle** (`heatMetric`).
+- All aggregations basis-aware. 13 tests passed. Files: App_STORE_analytics_v2.js + supabase_STORE_analytics_v2.js (superseded by App_SYNCNOW_fixed below).
+
+### 3. ⚠️🔥 FLIPDISH SYNC OUTAGE — full incident + fixes (RESOLVED 2026-06-04)
+**Symptom**: dashboard "-88% vs prior", all stores down in lockstep. Root-cause chain discovered:
+- `flipdish_sales` data FROZE ~2026-06-01 (days 01-03 June cut off mid-afternoon, 0 sales after 18:00 vs healthy days ending ~02:40 next morning w/ 1000-2000 evening sales).
+- **ROOT CAUSE**: cron job 5 (`flipdish-daily-sync`, `0 6,12,18 * * *`) calls Edge Function `flipdish-rms-sync` via net.http_post. The function had **"Verify JWT (legacy secret)" ON**, and the hardcoded legacy service-role JWT in the cron stopped validating (Supabase key-system migration) → every call bounced **401 UNAUTHORIZED_INVALID_JWT_FORMAT** → function never ran. Cron showed "succeeded" (net.http_post = fire-and-forget; check `net._http_response` table by request id for real status/body!).
+- **Distinct second failure**: Chrome token-refresh extension ("Chocoberry — Flipdish Token Refresh", refreshes rms-token+FD-Authorization every 4h into `sync_config` table keys `flipdish_rms_token`/`flipdish_fd_authorization`) was failing "Failed to fetch" because the **Flipdish portal session was logged out**. Fixed by logging into portal + clicking manual refresh. Extension only works while Chrome open + portal logged in (STRUCTURAL FRAGILITY — recurs!).
+- **Red herrings**: old `flipdish_sync_log` table = DEAD /orders pipeline (stopped 19 May, ignore it). "Latest sale Xh ago" can't distinguish closed-stores vs sync-down.
+**FIXES APPLIED**:
+1. **Verify JWT turned OFF** on flipdish-rms-sync → 200 OK.
+2. **Manual backfills** repaired 1-3 June (POST body `{"fromDate":"2026-06-01","toDate":"2026-06-03"}`; function processes MAX 2 days/invocation, returns `resumeFrom` for longer ranges).
+3. **Rolling window deployed** (new function version): empty `{}` body now syncs **YESTERDAY+TODAY** (was today-only) → gap days self-heal. Explicit ranges unchanged. File: /mnt/user-data/outputs/flipdish-rms-sync_index.ts.
+4. **Shared-secret guard added**: env `SYNC_SHARED_SECRET` on the function; requests need `x-sync-secret` header (or body.secret) else 401. Guard SKIPPED if env unset (staged rollout). Current secret: `chocoberryflipdishsync2026` (EXPOSED in notes/chat — should be swapped for fresh random value in ALL THREE places: function secret, cron header, Vercel env).
+5. **Cron job 5 updated** via cron.alter_job: sends x-sync-secret, legacy JWT REMOVED. Gotcha hit: env secret had whitespace/mismatch initially (both tests 401) → delete+re-add secret cleanly, redeploy function, retest. Verified: no-secret=401, with-secret=200, daysProcessed=2.
+**Diagnostic playbook (recurring!)**: check freshness `SELECT business_date, count(*), max(sale_time), count(*) FILTER (WHERE sale_time::time > '18:00') FROM flipdish_sales WHERE business_date >= current_date-7 GROUP BY 1 ORDER BY 1 DESC;` — partial day = few hundred sales, 0 after 18:00. Trigger sync via net.http_post w/ secret header; read result `SELECT * FROM net._http_response WHERE id=<req_id>` (~40s for 2 days). All-channels-drop-proportionally = partial sync, NOT trading collapse.
+
+### 4. Sync-now button rewired (DEPLOYED — App_SYNCNOW_fixed.js 1,211,934 + supabase_SYNCNOW_fixed.js 182,079)
+- `runFlipdishSync` was invoking **dead** "flipdish-sync" → now invokes **flipdish-rms-sync** with `x-sync-secret` header from `REACT_APP_SYNC_SECRET` (Vercel env var, Settings→Environment Variables; baked at BUILD time — add var BEFORE push or redeploy after; value must exactly match function secret). Toast now reports `totalUpserted`. CONFIRMED WORKING by user.
+- CRA env vars are public in bundle — guard protects vs scanners, not bundle-readers (accepted trade-off; worst case = triggered syncs).
+
+### CANONICAL LATEST FILES
+- **App_SYNCNOW_fixed.js (1,211,934 bytes)** + **supabase_SYNCNOW_fixed.js (182,079 bytes)** — cumulative: ALL of 06-03 work + StoreAnalytics + v2 upgrades + sync-now fix.
+- Edge Function: **flipdish-rms-sync_index.ts** (rolling window + secret guard) — DEPLOYED to Supabase.
+- Lineage 06-04: App_STORE_analytics(+supabase) → App_STORE_analytics_v2(+supabase) → **App_SYNCNOW_fixed(+supabase) = CURRENT**.
+
+### OPEN / NEXT (priority order)
+1. **Rotate service-role key** (exposed in cron history + chats). FIRST check extension `shared.js` — if it writes sync_config with that key, extension needs the new key too or token refresh silently breaks.
+2. **Swap shared secret** for fresh random value in all 3 places (function secret, cron job 5 header, Vercel REACT_APP_SYNC_SECRET + redeploy).
+3. **Structural token fragility**: refresh needs Chrome open + portal logged in on Atif's machine; portal logout = sync death within ~24h (rms-token TTL). Rolling window softens (self-heals once token refreshed). Long-term: server-side token acquisition or always-on host.
+4. **Sync-health indicator** on dashboard: "last successful sync X ago" + partial-day warning, so closed-stores vs sync-down vs incomplete-day are distinguishable.
+5. **HR Onboarding & Compliance dashboard** (parked from 06-03): read-only grid, rows=people in onboarding, columns=Documents/RTW, Contract, Training, Policies, Tax/Starter, Converted, profile_status.
+6. **Real employee passwords** (Supabase Auth; dormant fns exist), login background (CSS options parked), kiosk breaks stage 2, email notifications (Resend), storage hardening.
+7. NOTE: payroll corrections pasted 06-04 (P45/RTI/maternity) were a MISTAKE — ignore, not a task.
+
+---
+
+
+## 🆕 SESSION 2026-06-03 — what shipped
+
+### ⚠️ Validation discipline (reinforced this session — TWO build failures)
+Local babel + react-hooks eslint do NOT catch `no-undef`. Production CRA build does.
+- Failure 1: `XLSX` not imported (earlier session) → added `eslintcheck/.eslintrc.noundef.json`.
+- Failure 2 THIS SESSION: wrote `React.useMemo/useState/useEffect` in a new component, but App.js imports hooks as BARE names (`import { useState, useMemo, useEffect } from "react"`) and has NO `React` namespace in scope. The no-undef config had `React` whitelisted as a global → hid it. **FIXED the config: removed `React` from globals** so it now mirrors prod. ALWAYS use bare hooks (`useMemo`, not `React.useMemo`) in App.js.
+- RUN ALL THREE before every deploy: `node check.js App.js` (babel) + eslint `.eslintrc.json` (hooks) + eslint `.eslintrc.noundef.json` (no-undef, React NOT whitelisted).
+- Downloads `(1)` trap bit HARD this session: user repeatedly copied the OLD file or pasted literal `<placeholder>` text. Lesson: give a FRESH distinct filename when a fix re-uses a name (used `App_TRAINING_FIXED_v2.js`). ALWAYS verify by (a) `findstr` for the BROKEN marker returning EMPTY, and (b) exact byte count, BEFORE git commit. Also remind user: add → commit → push are THREE separate commands (user skipped commit once, ran add+push).
+
+### 1. Employee login → email + PIN, single page (DEPLOYED)
+- Problem: login showed all 30 employee NAMES (privacy + scale). 
+- `EmployeeLoginScreen` rewritten: single page, Email field + PIN field (masked password input w/ Eye/EyeOff show-hide toggle, digits only, max 6). One "Sign In". Combined check: find active ops_team by email (case-insensitive, trimmed) AND pin match. Vague error "Incorrect email or PIN" (no enumeration). Archived blocked. Same onLogin object as before (role employee, opsTeamMemberId, etc.) so nothing downstream changed.
+- PREREQUISITE: employees need EMAIL on their ops_team record (+ PIN). Many are blank — must be filled before they can log in.
+- Also added DORMANT Supabase Auth data-layer in supabase.js for FUTURE real passwords: `employeeSignIn`, `employeeResetPassword`, `employeeSetPassword`, `employeeAuthSignOut`. NOT wired to any UI yet. SECURITY NOTE found: existing MANAGER login (LoginScreen, ~line 2573) stores passwords PLAIN TEXT (`u.password === password`) — when we do real employee passwords, use Supabase Auth (Option A chosen) NOT plain text, and ideally migrate manager login too. Candidate magic-link auth already uses supabase.auth (OTP) — separate flow, shares the single browser session.
+
+### 2. Hiring pipeline: "In Training" → "Onboarding" (DEPLOYED)
+- APPLICATION_STATUSES: relabelled `in_training` display label from "In Training" to "Onboarding". KEY UNCHANGED (`in_training`) — no DB migration, no constraint change, existing applicants intact. Badges + Move-to buttons read from the label so they update automatically.
+- Flow is now: Applied → Reviewing → Onboarding → (convert to full staff) → Hired. The Training PORTAL feature is separate and untouched.
+
+### 3. New employees default to Onboarding/trainee (DEPLOYED)
+- Employee form init (~line 12534): `isTrainee: isHireFlow ? true : (item ? (item.isTrainee ?? false) : true)`. Pipeline hires AND manual adds → trainee. EDITS preserve existing flag (never re-trainee a converted full-staff member). isHireFlow = !!prefillApplication checked FIRST.
+- BULK: ran `bulk_set_onboarding.sql` → set ALL existing active employees `is_trainee=true` (user confirmed). They land in trainee portal until manager "Convert to full staff". Reverse statements in the SQL file if needed.
+
+### 4. Profile pending/complete status — ENFORCED (DEPLOYED: profile_status.sql)
+- NEW field `ops_team.profile_status` ('pending'|'complete', NOT NULL DEFAULT 'pending', CHECK). All existing → pending. SEPARATE from trainee/onboarding flag.
+- Mapper: profileStatus ↔ profile_status.
+- Validator `missingProfileFields(member)` + `PROFILE_REQUIRED_FIELDS` (17 fields): firstName, lastName, dob, niNumber, email, phone, address, role(or roleIds/roleId), store(storeIds), hireDate, payBasis, hourlyRate (£0 VALID — only null/undefined/"" fails), taxStarterStatement, legalStatus, emergencyContactName, emergencyContactPhone, pin.
+- EmployeeProfileView: status card (manager/owner only) shows pending/complete + lists missing fields as pills. "Mark complete" BLOCKED until all 17 filled (alert lists missing). "Set back to pending" to revert. Header badge ✓ complete / ● pending.
+- Pairs with the future HR onboarding/compliance dashboard (parked — see below).
+
+### 5. Interactive training: stepped guided cards (DEPLOYED: needs App + sample SQL)
+- Checked existing system first: per-store `training_modules` (title/description/category/Markdown content/required/type onboarding|training), authored in TrainingAdminView/TrainingModuleEditor, shown in TraineePortal + StaffTrainingView, progress in `training_progress`. Content was one read-only Markdown scroll.
+- NEW reusable `SteppedModuleContent` component: splits a module's existing `content` on a `---`-on-its-own-line delimiter into guided cards with PROGRESS BAR + step dots + Back/Next. 1 section → renders as before (backward compatible). NO DB change — reuses content field, SafeMarkdown, progress. Wired into BOTH TraineePortal and StaffTrainingView. Editor got a hint: "put --- on its own line to split into steps."
+- Sample module: `sample_training_module.sql` inserts "Welcome & Floor Basics (sample)" (6 steps) at store-london-road. Cleanup: DELETE FROM training_modules WHERE title='Welcome & Floor Basics (sample)'.
+
+### SQL run this session (all PROD)
+- profile_status.sql (profile_status column) ✅
+- bulk_set_onboarding.sql (all active → is_trainee true) ✅
+- sample_training_module.sql (demo stepped module) — run when deploying training
+
+### CANONICAL LATEST FILE
+- **App_TRAINING_FIXED_v2.js (1,185,655 bytes)** — has EVERYTHING this session (the React.* build-fix version; verify zero `React.use` + exact bytes before commit).
+- **supabase_PROFILE_status.js (~179,670 bytes)** — latest supabase (profileStatus mapper + dormant employee auth fns). 
+- Deploy lineage this session: App_HIRING_onboarding → App_NEWHIRE_onboarding → App_PROFILE_status (+supabase_PROFILE_status, +profile_status.sql) → App_EMAIL_PIN_login (+supabase_EMAIL_PIN_login) → App_LOGIN_singlepage → App_TRAINING_stepped → **App_TRAINING_FIXED_v2** (current).
+- NOTE: confirm all of profile_status + email-pin supabase + their SQL are deployed since App is cumulative and contains all that code.
+
+### OPEN / NEXT
+- **HR Onboarding & Compliance dashboard (PARKED — user said "later")**: read-only grid, rows = people in onboarding, columns = Documents/RTW, Contract, Training, Policies, Tax/Starter, Converted, + profile_status. Filters by store/search. "% complete / ready to convert". Layer 2 = clickable cells → profile tab. Build Layer 1 first.
+- **Real employee passwords (Supabase Auth)**: dormant fns exist. Decide provisioning: invite-by-email (needs small Edge Function) vs self-signup vs admin temp-password. Then wire employeeSignIn into login, add /reset page, session bridging (app uses cb_session localStorage, separate from supabase.auth).
+- **Login background**: user looked at CSS textured-pattern options (dot grid, mesh glow, chocolate weave etc.) then said "ignore for now". Pure-CSS options ready if revisited.
+- Carried from before: Flipdish pg_cron 401; rotate service-role key + shared secret; filter web-employee TodaysTasks to only the person's own tasks (currently shows all store tasks); kiosk breaks-deduct stage 2; email notifications (Resend); storage hardening (public applicant-photos bucket).
+
+---
+
+
+## 🆕 SESSION 2026-06-01 — what shipped (all DEPLOYED & live)
+
+### Validation gotcha learned this session
+- babel parse + react-hooks eslint DO NOT catch `no-undef` ("X is not defined") — the production CRA build does, and a build failed on it (XLSX not imported).
+- NEW validator added: `eslintcheck/.eslthrc.noundef.json` — run `./node_modules/.bin/eslint <file> -c .eslintrc.noundef.json --no-eslintrc`, grep "no-undef", ignore the exhaustive-deps lines. RUN ALL THREE (babel + hooks + no-undef) before every deploy.
+- Downloads numbering trap bit again: newest file gets the `(1)` suffix; the plain name is OLDER. ALWAYS `dir` first, verify byte-size before commit (findstr can pass on both old+new).
+
+### 1. Flipdish token auto-refresh — DONE
+- Chrome extension (C:\dev\flipdish-token-extension) reads rms-token + FD-Authorization cookies from logged-in portal.flipdish.com, writes via RPC `set_flipdish_tokens`. Background service-worker chrome.alarms auto-refresh every 4h. Editing shared.js needs FULL remove+re-add of extension.
+- STILL OPEN: pg_cron job 'flipdish-daily-sync' returns 401 UNAUTHORIZED_INVALID_JWT_FORMAT. Check Verify-JWT toggle OFF on the function + legacy vs new key system.
+- SECURITY TODO: rotate service-role key (was pasted in chat); replace 'chocoberryflipdishsync2026' shared secret.
+
+### 2. PAYROLL SYSTEM — full feature, DONE (owner-only)
+Goal: produce payroll Excel for the accountant from dashboard data. ALL wages fully declared; cash-vs-bank is purely PAYMENT METHOD, not off-books.
+
+**DB (all run, no RLS to match app):**
+- `minimum_wage_rates` (band 21_over/18_20/under_18, rate, effective_from) — payroll_stage1.sql
+- `payroll_periods` (employee_id, period_start/end, total_hours, total_pay, bank_amount, cash_amount, payroll_location, accounting_location, rate_snapshot jsonb) — stage1 + payroll_amounts.sql added bank_amount/cash_amount
+- `employee_loans` (advance/repayment) — internal only, NEVER exported
+- ops_team added: pay_basis, default_bank_amount, payroll_location, accounting_location
+
+**Code (supabase.js):** resolveHourlyRate (accepts BOTH camelCase app shape {payBasis,hourlyRate,dob} AND snake_case — dual-shape fix was critical), fetchMinimumWageRates/upsert/remove, ageOnDate/bandForAge/rateForBandOnDate, fetchPayrollPeriods/upsertPayrollPeriod, fetchEmployeeLoans/addLoanEntry/loanBalance. Rules: age on WORK date (birthday mid-period → higher rate from that day); fixed→hourly_rate (£0 valid, not flagged); minimum_wage→age band→rate; missing rate/DOB → flagged, never guess.
+
+**UI (App.js):**
+- Job & Pay tab: pay-basis selector
+- Profile "Payroll" tab (PayrollAttributesTab, owner-only): Default bank transfer (£), payroll location, accounting location, loan ledger (running balance), read-only Starter & tax summary
+- Admin → Minimum Wage tab (MinimumWageAdmin)
+- Admin → Payroll tab (PayrollRunScreen): pick date range → sums APPROVED punch_records hours → resolves rate per punch → shows working → applies default bank-£ split (cash=remainder, editable per row) → Save to payroll_periods (overlap warn) → Export Excel.
+
+**Split is BY AMOUNT (£):** "Bank transfer" / "Cash paid" labels, £ amounts only. default_bank_amount pre-fills, editable per run, capped at gross.
+
+**EXPORT — ExcelJS (not SheetJS — community SheetJS can't style cells).** New useExcelJS() hook (CDN exceljs 4.4.0). Accountant's EXACT 17 columns IN ORDER: Accounting Location, Start Date (=hire_date), End Date (blank), First Name, Last Name, Gender, DOB, NI Number, Email, Address, Starter Statement A, Starter Statement B, Starter Statement C (each "Yes" in matching col by tax_starter_statement), Salary Term (Hourly=minimum_wage / Fixed), Gross Pay, Bank Transfer, Cash Paid. Formatting: bold white-on-indigo frozen header, borders, zebra stripes, £#,##0.00, bold TOTAL row with SUM formulas. Verified by generate+read-back in Node.
+
+**UK NMW rates (user verifies on gov.uk):** from 1 Apr 2026 — 21+ £12.71, 18–20 £10.85, under-18 £8.00. Apr 2025–Mar 2026 — £12.21/£10.00/£7.55.
+
+**punch_records facts:** brand_id NOT NULL (use 'chocoberry'), status CHECK in ('open','closed','amended') — use 'closed' for completed shifts. Only approved+hours_worked counted. Test data: payroll_test_data.sql (notes='PAYROLL_TEST'; cleanup: DELETE WHERE notes='PAYROLL_TEST'). Armaan Singh ot-1779835195017 @ £13 = clean money test (38h → £494).
+
+### 3. Assignment target picker + save fix — DONE
+- assignment_target.sql added assignments.department + assign_to columns.
+- AssignmentFormModal: "Role" free-text REPLACED with two-dropdown picker — "Assign to" (Department/Role/Employee) + second dropdown of matching list, filtered to selected store (assignTargets useMemo). Threaded opsTeam/storeRoles/storeDepartments through AssignmentsView → modal. Mappers carry department+assignTo (back-compat infers from populated field).
+- SAVE BUG FIXED: handleSave had `if (!form.taskId || !form.role) return;` — silently failed when role empty. Now validates per assignTo with visible alerts, clears non-selected target fields.
+
+### 4. Employee task-visibility — TWO bugs fixed
+- KioskApp (in-store tablet): todaysTasks `mine`-match had no department case — added (matches employee.department field + roles' departmentId→storeDepartments name). Threaded storeDepartments through KioskShell loader.
+- THE REAL ONE (website employee login, name+PIN → EmployeeShell → TodaysTasks): EmployeeShell rendered `<TodaysTasks>` WITHOUT passing `stores` or `visibleStoreIds` → inside, store-scope filter was empty → EVERY store-assigned task hidden. FIXED: EmployeeShell now computes myVisibleStoreIds (stores in user's brands + ops_team storeIds) and passes stores + visibleStoreIds. NOTE: TodaysTasks shows ALL in-scope store tasks (no per-employee role/dept/person filter) — if user wants the web employee view filtered to only THEIR tasks like the kiosk, that's a future enhancement.
+
+### 5. Assignment filters — DONE
+AssignmentsView: added filter row — Search (by task name, case-insensitive) + Store dropdown (brand-prefixed, primary nav for 24+ stores) + existing Type dropdown + Target dropdown (Dept/Role/Employee) + Clear link + live count. All combine; brand-scoping preserved.
+
+### CANONICAL LATEST FILES (cumulative, in /mnt/user-data/outputs/)
+- **App_ASSIGN_filters.js (1,178,847 bytes)** — has EVERYTHING above
+- **supabase_ASSIGN_filters.js** — latest supabase (== supabase_KIOSK_match.js, == supabase_ASSIGN_picker.js cumulatively)
+- Deploy lineage this session: App_PAYROLL_S3a → S3b → exceljs → starter → ASSIGN_picker → KIOSK_match → EMPTASKS_fix → ASSIGN_filters
+
+### OPEN / NEXT
+- Flipdish pg_cron 401 (see above)
+- Security: rotate service-role key + shared secret
+- Possible: filter web employee TodaysTasks to only the logged-in person's tasks (currently shows all store tasks)
+- Long-standing: kiosk breaks-deduct stage 2; email notifications (Resend); storage hardening (public applicant-photos bucket has sensitive docs); enable TRAINING_GUIDE_PDF_URL
+
+---
+
 
 ## ⚠️ ENVIRONMENT — read before any work
 - Repo at `C:\dev\create-brands-dashboard\create-brands-dashboard` (nested one level — `git rev-parse --show-toplevel` → `C:/dev/create-brands-dashboard`).
@@ -223,6 +442,26 @@ BLOCKER: test invoke still returns **401 `UNAUTHORIZED_INVALID_JWT_FORMAT` / "In
   2. Settings → API Keys → is the project on **legacy** keys (anon/service_role JWTs) or the **new** system (sb_publishable_/sb_secret_)? Both sections were visible. If new system, the gateway may want an `sb_secret_...` key, not the legacy JWT.
 Test pattern: `SELECT net.http_post(url:='https://qtjsdbasoouslcpinqhu.supabase.co/functions/v1/flipdish-rms-sync', headers:=jsonb_build_object('Content-Type','application/json','Authorization','Bearer <KEY>'), body:='{}'::jsonb);` then `SELECT id,status_code,content::text FROM net._http_response ORDER BY created DESC LIMIT 3;` — want status_code 200.
 ⚠️ SECURITY: the legacy service_role JWT was pasted into chat + sits in plaintext in cron.job/net._http_response. ROTATE the service_role key (Settings→API Keys) once the sync works, and update the job. File scheduled_sync.sql has the template (⚠️ its placeholder must be replaced with the REAL key — that mistake already cost a cycle).
+
+
+## 🏗️ IN PROGRESS — PAYROLL FEATURE (staged build)
+Goal: produce payroll data for the accountant from dashboard data. Design (all confirmed with user):
+- A **payroll TAB inside the employee profile** (per-employee), PLUS an all-employee Excel export (the export iterates everyone for a period). OWNER-ONLY access (isOwnerRole, not hq).
+- Per-employee per-period record: total_hours, total_pay (gross), bank_hours, cash_hours (split is by HOURS; amounts derived proportionally from gross), payroll_location (PAYE entity) + accounting_location (cost centre) — two SEPARATE location fields.
+- **Cash vs bank is purely PAYMENT METHOD** — all wages fully declared to the accountant; cash is used when the bank balance is short (cash-flow), everything recorded. NOT off-books. (User clarified this explicitly.)
+- LOANS: internal-only running balance (advances + repayments ledger), NEVER in the accountant export.
+- PAY RATE per employee via new `ops_team.pay_basis` ('minimum_wage' | 'fixed'). minimum_wage = look up live from NMW table by age-on-work-date; fixed = use ops_team.hourly_rate. User pays min-or-above; picks per employee. NO below-min warning for fixed (user said fixed=fixed). NO apprentice rate (3 bands only: 21_over / 18_20 / under_18).
+- Hours: auto-pulled from punch_records (only APPROVED), editable. Overtime = just more hours, no premium. Gross for min-wage employees = RECOMPUTED live from the NMW rate (don't trust punch_records.gross_pay); show the working (auditable). Pay period = CUSTOM date range each run (warn on overlap with an existing saved period).
+- Rate resolver rules: age computed on the WORK/PUNCH date; exact age (birthday mid-period → higher rate from that day — user's choice, slightly more generous than strict UK law but safe); if NO rate configured for a band on a date → ERROR/FLAG loudly, never guess.
+- UK NMW (user MUST verify on gov.uk before entering): from 1 Apr 2026 — 21+ £12.71, 18–20 £10.85, under-18 £8.00. Apr 2025–Mar 2026 — £12.21 / £10.00 / £7.55.
+
+STAGE 1 — DONE & VERIFIED in prod. payroll_stage1.sql created 3 tables + 1 column (NO RLS — matches ops_team which has relrowsecurity=false; app gates owner-only at app layer). Confirmed: minimum_wage_rates, payroll_periods, employee_loans all exist; ops_team.pay_basis added, all 30 employees defaulted to 'fixed'. (Had to run statements ONE AT A TIME — the SQL editor only partially executed the multi-statement file.)
+
+STAGE 2 — DATA LAYER DONE & VERIFIED; UI NOT STARTED. Appended to supabase.js (saved as supabase_PAYROLL_S2.js, 175,292 bytes): fetchMinimumWageRates / upsertMinimumWageRate / removeMinimumWageRate; ageOnDate / bandForAge / rateForBandOnDate / **resolveHourlyRate** (the core resolver); fetchPayrollPeriods / upsertPayrollPeriod; fetchEmployeeLoans / addLoanEntry / loanBalance. Resolver tested with 13 cases ALL PASS (payroll_resolver_tests.mjs) incl. birthday-crossing (turns 21 on the 15th → 18_20 rate on 14th, 21_over on 15th) and April rate-change (effective-dating). syntax-clean.
+  REMAINING in Stage 2 (UI, in App.js — NOT yet edited, still canonical 1,131,558): (1) add `payBasis` to the ops_team camelCase mapper; (2) a pay_basis selector on the Job & Pay tab of EmployeeProfileView (function at ~line 8233; tabs array ~8457; tab bodies render via `tab === "job"` ~8491); (3) an OWNER-ONLY NMW-rates admin screen (add/list/delete rates by band+effective_from). Owner check helper: `isOwnerRole(role)` (~line 187). EmployeeProfileView gets `currentUser` prop. Build UI, then verify rate entry + resolver end-to-end BEFORE Stage 3.
+STAGE 3 (pending) — the payroll tab itself (period picker, auto-pull approved punch hours, show rate working per the resolver, bank/cash hours split, two locations, loan section). 
+STAGE 4 (pending) — all-employee Excel export, standard clean layout (user has no prior file to match); EXCLUDES loans. ⚠️ read /mnt/skills/public/xlsx/SKILL.md before building the export.
+
 
 ## SUGGESTED OPENER FOR NEXT CHAT
 > "Continuing Chocoberry dashboard. ⚠️ FIRST: latest files are App_SYNC_ALARM.js (1,131,558 bytes) + supabase_SERVER_AGG.js (169,184 bytes) — see FILE-LINEAGE WARNING; do NOT build on the App_KIOSK_TASKS branch. Everything's built and live: full onboarding (RTW docs two-stage + versioning + comments; contracts author→send→sign→print frozen-snapshot; HMRC tax; policy/allergen acks; employee bank w/ declaration; complete gate), training, profile polish. Team under PEOPLE→'Team' (grouped by store, filters+search). Multiple job roles per employee. Hiring advertised-roles list drives the public apply form. Self-fill onboarding link (/onboard?token=) + self-chosen unique PIN. Kiosk: tasks on punch-in + clocked-in menu. Chain Performance uses SERVER-SIDE aggregation RPCs (agg_flipdish_sales/items/heatmap/last_sale) — fixed a load timeout; numbers verified correct (an earlier '13% undercount' was a FALSE ALARM = mismatched windows, ignore). ⚠️ FLIPDISH SYNC: depends on FLIPDISH_RMS_TOKEN that expires ~24h and CANNOT be auto-refreshed (login has hCaptcha + SMS 2FA — confirmed). Safety net now in place: dashboard shows a red STALE-DATA alarm if no sale >30h; Edge Function flipdish-rms-sync auto-chunks max 2 days/call with resumeFrom (~7 calls for 2wks; daily sync-today = 1 call). When sync dies: refresh the token in Supabase secrets, then call the function following resumeFrom. Repo: C:\\dev\\create-brands-dashboard\\create-brands-dashboard; read SESSION_HANDOFF.md. ⚠️ IN PROGRESS: scheduled sync (pg_cron job flipdish-daily-sync, jobid 5) is created but the cron→function auth returns 401 Invalid JWT — see the IN PROGRESS section in the handoff (check Verify-JWT setting + legacy-vs-new key system); also ROTATE the service_role key (it was exposed). Other open (non-urgent): kiosk Stage 2 (breaks UNPAID→deduct + task-marking); email notifications (Resend); storage hardening; PDF-guide link."
