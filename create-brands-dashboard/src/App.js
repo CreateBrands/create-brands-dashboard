@@ -21452,6 +21452,48 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
   // Only an actual owner gets the view-as picker. Impersonated views never show it
   // (avoid the "view as X → view as Y" rabbit hole).
   const canImpersonate = actualUser?.role === "owner" && onImpersonate;
+
+  // ── Clear-on-view badges ────────────────────────────────────────────────────
+  // Items flagged badgeClearOnView hide their badge once the section is visited,
+  // and only show it again when the count INCREASES past what was seen. Seen
+  // counts are per-user in localStorage so they survive refreshes. When the
+  // count drops (work resolved), the seen baseline is clamped down so the next
+  // new item re-triggers the badge.
+  const seenStorageKey = `cb_badge_seen_${currentUser?.id || "anon"}`;
+  const [badgeSeen, setBadgeSeen] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(seenStorageKey) || "{}"); } catch { return {}; }
+  });
+
+  useEffect(() => {
+    setBadgeSeen(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const g of navGroups || []) {
+        for (const it of g.items || []) {
+          if (!it.badgeClearOnView) continue;
+          const count = parseInt(it.badge || "0", 10) || 0;
+          if (activeView === it.key) {
+            if ((next[it.key] ?? 0) !== count) { next[it.key] = count; changed = true; }
+          } else if ((next[it.key] ?? 0) > count) {
+            next[it.key] = count; changed = true;     // clamp down when items resolve
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [activeView, navGroups]);
+
+  useEffect(() => {
+    try { localStorage.setItem(seenStorageKey, JSON.stringify(badgeSeen)); } catch { /* ignore */ }
+  }, [badgeSeen, seenStorageKey]);
+
+  // Returns the badge to display for an item (null = hidden).
+  const displayBadge = (it) => {
+    if (!it.badge) return null;
+    if (!it.badgeClearOnView) return it.badge;
+    const count = parseInt(it.badge, 10) || 0;
+    return count > (badgeSeen[it.key] ?? 0) ? it.badge : null;
+  };
   const impersonationTargets = canImpersonate
     ? users.filter(u => u.id !== actualUser.id).sort((a, b) => {
         const order = { hq_staff: 0, manager: 1, staff: 2, owner: 3 };
@@ -21484,7 +21526,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
                   className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
                   <NIcon size={15} className="flex-shrink-0"/>
                   {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
-                  {!collapsed && n.badge && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{n.badge}</span>}
+                  {!collapsed && displayBadge(n) && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{displayBadge(n)}</span>}
                 </button>
               );
             })}
@@ -22290,12 +22332,12 @@ export default function App() {
       { key: "eod",            label: "EOD Report",      icon: FileText },
     ]},
     { group: "PEOPLE", items: [
-      { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
+      { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
-      { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null },
+      { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, badgeClearOnView: true },
       { key: "training",     label: "Training",          icon: GraduationCap },
       { key: "contracts",    label: "Contracts",         icon: FileText },
     ]},
