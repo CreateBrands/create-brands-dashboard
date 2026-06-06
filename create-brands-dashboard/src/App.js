@@ -3626,31 +3626,40 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       };
     }
     if (reportType === "payment-mix") {
-      // All methods, net of refunds, with share of net takings.
-      const byM = {};
+      // Settlement lines: channel × method, net of refunds. Each row maps to
+      // a different way money reaches the bank: POS/Cash = till deposits,
+      // POS/Credit = card acquirer settlements (near-1:1 gross), VenuePaid
+      // rows = platform remittances (arrive NET of commission — match against
+      // the platform's own statement, not this gross figure).
+      const byK = {};
       scoped.pay.forEach(r => {
-        if (!byM[r.paymentMethod]) byM[r.paymentMethod] = { method: r.paymentMethod, lines: 0, charges: 0, refunds: 0 };
-        if (r.lineType === "Charge") { byM[r.paymentMethod].charges += r.amount; byM[r.paymentMethod].lines += r.lines; }
-        else { byM[r.paymentMethod].refunds += r.amount; }
+        const k = `${r.channel}|${r.paymentMethod}`;
+        if (!byK[k]) byK[k] = { channel: r.channel, method: r.paymentMethod, lines: 0, charges: 0, refunds: 0 };
+        if (r.lineType === "Charge") { byK[k].charges += r.amount; byK[k].lines += r.lines; }
+        else { byK[k].refunds += r.amount; }
       });
-      const list = Object.values(byM).map(m => ({ ...m, net: m.charges - m.refunds })).sort((a, b) => b.net - a.net);
+      const list = Object.values(byK).map(m => ({ ...m, net: m.charges - m.refunds })).sort((a, b) => b.net - a.net);
       const totNet = list.reduce((a, m) => a + m.net, 0);
+      const settles = (m) => m.method === "Cash" ? "Till deposit" : m.method === "Credit" ? "Card settlement" : m.method === "VenuePaid" ? "Platform remittance (net of commission)" : "—";
       const rows = list.map(m => ({
-        method: m.method, lines: m.lines.toLocaleString("en-GB"),
+        channel: m.channel, method: m.method,
+        lines: m.lines.toLocaleString("en-GB"),
         charges: gbp(m.charges), refunds: m.refunds ? gbp(m.refunds) : "—",
         net: gbp(m.net),
         share: totNet > 0 ? `${n2(100 * m.net / totNet)}%` : "—",
+        settles: settles(m),
       }));
       return {
-        title: "Payment mix (net of refunds)",
+        title: "Payment mix — settlement lines (gross, net of refunds)",
         columns: [
-          { key: "method", label: "Method", width: 14 }, { key: "lines", label: "Payment lines", width: 13, num: true },
-          { key: "charges", label: "Charges", width: 12, num: true }, { key: "refunds", label: "Refunds", width: 12, num: true },
-          { key: "net", label: "Net", width: 12, num: true }, { key: "share", label: "Share", width: 9, num: true },
+          { key: "channel", label: "Channel", width: 15 }, { key: "method", label: "Method", width: 11 },
+          { key: "lines", label: "Lines", width: 9, num: true }, { key: "charges", label: "Charges", width: 12, num: true },
+          { key: "refunds", label: "Refunds", width: 11, num: true }, { key: "net", label: "Net (gross)", width: 12, num: true },
+          { key: "share", label: "Share", width: 8, num: true }, { key: "settles", label: "Reaches bank as", width: 28 },
         ],
         rows,
-        totals: { method: "TOTAL", net: gbp(totNet), share: rows.length ? "100%" : "—" },
-        emptyHint: "No payment rows in this range — check the payments table has been backfilled.",
+        totals: { channel: "TOTAL", net: gbp(totNet), share: rows.length ? "100%" : "—" },
+        emptyHint: "No payment rows in this range — run the payments_v2 SQL (channel rebuild + backfill) first.",
       };
     }
     if (reportType === "top-items") {
