@@ -1848,6 +1848,32 @@ export async function fetchSalesAggregated({ from, to, brandId = "chocoberry" } 
   }));
 }
 
+// ── LABOUR vs REVENUE (Phase 0.3) ────────────────────────────────────────────
+// Reads the labour_vs_revenue view (store_day_aggregates FULL OUTER JOIN
+// labour_day_aggregates). One row per brand/store/day. NULL revenue = labour
+// recorded with no sales row that day (and vice versa) — both are signals the
+// report surfaces rather than hides. store_id 'unmatched' = punches with no
+// store assigned (cost that would otherwise silently vanish).
+export async function fetchLabourVsRevenue({ from, to } = {}) {
+  let q = supabase.from("labour_vs_revenue").select("*")
+    .order("business_date", { ascending: true });
+  if (from) q = q.gte("business_date", from);
+  if (to)   q = q.lte("business_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    brandId:        r.brand_id,
+    storeId:        r.store_id,
+    date:           r.business_date,
+    revenueNet:     r.revenue_net      == null ? null : Number(r.revenue_net),
+    hours:          r.hours_total      == null ? null : Number(r.hours_total),
+    overtimeHours:  r.overtime_hours   == null ? null : Number(r.overtime_hours),
+    labourCost:     r.labour_cost      == null ? null : Number(r.labour_cost),
+    labourPct:      r.labour_pct       == null ? null : Number(r.labour_pct),
+    revenuePerHour: r.revenue_per_hour == null ? null : Number(r.revenue_per_hour),
+  }));
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // HIRING / ONBOARDING (slice 1)

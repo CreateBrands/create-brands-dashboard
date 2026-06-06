@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -2980,6 +2980,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
   const [to, setTo] = useState(todayStr());
   const [punches, setPunches] = useState([]);
   const [schedules, setSchedules] = useState([]);
+  const [labourRows, setLabourRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
   const ExcelJS = useExcelJS();
@@ -2991,6 +2992,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     { key: "variance",        label: "Scheduled vs actual",       hint: "Rota hours vs punched hours" },
     { key: "overtime",        label: "Overtime report",           hint: "All overtime + approval status" },
     { key: "exceptions",      label: "Exceptions",                hint: "Missing punch-outs, amendments, unapproved" },
+    { key: "labour",          label: "Labour vs revenue",         hint: "Labour cost as % of net revenue, per store/day" },
   ];
 
   // Employees pickable for the detail report — scoped to the selected store.
@@ -3010,11 +3012,12 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     setLoading(true);
     try {
       const effFrom = from, effTo = (reportType === "daily") ? from : to;
-      const [p, s] = await Promise.all([
-        fetchPunchRecords({ from: effFrom, to: effTo }),
+      const [p, s, l] = await Promise.all([
+        reportType === "labour" ? Promise.resolve([]) : fetchPunchRecords({ from: effFrom, to: effTo }),
         reportType === "variance" ? fetchSchedulesRange({ from: effFrom, to: effTo }) : Promise.resolve([]),
+        reportType === "labour" ? fetchLabourVsRevenue({ from: effFrom, to: effTo }) : Promise.resolve([]),
       ]);
-      setPunches(p); setSchedules(s); setRan(true);
+      setPunches(p); setSchedules(s); setLabourRows(l); setRan(true);
     } catch (e) { alert(`Could not load report data: ${e?.message || e}`); }
     finally { setLoading(false); }
   };
@@ -3029,8 +3032,9 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     return {
       punches: punches.filter(p => inScope(p.storeId)),
       schedules: schedules.filter(s => inScope(s.storeId)),
+      labour: labourRows.filter(r => inScope(r.storeId)),
     };
-  }, [punches, schedules, storeSel, isMgr, myStoreIds]);
+  }, [punches, schedules, labourRows, storeSel, isMgr, myStoreIds]);
 
   // ── Formatting helpers ──
   const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -3161,6 +3165,40 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
         totals: { name: "TOTAL", hours: n2(ot.reduce((a, p) => a + (p.overtimeHours || 0), 0)) },
       };
     }
+    if (reportType === "labour") {
+      // Labour vs revenue (Phase 0.3) — reads labour_vs_revenue view, NOT punches.
+      // '—' = side missing (labour with no sales row, or sales with no labour row).
+      const L = scoped.labour;
+      const rows = L
+        .slice()
+        .sort((a, b) => (a.date || "").localeCompare(b.date || "") || storeName(a.storeId).localeCompare(storeName(b.storeId)))
+        .map(r => ({
+          date: fmtD(r.date),
+          store: r.storeId === "unmatched" ? "⚠ Unmatched" : storeName(r.storeId),
+          revenue: r.revenueNet == null ? "—" : gbp(r.revenueNet),
+          hours: r.hours == null ? "—" : n2(r.hours),
+          ot: r.overtimeHours ? n2(r.overtimeHours) : "",
+          cost: r.labourCost == null ? "—" : gbp(r.labourCost),
+          pct: r.labourPct == null ? "—" : `${n2(r.labourPct)}%`,
+          rph: r.revenuePerHour == null ? "—" : gbp(r.revenuePerHour),
+        }));
+      const totRev  = L.reduce((a, r) => a + (r.revenueNet  || 0), 0);
+      const totHrs  = L.reduce((a, r) => a + (r.hours       || 0), 0);
+      const totCost = L.reduce((a, r) => a + (r.labourCost  || 0), 0);
+      return {
+        title: "Labour vs revenue",
+        columns: [
+          { key: "date", label: "Date", width: 16 }, { key: "store", label: "Store", width: 16 },
+          { key: "revenue", label: "Net revenue", width: 13, num: true }, { key: "hours", label: "Hours", width: 9, num: true },
+          { key: "ot", label: "OT hrs", width: 8, num: true }, { key: "cost", label: "Labour cost", width: 13, num: true },
+          { key: "pct", label: "Labour %", width: 10, num: true }, { key: "rph", label: "Rev / hour", width: 11, num: true },
+        ],
+        rows,
+        totals: { date: "TOTAL", revenue: gbp(totRev), hours: n2(totHrs), cost: gbp(totCost),
+          pct: totRev > 0 ? `${n2(100 * totCost / totRev)}%` : "—",
+          rph: totHrs > 0 ? gbp(totRev / totHrs) : "—" },
+      };
+    }
     // exceptions
     const ex = [];
     P.forEach(p => {
@@ -3220,7 +3258,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-bold text-white flex items-center gap-2"><FileText size={18}/> Reports</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Timesheet reports — on-screen, with Excel download</p>
+        <p className="text-xs text-slate-500 mt-0.5">Timesheet & labour reports — on-screen, with Excel download</p>
       </div>
 
       {/* Report type cards */}
