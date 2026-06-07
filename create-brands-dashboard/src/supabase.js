@@ -4189,3 +4189,103 @@ export function loanBalance(entries) {
   if (!entries) return 0;
   return entries.reduce((bal, e) => bal + (e.entry_type === "advance" ? Number(e.amount) : -Number(e.amount)), 0);
 }
+
+
+// ===== INVOICE_HELPERS_V1: invoice capture (upload → extract → review → approve) =====
+export async function uploadInvoiceFile(file, entity, userId) {
+  const safe = (file.name || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "_");
+  const path = `${entity}/${Date.now()}_${safe}`;
+  const { error: upErr } = await supabase.storage.from("invoices").upload(path, file, { upsert: false });
+  if (upErr) throw upErr;
+  const { data, error } = await supabase
+    .from("invoices")
+    .insert({ entity, image_path: path, uploaded_by: userId, status: "uploaded" })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function extractInvoice(invoiceId) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("invoice-extract", {
+    body: { invoice_id: invoiceId },
+    headers,
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || "extraction failed");
+  return data;
+}
+
+export async function listInvoices() {
+  const { data, error } = await supabase
+    .from("invoices")
+    .select("id, entity, supplier_name, invoice_number, invoice_date, total_ex_vat, status, created_at")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getInvoiceWithLines(invoiceId) {
+  const { data: inv, error: e1 } = await supabase.from("invoices").select("*").eq("id", invoiceId).single();
+  if (e1) throw e1;
+  const { data: lines, error: e2 } = await supabase
+    .from("invoice_lines")
+    .select("*")
+    .eq("invoice_id", invoiceId)
+    .order("line_no", { ascending: true });
+  if (e2) throw e2;
+  return { invoice: inv, lines: lines || [] };
+}
+
+export async function getInvoiceFileUrl(path) {
+  const { data, error } = await supabase.storage.from("invoices").createSignedUrl(path, 3600);
+  if (error) throw error;
+  return data?.signedUrl || null;
+}
+
+export async function saveInvoiceLine(lineId, fields) {
+  const { error } = await supabase.from("invoice_lines").update(fields).eq("id", lineId);
+  if (error) throw error;
+}
+
+export async function setInvoiceLineStatus(lineId, status) {
+  const { error } = await supabase.from("invoice_lines").update({ status }).eq("id", lineId);
+  if (error) throw error;
+}
+
+export async function searchCogsIngredients(domain, q) {
+  let query = supabase.from("cogs_ingredients").select("id, name").eq("domain", domain).eq("active", true).limit(12);
+  if (q && q.trim()) query = query.ilike("name", `%${q.trim()}%`);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateInvoiceHeader(invoiceId, fields) {
+  const { error } = await supabase.from("invoices").update(fields).eq("id", invoiceId);
+  if (error) throw error;
+}
+
+export async function approveInvoiceRpc(invoiceId, userId) {
+  const { data, error } = await supabase.rpc("approve_invoice", { p_invoice_id: invoiceId, p_user: userId });
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] : data;
+}
+
+export async function rejectInvoice(invoiceId, note) {
+  const { error } = await supabase
+    .from("invoices")
+    .update({ status: "rejected", error_note: note || "rejected in review" })
+    .eq("id", invoiceId);
+  if (error) throw error;
+}
+
+export async function listStoresLite() {
+  const { data, error } = await supabase.from("stores").select("id, name").order("name");
+  if (error) throw error;
+  return data || [];
+}
+// ===== end INVOICE_HELPERS_V1 =====

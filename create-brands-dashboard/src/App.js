@@ -69,6 +69,18 @@ import {
   fetchPayrollPeriods, upsertPayrollPeriod,
   fetchEmployeeLoans, addLoanEntry, loanBalance,
   resolveHourlyRate, ageOnDate, bandForAge,
+  uploadInvoiceFile,
+  extractInvoice,
+  listInvoices,
+  getInvoiceWithLines,
+  getInvoiceFileUrl,
+  saveInvoiceLine,
+  setInvoiceLineStatus,
+  searchCogsIngredients,
+  updateInvoiceHeader,
+  approveInvoiceRpc,
+  rejectInvoice,
+  listStoresLite,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -2960,6 +2972,327 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
 // ─── AskDataView — single-question Q&A against aggregates (Phase 3 slice 3) ──
 // v1: one question, one answer, no conversation memory. The Edge Function
 // sends AGGREGATES ONLY to the Claude API. Owner/HQ only.
+// ===== INVOICES_VIEW_V1: upload → extract → side-by-side review → approve =====
+function InvoiceLineRow({ line, domain, onChanged }) {
+  const [editQty, setEditQty] = useState(line.pack_qty_base ?? "");
+  const [editPrice, setEditPrice] = useState(line.pack_price_ex_vat ?? "");
+  const [search, setSearch] = useState("");
+  const [options, setOptions] = useState([]);
+  const [matchedName, setMatchedName] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    if (line.matched_ingredient_id) {
+      searchCogsIngredients(domain, "").then(() => {});
+      supabaseLookupName(line.matched_ingredient_id).then((n) => { if (live) setMatchedName(n); });
+    } else setMatchedName(null);
+    return () => { live = false; };
+  }, [line.matched_ingredient_id, domain]);
+
+  async function supabaseLookupName(id) {
+    try {
+      const opts = await searchCogsIngredients(domain, "");
+      const hit = opts.find((o) => o.id === id);
+      if (hit) return hit.name;
+    } catch {}
+    return "(matched)";
+  }
+
+  const doSearch = async (q) => {
+    setSearch(q);
+    if (!q || q.length < 2) { setOptions([]); return; }
+    try { setOptions(await searchCogsIngredients(domain, q)); } catch { setOptions([]); }
+  };
+
+  const pick = async (opt) => {
+    setBusy(true);
+    try {
+      await saveInvoiceLine(line.id, { matched_ingredient_id: opt.id, match_method: "human", match_confidence: 1 });
+      setOptions([]); setSearch("");
+      onChanged();
+    } finally { setBusy(false); }
+  };
+
+  const saveNumbers = async () => {
+    setBusy(true);
+    try {
+      await saveInvoiceLine(line.id, {
+        pack_qty_base: editQty === "" ? null : Number(editQty),
+        pack_price_ex_vat: editPrice === "" ? null : Number(editPrice),
+      });
+      onChanged();
+    } finally { setBusy(false); }
+  };
+
+  const mark = async (status) => {
+    setBusy(true);
+    try { await setInvoiceLineStatus(line.id, status); onChanged(); } finally { setBusy(false); }
+  };
+
+  const ok = line.matched_ingredient_id && Number(line.pack_qty_base) > 0 && line.pack_price_ex_vat !== null;
+  const badge =
+    line.status === "confirmed" ? "bg-emerald-600/20 text-emerald-300 border-emerald-700/40" :
+    line.status === "skipped"   ? "bg-slate-700/30 text-slate-500 border-slate-700/40" :
+                                   "bg-amber-600/20 text-amber-300 border-amber-700/40";
+
+  return (
+    <div className="border border-slate-800 rounded-xl p-3 bg-slate-900/60 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-sm text-slate-200">{line.raw_description}</div>
+        <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase ${badge}`}>{line.status}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-slate-500">Maps to:</span>
+        {line.matched_ingredient_id ? (
+          <span className="px-2 py-0.5 rounded-md bg-indigo-600/20 border border-indigo-700/40 text-indigo-300">
+            {matchedName || "(matched)"} {line.match_method === "fuzzy" && line.match_confidence ? `· ${Math.round(line.match_confidence * 100)}%` : ""}
+          </span>
+        ) : (
+          <span className="px-2 py-0.5 rounded-md bg-rose-600/20 border border-rose-700/40 text-rose-300">unmatched</span>
+        )}
+        <input
+          value={search}
+          onChange={(e) => doSearch(e.target.value)}
+          placeholder="search catalogue…"
+          className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-44"
+        />
+      </div>
+      {options.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {options.map((o) => (
+            <button key={o.id} disabled={busy} onClick={() => pick(o)}
+              className="px-2 py-0.5 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500">
+              {o.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-slate-500">Pack qty (base units)</label>
+        <input value={editQty} onChange={(e) => setEditQty(e.target.value)}
+          className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
+        <label className="text-slate-500">Pack £ ex-VAT</label>
+        <input value={editPrice} onChange={(e) => setEditPrice(e.target.value)}
+          className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
+        <button onClick={saveNumbers} disabled={busy}
+          className="px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500 disabled:opacity-40">save</button>
+        <span className="text-slate-600">line total £{line.line_total ?? "—"} {line.pack_unit_raw ? `· printed: ${line.pack_unit_raw}` : ""}</span>
+        <div className="ml-auto flex gap-1.5">
+          <button onClick={() => mark("confirmed")} disabled={busy || !ok}
+            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-[10px] font-semibold text-white">confirm</button>
+          <button onClick={() => mark("skipped")} disabled={busy}
+            className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-[10px] text-slate-200">skip</button>
+        </div>
+      </div>
+      {!ok && line.status !== "skipped" && (
+        <div className="text-[10px] text-amber-400">needs: ingredient match + pack qty + price before it can be confirmed</div>
+      )}
+    </div>
+  );
+}
+
+function InvoicesView({ currentUser }) {
+  const [invoices, setInvoices] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [entity, setEntity] = useState("kitchen");
+  const [uploading, setUploading] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [lines, setLines] = useState([]);
+  const [fileUrl, setFileUrl] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [overrideMismatch, setOverrideMismatch] = useState(false);
+
+  const refreshList = async () => {
+    try { setInvoices(await listInvoices()); } catch (e) { setError(e?.message || String(e)); }
+  };
+
+  useEffect(() => {
+    refreshList();
+    listStoresLite().then(setStores).catch(() => {});
+  }, []);
+
+  const openInvoice = async (id) => {
+    setBusy(true); setError(null); setNotice(null); setOverrideMismatch(false);
+    try {
+      const { invoice, lines: ls } = await getInvoiceWithLines(id);
+      setSelected(invoice); setLines(ls);
+      setFileUrl(invoice.image_path ? await getInvoiceFileUrl(invoice.image_path) : null);
+    } catch (e) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const reloadSelected = async () => { if (selected) await openInvoice(selected.id); };
+
+  const onUpload = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true); setError(null); setNotice(null);
+    try {
+      const inv = await uploadInvoiceFile(file, entity, currentUser.id);
+      setNotice("Uploaded — extracting with Claude vision…");
+      await refreshList();
+      await extractInvoice(inv.id);
+      setNotice("Extraction complete — opening for review.");
+      await refreshList();
+      await openInvoice(inv.id);
+    } catch (err) {
+      setError(err?.message || String(err));
+      await refreshList();
+    } finally { setUploading(false); }
+  };
+
+  const confirmedSum = lines
+    .filter((l) => l.status !== "skipped")
+    .reduce((s, l) => s + (Number(l.line_total) || 0), 0);
+  const totalsKnown = selected && selected.total_ex_vat !== null && selected.total_ex_vat !== undefined;
+  const mismatch = totalsKnown && Math.abs(confirmedSum - Number(selected.total_ex_vat)) > 1;
+  const confirmedCount = lines.filter((l) => l.status === "confirmed").length;
+  const canApprove =
+    selected && selected.status === "pending_review" && confirmedCount > 0 && (!mismatch || overrideMismatch);
+
+  const doApprove = async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await approveInvoiceRpc(selected.id, currentUser.id);
+      setNotice(`Approved — ${res?.prices_written ?? 0} price update(s) written, ${res?.alerts ?? 0} alert(s) raised.`);
+      await refreshList();
+      await openInvoice(selected.id);
+    } catch (e) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const doReject = async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      await rejectInvoice(selected.id, "rejected in review");
+      setNotice("Invoice rejected.");
+      await refreshList();
+      await openInvoice(selected.id);
+    } catch (e) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const statusChip = (s) =>
+    s === "approved" ? "bg-emerald-600/20 text-emerald-300 border-emerald-700/40" :
+    s === "pending_review" ? "bg-amber-600/20 text-amber-300 border-amber-700/40" :
+    s === "failed" || s === "rejected" ? "bg-rose-600/20 text-rose-300 border-rose-700/40" :
+    "bg-slate-700/30 text-slate-400 border-slate-700/40";
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Camera className="w-4 h-4 text-indigo-400" />
+          <h2 className="text-sm font-semibold text-slate-200">Scan an invoice</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={entity} onChange={(e) => setEntity(e.target.value)}
+            className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="kitchen">Central Kitchen</option>
+            {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <label className={`px-4 py-2 rounded-xl text-sm font-semibold text-white cursor-pointer ${uploading ? "bg-slate-700" : "bg-indigo-600 hover:bg-indigo-500"}`}>
+            {uploading ? "Working…" : "Photo / PDF"}
+            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={onUpload} disabled={uploading} />
+          </label>
+          <span className="text-[10px] text-slate-500">Original is stored; Claude extracts lines; nothing applies without your approval.</span>
+        </div>
+        {notice && <div className="text-xs text-emerald-400">{notice}</div>}
+        {error && <div className="text-xs text-rose-400">{error}</div>}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2 xl:col-span-1">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Invoices</h3>
+          {invoices.length === 0 && <div className="text-xs text-slate-600">None yet — scan the first one above.</div>}
+          {invoices.map((inv) => (
+            <button key={inv.id} onClick={() => openInvoice(inv.id)}
+              className={`w-full text-left px-3 py-2 rounded-xl border text-xs ${selected?.id === inv.id ? "border-indigo-500 bg-slate-800/60" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-200 truncate">{inv.supplier_name || "(extracting…)"} {inv.invoice_number ? `· ${inv.invoice_number}` : ""}</span>
+                <span className={`px-1.5 py-0.5 rounded border text-[9px] uppercase ${statusChip(inv.status)}`}>{inv.status}</span>
+              </div>
+              <div className="text-slate-500 mt-0.5">
+                {inv.entity === "kitchen" ? "Central Kitchen" : (stores.find((s) => s.id === inv.entity)?.name || inv.entity)}
+                {inv.invoice_date ? ` · ${inv.invoice_date}` : ""}{inv.total_ex_vat != null ? ` · £${inv.total_ex_vat}` : ""}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="xl:col-span-2 space-y-3">
+          {!selected && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Select an invoice to review.</div>}
+          {selected && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-indigo-400" />
+                  <span className="text-sm font-semibold text-slate-200">
+                    {selected.supplier_name || "Unknown supplier"} {selected.invoice_number ? `· ${selected.invoice_number}` : ""}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase ${statusChip(selected.status)}`}>{selected.status}</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  total ex-VAT £{selected.total_ex_vat ?? "—"} · VAT £{selected.total_vat ?? "—"} · lines sum £{confirmedSum.toFixed(2)}
+                </div>
+              </div>
+
+              {mismatch && (
+                <div className="bg-rose-950/40 border border-rose-800/50 rounded-xl p-3 text-xs text-rose-300 space-y-1">
+                  <div>Lines don't add up to the invoice total (difference £{Math.abs(confirmedSum - Number(selected.total_ex_vat)).toFixed(2)}). Fix lines or skip non-product charges.</div>
+                  <label className="flex items-center gap-2 text-rose-200">
+                    <input type="checkbox" checked={overrideMismatch} onChange={(e) => setOverrideMismatch(e.target.checked)} />
+                    I've reviewed the difference — approve anyway
+                  </label>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-2 min-h-[280px]">
+                  {fileUrl ? (
+                    selected.image_path?.toLowerCase().endsWith(".pdf")
+                      ? <iframe title="invoice" src={fileUrl} className="w-full h-[480px] rounded-lg" />
+                      : <img src={fileUrl} alt="invoice" className="w-full rounded-lg" />
+                  ) : (
+                    <div className="text-xs text-slate-600 p-4">No preview available.</div>
+                  )}
+                </div>
+                <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+                  {lines.length === 0 && <div className="text-xs text-slate-600">No lines extracted.</div>}
+                  {lines.map((l) => (
+                    <InvoiceLineRow key={l.id} line={l} domain={selected.entity === "kitchen" ? "kitchen" : "shop"} onChanged={reloadSelected} />
+                  ))}
+                </div>
+              </div>
+
+              {selected.status === "pending_review" && (
+                <div className="flex items-center justify-end gap-2">
+                  <button onClick={doReject} disabled={busy}
+                    className="px-4 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-sm text-slate-200">Reject</button>
+                  <button onClick={doApprove} disabled={busy || !canApprove}
+                    className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm font-semibold text-white">
+                    Approve · write {confirmedCount} price{confirmedCount === 1 ? "" : "s"}
+                  </button>
+                </div>
+              )}
+              {selected.status === "failed" && (
+                <div className="text-xs text-rose-400">Extraction failed: {selected.error_note || "unknown"} — re-upload or check the function logs.</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+// ===== end INVOICES_VIEW_V1 =====
+
 function AskDataView() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState(null);
@@ -23645,6 +23978,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"] },
       { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"] },
+      { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -23851,6 +24185,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "weekly-reports" && ["owner","hq_staff"].includes(currentUser.role) && <WeeklyReportsView/>}
             {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
+            {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
