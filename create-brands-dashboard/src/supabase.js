@@ -4209,7 +4209,7 @@ export async function uploadInvoiceFile(file, entity, userId) {
 export async function extractInvoice(invoiceId) {
   const headers = {};
   if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
-  const { data, error } = await supabase.functions.invoke("invoice-extract", {
+  const { data, error } = await supabase.functions.invoke("INVOICE_EXTRACT_V1", {
     body: { invoice_id: invoiceId },
     headers,
   });
