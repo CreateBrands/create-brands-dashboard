@@ -1275,32 +1275,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
 
   return (
     <div className="space-y-6">
-      {drill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900">
-              <h3 className="text-sm font-semibold text-white">{drill.title}</h3>
-              <button onClick={() => setDrill(null)} className="text-slate-500 hover:text-white text-lg leading-none">×</button>
-            </div>
-            <table className="w-full text-xs">
-              <thead><tr className="text-slate-500 border-b border-slate-800">
-                {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</th>)}
-              </tr></thead>
-              <tbody>
-                {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-6 text-center text-slate-600">No data for this period</td></tr>}
-                {drill.rows.map((r,ri) => (
-                  <tr key={ri} className="border-b border-slate-800/50">
-                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2 ${ci===0?"text-left text-slate-300":"text-right text-slate-400"}`}>{cell}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-              {drill.footer && <tfoot><tr className="border-t border-slate-700 font-semibold text-white">
-                {drill.footer.map((c,i) => <td key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</td>)}
-              </tr></tfoot>}
-            </table>
-          </div>
-        </div>
-      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {ISSUE_STATUSES.map(s => {
@@ -6442,6 +6417,32 @@ function DashboardView({ brands, stores, entries, issues }) {
 
   return (
     <div className="space-y-6">
+      {drill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900">
+              <h3 className="text-sm font-semibold text-white">{drill.title}</h3>
+              <button onClick={() => setDrill(null)} className="text-slate-500 hover:text-white text-lg leading-none">×</button>
+            </div>
+            <table className="w-full text-xs">
+              <thead><tr className="text-slate-500 border-b border-slate-800">
+                {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</th>)}
+              </tr></thead>
+              <tbody>
+                {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-6 text-center text-slate-600">No data for this period</td></tr>}
+                {drill.rows.map((r,ri) => (
+                  <tr key={ri} className="border-b border-slate-800/50">
+                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2 ${ci===0?"text-left text-slate-300":"text-right text-slate-400"}`}>{cell}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+              {drill.footer && <tfoot><tr className="border-t border-slate-700 font-semibold text-white">
+                {drill.footer.map((c,i) => <td key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</td>)}
+              </tr></tfoot>}
+            </table>
+          </div>
+        </div>
+      )}
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
