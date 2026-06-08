@@ -20362,6 +20362,20 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
   const streamRef      = useRef(null);
   const [cameraReady,  setCameraReady] = useState(false);
   const [cameraError,  setCameraError] = useState(false);
+  // KIOSK_LANDSCAPE_V2: true orientation detection (DPR-proof, unlike width breakpoints)
+  const [isLandscape, setIsLandscape] = useState(() =>
+    window.matchMedia("(orientation: landscape) and (min-width: 568px)").matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(orientation: landscape) and (min-width: 568px)");
+    const onChange = (e) => setIsLandscape(e.matches);
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  }, []);
 
   // Live clock
   useEffect(() => {
@@ -20712,10 +20726,10 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       <canvas ref={canvasRef} className="hidden"/>
 
       {/* KIOSK_LANDSCAPE_V1: two columns on wide/landscape screens */}
-      <div className="flex flex-col items-center lg:flex-row lg:items-center lg:justify-center lg:gap-14 w-full max-w-5xl">
+      <div className={isLandscape ? "flex flex-row items-center justify-center gap-12 w-full max-w-5xl" : "flex flex-col items-center w-full"}>
       <div className="flex flex-col items-center">
       {/* Header */}
-      <div className="mb-6 lg:mb-4 text-center">
+      <div className={isLandscape ? "mb-4 text-center" : "mb-6 text-center"}>
         <div className="flex items-center justify-center gap-3 mb-2">
           <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
             <span className="text-white font-black text-lg">CB</span>
@@ -20731,7 +20745,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         <video
           ref={videoRef}
           autoPlay playsInline muted
-          className={`w-32 h-32 lg:w-44 lg:h-44 rounded-full object-cover border-2 transition-all ${
+          className={`${isLandscape ? "w-44 h-44" : "w-32 h-32"} rounded-full object-cover border-2 transition-all ${
             cameraReady ? "border-emerald-500/40" : cameraError ? "border-red-500/40 opacity-30" : "border-slate-700/60 opacity-40"
           }`}
           style={{ transform: "scaleX(-1)" }}
@@ -20750,7 +20764,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       </div>
 
       {/* PIN display */}
-      <div className="w-full max-w-sm space-y-6 lg:space-y-4">
+      <div className={isLandscape ? "w-full max-w-sm space-y-3" : "w-full max-w-sm space-y-6"}>
         <div className="text-center">
           <div className="text-slate-600 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
 
@@ -20796,7 +20810,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
             return (
               <button key={key}
                 onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
-                className={`h-20 lg:h-14 rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
+                className={`${isLandscape ? "h-14" : "h-20"} rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
                   key === "⌫"
                     ? "bg-slate-800 text-slate-600 hover:bg-slate-700"
                     : "bg-slate-800 text-white hover:bg-slate-700"
@@ -20811,7 +20825,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         <div className="space-y-3">
           <button onClick={handleConfirm}
             disabled={!matched}
-            className={`w-full py-5 lg:py-4 rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
+            className={`w-full ${isLandscape ? "py-3" : "py-5"} rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
               submitting ? "bg-slate-700 text-slate-500 cursor-not-allowed" :
               matched
                 ? isClockedIn
