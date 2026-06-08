@@ -4375,4 +4375,15 @@ export async function fetchReviewsForDashboard({ from, to } = {}) {
   }));
 }
 
+
+// Lifetime per-store review stats (matches Google's all-time average + star counts).
+export async function fetchReviewStats() {
+  const { data, error } = await supabase.rpc("google_review_stats");
+  if (error) throw error;
+  return (data || []).map(r => ({
+    storeId: r.store_id, n: Number(r.n) || 0, avg: Number(r.avg_rating) || 0,
+    s5: Number(r.s5)||0, s4: Number(r.s4)||0, s3: Number(r.s3)||0, s2: Number(r.s2)||0, s1: Number(r.s1)||0,
+  }));
+}
+
 // ===== end GBP_REVIEWS_V1 =====

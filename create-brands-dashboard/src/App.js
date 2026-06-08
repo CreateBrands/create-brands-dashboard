@@ -88,6 +88,7 @@ import {
   postReviewReply,
   fetchSalesDaily,
   fetchReviewsForDashboard,
+  fetchReviewStats,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6314,16 +6315,40 @@ function DashboardView({ brands, stores, entries, issues }) {
     // eslint-disable-next-line
   }, [period.from, period.to]);
 
+  // Lifetime stats (matches Google's all-time average) — one RPC call.
+  const [reviewStats, setReviewStats] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => { try { const s = await fetchReviewStats(); if (!cancelled) setReviewStats(s); } catch { if (!cancelled) setReviewStats([]); } })();
+    return () => { cancelled = true; };
+  }, []);
+
   // scope reviews to selected stores
   const scopedReviews = useMemo(
     () => reviews90.filter(r => r.storeId && scopedStoreIds.has(r.storeId)),
     [reviews90, scopedStoreIds]
   );
-  // rolling 90-day average (stable headline)
+  // Lifetime average across selected stores (pooled) — matches what Google shows.
+  const scopedStats = useMemo(
+    () => reviewStats.filter(s => s.storeId && scopedStoreIds.has(s.storeId)),
+    [reviewStats, scopedStoreIds]
+  );
+  const totalReviews = useMemo(() => scopedStats.reduce((a, s) => a + s.n, 0), [scopedStats]);
   const ratingAvg = useMemo(() => {
-    if (scopedReviews.length === 0) return null;
-    return scopedReviews.reduce((a, r) => a + (r.stars || 0), 0) / scopedReviews.length;
-  }, [scopedReviews]);
+    if (totalReviews === 0) return null;
+    const weighted = scopedStats.reduce((a, s) => a + s.avg * s.n, 0);
+    return weighted / totalReviews;
+  }, [scopedStats, totalReviews]);
+  // Single store selected -> how many 5* reviews to reach the next 0.1 tier.
+  const fiveStarTarget = useMemo(() => {
+    if (storeId === "all" || scopedStats.length !== 1) return null;
+    const st = scopedStats[0];
+    if (!st.n || st.avg >= 4.95) return null;
+    const nextTier = Math.min(5, (Math.floor(st.avg * 10) + 1) / 10); // next 0.1 up
+    if (nextTier <= st.avg || nextTier >= 5) return null;
+    const x = Math.ceil((st.n * (nextTier - st.avg)) / (5 - nextTier));
+    return x > 0 ? { need: x, target: nextTier } : null;
+  }, [scopedStats, storeId]);
   // period-sliced distribution (5..1)
   const periodReviews = useMemo(
     () => scopedReviews.filter(r => r.createTime && r.createTime.slice(0,10) >= period.from && r.createTime.slice(0,10) <= period.to),
@@ -6546,7 +6571,7 @@ function DashboardView({ brands, stores, entries, issues }) {
             <div className="flex flex-col items-center justify-center px-2">
               <div className="text-3xl font-bold text-amber-400">{ratingAvg != null ? ratingAvg.toFixed(2) : "—"}</div>
               <div className="text-amber-400 text-sm">{"★".repeat(Math.round(ratingAvg||0))}{"☆".repeat(5-Math.round(ratingAvg||0))}</div>
-              <div className="text-[10px] text-slate-600 mt-1">{scopedReviews.length} reviews · 90d</div>
+              <div className="text-[10px] text-slate-600 mt-1">{totalReviews} reviews · all-time</div>
             </div>
             <div className="flex-1 space-y-1">
               {[5,4,3,2,1].map(star => (
@@ -6561,6 +6586,11 @@ function DashboardView({ brands, stores, entries, issues }) {
                 </button>
               ))}
               <div className="text-[10px] text-slate-600 pt-1">{period.label} · click a bar for reviews</div>
+              {fiveStarTarget && (
+                <div className="text-[11px] text-emerald-400 pt-1">
+                  +{fiveStarTarget.need} five-star reviews → {fiveStarTarget.target.toFixed(1)}★
+                </div>
+              )}
             </div>
           </div>
         </AnalysisBlock>
