@@ -4303,6 +4303,7 @@ export async function fetchGoogleReviews({ minStar, storeId } = {}) {
     reviewId: r.review_id, storeId: r.store_id, locationId: r.location_id,
     stars: r.star_rating, comment: r.comment || "", reviewer: r.reviewer_name || "Anonymous",
     reply: r.reply_comment || null, createTime: r.create_time, updateTime: r.update_time,
+    replyStatus: r.reply_status || "none", draftReply: r.draft_reply || null, replyError: r.reply_error || null,
   }));
 }
 
@@ -4319,4 +4320,25 @@ export async function getGoogleReviewsSyncState() {
   if (error) throw error;
   return data;
 }
+
+// ----- GBP_REPLY_V1: AI review replies -----
+export async function generateReviewReplies() {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-reply", { body: {}, headers });
+  if (error) throw error;
+  return data;
+}
+export async function postReviewReply(reviewId, comment, userId) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-reply", {
+    body: { post_review_id: reviewId, comment, user_id: userId }, headers,
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || "post failed");
+  return data;
+}
+// ----- end GBP_REPLY_V1 -----
+
 // ===== end GBP_REVIEWS_V1 =====

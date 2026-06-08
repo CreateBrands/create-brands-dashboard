@@ -84,6 +84,8 @@ import {
   fetchGoogleReviews,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
+  generateReviewReplies,
+  postReviewReply,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -3336,6 +3338,9 @@ function GoogleReviewsView({ stores = [], currentUser }) {
   const [filter, setFilter] = useState("all");   // all | low (<=2)
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [postingId, setPostingId] = useState(null);
+  const [edits, setEdits] = useState({});
   const [state, setState] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -3359,6 +3364,22 @@ function GoogleReviewsView({ stores = [], currentUser }) {
     finally { setSyncing(false); }
   };
 
+  const runReplies = async () => {
+    setDrafting(true); setErr(null);
+    try { await generateReviewReplies(); await load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setDrafting(false); }
+  };
+
+  const postDraft = async (r) => {
+    const text = (edits[r.reviewId] ?? r.draftReply ?? "").trim();
+    if (!text) return;
+    setPostingId(r.reviewId); setErr(null);
+    try { await postReviewReply(r.reviewId, text, currentUser.id); await load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setPostingId(null); }
+  };
+
   const avg = reviews.length ? (reviews.reduce((s, r) => s + (r.stars || 0), 0) / reviews.length) : 0;
 
   return (
@@ -3378,6 +3399,10 @@ function GoogleReviewsView({ stores = [], currentUser }) {
           <button onClick={runSync} disabled={syncing}
             className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
             {syncing ? "Syncing…" : "Sync now"}
+          </button>
+          <button onClick={runReplies} disabled={drafting}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+            {drafting ? "Drafting…" : "Generate replies"}
           </button>
         </div>
       </div>
@@ -3413,7 +3438,24 @@ function GoogleReviewsView({ stores = [], currentUser }) {
               </span>
             </div>
             {r.comment && <div className="text-xs text-slate-300 mt-1.5">{r.comment}</div>}
-            {r.reply && <div className="text-[11px] text-slate-500 mt-1.5 border-l-2 border-slate-700 pl-2">Your reply: {r.reply}</div>}
+            {r.reply && <div className="text-[11px] text-emerald-400/80 mt-1.5 border-l-2 border-emerald-700/50 pl-2">Reply posted: {r.reply}</div>}
+            {!r.reply && r.replyStatus === "draft" && r.draftReply && (
+              <div className="mt-2 bg-slate-950/60 border border-indigo-900/40 rounded-lg p-2 space-y-1.5">
+                <div className="text-[10px] text-indigo-300 uppercase tracking-wide font-semibold">AI draft — review & post</div>
+                <textarea
+                  value={edits[r.reviewId] ?? r.draftReply}
+                  onChange={e => setEdits(prev => ({ ...prev, [r.reviewId]: e.target.value }))}
+                  rows={3}
+                  className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
+                <div className="flex items-center gap-2">
+                  <button onClick={() => postDraft(r)} disabled={postingId === r.reviewId}
+                    className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-[11px] font-semibold text-white">
+                    {postingId === r.reviewId ? "Posting…" : "Post reply"}
+                  </button>
+                  {r.replyError && <span className="text-[10px] text-rose-400">last error: {r.replyError}</span>}
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
