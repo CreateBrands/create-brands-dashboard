@@ -6344,8 +6344,12 @@ function DashboardView({ brands, stores, entries, issues }) {
     if (storeId === "all" || scopedStats.length !== 1) return null;
     const st = scopedStats[0];
     if (!st.n || st.avg >= 4.95) return null;
-    const nextTier = Math.min(5, (Math.floor(st.avg * 10) + 1) / 10); // next 0.1 up
-    if (nextTier <= st.avg || nextTier >= 5) return null;
+    // Next tier = next 0.1 ABOVE the displayed (rounded-to-1dp) rating.
+    // e.g. 4.60 shown -> aim for 4.7; 4.62 -> aim for 4.7.
+    const shown = Math.round(st.avg * 10) / 10;          // 4.6
+    const nextTier = Math.round((shown + 0.1) * 10) / 10; // 4.7 (avoids fp drift)
+    if (nextTier >= 5) return null;
+    // reviews x of 5* needed so (avg*n + 5x)/(n+x) >= nextTier
     const x = Math.ceil((st.n * (nextTier - st.avg)) / (5 - nextTier));
     return x > 0 ? { need: x, target: nextTier } : null;
   }, [scopedStats, storeId]);
