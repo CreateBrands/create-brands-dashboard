@@ -349,6 +349,14 @@ function sumStoreTargetsForPeriod(storeKpiTargets, from, to) {
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const fmtCurrency = v => v == null ? "—" : `£${Math.round(v).toLocaleString()}`;
+// Decimal hours -> "Xh YYm" for consistent time display across the app.
+const fmtHM = (hrs) => {
+  if (hrs == null || isNaN(hrs)) return "—";
+  if (hrs <= 0) return "0m";
+  const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
+  if (m === 60) return `${h+1}h 00m`;
+  return h > 0 ? `${h}h ${String(m).padStart(2,"0")}m` : `${m}m`;
+};
 const fmtPct = v => v == null ? "—" : `${v.toFixed(1)}%`;
 const fmtSPLH = v => v == null ? "—" : `£${v.toFixed(2)}`;
 const fmtNum = v => v == null ? "—" : Math.round(v).toLocaleString();
@@ -21333,7 +21341,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 {(successHasOT || successUnsched) && (
                   <div className="pt-3 border-t border-white/10">
                     <div className="text-red-300 font-bold text-sm mb-1">
-                      ⚠ {successUnsched ? "Unscheduled shift" : `${lastAction.overtimeHrs.toFixed(2)}h extra time`}
+                      ⚠ {successUnsched ? "Unscheduled shift" : `${fmtHM(lastAction.overtimeHrs)} extra time`}
                     </div>
                     <div className="text-slate-700 text-xs">
                       {successUnsched
@@ -21567,7 +21575,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     }
     const s = summary[r.employeeId];
     if (r.hoursWorked) { s.totalHours += r.hoursWorked; s.days += 1; }
-    if (!r.approved && r.status === "closed") s.pendingApproval += 1;
+    if (!r.approved && r.status === "closed" && r.overtimeHrs > 0) s.pendingApproval += 1;
     if (r.overtimeHrs > 0 && !r.overtimeApproved) s.pendingOT += 1;
     const approvedOT = (r.overtimeApproved && r.overtimeHrs > 0) ? r.overtimeHrs : 0;
     s.approvedOT += approvedOT;
@@ -21673,13 +21681,14 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
             const member = opsTeam.find(m => m.id === r.employeeId);
             const hasOT  = r.overtimeHrs > 0;
-            const needsApproval = r.status === "closed" && !r.approved;
+            // Approval is only required for punches WITH overtime (the thing a
+            // manager needs to review). Clean punches within schedule are fine as-is.
+            const needsApproval = r.status === "closed" && !r.approved && hasOT;
             const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
             const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
             // A record is "settled" when there's nothing left to action:
-            //   - punch is approved AND
-            //   - either no overtime OR overtime has been approved/rejected
-            const isSettled = r.approved && (!hasOT || r.overtimeApproved || isRejected) && r.status !== "open";
+            //   - no overtime (clean punch, auto-fine) OR overtime approved/rejected
+            const isSettled = (!hasOT || r.overtimeApproved || isRejected) && r.status !== "open";
             const isExpanded = expanded.has(r.id);
 
             // ── Collapsed view for settled records ──
@@ -21825,7 +21834,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-bold text-red-400 mb-1">
-                          ⏱ {r.overtimeHrs.toFixed(2)}h overtime
+                          ⏱ {fmtHM(r.overtimeHrs)} overtime
                           {r.overtimeApproved && <span className="text-emerald-400 ml-2">✓ Approved by {r.overtimeApprovedBy}</span>}
                           {r.overtimeApproved === false && r.overtimeRejectedReason && <span className="text-red-400 ml-2">✗ Rejected</span>}
                         </div>
@@ -22022,7 +22031,7 @@ function RejectOTModal({ record, onReject, onClose }) {
       <div className="space-y-3">
         <div className="bg-slate-950 rounded-xl p-3 text-xs text-slate-600">
           <div className="font-semibold text-slate-700">{record.employeeName}</div>
-          <div>{record.overtimeHrs?.toFixed(2)}h overtime — Employee reason: "{record.overtimeReason}"</div>
+          <div>{fmtHM(record.overtimeHrs)} overtime — Employee reason: "{record.overtimeReason}"</div>
         </div>
         <div><label className={labelCls}>Reason for rejection</label>
           <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={3}
@@ -22168,7 +22177,7 @@ function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) 
         </div>
         {hoursWorked !== null && (
           <div className="text-xs text-slate-600 px-1">
-            Hours: <span className="text-white font-bold">{hoursWorked.toFixed(2)}h</span>
+            Hours: <span className="text-white font-bold">{fmtHM(hoursWorked)}</span>
             {member?.hourlyRate > 0 && <span className="ml-3">Pay: <span className="text-emerald-400 font-bold">£{(hoursWorked*member.hourlyRate).toFixed(2)}</span></span>}
           </div>
         )}
@@ -22369,7 +22378,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                       rejected ? "text-slate-600" :
                       "text-red-400"
                     }`}>
-                      ⏱ {r.isUnscheduled ? "Unscheduled shift" : `${r.overtimeHrs.toFixed(2)}h extra time`}
+                      ⏱ {r.isUnscheduled ? "Unscheduled shift" : `${fmtHM(r.overtimeHrs)} extra time`}
                     </span>
                     {r.overtimeApproved && <Badge label={`✓ Approved`} color="emerald"/>}
                     {awaitingApproval && <Badge label="Awaiting manager approval" color="amber"/>}
