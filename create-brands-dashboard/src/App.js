@@ -2637,12 +2637,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
   };
 
   const NavBar = () => (
-    <nav className="flex items-center gap-1 overflow-x-auto px-3 py-2 bg-slate-900 border-b border-slate-800/60">
+    <nav className="MOBILE_NAV_WRAP_V1 flex flex-wrap sm:flex-nowrap items-center justify-center sm:justify-start gap-1.5 sm:overflow-x-auto px-3 py-2 bg-slate-900 border-b border-slate-800/60">
       {NAV.map(n => {
         const NIcon = n.icon; const active = activeView === n.key;
         return (
           <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-800 hover:text-white"}`}>
+            className={`flex items-center gap-1.5 px-3.5 py-2.5 sm:py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-800 hover:text-white"}`}>
             <NIcon size={13}/>{n.label}
             {n.badge && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
           </button>
