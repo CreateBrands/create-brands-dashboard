@@ -1779,7 +1779,8 @@ export async function fetchStoreSalesDetailed({ storeId, from, to, brandId = "ch
   const { data, error } = await supabase
     .from("flipdish_sales")
     .select("sale_id, channel, amount_total, amount_subtotal, amount_tax, amount_discount, business_date, sale_time, store_id, payment_method, is_cancelled, is_fully_refunded, sale_items")
-    .eq("brand_id", brandId)
+    // FIX_BRAND_SCOPE_V1: store_id is globally unique; the hardcoded brand_id
+    // filter ("chocoberry") silently blanked every non-Chocoberry store (e.g. Tove).
     .eq("store_id", storeId)
     .gte("business_date", toIsoDate(from))
     .lte("business_date", toIsoDate(to))
