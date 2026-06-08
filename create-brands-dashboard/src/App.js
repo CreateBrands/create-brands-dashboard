@@ -6459,6 +6459,264 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
 }
 
 // ─── EOD Form ─────────────────────────────────────────────────────────────────
+// ===== EOD_AMEND_RECON_V1: amend EOD entries (logged trail) + manager<>HQ reconciliation thread =====
+const EOD_AMEND_FIELDS = [
+  { key: "netSales",     label: "Net sales",      money: true },
+  { key: "cardRevenue",  label: "Card revenue",   money: true },
+  { key: "cashExpected", label: "Cash expected",  money: true },
+  { key: "physicalCash", label: "Physical cash",  money: true },
+  { key: "openingFloat", label: "Opening float",  money: true },
+  { key: "closingFloat", label: "Closing float",  money: true },
+  { key: "laborCost",    label: "Labour cost",    money: true },
+  { key: "cogsCost",     label: "COGS cost",      money: true },
+  { key: "totalOrders",  label: "Total orders",   money: false },
+  { key: "totalHours",   label: "Total hours",    money: false },
+];
+
+function EodReconBadge({ status }) {
+  const map = {
+    open:     "bg-slate-700/40 text-slate-300 border-slate-600/50",
+    queried:  "bg-amber-600/20 text-amber-300 border-amber-700/50",
+    resolved: "bg-emerald-600/20 text-emerald-300 border-emerald-700/50",
+  };
+  const label = { open: "Open", queried: "Queried", resolved: "Resolved" }[status] || status;
+  return <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase font-semibold ${map[status] || map.open}`}>{label}</span>;
+}
+
+function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [], currentUser, onUpdateEntry }) {
+  const isHq = isHqOrAbove(currentUser.role);
+  const myStoreIds = currentUser.storeIds || [];
+  const fmtMoney = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || null;
+  const brandName = (id) => brands.find(b => b.id === id)?.name || id;
+
+  const inScope = (e) => {
+    if (isHq) return brands.some(b => b.id === e.brandId);
+    if (e.storeId) return myStoreIds.includes(e.storeId);
+    return (currentUser.brandIds || []).includes(e.brandId); // legacy entries w/o storeId
+  };
+
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [selId, setSelId] = useState(null);
+
+  const visible = useMemo(() => {
+    return (entries || [])
+      .filter(inScope)
+      .filter(e => statusFilter === "all" ? true : (e.reconStatus || "open") === statusFilter)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [entries, statusFilter, currentUser]);
+
+  const selected = useMemo(() => visible.find(e => e.id === selId) || null, [visible, selId]);
+
+  // Amend form state
+  const [draft, setDraft] = useState({});
+  const [reason, setReason] = useState("");
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (!selected) return;
+    const d = {};
+    EOD_AMEND_FIELDS.forEach(f => { d[f.key] = selected[f.key] ?? ""; });
+    d.notes = selected.notes ?? "";
+    setDraft(d); setReason(""); setComment(""); setNotice("");
+  }, [selId]);
+
+  const canAmend = selected && (isHq || (selected.storeId ? myStoreIds.includes(selected.storeId) : (currentUser.brandIds || []).includes(selected.brandId)));
+
+  const changedFields = useMemo(() => {
+    if (!selected) return [];
+    const out = [];
+    EOD_AMEND_FIELDS.forEach(f => {
+      const before = selected[f.key] ?? "";
+      const after = draft[f.key] ?? "";
+      if (String(before) !== String(after)) out.push({ ...f, from: before, to: after });
+    });
+    if ((selected.notes ?? "") !== (draft.notes ?? "")) out.push({ key: "notes", label: "Notes", from: selected.notes ?? "", to: draft.notes ?? "" });
+    return out;
+  }, [selected, draft]);
+
+  const saveAmendment = async () => {
+    if (!selected || changedFields.length === 0) return;
+    if (!reason.trim()) { setNotice("A reason is required to amend an entry."); return; }
+    setBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const amendmentRecords = changedFields.map(c => ({
+        at: now, by: currentUser.id, byName: currentUser.name, role: currentUser.role,
+        field: c.key, label: c.label, from: c.from, to: c.to, reason: reason.trim(),
+      }));
+      const updated = { ...selected };
+      changedFields.forEach(c => {
+        updated[c.key] = c.key === "notes" ? c.to : (c.to === "" ? null : Number(c.to));
+      });
+      // recompute derived values
+      const ns = Number(updated.netSales) || 0, ord = Number(updated.totalOrders) || 0;
+      updated.cashVariance = (Number(updated.physicalCash) || 0) - (Number(updated.cashExpected) || 0);
+      updated.atv = ord > 0 ? Math.round((ns / ord) * 100) / 100 : 0;
+      updated.amendments = [...(selected.amendments || []), ...amendmentRecords];
+      await onUpdateEntry(updated);
+      setNotice("Amendment saved and logged."); setReason("");
+    } catch (e) { setNotice(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const postComment = async (newStatus) => {
+    if (!selected) return;
+    const text = comment.trim();
+    if (!text && !newStatus) return;
+    setBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const updated = { ...selected };
+      if (text) {
+        updated.reconciliation = [...(selected.reconciliation || []), {
+          at: now, by: currentUser.id, byName: currentUser.name, role: currentUser.role, text,
+        }];
+      }
+      if (newStatus) updated.reconStatus = newStatus;
+      await onUpdateEntry(updated);
+      setComment("");
+    } catch (e) { setNotice(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <ClipboardList className="w-4 h-4 text-indigo-400" />
+          <h2 className="text-sm font-semibold text-slate-200">EOD Reconciliation</h2>
+        </div>
+        <div className="flex gap-1.5">
+          {["all", "open", "queried", "resolved"].map(f => (
+            <button key={f} onClick={() => setStatusFilter(f)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize ${statusFilter === f ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"}`}>
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="xl:col-span-1 space-y-2">
+          {visible.length === 0 && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-600">No EOD entries in scope.</div>}
+          {visible.map(e => (
+            <button key={e.id} onClick={() => setSelId(e.id)}
+              className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs ${selId === e.id ? "border-indigo-500 bg-slate-800/60" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-200 font-semibold">{e.date}</span>
+                <EodReconBadge status={e.reconStatus || "open"} />
+              </div>
+              <div className="text-slate-500 mt-0.5">
+                {(e.storeId && storeName(e.storeId)) || brandName(e.brandId)} · {e.manager || "—"} · {fmtMoney(e.netSales)}
+                {(e.amendments?.length > 0) && <span className="text-amber-500"> · {e.amendments.length} amend</span>}
+                {(e.reconciliation?.length > 0) && <span className="text-indigo-400"> · {e.reconciliation.length} note</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="xl:col-span-2 space-y-3">
+          {!selected && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Select an entry to review, amend, or reconcile.</div>}
+          {selected && (
+            <>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="text-sm font-semibold text-slate-200">
+                    {selected.date} · {(selected.storeId && storeName(selected.storeId)) || brandName(selected.brandId)} · {selected.manager}
+                  </div>
+                  <EodReconBadge status={selected.reconStatus || "open"} />
+                </div>
+
+                {/* Amend grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {EOD_AMEND_FIELDS.map(f => (
+                    <div key={f.key}>
+                      <label className="text-[10px] text-slate-500 uppercase tracking-wide">{f.label}</label>
+                      <input value={draft[f.key] ?? ""} disabled={!canAmend}
+                        onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))}
+                        className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50" />
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase tracking-wide">Notes</label>
+                  <textarea value={draft.notes ?? ""} disabled={!canAmend} rows={2}
+                    onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+                    className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50" />
+                </div>
+
+                {canAmend && changedFields.length > 0 && (
+                  <div className="space-y-2 bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
+                    <div className="text-[11px] text-amber-300 font-semibold">{changedFields.length} change(s) pending — a reason is required:</div>
+                    <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Why is this being amended?"
+                      className="w-full px-2 py-1.5 bg-slate-950 border border-amber-900/50 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-amber-500" />
+                    <button onClick={saveAmendment} disabled={busy}
+                      className="px-4 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-xs font-semibold text-white">
+                      Save amendment ({changedFields.length})
+                    </button>
+                  </div>
+                )}
+                {notice && <div className="text-xs text-slate-400">{notice}</div>}
+                {!canAmend && <div className="text-[11px] text-slate-600">You can view this entry but only its store's manager or HQ can amend it.</div>}
+              </div>
+
+              {/* Amendment history */}
+              {(selected.amendments?.length > 0) && (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+                  <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Amendment history</div>
+                  {[...selected.amendments].reverse().map((a, i) => (
+                    <div key={i} className="text-xs border-l-2 border-amber-700/50 pl-3 py-1">
+                      <span className="text-slate-300 font-semibold">{a.label}</span>
+                      <span className="text-slate-500"> {String(a.from)} → </span><span className="text-amber-300">{String(a.to)}</span>
+                      <div className="text-[10px] text-slate-600">{a.byName} · {new Date(a.at).toLocaleString("en-GB")} — {a.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Reconciliation thread */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Reconciliation</div>
+                  <div className="flex gap-1.5">
+                    {isHq && (selected.reconStatus !== "queried") && <button onClick={() => postComment("queried")} disabled={busy} className="px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-[10px] font-semibold text-white">Flag for explanation</button>}
+                    {isHq && (selected.reconStatus !== "resolved") && <button onClick={() => postComment("resolved")} disabled={busy} className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-[10px] font-semibold text-white">Mark resolved</button>}
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {(selected.reconciliation || []).length === 0 && <div className="text-[11px] text-slate-600">No reconciliation notes yet.</div>}
+                  {(selected.reconciliation || []).map((c, i) => {
+                    const mine = c.by === currentUser.id;
+                    const hqMsg = c.role === "owner" || c.role === "hq_staff";
+                    return (
+                      <div key={i} className={`rounded-xl px-3 py-2 text-xs ${hqMsg ? "bg-indigo-950/40 border border-indigo-900/40" : "bg-slate-800/50 border border-slate-700/40"}`}>
+                        <div className="text-slate-200">{c.text}</div>
+                        <div className="text-[10px] text-slate-600 mt-0.5">{c.byName}{hqMsg ? " · HQ" : " · Manager"} · {new Date(c.at).toLocaleString("en-GB")}{mine ? " · you" : ""}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <input value={comment} onChange={e => setComment(e.target.value)}
+                    placeholder={isHq ? "Ask for an explanation or reply…" : "Reply with your explanation…"}
+                    onKeyDown={e => { if (e.key === "Enter") postComment(); }}
+                    className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500" />
+                  <button onClick={() => postComment()} disabled={busy || !comment.trim()}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-semibold text-white">Send</button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+// ===== end EOD_AMEND_RECON_V1 =====
+
 function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const { user } = useAuth();
 
@@ -24059,6 +24317,7 @@ export default function App() {
       { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
       { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
       { key: "eod",            label: "EOD Report",      icon: FileText },
+      { key: "eod-recon",      label: "EOD Reconciliation", icon: ClipboardList, roles: ["owner", "hq_staff", "manager"] },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
@@ -24176,6 +24435,7 @@ export default function App() {
             {effectiveActiveView === "store-analytics" && currentUser.role === "manager" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={addEntry}/>}
+            {effectiveActiveView === "eod-recon"      && ["owner","hq_staff","manager"].includes(currentUser.role) && <EodReconView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
