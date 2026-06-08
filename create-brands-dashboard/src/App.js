@@ -18253,13 +18253,28 @@ function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose })
   const isOwner   = isHqOrAbove(currentUser.role);
   const myBrands  = brands.filter(b => currentUser.brandIds.includes(b.id));
 
+  // CHAT_STORE_SCOPE_V1: scope contacts by shared STORE, not brand.
+  //  - HQ/owner: everyone (myStoreIds null => sharesStore always true).
+  //  - Managers: their assigned stores (currentUser.storeIds).
+  //  - Staff: their ops record's stores (session carries no storeIds directly).
+  // Result: staff see only their own store's colleagues + that store's managers,
+  // while HQ/owner remain reachable by anyone (escalation path). This also fixes
+  // managers being invisible to staff (the old brand_ids overlap failed when a
+  // manager's brand_ids array was empty; storeIds is reliably populated).
+  const myMember = (opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+  const myStoreIds = isOwner ? null : (currentUser.storeIds?.length ? currentUser.storeIds : (myMember?.storeIds || []));
+  const sharesStore = (storeIds) => {
+    if (myStoreIds == null) return true;
+    return (storeIds || []).some(id => myStoreIds.includes(id));
+  };
+
   // All people I can message
   const people = [
     ...users
-      .filter(u => u.id !== currentUser.id && (isOwner || u.brandIds?.some(bid => currentUser.brandIds.includes(bid))))
+      .filter(u => u.id !== currentUser.id && (isHqOrAbove(u.role) || sharesStore(u.storeIds)))
       .map(u => ({ id: u.id, name: u.name, sub: u.role, type: "user" })),
     ...opsTeam
-      .filter(m => isOwner || currentUser.brandIds.includes(m.brandId))
+      .filter(m => m.id !== (currentUser.opsTeamMemberId || currentUser.id) && !m.archivedAt && sharesStore(m.storeIds))
       .map(m => {
         const b = brands.find(x => x.id === m.brandId);
         return { id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), sub: `${m.role}${b ? " · " + b.name : ""}`, type: "ops" };
