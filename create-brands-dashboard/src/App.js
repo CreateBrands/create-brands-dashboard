@@ -21493,6 +21493,26 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
     return `${h}h ${String(m).padStart(2,"0")}m`;
   };
+  // Graced punch in/out times (PUNCH_GRACE_V1) — returns the ISO strings to DISPLAY.
+  // Actual r.punchIn/r.punchOut stay untouched in storage (audit trail preserved).
+  const gracedPunchTimes = (r) => {
+    if (!r.punchIn) return { inIso: r.punchIn, outIso: r.punchOut };
+    let pIn = new Date(r.punchIn).getTime();
+    let pOut = r.punchOut ? new Date(r.punchOut).getTime() : null;
+    if (r.scheduledStart && r.scheduledEnd) {
+      const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
+      let ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
+      let seMs = new Date(r.date + "T" + r.scheduledEnd   + ":00").getTime();
+      if (seMs <= ssMs) seMs += 86400000;
+      const earlyMs = ssMs - pIn;
+      if (earlyMs > 0 && earlyMs <= GRACE_IN_MS) pIn = ssMs;
+      if (pOut != null) {
+        const lateMs = pOut - seMs;
+        if (lateMs > 0 && lateMs <= GRACE_OUT_MS) pOut = seMs;
+      }
+    }
+    return { inIso: new Date(pIn).toISOString(), outIso: pOut != null ? new Date(pOut).toISOString() : null };
+  };
   // Graced worked hours for DISPLAY — recomputes from punch + schedule so the
   // screen shows graced hours regardless of what's stored (PUNCH_GRACE_V1).
   // in <=15min early -> round up to start; out <=14min late -> round down to end.
@@ -21576,8 +21596,10 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const scheduledEnd   = r.scheduledEnd   || sched?.endTime   || null;
     // Always recalculate fresh — DB value may be stale if schedule changed
     const overtimeHrs    = calcOvertimeHours({ ...r, scheduledStart, scheduledEnd });
+    const gracedHours    = calcGracedHours({ ...r, scheduledStart, scheduledEnd });
+    const gt             = gracedPunchTimes({ ...r, scheduledStart, scheduledEnd });
     const isUnscheduled  = !sched && !r.scheduledStart;
-    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, isUnscheduled };
+    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, gracedHours, gracedIn: gt.inIso, gracedOut: gt.outIso, isUnscheduled };
   });
 
   // Summary per employee
@@ -21823,7 +21845,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                           {!r.photoUrlIn && r.punchIn && (
                             <span className="text-xs text-amber-500/60" title="No photo captured">⚠</span>
                           )}
-                          <span className="text-white font-mono font-bold">{fmtTime(r.punchIn)}</span>
+                          <span className="text-white font-mono font-bold">{fmtTime(r.gracedIn ?? r.punchIn)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-xs">
@@ -21836,7 +21858,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                           {!r.photoUrlOut && r.punchOut && (
                             <span className="text-xs text-amber-500/60" title="No photo captured">⚠</span>
                           )}
-                          <span className={`font-mono font-bold ${r.punchOut ? "text-white" : "text-amber-400"}`}>{r.punchOut ? fmtTime(r.punchOut) : "Still in"}</span>
+                          <span className={`font-mono font-bold ${r.punchOut ? "text-white" : "text-amber-400"}`}>{r.punchOut ? fmtTime(r.gracedOut ?? r.punchOut) : "Still in"}</span>
                         </div>
                       </div>
                       <div className="flex justify-between text-xs">
