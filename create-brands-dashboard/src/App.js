@@ -21493,6 +21493,23 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
     return `${h}h ${String(m).padStart(2,"0")}m`;
   };
+  // Graced worked hours for DISPLAY — recomputes from punch + schedule so the
+  // screen shows graced hours regardless of what's stored (PUNCH_GRACE_V1).
+  // in <=15min early -> round up to start; out <=14min late -> round down to end.
+  const calcGracedHours = (r) => {
+    if (!r.punchIn || !r.punchOut) return r.hoursWorked;
+    let pIn = new Date(r.punchIn).getTime();
+    let pOut = new Date(r.punchOut).getTime();
+    if (r.scheduledStart && r.scheduledEnd) {
+      const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
+      let ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
+      let seMs = new Date(r.date + "T" + r.scheduledEnd   + ":00").getTime();
+      if (seMs <= ssMs) seMs += 86400000;
+      const earlyMs = ssMs - pIn;  if (earlyMs > 0 && earlyMs <= GRACE_IN_MS)  pIn  = ssMs;
+      const lateMs  = pOut - seMs; if (lateMs  > 0 && lateMs  <= GRACE_OUT_MS) pOut = seMs;
+    }
+    return Math.round(((pOut - pIn) / 3600000) * 100) / 100;
+  };
   const calcOvertimeHours = (r) => {
     if (!r.punchIn || !r.punchOut) return 0;
     if (!r.scheduledStart || !r.scheduledEnd) return 0;
@@ -21575,7 +21592,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     }
     const s = summary[r.employeeId];
     if (r.hoursWorked) { s.totalHours += r.hoursWorked; s.days += 1; }
-    if (!r.approved && r.status === "closed" && r.overtimeHrs > 0) s.pendingApproval += 1;
+    if (!r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)) s.pendingApproval += 1;
     if (r.overtimeHrs > 0 && !r.overtimeApproved) s.pendingOT += 1;
     const approvedOT = (r.overtimeApproved && r.overtimeHrs > 0) ? r.overtimeHrs : 0;
     s.approvedOT += approvedOT;
@@ -21681,14 +21698,16 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
             const member = opsTeam.find(m => m.id === r.employeeId);
             const hasOT  = r.overtimeHrs > 0;
-            // Approval is only required for punches WITH overtime (the thing a
-            // manager needs to review). Clean punches within schedule are fine as-is.
-            const needsApproval = r.status === "closed" && !r.approved && hasOT;
+            // Approval required for punches WITH overtime OR unscheduled shifts
+            // (both need a manager's eye). Clean scheduled punches are auto-fine.
+            const needsApproval = r.status === "closed" && !r.approved && (hasOT || r.isUnscheduled);
             const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
             const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
-            // A record is "settled" when there's nothing left to action:
-            //   - no overtime (clean punch, auto-fine) OR overtime approved/rejected
-            const isSettled = (!hasOT || r.overtimeApproved || isRejected) && r.status !== "open";
+            // Settled when nothing's left to action: no OT (or OT resolved) AND
+            // not an unapproved unscheduled shift.
+            const otResolved = !hasOT || r.overtimeApproved || isRejected;
+            const unschedResolved = !r.isUnscheduled || r.approved;
+            const isSettled = otResolved && unschedResolved && r.status !== "open";
             const isExpanded = expanded.has(r.id);
 
             // ── Collapsed view for settled records ──
@@ -21709,7 +21728,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
                     {r.grossPay && <div className="text-xs text-emerald-400 tabular-nums">£{r.grossPay.toFixed(2)}</div>}
                   </div>
                   {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">OT ✓</span>}
@@ -21822,7 +21841,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                       </div>
                       <div className="flex justify-between text-xs">
                         <span className="text-slate-500">Hours</span>
-                        <span className="text-white font-bold">{fmtDur(r.hoursWorked)}</span>
+                        <span className="text-white font-bold">{fmtDur(r.gracedHours ?? r.hoursWorked)}</span>
                       </div>
                     </div>
                   </div>
@@ -21870,7 +21889,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                 {/* Unscheduled shift */}
                 {r.isUnscheduled && r.status === "closed" && (
                   <div className="bg-red-950/20 border border-red-500/20 rounded-xl p-3">
-                    <div className="text-xs font-bold text-red-400 mb-0.5">⚠ Unscheduled shift — {fmtDur(r.hoursWorked)}</div>
+                    <div className="text-xs font-bold text-red-400 mb-0.5">⚠ Unscheduled shift — {fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
                     <div className="text-xs text-slate-500">No matching published schedule found for this date</div>
                   </div>
                 )}
@@ -22234,18 +22253,23 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     // Overtime = max of (actual hours - scheduled hours) OR (hours worked outside scheduled window)
     // This catches both "stayed late" AND "came in completely outside scheduled time"
     let overtimeHrs = 0;
+    let gracedHours = r.hoursWorked;
     if (r.punchIn && r.punchOut && scheduledStart && scheduledEnd) {
-      const actualMs = new Date(r.punchOut) - new Date(r.punchIn);
-      const actualHours = actualMs / 3600000;
       const ss = new Date(r.date+"T"+scheduledStart+":00");
       const se = new Date(r.date+"T"+scheduledEnd  +":00");
-      const schedHours = se <= ss ? (se-ss+86400000)/3600000 : (se-ss)/3600000;
-      const overByTotal = Math.max(0, actualHours - schedHours);
-      // Out-of-window: time worked outside the scheduled window
-      const pIn = new Date(r.punchIn).getTime();
-      const pOut = new Date(r.punchOut).getTime();
       let ssMs = ss.getTime(), seMs = se.getTime();
       if (seMs <= ssMs) seMs += 86400000;
+      // PUNCH_GRACE_V1: in <=15min early -> start; out <=14min late -> end.
+      const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
+      let pIn = new Date(r.punchIn).getTime();
+      let pOut = new Date(r.punchOut).getTime();
+      const earlyMs = ssMs - pIn;  if (earlyMs > 0 && earlyMs <= GRACE_IN_MS)  pIn  = ssMs;
+      const lateMs  = pOut - seMs; if (lateMs  > 0 && lateMs  <= GRACE_OUT_MS) pOut = seMs;
+      const actualMs = pOut - pIn;
+      const actualHours = actualMs / 3600000;
+      gracedHours = Math.round(actualHours * 100) / 100;
+      const schedHours = (seMs - ssMs) / 3600000;
+      const overByTotal = Math.max(0, actualHours - schedHours);
       const overlapStart = Math.max(pIn, ssMs);
       const overlapEnd   = Math.min(pOut, seMs);
       const overlapMs    = Math.max(0, overlapEnd - overlapStart);
@@ -22253,7 +22277,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
       overtimeHrs = Math.round(Math.max(overByTotal, outOfWindow) * 100) / 100;
     }
     const isUnscheduled = !sched && !r.scheduledStart;
-    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, isUnscheduled };
+    return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, gracedHours, isUnscheduled };
   });
 
   const totalHours = enriched.reduce((a,r) => a + (r.hoursWorked||0), 0);
@@ -22322,7 +22346,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   <div className="text-xs font-semibold text-slate-600 w-20 flex-shrink-0">
                     {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                   </div>
-                  <div className="text-sm font-bold text-white tabular-nums flex-shrink-0">{fmtDur(r.hoursWorked)}</div>
+                  <div className="text-sm font-bold text-white tabular-nums flex-shrink-0">{fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
                   {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold">+ OT approved</span>}
                   {rejected && <span className="text-xs text-slate-500 font-semibold">OT not approved</span>}
                 </div>
@@ -22360,7 +22384,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
               <div className="bg-slate-950 rounded-xl p-3">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-semibold text-slate-600">Hours worked</div>
-                  <div className="text-lg font-black text-white tabular-nums">{fmtDur(r.hoursWorked)}</div>
+                  <div className="text-lg font-black text-white tabular-nums">{fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
                 </div>
               </div>
 
