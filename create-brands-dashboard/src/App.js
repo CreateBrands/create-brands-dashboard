@@ -6297,6 +6297,55 @@ function DashboardView({ brands, stores, entries, issues }) {
     // eslint-disable-next-line
   }, [isSingleDay, period.from, period.to, JSON.stringify(visibleBrandIds)]);
 
+  // ── Google reviews: 90-day window (rolling avg) + period slice (distribution) ──
+  const [reviews90, setReviews90] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    const ninetyAgo = new Date(); ninetyAgo.setDate(ninetyAgo.getDate() - 90);
+    const fromStr = `${ninetyAgo.getFullYear()}-${String(ninetyAgo.getMonth()+1).padStart(2,"0")}-${String(ninetyAgo.getDate()).padStart(2,"0")}`;
+    (async () => {
+      try {
+        const rv = await fetchReviewsForDashboard({ from: fromStr < period.from ? fromStr : period.from, to: period.to });
+        if (!cancelled) setReviews90(rv);
+      } catch { if (!cancelled) setReviews90([]); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [period.from, period.to]);
+
+  // scope reviews to selected stores
+  const scopedReviews = useMemo(
+    () => reviews90.filter(r => r.storeId && scopedStoreIds.has(r.storeId)),
+    [reviews90, scopedStoreIds]
+  );
+  // rolling 90-day average (stable headline)
+  const ratingAvg = useMemo(() => {
+    if (scopedReviews.length === 0) return null;
+    return scopedReviews.reduce((a, r) => a + (r.stars || 0), 0) / scopedReviews.length;
+  }, [scopedReviews]);
+  // period-sliced distribution (5..1)
+  const periodReviews = useMemo(
+    () => scopedReviews.filter(r => r.createTime && r.createTime.slice(0,10) >= period.from && r.createTime.slice(0,10) <= period.to),
+    [scopedReviews, period.from, period.to]
+  );
+  const starDist = useMemo(() => {
+    const d = { 5:0, 4:0, 3:0, 2:0, 1:0 };
+    periodReviews.forEach(r => { if (d[r.stars] != null) d[r.stars]++; });
+    return d;
+  }, [periodReviews]);
+  const distMax = Math.max(1, ...Object.values(starDist));
+
+  const openStarDrill = (star) => {
+    const rows = periodReviews.filter(r => r.stars === star)
+      .map(r => [r.reviewer, nameOfStore(r.storeId), (r.comment || "(no text)").slice(0,140), r.createTime ? r.createTime.slice(0,10) : "—"]);
+    setDrill({
+      title: `${star}★ reviews · ${period.label}`,
+      columns: ["Reviewer", "Store", "Comment", "Date"],
+      rows,
+      footer: ["Total", "", "", `${rows.length}`],
+    });
+  };
+
   // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
   const rollup = (sales, punch) => {
     const s = sales.filter(r => scopedStoreIds.has(r.storeId));
@@ -6488,6 +6537,32 @@ function DashboardView({ brands, stores, entries, issues }) {
         <StatCard label="Net Margin" value="Pending COGS" sub="Awaiting COGS module" icon={TrendingUp} accent="slate" />
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <AnalysisBlock title="Google Rating">
+          <div className="flex items-center gap-4">
+            <div className="flex flex-col items-center justify-center px-2">
+              <div className="text-3xl font-bold text-amber-400">{ratingAvg != null ? ratingAvg.toFixed(2) : "—"}</div>
+              <div className="text-amber-400 text-sm">{"★".repeat(Math.round(ratingAvg||0))}{"☆".repeat(5-Math.round(ratingAvg||0))}</div>
+              <div className="text-[10px] text-slate-600 mt-1">{scopedReviews.length} reviews · 90d</div>
+            </div>
+            <div className="flex-1 space-y-1">
+              {[5,4,3,2,1].map(star => (
+                <button key={star} onClick={() => openStarDrill(star)}
+                  className="w-full flex items-center gap-2 group" title={`View ${star}★ reviews`}>
+                  <span className="text-[11px] text-slate-500 w-6 text-right">{star}★</span>
+                  <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${star>=4?"bg-emerald-500":star===3?"bg-amber-500":"bg-red-500"} group-hover:opacity-80`}
+                      style={{ width: `${(starDist[star]/distMax)*100}%` }}/>
+                  </div>
+                  <span className="text-[11px] text-slate-400 w-8 group-hover:text-white">{starDist[star]}</span>
+                </button>
+              ))}
+              <div className="text-[10px] text-slate-600 pt-1">{period.label} · click a bar for reviews</div>
+            </div>
+          </div>
+        </AnalysisBlock>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">

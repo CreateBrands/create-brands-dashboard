@@ -4354,4 +4354,25 @@ export async function postReviewReply(reviewId, comment, userId) {
 }
 // ----- end GBP_REPLY_V1 -----
 
+
+// Period + store scoped reviews for the dashboard rating tile (counts + drill).
+// Returns lightweight rows; date-filters on create_time. 90-day fetch for the
+// rolling average, caller buckets to the selected period for the distribution.
+export async function fetchReviewsForDashboard({ from, to } = {}) {
+  let q = supabase.from("google_reviews")
+    .select("review_id, store_id, star_rating, comment, reviewer_name, create_time, reply_comment")
+    .not("star_rating", "is", null)
+    .order("create_time", { ascending: false })
+    .limit(5000);
+  if (from) q = q.gte("create_time", from);
+  if (to)   q = q.lte("create_time", to + "T23:59:59");
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    reviewId: r.review_id, storeId: r.store_id, stars: r.star_rating,
+    comment: r.comment || "", reviewer: r.reviewer_name || "Anonymous",
+    createTime: r.create_time, reply: r.reply_comment || null,
+  }));
+}
+
 // ===== end GBP_REVIEWS_V1 =====
