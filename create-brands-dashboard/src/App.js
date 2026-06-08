@@ -6211,25 +6211,29 @@ function DashboardView({ brands, stores, entries, issues }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const visibleBrandIds = useMemo(() => visibleBrands.map(b => b.id), [visibleBrands]);
-  const visibleStores = useMemo(
+  const allStores = useMemo(
     () => (stores || []).filter(s => visibleBrandIds.includes(s.brandId) && !s.archivedAt && s.id !== "store-system-non-trading"),
     [stores, visibleBrandIds]
   );
-  const storeIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
-  const brandOfStore = useMemo(() => {
-    const m = {}; visibleStores.forEach(s => { m[s.id] = s.brandId; }); return m;
-  }, [visibleStores]);
 
-  const today = new Date(); today.setHours(0,0,0,0);
-  const todayStr = fmtDate(today);
-  const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate()-6);
-  const weekAgoStr = fmtDate(weekAgo);
-  const trendStart = new Date(today); trendStart.setDate(trendStart.getDate()-13);
-  const trendStartStr = fmtDate(trendStart);
+  // ── Filters: period + store ───────────────────────────────────────────────
+  const [preset, setPreset] = useState("today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [storeId, setStoreId] = useState("all");
 
-  // ── Actuals: Flipdish GROSS daily + punch labour, ONE ranged call per brand ──
-  const [salesDaily, setSalesDaily] = useState([]);   // [{businessDate, storeId, channel, saleCount, revenue}]
-  const [punches, setPunches] = useState([]);
+  const period = useMemo(() => resolvePeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
+  const prevPeriod = useMemo(() => resolvePrevPeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
+
+  const scopedStores = useMemo(
+    () => storeId === "all" ? allStores : allStores.filter(s => s.id === storeId),
+    [allStores, storeId]
+  );
+  const scopedStoreIds = useMemo(() => new Set(scopedStores.map(s => s.id)), [scopedStores]);
+  const brandOfStore = useMemo(() => { const m={}; allStores.forEach(s=>{m[s.id]=s.brandId;}); return m; }, [allStores]);
+
+  // ── Fetch current + prior sales (daily) and punches, per brand, combined ──
+  const [data, setData] = useState({ curSales: [], prevSales: [], curPunch: [], prevPunch: [] });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
 
@@ -6238,96 +6242,117 @@ function DashboardView({ brands, stores, entries, issues }) {
     (async () => {
       setLoading(true); setErr(null);
       try {
-        const [salesByBrand, punchByBrand] = await Promise.all([
-          Promise.all(visibleBrandIds.map(bid => fetchSalesDaily({ from: trendStartStr, to: todayStr, brandId: bid }))),
-          Promise.all(visibleBrandIds.map(bid => fetchPunchRecords({ brandId: bid, from: trendStartStr, to: todayStr }))),
-        ]);
+        const ranges = [];
+        // current
+        ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: period.from, to: period.to, brandId: b }))));
+        ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: period.from, to: period.to }))));
+        // prior (may be null)
+        if (prevPeriod) {
+          ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b }))));
+          ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: prevPeriod.from, to: prevPeriod.to }))));
+        }
+        const res = await Promise.all(ranges);
         if (cancelled) return;
-        setSalesDaily(salesByBrand.flat().filter(r => storeIds.has(r.storeId)));
-        setPunches(punchByBrand.flat().filter(p => storeIds.has(p.storeId)));
+        setData({
+          curSales: res[0].flat(), curPunch: res[1].flat(),
+          prevSales: prevPeriod ? res[2].flat() : [], prevPunch: prevPeriod ? res[3].flat() : [],
+        });
       } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
-  }, [JSON.stringify(visibleBrandIds), trendStartStr, todayStr]);
+  }, [JSON.stringify(visibleBrandIds), period.from, period.to, prevPeriod?.from, prevPeriod?.to]);
 
-  // ── Build 14-day buckets from the single fetch ────────────────────────────
-  const daily = useMemo(() => {
-    const days = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(today); d.setDate(d.getDate()-i);
-      const ds = fmtDate(d);
-      const sRows = salesDaily.filter(r => r.businessDate === ds);
-      const revenue = sRows.reduce((a, r) => a + r.revenue, 0);
-      const orders = sRows.reduce((a, r) => a + r.saleCount, 0);
-      const dayPunches = punches.filter(p => p.date === ds);
-      const hours = dayPunches.reduce((a, p) => a + (p.hoursWorked || 0), 0);
-      const labourCost = dayPunches.reduce((a, p) => a + (p.grossPay || 0), 0);
-      days.push({ date: ds, label: ds.slice(5), revenue, orders, hours, labourCost,
-        laborPct: revenue > 0 ? (labourCost / revenue) * 100 : 0 });
-    }
-    return days;
-  }, [salesDaily, punches, todayStr]);
+  // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
+  const rollup = (sales, punch) => {
+    const s = sales.filter(r => scopedStoreIds.has(r.storeId));
+    const p = punch.filter(r => scopedStoreIds.has(r.storeId));
+    const revenue = s.reduce((a, r) => a + r.revenue, 0);
+    const orders = s.reduce((a, r) => a + r.saleCount, 0);
+    const hours = p.reduce((a, r) => a + (r.hoursWorked || 0), 0);
+    const labourCost = p.reduce((a, r) => a + (r.grossPay || 0), 0);
+    return {
+      revenue, orders, hours, labourCost,
+      wagePct: revenue > 0 ? (labourCost / revenue) * 100 : null,
+      splh: hours > 0 ? revenue / hours : null,
+      atv: orders > 0 ? revenue / orders : null,
+    };
+  };
+  const cur = useMemo(() => rollup(data.curSales, data.curPunch), [data, scopedStoreIds]);
+  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch), [data, scopedStoreIds]);
 
-  const todayRow = daily.find(d => d.date === todayStr) || { revenue:0, orders:0, hours:0, labourCost:0 };
-  const weekRows = daily.filter(d => d.date >= weekAgoStr && d.date <= todayStr);
-  const weekRevenue = weekRows.reduce((a, d) => a + d.revenue, 0);
-  const weekHours = weekRows.reduce((a, d) => a + d.hours, 0);
-  const weekLabour = weekRows.reduce((a, d) => a + d.labourCost, 0);
-  const weekOrders = weekRows.reduce((a, d) => a + d.orders, 0);
-
-  const wagePct = weekRevenue > 0 ? (weekLabour / weekRevenue) * 100 : null;
-  const splh = weekHours > 0 ? weekRevenue / weekHours : null;
-  const atv = todayRow.orders > 0 ? todayRow.revenue / todayRow.orders
-            : (weekOrders > 0 ? weekRevenue / weekOrders : null);
-
-  // ── Targets: sum each visible store's day-of-week targets ──────────────────
-  const sumTargets = (from, to) => {
+  // ── Targets for the selected period + stores ──────────────────────────────
+  const target = useMemo(() => {
     let revenue = 0, orders = 0, hours = 0, any = false;
-    visibleStores.forEach(s => {
-      const t = sumStoreTargetsForPeriod(s.kpiTargets, from, to);
+    scopedStores.forEach(s => {
+      const t = sumStoreTargetsForPeriod(s.kpiTargets, period.from, period.to);
       if (t) { revenue += t.revenue; orders += t.orders; hours += t.hours; any = true; }
     });
     return any ? { revenue, orders, hours } : null;
-  };
-  const todayTarget = useMemo(() => sumTargets(todayStr, todayStr), [visibleStores, todayStr]);
-  const weekTarget  = useMemo(() => sumTargets(weekAgoStr, todayStr), [visibleStores, weekAgoStr, todayStr]);
+  }, [scopedStores, period.from, period.to]);
 
-  // ── Per-brand week split for the pie ──────────────────────────────────────
+  // ── Daily chart over the selected window ──────────────────────────────────
+  const chart = useMemo(() => {
+    const byDate = {};
+    data.curSales.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
+      byDate[r.businessDate] = byDate[r.businessDate] || { revenue: 0, hours: 0, labourCost: 0 };
+      byDate[r.businessDate].revenue += r.revenue;
+    });
+    data.curPunch.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
+      byDate[r.date] = byDate[r.date] || { revenue: 0, hours: 0, labourCost: 0 };
+      byDate[r.date].hours += r.hoursWorked || 0;
+      byDate[r.date].labourCost += r.grossPay || 0;
+    });
+    return Object.keys(byDate).sort().map(d => ({
+      label: d.slice(5),
+      revenue: byDate[d].revenue,
+      laborPct: byDate[d].revenue > 0 ? (byDate[d].labourCost / byDate[d].revenue) * 100 : 0,
+    }));
+  }, [data, scopedStoreIds]);
+
   const pieData = useMemo(() => visibleBrands.map(b => {
-    const value = salesDaily
-      .filter(r => r.businessDate >= weekAgoStr && brandOfStore[r.storeId] === b.id)
+    const value = data.curSales.filter(r => scopedStoreIds.has(r.storeId) && brandOfStore[r.storeId] === b.id)
       .reduce((a, r) => a + r.revenue, 0);
     return { name: b.name, value, color: b.color };
-  }).filter(p => p.value > 0), [salesDaily, visibleBrands, brandOfStore, weekAgoStr]);
+  }).filter(p => p.value > 0), [data, visibleBrands, brandOfStore, scopedStoreIds]);
 
   const openIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.status === "Open").length;
   const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
+  const prevLabel = prevPeriod?.label || "Prior";
 
   return (
     <div className="space-y-6">
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
+        <SelectDropdown value={storeId} onChange={setStoreId} className="w-52">
+          <option value="all">All stores ({allStores.length})</option>
+          {allStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </SelectDropdown>
+      </div>
+
       {err && <div className="text-xs text-rose-400">Couldn't load actuals: {err}</div>}
-      {loading && <div className="text-xs text-slate-500">Loading actual sales &amp; labour…</div>}
+      {loading && <div className="text-xs text-slate-500">Loading {period.label.toLowerCase()} actuals…</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Revenue (gross)" value={fmtCurrency(todayRow.revenue)} sub={todayTarget ? `Target ${fmtCurrency(todayTarget.revenue)}` : `${todayRow.orders} orders`} icon={PoundSterling} accent={todayTarget && todayRow.revenue >= todayTarget.revenue ? "emerald" : "indigo"} />
-        <StatCard label="Wage Cost %" value={wagePct != null ? fmtPct(wagePct) : "—"} sub={wagePct != null && wagePct > 30 ? "Above 30% target" : "On target (≤30%)"} icon={Users} accent={wagePct != null && wagePct > 30 ? "amber" : "emerald"} alert={wagePct != null && wagePct > 35} />
+        <ComparisonKPICard label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
+        <ComparisonKPICard label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={cur.wagePct != null && cur.wagePct > 30 ? "Above 30%" : "≤30% target"} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <StatCard label="Prime Cost %" value="Pending COGS" sub="Awaiting COGS module" icon={Activity} accent="slate" />
-        <StatCard label="Avg Spend / Order" value={atv != null ? fmtCurrency(atv) : "—"} sub={`${todayRow.orders || weekOrders} orders`} icon={ChefHat} accent="sky" />
+        <ComparisonKPICard label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="SPLH" value={splh != null ? fmtSPLH(splh) : "—"} sub="Gross sales / labour hr" icon={Zap} accent={splh != null && splh >= 8 ? "emerald" : splh != null && splh >= 5 ? "amber" : "red"} />
+        <ComparisonKPICard label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
         <StatCard label="Net Margin" value="Pending COGS" sub="Awaiting COGS module" icon={TrendingUp} accent="slate" />
-        <StatCard label="Labour Hours" value={`${weekHours.toFixed(0)}h`} sub={weekTarget ? `Target ${weekTarget.hours.toFixed(0)}h · 7d` : "This week (actual)"} icon={Clock} accent={weekTarget && weekHours > weekTarget.hours ? "amber" : "indigo"} />
+        <ComparisonKPICard label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <AnalysisBlock title="14-Day Gross Revenue &amp; Labour %" className="xl:col-span-2">
+        <AnalysisBlock title={`Gross Revenue & Labour % · ${period.label}`} className="xl:col-span-2">
           <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={daily} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
+            <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
               <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
               <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `£${(v/1000).toFixed(0)}k`} />
@@ -6339,7 +6364,7 @@ function DashboardView({ brands, stores, entries, issues }) {
             </ComposedChart>
           </ResponsiveContainer>
         </AnalysisBlock>
-        <AnalysisBlock title="7-Day Revenue Split">
+        <AnalysisBlock title="Revenue Split by Brand">
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
               <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3}>

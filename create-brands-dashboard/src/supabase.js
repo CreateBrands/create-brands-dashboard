@@ -1857,7 +1857,7 @@ export async function fetchSalesDaily({ from, to, brandId = "chocoberry" } = {})
   });
   if (error) throw error;
   return (data || []).map(r => ({
-    businessDate: r.business_date, storeId: r.store_id, channel: r.channel,
+    businessDate: String(r.business_date).slice(0,10), storeId: r.store_id, channel: r.channel,
     saleCount: Number(r.sale_count) || 0, revenue: Number(r.revenue) || 0,
   }));
 }
