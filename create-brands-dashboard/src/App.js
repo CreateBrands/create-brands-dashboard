@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -86,6 +86,9 @@ import {
   getGoogleReviewsSyncState,
   generateReviewReplies,
   postReviewReply,
+  fetchSalesDaily,
+  fetchReviewsForDashboard,
+  fetchReviewStats,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -235,6 +238,11 @@ function managersAsRoster(users) {
     });
 }
 
+// Local-time date string (YYYY-MM-DD) — avoids the UTC off-by-one that
+// toISOString() causes in BST/any +TZ (local midnight -> previous UTC day).
+function fmtDateLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
 function resolvePeriod(preset, customFrom, customTo) {
   const today = new Date(); today.setHours(0,0,0,0);
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
@@ -242,12 +250,12 @@ function resolvePeriod(preset, customFrom, customTo) {
   const lastMon = new Date(mon); lastMon.setDate(lastMon.getDate()-7);
   const lastSun = new Date(mon); lastSun.setDate(lastSun.getDate()-1);
   switch (preset) {
-    case "today": return { from: fmtDate(today), to: fmtDate(today), label: "Today" };
-    case "yesterday": return { from: fmtDate(yest), to: fmtDate(yest), label: "Yesterday" };
-    case "this_week": return { from: fmtDate(mon), to: fmtDate(today), label: "This Week" };
-    case "last_week": return { from: fmtDate(lastMon), to: fmtDate(lastSun), label: "Last Week" };
+    case "today": return { from: fmtDateLocal(today), to: fmtDateLocal(today), label: "Today" };
+    case "yesterday": return { from: fmtDateLocal(yest), to: fmtDateLocal(yest), label: "Yesterday" };
+    case "this_week": return { from: fmtDateLocal(mon), to: fmtDateLocal(today), label: "This Week" };
+    case "last_week": return { from: fmtDateLocal(lastMon), to: fmtDateLocal(lastSun), label: "Last Week" };
     case "custom": return { from: customFrom, to: customTo, label: "Custom Period" };
-    default: return { from: fmtDate(today), to: fmtDate(today), label: "Today" };
+    default: return { from: fmtDateLocal(today), to: fmtDateLocal(today), label: "Today" };
   }
 }
 
@@ -261,15 +269,15 @@ function resolvePrevPeriod(preset, customFrom, customTo) {
   const weekBefore = new Date(lastMon); weekBefore.setDate(weekBefore.getDate()-7);
   const weekBeforeSun = new Date(lastMon); weekBeforeSun.setDate(weekBeforeSun.getDate()-1);
   switch (preset) {
-    case "today": return { from: fmtDate(yest), to: fmtDate(yest), label: "Yesterday" };
-    case "yesterday": return { from: fmtDate(twoDaysAgo), to: fmtDate(twoDaysAgo), label: "2 Days Ago" };
-    case "this_week": return { from: fmtDate(lastMon), to: fmtDate(lastSun), label: "Last Week" };
-    case "last_week": return { from: fmtDate(weekBefore), to: fmtDate(weekBeforeSun), label: "Week Before" };
+    case "today": return { from: fmtDateLocal(yest), to: fmtDateLocal(yest), label: "Yesterday" };
+    case "yesterday": return { from: fmtDateLocal(twoDaysAgo), to: fmtDateLocal(twoDaysAgo), label: "2 Days Ago" };
+    case "this_week": return { from: fmtDateLocal(lastMon), to: fmtDateLocal(lastSun), label: "Last Week" };
+    case "last_week": return { from: fmtDateLocal(weekBefore), to: fmtDateLocal(weekBeforeSun), label: "Week Before" };
     case "custom": {
       if (!customFrom || !customTo) return null;
       const f = new Date(customFrom), t = new Date(customTo);
       const diff = t - f;
-      return { from: fmtDate(new Date(f - diff - 86400000)), to: fmtDate(new Date(f - 86400000)), label: "Prior Period" };
+      return { from: fmtDateLocal(new Date(f - diff - 86400000)), to: fmtDateLocal(new Date(f - 86400000)), label: "Prior Period" };
     }
     default: return null;
   }
@@ -446,7 +454,15 @@ function AnalysisBlock({ title, children, className = "", action }) {
   );
 }
 
-function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior" }) {
+function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null }) {
+  const ACCENTS = {
+    indigo: { icon: "text-indigo-400", val: "text-indigo-300", ring: "border-indigo-500/30 bg-indigo-950/20" },
+    emerald:{ icon: "text-emerald-400", val: "text-emerald-300", ring: "border-emerald-500/30 bg-emerald-950/20" },
+    sky:    { icon: "text-sky-400", val: "text-sky-300", ring: "border-sky-500/30 bg-sky-950/20" },
+    amber:  { icon: "text-amber-400", val: "text-amber-300", ring: "border-amber-500/30 bg-amber-950/20" },
+    red:    { icon: "text-red-400", val: "text-red-300", ring: "border-red-500/30 bg-red-950/20" },
+  };
+  const ac = accent && ACCENTS[accent] ? ACCENTS[accent] : null;
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
   let deltaEl = null;
@@ -461,12 +477,13 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     );
   }
   return (
-    <div className={`rounded-2xl border p-4 flex flex-col gap-2 ${alert ? "bg-red-950/20 border-red-500/30" : "bg-slate-900 border-slate-700"}`}>
+    <div onClick={onClick} className={`rounded-2xl border p-4 flex flex-col gap-2 ${onClick ? "cursor-pointer hover:border-indigo-500/60 transition-colors" : ""} ${alert ? "bg-red-950/20 border-red-500/30" : ac ? ac.ring : "bg-slate-900 border-slate-700"}`}>
       <div className="flex items-center gap-2">
-        {Icon && <Icon size={13} className="text-slate-600" />}
+        {Icon && <Icon size={13} className={alert ? "text-red-400" : ac ? ac.icon : "text-slate-600"} />}
         <span className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{label}</span>
+        {onClick && <span className="ml-auto text-[10px] text-slate-600">view ›</span>}
       </div>
-      <div className={`text-xl font-bold ${alert ? "text-red-400" : "text-white"}`}>{currentVal}</div>
+      <div className={`text-xl font-bold ${alert ? "text-red-400" : ac ? ac.val : "text-white"}`}>{currentVal}</div>
       {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
       {deltaEl}
       {previousVal && (
@@ -1268,6 +1285,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
 
   return (
     <div className="space-y-6">
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {ISSUE_STATUSES.map(s => {
@@ -6214,74 +6232,404 @@ function StoreDetailModal({ store, flipdishStores, fromDate, toDate, periodLabel
 }
 
 
-function DashboardView({ brands, entries, issues }) {
+function DashboardView({ brands, stores, entries, issues }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
-  const today = new Date(); today.setHours(0,0,0,0);
-  const todayStr = fmtDate(today);
-  const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate()-6);
-  const weekAgoStr = fmtDate(weekAgo);
+  const visibleBrandIds = useMemo(() => visibleBrands.map(b => b.id), [visibleBrands]);
+  const allStores = useMemo(
+    () => (stores || []).filter(s => visibleBrandIds.includes(s.brandId) && !s.archivedAt && s.id !== "store-system-non-trading"),
+    [stores, visibleBrandIds]
+  );
 
-  const todayEntries = entries.filter(e => e.date === todayStr && visibleBrands.some(b => b.id === e.brandId));
-  const weekEntries = entries.filter(e => e.date >= weekAgoStr && e.date <= todayStr && visibleBrands.some(b => b.id === e.brandId));
+  // ── Filters: period + store ───────────────────────────────────────────────
+  const [preset, setPreset] = useState("today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [storeId, setStoreId] = useState("all");
+  const [drill, setDrill] = useState(null);  // {title, columns, rows, footer} | null
 
-  const todayAgg = aggregateEntries(todayEntries);
-  const weekAgg = aggregateEntries(weekEntries);
-  const useLatest = todayAgg || weekAgg;
+  const period = useMemo(() => resolvePeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
+  const prevPeriod = useMemo(() => resolvePrevPeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
 
-  const chartData = useMemo(() => {
-    const days = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(today); d.setDate(d.getDate()-i);
-      const ds = fmtDate(d);
-      const de = entries.filter(e => e.date === ds && visibleBrands.some(b => b.id === e.brandId));
-      const agg = aggregateEntries(de);
-      days.push({ date: ds.slice(5), revenue: agg?.netSales || 0, laborPct: agg?.laborPct || 0, primeCost: agg?.primeCost || 0 });
+  const scopedStores = useMemo(
+    () => storeId === "all" ? allStores : allStores.filter(s => s.id === storeId),
+    [allStores, storeId]
+  );
+  const scopedStoreIds = useMemo(() => new Set(scopedStores.map(s => s.id)), [scopedStores]);
+  const brandOfStore = useMemo(() => { const m={}; allStores.forEach(s=>{m[s.id]=s.brandId;}); return m; }, [allStores]);
+
+  // ── Fetch current + prior sales (daily) and punches, per brand, combined ──
+  const [data, setData] = useState({ curSales: [], prevSales: [], curPunch: [], prevPunch: [] });
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setErr(null);
+      try {
+        const ranges = [];
+        // current
+        ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: period.from, to: period.to, brandId: b }))));
+        ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: period.from, to: period.to }))));
+        // prior (may be null)
+        if (prevPeriod) {
+          ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b }))));
+          ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: prevPeriod.from, to: prevPeriod.to }))));
+        }
+        const res = await Promise.all(ranges);
+        if (cancelled) return;
+        setData({
+          curSales: res[0].flat(), curPunch: res[1].flat(),
+          prevSales: prevPeriod ? res[2].flat() : [], prevPunch: prevPeriod ? res[3].flat() : [],
+        });
+      } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [JSON.stringify(visibleBrandIds), period.from, period.to, prevPeriod?.from, prevPeriod?.to]);
+
+  // Single-day selection -> fetch that day's raw sales for an HOURLY chart.
+  const isSingleDay = period.from === period.to;
+  const [hourlyRows, setHourlyRows] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isSingleDay) { setHourlyRows([]); return; }
+    (async () => {
+      try {
+        const perBrand = await Promise.all(visibleBrandIds.map(b =>
+          fetchFlipdishSales({ from: period.from, to: period.to, brandId: b })));
+        if (!cancelled) setHourlyRows(perBrand.flat());
+      } catch { if (!cancelled) setHourlyRows([]); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [isSingleDay, period.from, period.to, JSON.stringify(visibleBrandIds)]);
+
+  // ── Google reviews: 90-day window (rolling avg) + period slice (distribution) ──
+  const [reviews90, setReviews90] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    const ninetyAgo = new Date(); ninetyAgo.setDate(ninetyAgo.getDate() - 90);
+    const fromStr = `${ninetyAgo.getFullYear()}-${String(ninetyAgo.getMonth()+1).padStart(2,"0")}-${String(ninetyAgo.getDate()).padStart(2,"0")}`;
+    (async () => {
+      try {
+        const rv = await fetchReviewsForDashboard({ from: fromStr < period.from ? fromStr : period.from, to: period.to });
+        if (!cancelled) setReviews90(rv);
+      } catch { if (!cancelled) setReviews90([]); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [period.from, period.to]);
+
+  // Lifetime stats (matches Google's all-time average) — one RPC call.
+  const [reviewStats, setReviewStats] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => { try { const s = await fetchReviewStats(); if (!cancelled) setReviewStats(s); } catch { if (!cancelled) setReviewStats([]); } })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // scope reviews to selected stores
+  const scopedReviews = useMemo(
+    () => reviews90.filter(r => r.storeId && scopedStoreIds.has(r.storeId)),
+    [reviews90, scopedStoreIds]
+  );
+  // Lifetime average across selected stores (pooled) — matches what Google shows.
+  const scopedStats = useMemo(
+    () => reviewStats.filter(s => s.storeId && scopedStoreIds.has(s.storeId)),
+    [reviewStats, scopedStoreIds]
+  );
+  const totalReviews = useMemo(() => scopedStats.reduce((a, s) => a + s.n, 0), [scopedStats]);
+  const ratingAvg = useMemo(() => {
+    if (totalReviews === 0) return null;
+    const weighted = scopedStats.reduce((a, s) => a + s.avg * s.n, 0);
+    return weighted / totalReviews;
+  }, [scopedStats, totalReviews]);
+  // Single store selected -> how many 5* reviews to reach the next 0.1 tier.
+  const fiveStarTarget = useMemo(() => {
+    if (storeId === "all" || scopedStats.length !== 1) return null;
+    const st = scopedStats[0];
+    if (!st.n || st.avg >= 4.95) return null;
+    // Next tier = next 0.1 ABOVE the displayed (rounded-to-1dp) rating.
+    // e.g. 4.60 shown -> aim for 4.7; 4.62 -> aim for 4.7.
+    const shown = Math.round(st.avg * 10) / 10;          // 4.6
+    const nextTier = Math.round((shown + 0.1) * 10) / 10; // 4.7 (avoids fp drift)
+    if (nextTier >= 5) return null;
+    // reviews x of 5* needed so (avg*n + 5x)/(n+x) >= nextTier
+    const x = Math.ceil((st.n * (nextTier - st.avg)) / (5 - nextTier));
+    return x > 0 ? { need: x, target: nextTier } : null;
+  }, [scopedStats, storeId]);
+  // period-sliced distribution (5..1)
+  const periodReviews = useMemo(
+    () => scopedReviews.filter(r => r.createTime && r.createTime.slice(0,10) >= period.from && r.createTime.slice(0,10) <= period.to),
+    [scopedReviews, period.from, period.to]
+  );
+  const starDist = useMemo(() => {
+    const d = { 5:0, 4:0, 3:0, 2:0, 1:0 };
+    periodReviews.forEach(r => { if (d[r.stars] != null) d[r.stars]++; });
+    return d;
+  }, [periodReviews]);
+  const distMax = Math.max(1, ...Object.values(starDist));
+
+  const openStarDrill = (star) => {
+    const rows = periodReviews.filter(r => r.stars === star)
+      .map(r => [r.reviewer, nameOfStore(r.storeId), (r.comment || "(no text)").slice(0,140), r.createTime ? r.createTime.slice(0,10) : "—"]);
+    setDrill({
+      title: `${star}★ reviews · ${period.label}`,
+      columns: ["Reviewer", "Store", "Comment", "Date"],
+      rows,
+      footer: ["Total", "", "", `${rows.length}`],
+    });
+  };
+
+  // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
+  const rollup = (sales, punch) => {
+    const s = sales.filter(r => scopedStoreIds.has(r.storeId));
+    const p = punch.filter(r => scopedStoreIds.has(r.storeId));
+    const revenue = s.reduce((a, r) => a + r.revenue, 0);
+    const orders = s.reduce((a, r) => a + r.saleCount, 0);
+    const hours = p.reduce((a, r) => a + (r.hoursWorked || 0), 0);
+    const labourCost = p.reduce((a, r) => a + (r.grossPay || 0), 0);
+    return {
+      revenue, orders, hours, labourCost,
+      wagePct: revenue > 0 ? (labourCost / revenue) * 100 : null,
+      splh: hours > 0 ? revenue / hours : null,
+      atv: orders > 0 ? revenue / orders : null,
+    };
+  };
+  const cur = useMemo(() => rollup(data.curSales, data.curPunch), [data, scopedStoreIds]);
+  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch), [data, scopedStoreIds]);
+
+  // ── Targets for the selected period + stores ──────────────────────────────
+  const target = useMemo(() => {
+    let revenue = 0, orders = 0, hours = 0, any = false;
+    scopedStores.forEach(s => {
+      const t = sumStoreTargetsForPeriod(s.kpiTargets, period.from, period.to);
+      if (t) { revenue += t.revenue; orders += t.orders; hours += t.hours; any = true; }
+    });
+    return any ? { revenue, orders, hours } : null;
+  }, [scopedStores, period.from, period.to]);
+
+  // ── Chart: HOURLY when a single day is selected, DAILY otherwise ──────────
+  const chart = useMemo(() => {
+    if (isSingleDay) {
+      // bucket the day's raw sales by LOCAL hour (0-23)
+      const buckets = {};
+      hourlyRows.filter(r => scopedStoreIds.has(r.storeId) && !r.isCancelled).forEach(r => {
+        if (!r.saleTime) return;
+        const h = new Date(r.saleTime).getHours(); // local hour
+        buckets[h] = buckets[h] || { revenue: 0, orders: 0 };
+        buckets[h].revenue += r.amountTotal || 0;
+        buckets[h].orders += 1;
+      });
+      const hours = Object.keys(buckets).map(Number).sort((a, b) => a - b);
+      if (hours.length === 0) return [];
+      const lo = hours[0], hi = hours[hours.length - 1];
+      const out = [];
+      for (let h = lo; h <= hi; h++) {
+        const b = buckets[h] || { revenue: 0, orders: 0 };
+        out.push({ label: `${String(h).padStart(2, "0")}:00`, revenue: b.revenue, laborPct: 0 });
+      }
+      return out;
     }
-    return days;
-  }, [entries, visibleBrands]);
+    // multi-day: daily buckets from the daily RPC + punch labour
+    const byDate = {};
+    data.curSales.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
+      byDate[r.businessDate] = byDate[r.businessDate] || { revenue: 0, hours: 0, labourCost: 0 };
+      byDate[r.businessDate].revenue += r.revenue;
+    });
+    data.curPunch.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
+      byDate[r.date] = byDate[r.date] || { revenue: 0, hours: 0, labourCost: 0 };
+      byDate[r.date].hours += r.hoursWorked || 0;
+      byDate[r.date].labourCost += r.grossPay || 0;
+    });
+    return Object.keys(byDate).sort().map(d => ({
+      label: d.slice(5),
+      revenue: byDate[d].revenue,
+      laborPct: byDate[d].revenue > 0 ? (byDate[d].labourCost / byDate[d].revenue) * 100 : 0,
+    }));
+  }, [isSingleDay, hourlyRows, data, scopedStoreIds]);
 
-  const pieData = visibleBrands.map(b => {
-    const be = weekEntries.filter(e => e.brandId === b.id);
-    return { name: b.name, value: be.reduce((a, e) => a + e.netSales, 0), color: b.color };
-  }).filter(p => p.value > 0);
+  const pieData = useMemo(() => visibleBrands.map(b => {
+    const value = data.curSales.filter(r => scopedStoreIds.has(r.storeId) && brandOfStore[r.storeId] === b.id)
+      .reduce((a, r) => a + r.revenue, 0);
+    return { name: b.name, value, color: b.color };
+  }).filter(p => p.value > 0), [data, visibleBrands, brandOfStore, scopedStoreIds]);
 
-  const openIssues = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && i.status === "Open").length;
-  const criticalIssues = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
+  const openIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.status === "Open").length;
+  const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
+  const prevLabel = prevPeriod?.label || "Prior";
+
+  const nameOfStore = (id) => allStores.find(s => s.id === id)?.shortName || allStores.find(s => s.id === id)?.name || id;
+
+  // ── Drill-down builders ───────────────────────────────────────────────────
+  const openRevenueDrill = () => {
+    const rows = [];
+    const map = {};
+    data.curSales.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
+      const key = `${r.storeId}|${r.channel}`;
+      map[key] = map[key] || { store: nameOfStore(r.storeId), channel: r.channel || "—", orders: 0, revenue: 0 };
+      map[key].orders += r.saleCount; map[key].revenue += r.revenue;
+    });
+    Object.values(map).sort((a,b)=>b.revenue-a.revenue).forEach(v =>
+      rows.push([v.store, v.channel, fmtNum(v.orders), fmtCurrency(v.revenue)]));
+    setDrill({
+      title: `Revenue breakdown · ${period.label}`,
+      columns: ["Store", "Channel", "Orders", "Revenue (gross)"],
+      rows,
+      footer: ["Total", "", fmtNum(cur.orders), fmtCurrency(cur.revenue)],
+    });
+  };
+  const fmtTime = (ts) => {
+    if (!ts) return "—";
+    try { return new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
+    catch { return "—"; }
+  };
+  const openLabourDrill = (mode) => {
+    // mode: "hours" | "cost"
+    const punches = data.curPunch.filter(r => scopedStoreIds.has(r.storeId))
+      .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (a.employeeName||"").localeCompare(b.employeeName||""));
+    if (mode === "cost") {
+      const rows = punches.map(p => [
+        p.employeeName || "—", nameOfStore(p.storeId), p.date || "—",
+        p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "on shift",
+        fmtCurrency(p.grossPay || 0),
+      ]);
+      setDrill({
+        title: `Labour cost breakdown · ${period.label}`,
+        columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
+        rows,
+        footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, fmtCurrency(cur.labourCost)],
+      });
+    } else {
+      // hours: Name, Start, End, Worked hours, Overtime
+      const totOt = punches.reduce((a, p) => a + (p.overtimeHours || 0), 0);
+      const rows = punches.map(p => [
+        p.employeeName || "—",
+        fmtTime(p.punchIn),
+        p.punchOut ? fmtTime(p.punchOut) : "on shift",
+        p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "—",
+        p.overtimeHours ? `${p.overtimeHours.toFixed(2)}h` : "—",
+      ]);
+      setDrill({
+        title: `Labour hours breakdown · ${period.label}`,
+        columns: ["Employee", "Start", "End", "Worked", "Overtime"],
+        rows,
+        footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, totOt ? `${totOt.toFixed(2)}h` : "—"],
+      });
+    }
+  };
+
 
   return (
     <div className="space-y-6">
+      {drill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900">
+              <h3 className="text-sm font-semibold text-white">{drill.title}</h3>
+              <button onClick={() => setDrill(null)} className="text-slate-500 hover:text-white text-lg leading-none">×</button>
+            </div>
+            <table className="w-full text-xs">
+              <thead><tr className="text-slate-500 border-b border-slate-800">
+                {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</th>)}
+              </tr></thead>
+              <tbody>
+                {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-6 text-center text-slate-600">No data for this period</td></tr>}
+                {drill.rows.map((r,ri) => (
+                  <tr key={ri} className="border-b border-slate-800/50">
+                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2 ${ci===0?"text-left text-slate-300":"text-right text-slate-400"}`}>{cell}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+              {drill.footer && <tfoot><tr className="border-t border-slate-700 font-semibold text-white">
+                {drill.footer.map((c,i) => <td key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</td>)}
+              </tr></tfoot>}
+            </table>
+          </div>
+        </div>
+      )}
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
+        <SelectDropdown value={storeId} onChange={setStoreId} className="w-52">
+          <option value="all">All stores ({allStores.length})</option>
+          {allStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </SelectDropdown>
+      </div>
+
+      {err && <div className="text-xs text-rose-400">Couldn't load actuals: {err}</div>}
+      {loading && <div className="text-xs text-slate-500">Loading {period.label.toLowerCase()} actuals…</div>}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Revenue" value={todayAgg ? fmtCurrency(todayAgg.netSales) : "No Data"} sub={`${todayEntries.length} reports`} icon={PoundSterling} accent="indigo" />
-        <StatCard label="Wage Cost %" value={useLatest ? fmtPct(useLatest.laborPct) : "—"} sub={useLatest && useLatest.laborPct > 35 ? "Above target (35%)" : "On target (≤35%)"} icon={Users} accent={useLatest && useLatest.laborPct > 35 ? "amber" : "emerald"} alert={useLatest && useLatest.laborPct > 40} />
-        <StatCard label="Prime Cost %" value={useLatest ? fmtPct(useLatest.primeCost) : "—"} sub="Labour + COGS" icon={Activity} accent={useLatest && useLatest.primeCost > 60 ? "red" : "emerald"} alert={useLatest && useLatest.primeCost > 65} />
-        <StatCard label="Avg Spend / Cover" value={useLatest && useLatest.atv > 0 ? fmtCurrency(useLatest.atv) : "—"} sub={useLatest ? `${fmtNum(useLatest.totalOrders)} covers` : "Average ticket"} icon={ChefHat} accent="sky" />
+        <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
+        <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
+        <StatCard label="Prime Cost %" value="Pending COGS" sub="Awaiting COGS module" icon={Activity} accent="slate" />
+        <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="SPLH" value={useLatest ? fmtSPLH(useLatest.splh) : "—"} sub="Sales per labour hr · target ≥£8" icon={Zap} accent={useLatest && useLatest.splh >= 8 ? "emerald" : useLatest && useLatest.splh >= 5 ? "amber" : "red"} />
-        <StatCard label="Net Margin" value={useLatest ? fmtPct(useLatest.netMargin) : "—"} sub="After labour + COGS" icon={TrendingUp} accent={useLatest && useLatest.netMargin >= 15 ? "emerald" : "amber"} />
-        <StatCard label="Labour Hours" value={useLatest ? `${useLatest.totalHours.toFixed(0)}h` : "—"} sub="This week" icon={Clock} accent="indigo" />
+        <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
+        <StatCard label="Net Margin" value="Pending COGS" sub="Awaiting COGS module" icon={TrendingUp} accent="slate" />
+        <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <AnalysisBlock title="Google Rating">
+          <div className="flex items-center gap-4">
+            <div className="flex flex-col items-center justify-center px-2">
+              <div className="text-3xl font-bold text-amber-400">{ratingAvg != null ? ratingAvg.toFixed(2) : "—"}</div>
+              <div className="text-amber-400 text-sm">{"★".repeat(Math.round(ratingAvg||0))}{"☆".repeat(5-Math.round(ratingAvg||0))}</div>
+              <div className="text-[10px] text-slate-600 mt-1">{totalReviews} reviews · all-time</div>
+            </div>
+            <div className="flex-1 space-y-1">
+              {[5,4,3,2,1].map(star => (
+                <button key={star} onClick={() => openStarDrill(star)}
+                  className="w-full flex items-center gap-2 group" title={`View ${star}★ reviews`}>
+                  <span className="text-[11px] text-slate-500 w-6 text-right">{star}★</span>
+                  <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${star>=4?"bg-emerald-500":star===3?"bg-amber-500":"bg-red-500"} group-hover:opacity-80`}
+                      style={{ width: `${(starDist[star]/distMax)*100}%` }}/>
+                  </div>
+                  <span className="text-[11px] text-slate-400 w-8 group-hover:text-white">{starDist[star]}</span>
+                </button>
+              ))}
+              <div className="text-[10px] text-slate-600 pt-1">{period.label} · click a bar for reviews</div>
+              {fiveStarTarget && (
+                <div className="text-[11px] text-emerald-400 pt-1">
+                  +{fiveStarTarget.need} five-star reviews → {fiveStarTarget.target.toFixed(1)}★
+                </div>
+              )}
+            </div>
+          </div>
+        </AnalysisBlock>
+      </div>
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <AnalysisBlock title="14-Day Revenue & Cost Trend" className="xl:col-span-2">
+        <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2">
+          {chart.length === 0 ? (
+            <div className="h-[220px] flex items-center justify-center text-xs text-slate-600">
+              {loading ? "Loading…" : isSingleDay ? "No sales recorded for this day yet" : "No data for this period"}
+            </div>
+          ) : (
           <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
+            <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} />
-              <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `£${(v/1000).toFixed(0)}k`} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />
+              <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
+              <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => v >= 1000 ? `£${(v/1000).toFixed(0)}k` : `£${Math.round(v)}`} />
+              {!isSingleDay && <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />}
               <Tooltip content={<ChartTooltip/>} />
               <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-              <Bar yAxisId="left" dataKey="revenue" name="£ Revenue" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]} />
-              <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />
-              <Line yAxisId="right" type="monotone" dataKey="primeCost" name="Prime Cost %" stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 4" dot={false} />
+              <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]} />
+              {!isSingleDay && <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />}
             </ComposedChart>
           </ResponsiveContainer>
+          )}
         </AnalysisBlock>
-        <AnalysisBlock title="7-Day Revenue Split">
+        <AnalysisBlock title="Revenue Split by Brand">
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
               <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3}>
@@ -6301,11 +6649,10 @@ function DashboardView({ brands, entries, issues }) {
         </AnalysisBlock>
       </div>
 
-      {/* Active Issues Summary */}
-      {issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && !["Resolved","Closed"].includes(i.status)).length > 0 && (
+      {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).length > 0 && (
         <AnalysisBlock title="Active Issues Requiring Attention">
           <div className="space-y-2">
-            {issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && !["Resolved","Closed"].includes(i.status)).slice(0, 5).map(issue => {
+            {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).slice(0, 5).map(issue => {
               const sc = STATUS_CONFIG[issue.status];
               const pc = PRIORITY_CONFIG[issue.priority];
               const brand = brands.find(b => b.id === issue.brandId);
@@ -20980,12 +21327,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       const scheduledStart = openRecord.scheduledStart;
       const scheduledEnd   = openRecord.scheduledEnd;
       const isUnscheduled = !scheduledStart || !scheduledEnd;
-
-      // ── GRACE ROUNDING (PUNCH_GRACE_V1) ──────────────────────────────────
-      // Clock-in  <=15 min EARLY -> round up to scheduled start (early mins unpaid).
-      // Clock-out <=14 min LATE  -> round down to scheduled end (late mins unpaid, no OT).
-      // Late-in / early-out -> actual time stands. Grace only rounds toward the
-      // schedule in the employer-favourable direction. Pay follows the rounded time.
+      // PUNCH_GRACE_V1 — in <=15min early -> scheduled start; out <=14min late -> scheduled end.
       const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
       let effInMs = punchInTime.getTime();
       let effOutMs = Date.now();
@@ -20993,21 +21335,18 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       if (!isUnscheduled) {
         ssMs = new Date(openRecord.date+"T"+scheduledStart+":00").getTime();
         seMs = new Date(openRecord.date+"T"+scheduledEnd  +":00").getTime();
-        if (seMs <= ssMs) seMs += 86400000;                 // overnight shift
-        const earlyMs = ssMs - effInMs;                     // >0 = clocked in early
+        if (seMs <= ssMs) seMs += 86400000;
+        const earlyMs = ssMs - effInMs;
         if (earlyMs > 0 && earlyMs <= GRACE_IN_MS) effInMs = ssMs;
-        const lateMs = effOutMs - seMs;                     // >0 = clocked out late
+        const lateMs = effOutMs - seMs;
         if (lateMs > 0 && lateMs <= GRACE_OUT_MS) effOutMs = seMs;
       }
-
       const hoursWorked = Math.round(((effOutMs - effInMs) / 3600000) * 100) / 100;
       const grossPay    = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
       let overtimeHrs = 0;
       if (!isUnscheduled) {
         const schedHours = (seMs - ssMs) / 3600000;
         const overByTotal = Math.max(0, hoursWorked - schedHours);
-        // Out-of-window time, using the GRACED in/out (so early-in/late-out within
-        // grace never count as unscheduled overtime).
         const overlapStart = Math.max(effInMs, ssMs);
         const overlapEnd   = Math.min(effOutMs, seMs);
         const overlapMs    = Math.max(0, overlapEnd - overlapStart);
@@ -21493,8 +21832,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
     return `${h}h ${String(m).padStart(2,"0")}m`;
   };
-  // Graced punch in/out times (PUNCH_GRACE_V1) — returns the ISO strings to DISPLAY.
-  // Actual r.punchIn/r.punchOut stay untouched in storage (audit trail preserved).
+  // PUNCH_GRACE_V1 — graced punch in/out times for DISPLAY (actual stays in storage).
   const gracedPunchTimes = (r) => {
     if (!r.punchIn) return { inIso: r.punchIn, outIso: r.punchOut };
     let pIn = new Date(r.punchIn).getTime();
@@ -21506,16 +21844,10 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       if (seMs <= ssMs) seMs += 86400000;
       const earlyMs = ssMs - pIn;
       if (earlyMs > 0 && earlyMs <= GRACE_IN_MS) pIn = ssMs;
-      if (pOut != null) {
-        const lateMs = pOut - seMs;
-        if (lateMs > 0 && lateMs <= GRACE_OUT_MS) pOut = seMs;
-      }
+      if (pOut != null) { const lateMs = pOut - seMs; if (lateMs > 0 && lateMs <= GRACE_OUT_MS) pOut = seMs; }
     }
     return { inIso: new Date(pIn).toISOString(), outIso: pOut != null ? new Date(pOut).toISOString() : null };
   };
-  // Graced worked hours for DISPLAY — recomputes from punch + schedule so the
-  // screen shows graced hours regardless of what's stored (PUNCH_GRACE_V1).
-  // in <=15min early -> round up to start; out <=14min late -> round down to end.
   const calcGracedHours = (r) => {
     if (!r.punchIn || !r.punchOut) return r.hoursWorked;
     let pIn = new Date(r.punchIn).getTime();
@@ -21533,13 +21865,11 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   const calcOvertimeHours = (r) => {
     if (!r.punchIn || !r.punchOut) return 0;
     if (!r.scheduledStart || !r.scheduledEnd) return 0;
-    // PUNCH_GRACE_V1 — mirror the kiosk grace so the review screen matches stored pay:
-    // in <=15min early rounds up to scheduled start; out <=14min late rounds down to end.
     const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
     const schedStart = new Date(r.date + "T" + r.scheduledStart + ":00");
     const schedEnd   = new Date(r.date + "T" + r.scheduledEnd   + ":00");
     let ssMs = schedStart.getTime(), seMs = schedEnd.getTime();
-    if (seMs <= ssMs) seMs += 86400000; // overnight
+    if (seMs <= ssMs) seMs += 86400000;
     let pIn  = new Date(r.punchIn).getTime();
     let pOut = new Date(r.punchOut).getTime();
     const earlyMs = ssMs - pIn;  if (earlyMs > 0 && earlyMs <= GRACE_IN_MS)  pIn  = ssMs;
@@ -21547,14 +21877,11 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const actualMs = pOut - pIn;
     const actualHours = actualMs / 3600000;
     const schedHours = (seMs - ssMs) / 3600000;
-    // Component 1: total hours worked > scheduled hours
     const overByTotal = Math.max(0, actualHours - schedHours);
-    // Component 2: hours worked OUTSIDE the scheduled window (early start or late end)
     const overlapStart = Math.max(pIn, ssMs);
     const overlapEnd   = Math.min(pOut, seMs);
     const overlapMs    = Math.max(0, overlapEnd - overlapStart);
     const outOfWindowHours = Math.max(0, (actualMs - overlapMs) / 3600000);
-    // Report whichever is larger — covers both "worked extra" and "worked at wrong time"
     return Math.round(Math.max(overByTotal, outOfWindowHours) * 100) / 100;
   };
   const calcUnscheduled = (r) => {
@@ -21720,8 +22047,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
             const member = opsTeam.find(m => m.id === r.employeeId);
             const hasOT  = r.overtimeHrs > 0;
-            // Approval required for punches WITH overtime OR unscheduled shifts
-            // (both need a manager's eye). Clean scheduled punches are auto-fine.
+            // Approval required for overtime OR unscheduled shifts; clean punches auto-fine.
             const needsApproval = r.status === "closed" && !r.approved && (hasOT || r.isUnscheduled);
             const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
             const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
@@ -21865,6 +22191,12 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                         <span className="text-slate-500">Hours</span>
                         <span className="text-white font-bold">{fmtDur(r.gracedHours ?? r.hoursWorked)}</span>
                       </div>
+                      {(r.gracedIn !== r.punchIn || (r.gracedOut && r.gracedOut !== r.punchOut)) && (
+                        <div className="text-[10px] text-slate-600 italic pt-1">
+                          Grace applied · actual punch: {fmtTime(r.punchIn)}{r.punchOut ? `–${fmtTime(r.punchOut)}` : ""}
+                        </div>
+                      )}
+                      <PunchHistory punchId={r.id} />
                     </div>
                   </div>
                 </div>
@@ -21996,6 +22328,41 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 // ── Amend Punch Modal ─────────────────────────────────────────────────────────
 
 // ── Amend Punch Modal — full manager controls ─────────────────────────────────
+function PunchHistory({ punchId }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const toggle = async () => {
+    const next = !open; setOpen(next);
+    if (next && rows == null) {
+      setLoading(true);
+      try { setRows(await fetchPunchAudit(punchId)); } catch { setRows([]); } finally { setLoading(false); }
+    }
+  };
+  const fmtWhen = (iso) => { try { return new Date(iso).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}); } catch { return iso; } };
+  const fieldLabel = (f) => f === "punch_in" ? "Clock in" : f === "punch_out" ? "Clock out" : f;
+  return (
+    <div className="pt-1">
+      <button onClick={toggle} className="text-[10px] text-slate-600 hover:text-slate-400 underline">
+        {open ? "Hide change history" : "Change history"}
+      </button>
+      {open && (
+        <div className="mt-1 space-y-1">
+          {loading && <div className="text-[10px] text-slate-600">Loading…</div>}
+          {!loading && rows && rows.length === 0 && <div className="text-[10px] text-slate-600">No changes recorded.</div>}
+          {!loading && rows && rows.map(a => (
+            <div key={a.id} className="text-[10px] text-slate-500 flex gap-2 flex-wrap">
+              <span className="text-slate-600">{fmtWhen(a.changedAt)}</span>
+              <span>{fieldLabel(a.field)}: <span className="text-slate-400">{a.oldValue ?? "—"}</span> → <span className="text-slate-300">{a.newValue ?? "—"}</span></span>
+              <span className="text-slate-700">({a.reason}{a.changedBy ? ` · ${a.changedBy}` : ""})</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AmendPunchModal({ record, onSave, onDelete, onClose }) {
   const toTimeStr = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "";
   const [punchInTime,  setPunchInTime]  = useState(toTimeStr(record.punchIn));
@@ -22009,8 +22376,12 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
     const newPunchOut = punchOutTime ? new Date(dateBase + punchOutTime + ":00").toISOString() : null;
     const hoursWorked = newPunchOut ? Math.round(((new Date(newPunchOut)-new Date(newPunchIn))/3600000)*100)/100 : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
+    const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
+    const _audit = [];
+    if (record.punchIn !== newPunchIn) _audit.push({ field: "punch_in", oldValue: fmtT(record.punchIn), newValue: fmtT(newPunchIn) });
+    if ((record.punchOut || null) !== newPunchOut) _audit.push({ field: "punch_out", oldValue: fmtT(record.punchOut), newValue: fmtT(newPunchOut) });
     onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes,
-             status: punchOutTime ? "amended" : "open", approved: false, updatedAt: new Date().toISOString() });
+             status: punchOutTime ? "amended" : "open", approved: false, updatedAt: new Date().toISOString(), _audit });
   };
 
   const handleForceClockOut = () => {
@@ -22281,7 +22652,6 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
       const se = new Date(r.date+"T"+scheduledEnd  +":00");
       let ssMs = ss.getTime(), seMs = se.getTime();
       if (seMs <= ssMs) seMs += 86400000;
-      // PUNCH_GRACE_V1: in <=15min early -> start; out <=14min late -> end.
       const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
       let pIn = new Date(r.punchIn).getTime();
       let pOut = new Date(r.punchOut).getTime();
@@ -24359,7 +24729,7 @@ export default function App() {
   const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
   const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
-  const handleAmendPunch = useCallback(async record=>{try{const saved=await upsertPunchRecord(record);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
+  const handleAmendPunch = useCallback(async record=>{try{const {_audit, ...clean}=record;const saved=await upsertPunchRecord(clean);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));if(_audit&&_audit.length){logPunchAudit(_audit.map(a=>({...a,punchId:saved.id,reason:"manager_amend",changedBy:currentUser?.name||currentUser?.id||"manager"})));}showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, currentUser]);
 
   const handleFlipdishSync = useCallback(async () => {
     try {
@@ -24638,7 +25008,7 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
-            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
+            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && currentUser.role === "manager" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}

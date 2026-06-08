@@ -1004,6 +1004,30 @@ export async function upsertPunchRecord(record) {
   return dbPunchToApp(data);
 }
 
+// PUNCH_AUDIT_V1 — write change entries (fire-and-forget; never blocks the save).
+export async function logPunchAudit(entries) {
+  if (!entries || entries.length === 0) return;
+  const rows = entries.map((e, i) => ({
+    id: `pa-${Date.now()}-${i}`,
+    punch_id: e.punchId, field: e.field,
+    old_value: e.oldValue == null ? null : String(e.oldValue),
+    new_value: e.newValue == null ? null : String(e.newValue),
+    reason: e.reason || "manager_amend", changed_by: e.changedBy || "unknown",
+    changed_at: new Date().toISOString(),
+  }));
+  const { error } = await supabase.from("punch_audit").insert(rows);
+  if (error) console.error("punch_audit insert failed:", error.message);
+}
+export async function fetchPunchAudit(punchId) {
+  const { data, error } = await supabase.from("punch_audit")
+    .select("*").eq("punch_id", punchId).order("changed_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: r.id, punchId: r.punch_id, field: r.field, oldValue: r.old_value,
+    newValue: r.new_value, reason: r.reason, changedBy: r.changed_by, changedAt: r.changed_at,
+  }));
+}
+
 function appPunchToDb(p) {
   return {
     id: p.id, brand_id: p.brandId, store_id: p.storeId || null,
