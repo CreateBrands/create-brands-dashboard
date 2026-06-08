@@ -236,6 +236,11 @@ function managersAsRoster(users) {
     });
 }
 
+// Local-time date string (YYYY-MM-DD) — avoids the UTC off-by-one that
+// toISOString() causes in BST/any +TZ (local midnight -> previous UTC day).
+function fmtDateLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
 function resolvePeriod(preset, customFrom, customTo) {
   const today = new Date(); today.setHours(0,0,0,0);
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
@@ -243,12 +248,12 @@ function resolvePeriod(preset, customFrom, customTo) {
   const lastMon = new Date(mon); lastMon.setDate(lastMon.getDate()-7);
   const lastSun = new Date(mon); lastSun.setDate(lastSun.getDate()-1);
   switch (preset) {
-    case "today": return { from: fmtDate(today), to: fmtDate(today), label: "Today" };
-    case "yesterday": return { from: fmtDate(yest), to: fmtDate(yest), label: "Yesterday" };
-    case "this_week": return { from: fmtDate(mon), to: fmtDate(today), label: "This Week" };
-    case "last_week": return { from: fmtDate(lastMon), to: fmtDate(lastSun), label: "Last Week" };
+    case "today": return { from: fmtDateLocal(today), to: fmtDateLocal(today), label: "Today" };
+    case "yesterday": return { from: fmtDateLocal(yest), to: fmtDateLocal(yest), label: "Yesterday" };
+    case "this_week": return { from: fmtDateLocal(mon), to: fmtDateLocal(today), label: "This Week" };
+    case "last_week": return { from: fmtDateLocal(lastMon), to: fmtDateLocal(lastSun), label: "Last Week" };
     case "custom": return { from: customFrom, to: customTo, label: "Custom Period" };
-    default: return { from: fmtDate(today), to: fmtDate(today), label: "Today" };
+    default: return { from: fmtDateLocal(today), to: fmtDateLocal(today), label: "Today" };
   }
 }
 
@@ -262,15 +267,15 @@ function resolvePrevPeriod(preset, customFrom, customTo) {
   const weekBefore = new Date(lastMon); weekBefore.setDate(weekBefore.getDate()-7);
   const weekBeforeSun = new Date(lastMon); weekBeforeSun.setDate(weekBeforeSun.getDate()-1);
   switch (preset) {
-    case "today": return { from: fmtDate(yest), to: fmtDate(yest), label: "Yesterday" };
-    case "yesterday": return { from: fmtDate(twoDaysAgo), to: fmtDate(twoDaysAgo), label: "2 Days Ago" };
-    case "this_week": return { from: fmtDate(lastMon), to: fmtDate(lastSun), label: "Last Week" };
-    case "last_week": return { from: fmtDate(weekBefore), to: fmtDate(weekBeforeSun), label: "Week Before" };
+    case "today": return { from: fmtDateLocal(yest), to: fmtDateLocal(yest), label: "Yesterday" };
+    case "yesterday": return { from: fmtDateLocal(twoDaysAgo), to: fmtDateLocal(twoDaysAgo), label: "2 Days Ago" };
+    case "this_week": return { from: fmtDateLocal(lastMon), to: fmtDateLocal(lastSun), label: "Last Week" };
+    case "last_week": return { from: fmtDateLocal(weekBefore), to: fmtDateLocal(weekBeforeSun), label: "Week Before" };
     case "custom": {
       if (!customFrom || !customTo) return null;
       const f = new Date(customFrom), t = new Date(customTo);
       const diff = t - f;
-      return { from: fmtDate(new Date(f - diff - 86400000)), to: fmtDate(new Date(f - 86400000)), label: "Prior Period" };
+      return { from: fmtDateLocal(new Date(f - diff - 86400000)), to: fmtDateLocal(new Date(f - 86400000)), label: "Prior Period" };
     }
     default: return null;
   }
@@ -439,7 +444,15 @@ function AnalysisBlock({ title, children, className = "", action }) {
   );
 }
 
-function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior" }) {
+function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null }) {
+  const ACCENTS = {
+    indigo: { icon: "text-indigo-400", val: "text-indigo-300", ring: "border-indigo-500/30 bg-indigo-950/20" },
+    emerald:{ icon: "text-emerald-400", val: "text-emerald-300", ring: "border-emerald-500/30 bg-emerald-950/20" },
+    sky:    { icon: "text-sky-400", val: "text-sky-300", ring: "border-sky-500/30 bg-sky-950/20" },
+    amber:  { icon: "text-amber-400", val: "text-amber-300", ring: "border-amber-500/30 bg-amber-950/20" },
+    red:    { icon: "text-red-400", val: "text-red-300", ring: "border-red-500/30 bg-red-950/20" },
+  };
+  const ac = accent && ACCENTS[accent] ? ACCENTS[accent] : null;
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
   let deltaEl = null;
@@ -454,12 +467,12 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     );
   }
   return (
-    <div className={`rounded-2xl border p-4 flex flex-col gap-2 ${alert ? "bg-red-950/20 border-red-500/30" : "bg-slate-900 border-slate-700"}`}>
+    <div className={`rounded-2xl border p-4 flex flex-col gap-2 ${alert ? "bg-red-950/20 border-red-500/30" : ac ? ac.ring : "bg-slate-900 border-slate-700"}`}>
       <div className="flex items-center gap-2">
-        {Icon && <Icon size={13} className="text-slate-600" />}
+        {Icon && <Icon size={13} className={alert ? "text-red-400" : ac ? ac.icon : "text-slate-600"} />}
         <span className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{label}</span>
       </div>
-      <div className={`text-xl font-bold ${alert ? "text-red-400" : "text-white"}`}>{currentVal}</div>
+      <div className={`text-xl font-bold ${alert ? "text-red-400" : ac ? ac.val : "text-white"}`}>{currentVal}</div>
       {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
       {deltaEl}
       {previousVal && (
@@ -6336,16 +6349,16 @@ function DashboardView({ brands, stores, entries, issues }) {
       {loading && <div className="text-xs text-slate-500">Loading {period.label.toLowerCase()} actuals…</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <ComparisonKPICard label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
-        <ComparisonKPICard label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={cur.wagePct != null && cur.wagePct > 30 ? "Above 30%" : "≤30% target"} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
+        <ComparisonKPICard accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
+        <ComparisonKPICard accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={cur.wagePct != null && cur.wagePct > 30 ? "Above 30%" : "≤30% target"} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <StatCard label="Prime Cost %" value="Pending COGS" sub="Awaiting COGS module" icon={Activity} accent="slate" />
-        <ComparisonKPICard label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
+        <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <ComparisonKPICard label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
+        <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
         <StatCard label="Net Margin" value="Pending COGS" sub="Awaiting COGS module" icon={TrendingUp} accent="slate" />
-        <ComparisonKPICard label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
+        <ComparisonKPICard accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
