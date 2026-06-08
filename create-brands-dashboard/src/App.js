@@ -81,6 +81,9 @@ import {
   approveInvoiceRpc,
   rejectInvoice,
   listStoresLite,
+  fetchGoogleReviews,
+  triggerGoogleReviewsSync,
+  getGoogleReviewsSyncState,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -3326,6 +3329,98 @@ function InvoicesView({ currentUser }) {
   );
 }
 // ===== end INVOICES_VIEW_V1 =====
+
+// ===== GOOGLE_REVIEWS_VIEW_V1 =====
+function GoogleReviewsView({ stores = [], currentUser }) {
+  const [reviews, setReviews] = useState([]);
+  const [filter, setFilter] = useState("all");   // all | low (<=2)
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [state, setState] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      setReviews(await fetchGoogleReviews(filter === "low" ? { minStar: 2 } : {}));
+      setState(await getGoogleReviewsSyncState());
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter]);
+
+  const storeName = (id) => stores.find(s => s.id === id)?.name || (id ? id : "Unmapped store");
+  const stars = (n) => "★".repeat(n || 0) + "☆".repeat(5 - (n || 0));
+
+  const runSync = async () => {
+    setSyncing(true); setErr(null);
+    try { await triggerGoogleReviewsSync(); await load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setSyncing(false); }
+  };
+
+  const avg = reviews.length ? (reviews.reduce((s, r) => s + (r.stars || 0), 0) / reviews.length) : 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Star className="w-4 h-4 text-amber-400" />
+          <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
+        </div>
+        <div className="flex gap-1.5 items-center">
+          {["all", "low"].map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${filter === f ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"}`}>
+              {f === "all" ? "All" : "Needs attention (≤2★)"}
+            </button>
+          ))}
+          <button onClick={runSync} disabled={syncing}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+            {syncing ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      </div>
+
+      {state?.last_run_at && (
+        <div className="text-[11px] text-slate-600">
+          Last sync {new Date(state.last_run_at).toLocaleString("en-GB")}
+          {state.last_result?.unmatched ? ` · ${state.last_result.unmatched} unmapped listing(s)` : ""}
+        </div>
+      )}
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+      {!loading && reviews.length > 0 && (
+        <div className="text-xs text-slate-400">{reviews.length} reviews shown · avg {avg.toFixed(2)}★</div>
+      )}
+
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Loading…</div>}
+      {!loading && reviews.length === 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">
+          No reviews yet — hit “Sync now” to pull from Google.
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {reviews.map(r => (
+          <div key={r.reviewId} className={`rounded-xl border p-3 ${r.stars <= 2 ? "border-rose-800/50 bg-rose-950/20" : "border-slate-800 bg-slate-900"}`}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className={`text-sm ${r.stars <= 2 ? "text-rose-300" : "text-amber-300"}`}>{stars(r.stars)}</span>
+                <span className="text-xs text-slate-400">{r.reviewer}</span>
+              </div>
+              <span className="text-[10px] text-slate-600">
+                {storeName(r.storeId)}{r.createTime ? " · " + new Date(r.createTime).toLocaleDateString("en-GB") : ""}
+              </span>
+            </div>
+            {r.comment && <div className="text-xs text-slate-300 mt-1.5">{r.comment}</div>}
+            {r.reply && <div className="text-[11px] text-slate-500 mt-1.5 border-l-2 border-slate-700 pl-2">Your reply: {r.reply}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+// ===== end GOOGLE_REVIEWS_VIEW_V1 =====
 
 function AskDataView() {
   const [question, setQuestion] = useState("");
@@ -24307,6 +24402,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"] },
       { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"] },
+      { key: "google-reviews", label: "Google Reviews", icon: Star, roles: ["owner", "hq_staff", "manager"] },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
@@ -24516,6 +24612,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "weekly-reports" && ["owner","hq_staff"].includes(currentUser.role) && <WeeklyReportsView/>}
             {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
+            {effectiveActiveView === "google-reviews" && ["owner","hq_staff","manager"].includes(currentUser.role) && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

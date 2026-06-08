@@ -4290,3 +4290,33 @@ export async function listStoresLite() {
   return data || [];
 }
 // ===== end INVOICE_HELPERS_V1 =====
+
+
+// ===== GBP_REVIEWS_V1: fetch Google reviews + trigger sync =====
+export async function fetchGoogleReviews({ minStar, storeId } = {}) {
+  let q = supabase.from("google_reviews").select("*").order("create_time", { ascending: false }).limit(300);
+  if (typeof minStar === "number") q = q.lte("star_rating", minStar);
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    reviewId: r.review_id, storeId: r.store_id, locationId: r.location_id,
+    stars: r.star_rating, comment: r.comment || "", reviewer: r.reviewer_name || "Anonymous",
+    reply: r.reply_comment || null, createTime: r.create_time, updateTime: r.update_time,
+  }));
+}
+
+export async function triggerGoogleReviewsSync() {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-reviews-sync", { body: {}, headers });
+  if (error) throw error;
+  return data;
+}
+
+export async function getGoogleReviewsSyncState() {
+  const { data, error } = await supabase.from("google_reviews_sync_state").select("*").eq("id", 1).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+// ===== end GBP_REVIEWS_V1 =====
