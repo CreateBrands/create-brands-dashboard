@@ -2593,7 +2593,7 @@ function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
   );
 }
 
-function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments, checklists, tempUnits,
+function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
@@ -2744,7 +2744,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
 
           {activeView === "comms" && (
             <CommunicationView
-              currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={[]}
+              currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages || []} onSend={onSendMessage} onMarkRead={onMarkRead}
               tickets={hdTickets || []} onAddTicket={onAddHdTicket} onUpdateTicket={onUpdateHdTicket} onDeleteTicket={() => {}}
               availability={availability || []} onAddAvailability={onAddAvailability} onUpdateAvailability={onUpdateAvailability}
@@ -23981,7 +23981,7 @@ export default function App() {
     return (
       <AuthContext.Provider value={{ user: currentUser }}>
         <EmployeeShell
-          currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam}
+          currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
           cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
           tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
