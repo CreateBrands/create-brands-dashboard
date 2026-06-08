@@ -6395,23 +6395,44 @@ function DashboardView({ brands, stores, entries, issues }) {
       footer: ["Total", "", fmtNum(cur.orders), fmtCurrency(cur.revenue)],
     });
   };
+  const fmtTime = (ts) => {
+    if (!ts) return "—";
+    try { return new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
+    catch { return "—"; }
+  };
   const openLabourDrill = (mode) => {
     // mode: "hours" | "cost"
     const punches = data.curPunch.filter(r => scopedStoreIds.has(r.storeId))
       .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (a.employeeName||"").localeCompare(b.employeeName||""));
-    const rows = punches.map(p => [
-      p.employeeName || "—",
-      nameOfStore(p.storeId),
-      p.date || "—",
-      p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "on shift",
-      fmtCurrency(p.grossPay || 0),
-    ]);
-    setDrill({
-      title: `${mode === "hours" ? "Labour hours" : "Labour cost"} breakdown · ${period.label}`,
-      columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
-      rows,
-      footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, fmtCurrency(cur.labourCost)],
-    });
+    if (mode === "cost") {
+      const rows = punches.map(p => [
+        p.employeeName || "—", nameOfStore(p.storeId), p.date || "—",
+        p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "on shift",
+        fmtCurrency(p.grossPay || 0),
+      ]);
+      setDrill({
+        title: `Labour cost breakdown · ${period.label}`,
+        columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
+        rows,
+        footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, fmtCurrency(cur.labourCost)],
+      });
+    } else {
+      // hours: Name, Start, End, Worked hours, Overtime
+      const totOt = punches.reduce((a, p) => a + (p.overtimeHours || 0), 0);
+      const rows = punches.map(p => [
+        p.employeeName || "—",
+        fmtTime(p.punchIn),
+        p.punchOut ? fmtTime(p.punchOut) : "on shift",
+        p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "—",
+        p.overtimeHours ? `${p.overtimeHours.toFixed(2)}h` : "—",
+      ]);
+      setDrill({
+        title: `Labour hours breakdown · ${period.label}`,
+        columns: ["Employee", "Start", "End", "Worked", "Overtime"],
+        rows,
+        footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, totOt ? `${totOt.toFixed(2)}h` : "—"],
+      });
+    }
   };
 
 
@@ -6471,11 +6492,16 @@ function DashboardView({ brands, stores, entries, issues }) {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2">
+          {chart.length === 0 ? (
+            <div className="h-[220px] flex items-center justify-center text-xs text-slate-600">
+              {loading ? "Loading…" : isSingleDay ? "No sales recorded for this day yet" : "No data for this period"}
+            </div>
+          ) : (
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
               <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
-              <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `£${(v/1000).toFixed(0)}k`} />
+              <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => v >= 1000 ? `£${(v/1000).toFixed(0)}k` : `£${Math.round(v)}`} />
               {!isSingleDay && <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />}
               <Tooltip content={<ChartTooltip/>} />
               <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
@@ -6483,6 +6509,7 @@ function DashboardView({ brands, stores, entries, issues }) {
               {!isSingleDay && <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />}
             </ComposedChart>
           </ResponsiveContainer>
+          )}
         </AnalysisBlock>
         <AnalysisBlock title="Revenue Split by Brand">
           <ResponsiveContainer width="100%" height={180}>
