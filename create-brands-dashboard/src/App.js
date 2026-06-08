@@ -22304,7 +22304,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
         />
       )}
       {addManualModal && (
-        <AddManualHoursModal brands={vb} opsTeam={opsTeam} currentUser={currentUser}
+        <AddManualHoursModal brands={vb} stores={stores} opsTeam={opsTeam} currentUser={currentUser}
           onSave={r => { onAdd(r); setAddManualModal(false); }}
           onClose={() => setAddManualModal(false)}
         />
@@ -22539,25 +22539,28 @@ function OvertimeConversation({ record, currentUser, isEmployee, onAddComment, c
   );
 }
 
-function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) {
+function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave, onClose }) {
   const vb = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const [brandId,   setBrandId]   = useState(vb[0]?.id || "");
+  const [storeId,   setStoreId]   = useState("");
   const [empId,     setEmpId]     = useState("");
   const [date,      setDate]      = useState("");
   const [punchIn,   setPunchIn]   = useState("08:00");
   const [punchOut,  setPunchOut]  = useState("16:00");
   const [notes,     setNotes]     = useState("Manual entry by manager");
 
+  const brandStores = stores.filter(s => s.brandId === brandId && !s.archivedAt &&
+    (isHqOrAbove(currentUser.role) || (currentUser.storeIds || []).includes(s.id)));
   const members = opsTeam.filter(m => m.brandId === brandId);
   const member  = opsTeam.find(m => m.id === empId);
   const hoursWorked = punchIn && punchOut ? Math.round(((new Date("2000-01-01T"+punchOut)-new Date("2000-01-01T"+punchIn))/3600000)*100)/100 : null;
 
   const handleSave = () => {
-    if (!empId || !date) return;
+    if (!empId || !date || !storeId) return;
     const dateBase = date + "T";
     const grossPay = hoursWorked && member?.hourlyRate ? Math.round(hoursWorked*member.hourlyRate*100)/100 : null;
     onSave({
-      id: `pr-${Date.now()}`, brandId,
+      id: `pr-${Date.now()}`, brandId, storeId: storeId || null,
       employeeId: empId, employeeName: `${member.firstName} ${member.lastName}`.trim(),
       date, punchIn: new Date(dateBase+punchIn+":00").toISOString(),
       punchOut: new Date(dateBase+punchOut+":00").toISOString(),
@@ -22572,10 +22575,16 @@ function AddManualHoursModal({ brands, opsTeam, currentUser, onSave, onClose }) 
     <Modal title="Add Manual Hours" onClose={onClose}
       footer={<>
         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-        <button onClick={handleSave} disabled={!empId||!date} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add Entry</button>
+        <button onClick={handleSave} disabled={!empId||!date||!storeId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add Entry</button>
       </>}>
       <div className="space-y-4">
-        {vb.length > 1 && <div><label className={labelCls}>Location</label><LocationDropdown brands={vb} value={brandId} onChange={v=>{setBrandId(v);setEmpId("");}} className="w-full"/></div>}
+        {vb.length > 1 && <div><label className={labelCls}>Brand</label><LocationDropdown brands={vb} value={brandId} onChange={v=>{setBrandId(v);setStoreId("");setEmpId("");}} className="w-full"/></div>}
+        <div><label className={labelCls}>Store *</label>
+          <SelectDropdown value={storeId} onChange={setStoreId} className="w-full">
+            <option value="">— Select store —</option>
+            {brandStores.map(s=><option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+          </SelectDropdown>
+        </div>
         <div><label className={labelCls}>Employee *</label>
           <SelectDropdown value={empId} onChange={setEmpId} className="w-full">
             <option value="">— Select —</option>
