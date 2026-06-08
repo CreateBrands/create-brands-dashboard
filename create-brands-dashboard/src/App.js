@@ -87,6 +87,7 @@ import {
   generateReviewReplies,
   postReviewReply,
   fetchSalesDaily,
+  fetchReviewsForDashboard,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
