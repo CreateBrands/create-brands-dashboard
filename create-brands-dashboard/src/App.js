@@ -21890,6 +21890,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   };
 
   const [weekOffset,     setWeekOffset]     = useState(0);
+  const [viewMode,       setViewMode]       = useState("week");   // "week" | "day"
+  const [dayOffset,      setDayOffset]      = useState(0);        // 0 = today, negative = past
+  const [approvalFilter, setApprovalFilter] = useState("all");    // "all" | "needs" | "approved"
   const [filterEmployee, setFilterEmployee] = useState("all");
   const [tab,            setTab]            = useState("records");
   const [amendModal,     setAmendModal]     = useState(null);
@@ -21899,7 +21902,12 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   const [expanded,       setExpanded]       = useState(new Set());  // record ids that are expanded
   const toggleExpanded = (id) => setExpanded(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
-  const { from, to } = getWeekBounds(weekOffset);
+  const dayBounds = (offset = 0) => {
+    const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() + offset);
+    const s = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    return { from: s, to: s };
+  };
+  const { from, to } = viewMode === "day" ? dayBounds(dayOffset) : getWeekBounds(weekOffset);
 
   const visible = punchRecords.filter(r => {
     if (!inScope(r)) return false;
@@ -22025,24 +22033,51 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
         </SelectDropdown>
       </div>
 
-      {/* Week nav */}
-      <div className="flex items-center justify-between">
-        <button onClick={()=>setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-        <div className="text-sm font-semibold text-white">
-          {new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}
-          {weekOffset === 0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}
+      {/* Day/Week toggle */}
+      <div className="flex items-center gap-2">
+        <div className="inline-flex rounded-xl bg-slate-800 p-0.5">
+          <button onClick={()=>setViewMode("day")}  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${viewMode==="day"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Day</button>
+          <button onClick={()=>setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Week</button>
         </div>
-        <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+      </div>
+
+      {/* Period nav (adapts to day/week) */}
+      <div className="flex items-center justify-between">
+        <button onClick={()=> viewMode==="day" ? setDayOffset(d=>d-1) : setWeekOffset(w=>w-1)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+        <div className="text-sm font-semibold text-white">
+          {viewMode === "day"
+            ? <>{new Date(from+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short",year:"numeric"})}{dayOffset===0 && <span className="ml-2 text-xs text-indigo-400">Today</span>}</>
+            : <>{new Date(from+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(to+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}{weekOffset===0 && <span className="ml-2 text-xs text-indigo-400">This week</span>}</>}
+        </div>
+        <button onClick={()=> viewMode==="day" ? setDayOffset(d=>d+1) : setWeekOffset(w=>w+1)} disabled={viewMode==="day" ? dayOffset>=0 : weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
+      </div>
+
+      {/* Approval tabs */}
+      <div className="flex gap-2">
+        {[["all","All"],["needs","Needs approval"],["approved","Approved"]].map(([k,label])=>(
+          <button key={k} onClick={()=>setApprovalFilter(k)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${approvalFilter===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* ── Records ── */}
-      {tab === "records" && (
+      {tab === "records" && (() => {
+        // Approval tab filter: needs = unapproved overtime/unscheduled; approved = the rest/settled.
+        const recNeedsApproval = (r) => r.status === "closed" && !r.approved && (r.overtimeHrs > 0 || r.isUnscheduled);
+        const displayed = enriched.filter(r =>
+          approvalFilter === "all" ? true :
+          approvalFilter === "needs" ? recNeedsApproval(r) :
+          !recNeedsApproval(r)   // "approved"
+        );
+        return (
         <div className="space-y-3">
-          {enriched.length === 0 && (
-            <EmptyState icon={Clock} title="No clock-in records this week"
-              message="Once your team starts clocking in at the kiosk, records will appear here for you to approve. You can also add hours manually using the button above."/>
+          {displayed.length === 0 && (
+            <EmptyState icon={Clock} title={approvalFilter === "needs" ? "Nothing needs approval" : approvalFilter === "approved" ? "No approved records here" : (viewMode === "day" ? "No clock-in records this day" : "No clock-in records this week")}
+              message="Once your team starts clocking in at the kiosk, records will appear here. You can also add hours manually using the button above."/>
           )}
-          {enriched.map(r => {
+          {displayed.map(r => {
             const brand  = brands.find(b => b.id === r.brandId);
             const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
             const member = opsTeam.find(m => m.id === r.employeeId);
@@ -22251,7 +22286,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             );
           })}
         </div>
-      )}
+        );
+      })()}
 
       {/* ── Summary ── */}
       {tab === "summary" && (
@@ -22541,7 +22577,7 @@ function OvertimeConversation({ record, currentUser, isEmployee, onAddComment, c
 
 function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave, onClose }) {
   const vb = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
-  const [brandId,   setBrandId]   = useState(vb[0]?.id || "");
+  const [brandId]   = useState(vb[0]?.id || "");  // fallback brand; store now drives it
   const [storeId,   setStoreId]   = useState("");
   const [empId,     setEmpId]     = useState("");
   const [date,      setDate]      = useState("");
@@ -22549,9 +22585,12 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
   const [punchOut,  setPunchOut]  = useState("16:00");
   const [notes,     setNotes]     = useState("Manual entry by manager");
 
-  const brandStores = stores.filter(s => s.brandId === brandId && !s.archivedAt &&
+  const pickStores = stores.filter(s => !s.archivedAt &&
     (isHqOrAbove(currentUser.role) || (currentUser.storeIds || []).includes(s.id)));
-  const members = opsTeam.filter(m => m.brandId === brandId);
+  const selStoreObj = stores.find(s => s.id === storeId);
+  const effBrandId = selStoreObj?.brandId || brandId;
+  // employees scoped to the chosen store's brand (once a store is picked)
+  const members = opsTeam.filter(m => storeId ? m.brandId === effBrandId : true);
   const member  = opsTeam.find(m => m.id === empId);
   const hoursWorked = punchIn && punchOut ? Math.round(((new Date("2000-01-01T"+punchOut)-new Date("2000-01-01T"+punchIn))/3600000)*100)/100 : null;
 
@@ -22560,7 +22599,7 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
     const dateBase = date + "T";
     const grossPay = hoursWorked && member?.hourlyRate ? Math.round(hoursWorked*member.hourlyRate*100)/100 : null;
     onSave({
-      id: `pr-${Date.now()}`, brandId, storeId: storeId || null,
+      id: `pr-${Date.now()}`, brandId: effBrandId, storeId: storeId || null,
       employeeId: empId, employeeName: `${member.firstName} ${member.lastName}`.trim(),
       date, punchIn: new Date(dateBase+punchIn+":00").toISOString(),
       punchOut: new Date(dateBase+punchOut+":00").toISOString(),
@@ -22578,11 +22617,10 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
         <button onClick={handleSave} disabled={!empId||!date||!storeId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add Entry</button>
       </>}>
       <div className="space-y-4">
-        {vb.length > 1 && <div><label className={labelCls}>Brand</label><LocationDropdown brands={vb} value={brandId} onChange={v=>{setBrandId(v);setStoreId("");setEmpId("");}} className="w-full"/></div>}
         <div><label className={labelCls}>Store *</label>
-          <SelectDropdown value={storeId} onChange={setStoreId} className="w-full">
+          <SelectDropdown value={storeId} onChange={v=>{setStoreId(v);setEmpId("");}} className="w-full">
             <option value="">— Select store —</option>
-            {brandStores.map(s=><option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            {pickStores.map(s=><option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
           </SelectDropdown>
         </div>
         <div><label className={labelCls}>Employee *</label>
