@@ -2581,12 +2581,21 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, assignments,
   // their ops_team record lists. TodaysTasks needs this to scope assignments —
   // without it, nothing shows (every store-scoped assignment fails the filter).
   const myOpsMember = (opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+  // FIX_STAFF_STORE_SCOPE_V1: previously ANY user whose brand matched a store
+  // saw EVERY store in that brand (e.g. a single-store till operator saw all 23
+  // Chocoberry shops). Now: HQ/owner see the whole brand; everyone else is
+  // scoped to their assigned store_ids. Fallback to the brand-wide set ONLY when
+  // a user has no assigned stores at all, so no one is ever locked out.
   const myVisibleStoreIds = useMemo(() => {
+    const assigned = myOpsMember?.storeIds || [];
+    if (!isHqOrAbove(currentUser.role) && assigned.length > 0) {
+      return [...assigned];
+    }
     const ids = new Set();
     (stores || []).forEach(s => { if (currentUser.brandIds?.includes(s.brandId)) ids.add(s.id); });
-    (myOpsMember?.storeIds || []).forEach(id => ids.add(id));
+    assigned.forEach(id => ids.add(id));
     return [...ids];
-  }, [stores, currentUser.brandIds, myOpsMember]);
+  }, [stores, currentUser.brandIds, currentUser.role, myOpsMember]);
   const [activeView, setActiveView] = useState("ops-tasks");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const overdueCount = assignments.filter(a =>
