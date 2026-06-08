@@ -444,7 +444,7 @@ function AnalysisBlock({ title, children, className = "", action }) {
   );
 }
 
-function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null }) {
+function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null }) {
   const ACCENTS = {
     indigo: { icon: "text-indigo-400", val: "text-indigo-300", ring: "border-indigo-500/30 bg-indigo-950/20" },
     emerald:{ icon: "text-emerald-400", val: "text-emerald-300", ring: "border-emerald-500/30 bg-emerald-950/20" },
@@ -467,10 +467,11 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     );
   }
   return (
-    <div className={`rounded-2xl border p-4 flex flex-col gap-2 ${alert ? "bg-red-950/20 border-red-500/30" : ac ? ac.ring : "bg-slate-900 border-slate-700"}`}>
+    <div onClick={onClick} className={`rounded-2xl border p-4 flex flex-col gap-2 ${onClick ? "cursor-pointer hover:border-indigo-500/60 transition-colors" : ""} ${alert ? "bg-red-950/20 border-red-500/30" : ac ? ac.ring : "bg-slate-900 border-slate-700"}`}>
       <div className="flex items-center gap-2">
         {Icon && <Icon size={13} className={alert ? "text-red-400" : ac ? ac.icon : "text-slate-600"} />}
         <span className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{label}</span>
+        {onClick && <span className="ml-auto text-[10px] text-slate-600">view ›</span>}
       </div>
       <div className={`text-xl font-bold ${alert ? "text-red-400" : ac ? ac.val : "text-white"}`}>{currentVal}</div>
       {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
@@ -1274,6 +1275,32 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
 
   return (
     <div className="space-y-6">
+      {drill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900">
+              <h3 className="text-sm font-semibold text-white">{drill.title}</h3>
+              <button onClick={() => setDrill(null)} className="text-slate-500 hover:text-white text-lg leading-none">×</button>
+            </div>
+            <table className="w-full text-xs">
+              <thead><tr className="text-slate-500 border-b border-slate-800">
+                {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</th>)}
+              </tr></thead>
+              <tbody>
+                {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-6 text-center text-slate-600">No data for this period</td></tr>}
+                {drill.rows.map((r,ri) => (
+                  <tr key={ri} className="border-b border-slate-800/50">
+                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2 ${ci===0?"text-left text-slate-300":"text-right text-slate-400"}`}>{cell}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+              {drill.footer && <tfoot><tr className="border-t border-slate-700 font-semibold text-white">
+                {drill.footer.map((c,i) => <td key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</td>)}
+              </tr></tfoot>}
+            </table>
+          </div>
+        </div>
+      )}
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {ISSUE_STATUSES.map(s => {
@@ -6234,6 +6261,7 @@ function DashboardView({ brands, stores, entries, issues }) {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [storeId, setStoreId] = useState("all");
+  const [drill, setDrill] = useState(null);  // {title, columns, rows, footer} | null
 
   const period = useMemo(() => resolvePeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
   const prevPeriod = useMemo(() => resolvePrevPeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
@@ -6277,6 +6305,23 @@ function DashboardView({ brands, stores, entries, issues }) {
     // eslint-disable-next-line
   }, [JSON.stringify(visibleBrandIds), period.from, period.to, prevPeriod?.from, prevPeriod?.to]);
 
+  // Single-day selection -> fetch that day's raw sales for an HOURLY chart.
+  const isSingleDay = period.from === period.to;
+  const [hourlyRows, setHourlyRows] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isSingleDay) { setHourlyRows([]); return; }
+    (async () => {
+      try {
+        const perBrand = await Promise.all(visibleBrandIds.map(b =>
+          fetchStoreSalesDetailed({ from: period.from, to: period.to, brandId: b })));
+        if (!cancelled) setHourlyRows(perBrand.flat());
+      } catch { if (!cancelled) setHourlyRows([]); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [isSingleDay, period.from, period.to, JSON.stringify(visibleBrandIds)]);
+
   // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
   const rollup = (sales, punch) => {
     const s = sales.filter(r => scopedStoreIds.has(r.storeId));
@@ -6305,8 +6350,29 @@ function DashboardView({ brands, stores, entries, issues }) {
     return any ? { revenue, orders, hours } : null;
   }, [scopedStores, period.from, period.to]);
 
-  // ── Daily chart over the selected window ──────────────────────────────────
+  // ── Chart: HOURLY when a single day is selected, DAILY otherwise ──────────
   const chart = useMemo(() => {
+    if (isSingleDay) {
+      // bucket the day's raw sales by LOCAL hour (0-23)
+      const buckets = {};
+      hourlyRows.filter(r => scopedStoreIds.has(r.storeId) && !r.isCancelled).forEach(r => {
+        if (!r.saleTime) return;
+        const h = new Date(r.saleTime).getHours(); // local hour
+        buckets[h] = buckets[h] || { revenue: 0, orders: 0 };
+        buckets[h].revenue += r.amountTotal || 0;
+        buckets[h].orders += 1;
+      });
+      const hours = Object.keys(buckets).map(Number).sort((a, b) => a - b);
+      if (hours.length === 0) return [];
+      const lo = hours[0], hi = hours[hours.length - 1];
+      const out = [];
+      for (let h = lo; h <= hi; h++) {
+        const b = buckets[h] || { revenue: 0, orders: 0 };
+        out.push({ label: `${String(h).padStart(2, "0")}:00`, revenue: b.revenue, laborPct: 0 });
+      }
+      return out;
+    }
+    // multi-day: daily buckets from the daily RPC + punch labour
     const byDate = {};
     data.curSales.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
       byDate[r.businessDate] = byDate[r.businessDate] || { revenue: 0, hours: 0, labourCost: 0 };
@@ -6322,7 +6388,7 @@ function DashboardView({ brands, stores, entries, issues }) {
       revenue: byDate[d].revenue,
       laborPct: byDate[d].revenue > 0 ? (byDate[d].labourCost / byDate[d].revenue) * 100 : 0,
     }));
-  }, [data, scopedStoreIds]);
+  }, [isSingleDay, hourlyRows, data, scopedStoreIds]);
 
   const pieData = useMemo(() => visibleBrands.map(b => {
     const value = data.curSales.filter(r => scopedStoreIds.has(r.storeId) && brandOfStore[r.storeId] === b.id)
@@ -6333,6 +6399,46 @@ function DashboardView({ brands, stores, entries, issues }) {
   const openIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.status === "Open").length;
   const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
   const prevLabel = prevPeriod?.label || "Prior";
+
+  const nameOfStore = (id) => allStores.find(s => s.id === id)?.shortName || allStores.find(s => s.id === id)?.name || id;
+
+  // ── Drill-down builders ───────────────────────────────────────────────────
+  const openRevenueDrill = () => {
+    const rows = [];
+    const map = {};
+    data.curSales.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
+      const key = `${r.storeId}|${r.channel}`;
+      map[key] = map[key] || { store: nameOfStore(r.storeId), channel: r.channel || "—", orders: 0, revenue: 0 };
+      map[key].orders += r.saleCount; map[key].revenue += r.revenue;
+    });
+    Object.values(map).sort((a,b)=>b.revenue-a.revenue).forEach(v =>
+      rows.push([v.store, v.channel, fmtNum(v.orders), fmtCurrency(v.revenue)]));
+    setDrill({
+      title: `Revenue breakdown · ${period.label}`,
+      columns: ["Store", "Channel", "Orders", "Revenue (gross)"],
+      rows,
+      footer: ["Total", "", fmtNum(cur.orders), fmtCurrency(cur.revenue)],
+    });
+  };
+  const openLabourDrill = (mode) => {
+    // mode: "hours" | "cost"
+    const punches = data.curPunch.filter(r => scopedStoreIds.has(r.storeId))
+      .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (a.employeeName||"").localeCompare(b.employeeName||""));
+    const rows = punches.map(p => [
+      p.employeeName || "—",
+      nameOfStore(p.storeId),
+      p.date || "—",
+      p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "on shift",
+      fmtCurrency(p.grossPay || 0),
+    ]);
+    setDrill({
+      title: `${mode === "hours" ? "Labour hours" : "Labour cost"} breakdown · ${period.label}`,
+      columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
+      rows,
+      footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, fmtCurrency(cur.labourCost)],
+    });
+  };
+
 
   return (
     <div className="space-y-6">
@@ -6349,8 +6455,8 @@ function DashboardView({ brands, stores, entries, issues }) {
       {loading && <div className="text-xs text-slate-500">Loading {period.label.toLowerCase()} actuals…</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <ComparisonKPICard accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
-        <ComparisonKPICard accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={cur.wagePct != null && cur.wagePct > 30 ? "Above 30%" : "≤30% target"} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
+        <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
+        <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <StatCard label="Prime Cost %" value="Pending COGS" sub="Awaiting COGS module" icon={Activity} accent="slate" />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
@@ -6358,22 +6464,22 @@ function DashboardView({ brands, stores, entries, issues }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
         <StatCard label="Net Margin" value="Pending COGS" sub="Awaiting COGS module" icon={TrendingUp} accent="slate" />
-        <ComparisonKPICard accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
+        <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <AnalysisBlock title={`Gross Revenue & Labour % · ${period.label}`} className="xl:col-span-2">
+        <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2">
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
               <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
               <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `£${(v/1000).toFixed(0)}k`} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />
+              {!isSingleDay && <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />}
               <Tooltip content={<ChartTooltip/>} />
               <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
               <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]} />
-              <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />
+              {!isSingleDay && <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />}
             </ComposedChart>
           </ResponsiveContainer>
         </AnalysisBlock>
