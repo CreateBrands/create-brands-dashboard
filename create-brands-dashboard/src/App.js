@@ -6289,7 +6289,7 @@ function DashboardView({ brands, stores, entries, issues }) {
     (async () => {
       try {
         const perBrand = await Promise.all(visibleBrandIds.map(b =>
-          fetchStoreSalesDetailed({ from: period.from, to: period.to, brandId: b })));
+          fetchFlipdishSales({ from: period.from, to: period.to, brandId: b })));
         if (!cancelled) setHourlyRows(perBrand.flat());
       } catch { if (!cancelled) setHourlyRows([]); }
     })();
