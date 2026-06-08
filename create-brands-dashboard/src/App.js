@@ -205,6 +205,31 @@ function fmtDate(d) { return d.toISOString().split("T")[0]; }
 function isOwnerRole(role) { return role === "owner"; }
 function isHqOrAbove(role) { return role === "owner" || role === "hq_staff"; }
 
+// MANAGERS_IN_TEAM_V1: managers live in `users`; map them into ops-member shape
+// so they appear in the team directory and can be scheduled — WITHOUT creating
+// duplicate ops_team rows (single source of truth, no drift). A manager spanning
+// brands (storeIds across brands) naturally appears under each store's rota since
+// the schedule keys on storeIds. Read-only in the directory (edited in Managers & Access).
+function managersAsRoster(users) {
+  return (users || [])
+    .filter(u => u.role === "manager")
+    .map(u => {
+      const parts = (u.name || "").trim().split(/\s+/);
+      return {
+        id: u.id,
+        firstName: parts[0] || (u.name || "Manager"),
+        lastName: parts.slice(1).join(" "),
+        role: "Manager",
+        department: "Management",
+        brandId: (u.brandIds || [])[0] || null,
+        storeIds: u.storeIds || [],
+        status: "active",
+        color: "#a855f7",
+        isManager: true,
+      };
+    });
+}
+
 function resolvePeriod(preset, customFrom, customTo) {
   const today = new Date(); today.setHours(0,0,0,0);
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
@@ -16041,7 +16066,7 @@ function CleaningTaskListSection({ brands, stores, visibleStoreIds, cleaningTask
 function OpsTeamView({
   brands, stores = [], visibleStoreIds = [],
   storeDepartments = [], storeRoles = [],
-  opsTeam = [],
+  opsTeam = [], users = [],
   onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam,
   onOpenEmployeeProfile, currentUser,
 }) {
@@ -16066,7 +16091,7 @@ function OpsTeamView({
   };
 
   // Active employees (not archived), with optional pending filter.
-  const base = useMemo(() => opsTeam.filter(m => !m.archivedAt), [opsTeam]);
+  const base = useMemo(() => [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users)], [opsTeam, users]);
 
   const pendingCount = useMemo(() => base.filter(m => {
     if (m.status !== "pending_setup") return false;
@@ -16160,19 +16185,20 @@ function OpsTeamView({
                 {g.members.map(m => {
                   const { roleLabel, deptLabel } = memberMeta(m);
                   return (
-                    <div key={m.id} onClick={() => onOpenEmployeeProfile?.(m.id)} title="Click to open profile"
-                      className="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 hover:border-slate-600 transition-colors cursor-pointer">
+                    <div key={m.id} onClick={() => { if (!m.isManager) onOpenEmployeeProfile?.(m.id); }} title={m.isManager ? "Manager — edit in Managers & Access" : "Click to open profile"}
+                      className={`flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 transition-colors ${m.isManager ? "" : "hover:border-slate-600 cursor-pointer"}`}>
                       <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}</div>
                           {m.status === "pending_setup" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">⚠ Pending setup</span>}
+                          {m.isManager && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-700 text-purple-300 font-semibold">Manager</span>}
                         </div>
                         <div className="text-xs text-slate-600">{[roleLabel, deptLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click to complete setup" : "")}</div>
                       </div>
                       <div className="flex gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
-                        <button onClick={() => setDelTarget({ msg: `Delete "${m.firstName} ${m.lastName}"? This removes the team member.`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                        {!m.isManager && <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>}
+                        {!m.isManager && <button onClick={() => setDelTarget({ msg: `Delete "${m.firstName} ${m.lastName}"? This removes the team member.`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>}
                       </div>
                     </div>
                   );
@@ -18761,7 +18787,7 @@ function CommunicationView({
             brands={brands}
             stores={stores}
             visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)}
-            opsTeam={opsTeam}
+            opsTeam={opsTeam} users={users}
             schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]}
             punchRecords={punchRecords||[]} currentUser={currentUser}
             onAdd={onAddSchedule} onUpdate={onAddSchedule} onDelete={onDeleteSchedule}
@@ -19144,7 +19170,7 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
 // SCHEDULE VIEW — totals, costs, copy-week, conflicts, coverage, drag-resize,
 // auto-fill, forecasted SPLH, lock, multi-select bulk, mobile day view
 // ═══════════════════════════════════════════════════════════════════════════════
-function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore }) {
+function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore }) {
   const { user } = useAuth();
 
   // Store-first scoping (the new pattern). We pick a SINGLE store for the
@@ -19226,7 +19252,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
   // Members are filtered by store membership now (multi-store-staff supported
   // via ops_team.store_ids text[]). Falls back to brandId match for any legacy
   // ops_team row that doesn't yet have storeIds populated.
-  const brandMembers = opsTeam.filter(m => {
+  // MANAGERS_IN_TEAM_V1: roster = ops staff + managers (schedulable, multi-brand via storeIds)
+  const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users)], [opsTeam, users]);
+  const brandMembers = roster.filter(m => {
     const ids = m.storeIds || [];
     if (ids.length > 0) return ids.includes(storeId);
     return m.brandId === brandId;  // legacy fallback
@@ -19674,7 +19702,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
                 {daySlots.length===0
                   ? <div className="text-center py-8 text-slate-500 text-sm italic">No shifts scheduled</div>
                   : daySlots.map(s=>{
-                      const member = opsTeam.find(m=>m.id===s.employeeId);
+                      const member = roster.find(m=>m.id===s.employeeId);
                       const conflict = getSlotConflict(s, member);
                       const hrs = calcShiftHours(s.startTime, s.endTime);
                       return (
@@ -19867,7 +19895,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
                   ? <div className="px-4 py-3 text-xs text-slate-600 italic">No shifts scheduled</div>
                   : <div className="divide-y divide-slate-800/40">
                       {daySlots.map(s=>{
-                        const member = opsTeam.find(m=>m.id===s.employeeId);
+                        const member = roster.find(m=>m.id===s.employeeId);
                         const conflict = getSlotConflict(s, member);
                         const hrs = calcShiftHours(s.startTime, s.endTime);
                         const isSelected = selected.has(s.id);
@@ -19956,7 +19984,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, schedules, ava
           date={shiftModal.date} slot={shiftModal.slot||null} brandId={brandId} storeId={storeId}
           memberId={shiftModal.memberId||null} memberName={shiftModal.memberName||""}
           filterRole={filterRole!=="all"?filterRole:""} filterDept={filterDept!=="all"?filterDept:""}
-          opsTeam={opsTeam} availability={availability} shiftPresets={shiftPresets} schedules={schedules} currentUser={currentUser}
+          opsTeam={roster} availability={availability} shiftPresets={shiftPresets} schedules={schedules} currentUser={currentUser}
           onSave={s=>{onAdd(s);setShiftModal(null);}}
           onDelete={id=>{onDelete(id);setShiftModal(null);}}
           onClose={()=>setShiftModal(null)}
@@ -24169,7 +24197,7 @@ export default function App() {
             {effectiveActiveView === "team"           && <OpsTeamView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
-              opsTeam={opsTeam}
+              opsTeam={opsTeam} users={users}
               onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
               onOpenEmployeeProfile={openEmployeeProfile}
               currentUser={currentUser}
