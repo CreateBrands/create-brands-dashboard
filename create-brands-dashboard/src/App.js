@@ -86,6 +86,7 @@ import {
   getGoogleReviewsSyncState,
   generateReviewReplies,
   postReviewReply,
+  fetchSalesDaily,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6206,70 +6207,135 @@ function StoreDetailModal({ store, flipdishStores, fromDate, toDate, periodLabel
 }
 
 
-function DashboardView({ brands, entries, issues }) {
+function DashboardView({ brands, stores, entries, issues }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+  const visibleBrandIds = useMemo(() => visibleBrands.map(b => b.id), [visibleBrands]);
+  const visibleStores = useMemo(
+    () => (stores || []).filter(s => visibleBrandIds.includes(s.brandId) && !s.archivedAt && s.id !== "store-system-non-trading"),
+    [stores, visibleBrandIds]
+  );
+  const storeIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
+  const brandOfStore = useMemo(() => {
+    const m = {}; visibleStores.forEach(s => { m[s.id] = s.brandId; }); return m;
+  }, [visibleStores]);
+
   const today = new Date(); today.setHours(0,0,0,0);
   const todayStr = fmtDate(today);
   const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate()-6);
   const weekAgoStr = fmtDate(weekAgo);
+  const trendStart = new Date(today); trendStart.setDate(trendStart.getDate()-13);
+  const trendStartStr = fmtDate(trendStart);
 
-  const todayEntries = entries.filter(e => e.date === todayStr && visibleBrands.some(b => b.id === e.brandId));
-  const weekEntries = entries.filter(e => e.date >= weekAgoStr && e.date <= todayStr && visibleBrands.some(b => b.id === e.brandId));
+  // ── Actuals: Flipdish GROSS daily + punch labour, ONE ranged call per brand ──
+  const [salesDaily, setSalesDaily] = useState([]);   // [{businessDate, storeId, channel, saleCount, revenue}]
+  const [punches, setPunches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
-  const todayAgg = aggregateEntries(todayEntries);
-  const weekAgg = aggregateEntries(weekEntries);
-  const useLatest = todayAgg || weekAgg;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setErr(null);
+      try {
+        const [salesByBrand, punchByBrand] = await Promise.all([
+          Promise.all(visibleBrandIds.map(bid => fetchSalesDaily({ from: trendStartStr, to: todayStr, brandId: bid }))),
+          Promise.all(visibleBrandIds.map(bid => fetchPunchRecords({ brandId: bid, from: trendStartStr, to: todayStr }))),
+        ]);
+        if (cancelled) return;
+        setSalesDaily(salesByBrand.flat().filter(r => storeIds.has(r.storeId)));
+        setPunches(punchByBrand.flat().filter(p => storeIds.has(p.storeId)));
+      } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [JSON.stringify(visibleBrandIds), trendStartStr, todayStr]);
 
-  const chartData = useMemo(() => {
+  // ── Build 14-day buckets from the single fetch ────────────────────────────
+  const daily = useMemo(() => {
     const days = [];
     for (let i = 13; i >= 0; i--) {
       const d = new Date(today); d.setDate(d.getDate()-i);
       const ds = fmtDate(d);
-      const de = entries.filter(e => e.date === ds && visibleBrands.some(b => b.id === e.brandId));
-      const agg = aggregateEntries(de);
-      days.push({ date: ds.slice(5), revenue: agg?.netSales || 0, laborPct: agg?.laborPct || 0, primeCost: agg?.primeCost || 0 });
+      const sRows = salesDaily.filter(r => r.businessDate === ds);
+      const revenue = sRows.reduce((a, r) => a + r.revenue, 0);
+      const orders = sRows.reduce((a, r) => a + r.saleCount, 0);
+      const dayPunches = punches.filter(p => p.date === ds);
+      const hours = dayPunches.reduce((a, p) => a + (p.hoursWorked || 0), 0);
+      const labourCost = dayPunches.reduce((a, p) => a + (p.grossPay || 0), 0);
+      days.push({ date: ds, label: ds.slice(5), revenue, orders, hours, labourCost,
+        laborPct: revenue > 0 ? (labourCost / revenue) * 100 : 0 });
     }
     return days;
-  }, [entries, visibleBrands]);
+  }, [salesDaily, punches, todayStr]);
 
-  const pieData = visibleBrands.map(b => {
-    const be = weekEntries.filter(e => e.brandId === b.id);
-    return { name: b.name, value: be.reduce((a, e) => a + e.netSales, 0), color: b.color };
-  }).filter(p => p.value > 0);
+  const todayRow = daily.find(d => d.date === todayStr) || { revenue:0, orders:0, hours:0, labourCost:0 };
+  const weekRows = daily.filter(d => d.date >= weekAgoStr && d.date <= todayStr);
+  const weekRevenue = weekRows.reduce((a, d) => a + d.revenue, 0);
+  const weekHours = weekRows.reduce((a, d) => a + d.hours, 0);
+  const weekLabour = weekRows.reduce((a, d) => a + d.labourCost, 0);
+  const weekOrders = weekRows.reduce((a, d) => a + d.orders, 0);
 
-  const openIssues = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && i.status === "Open").length;
-  const criticalIssues = issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
+  const wagePct = weekRevenue > 0 ? (weekLabour / weekRevenue) * 100 : null;
+  const splh = weekHours > 0 ? weekRevenue / weekHours : null;
+  const atv = todayRow.orders > 0 ? todayRow.revenue / todayRow.orders
+            : (weekOrders > 0 ? weekRevenue / weekOrders : null);
+
+  // ── Targets: sum each visible store's day-of-week targets ──────────────────
+  const sumTargets = (from, to) => {
+    let revenue = 0, orders = 0, hours = 0, any = false;
+    visibleStores.forEach(s => {
+      const t = sumStoreTargetsForPeriod(s.kpiTargets, from, to);
+      if (t) { revenue += t.revenue; orders += t.orders; hours += t.hours; any = true; }
+    });
+    return any ? { revenue, orders, hours } : null;
+  };
+  const todayTarget = useMemo(() => sumTargets(todayStr, todayStr), [visibleStores, todayStr]);
+  const weekTarget  = useMemo(() => sumTargets(weekAgoStr, todayStr), [visibleStores, weekAgoStr, todayStr]);
+
+  // ── Per-brand week split for the pie ──────────────────────────────────────
+  const pieData = useMemo(() => visibleBrands.map(b => {
+    const value = salesDaily
+      .filter(r => r.businessDate >= weekAgoStr && brandOfStore[r.storeId] === b.id)
+      .reduce((a, r) => a + r.revenue, 0);
+    return { name: b.name, value, color: b.color };
+  }).filter(p => p.value > 0), [salesDaily, visibleBrands, brandOfStore, weekAgoStr]);
+
+  const openIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.status === "Open").length;
+  const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
 
   return (
     <div className="space-y-6">
+      {err && <div className="text-xs text-rose-400">Couldn't load actuals: {err}</div>}
+      {loading && <div className="text-xs text-slate-500">Loading actual sales &amp; labour…</div>}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Revenue" value={todayAgg ? fmtCurrency(todayAgg.netSales) : "No Data"} sub={`${todayEntries.length} reports`} icon={PoundSterling} accent="indigo" />
-        <StatCard label="Wage Cost %" value={useLatest ? fmtPct(useLatest.laborPct) : "—"} sub={useLatest && useLatest.laborPct > 35 ? "Above target (35%)" : "On target (≤35%)"} icon={Users} accent={useLatest && useLatest.laborPct > 35 ? "amber" : "emerald"} alert={useLatest && useLatest.laborPct > 40} />
-        <StatCard label="Prime Cost %" value={useLatest ? fmtPct(useLatest.primeCost) : "—"} sub="Labour + COGS" icon={Activity} accent={useLatest && useLatest.primeCost > 60 ? "red" : "emerald"} alert={useLatest && useLatest.primeCost > 65} />
-        <StatCard label="Avg Spend / Cover" value={useLatest && useLatest.atv > 0 ? fmtCurrency(useLatest.atv) : "—"} sub={useLatest ? `${fmtNum(useLatest.totalOrders)} covers` : "Average ticket"} icon={ChefHat} accent="sky" />
+        <StatCard label="Today's Revenue (gross)" value={fmtCurrency(todayRow.revenue)} sub={todayTarget ? `Target ${fmtCurrency(todayTarget.revenue)}` : `${todayRow.orders} orders`} icon={PoundSterling} accent={todayTarget && todayRow.revenue >= todayTarget.revenue ? "emerald" : "indigo"} />
+        <StatCard label="Wage Cost %" value={wagePct != null ? fmtPct(wagePct) : "—"} sub={wagePct != null && wagePct > 30 ? "Above 30% target" : "On target (≤30%)"} icon={Users} accent={wagePct != null && wagePct > 30 ? "amber" : "emerald"} alert={wagePct != null && wagePct > 35} />
+        <StatCard label="Prime Cost %" value="Pending COGS" sub="Awaiting COGS module" icon={Activity} accent="slate" />
+        <StatCard label="Avg Spend / Order" value={atv != null ? fmtCurrency(atv) : "—"} sub={`${todayRow.orders || weekOrders} orders`} icon={ChefHat} accent="sky" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="SPLH" value={useLatest ? fmtSPLH(useLatest.splh) : "—"} sub="Sales per labour hr · target ≥£8" icon={Zap} accent={useLatest && useLatest.splh >= 8 ? "emerald" : useLatest && useLatest.splh >= 5 ? "amber" : "red"} />
-        <StatCard label="Net Margin" value={useLatest ? fmtPct(useLatest.netMargin) : "—"} sub="After labour + COGS" icon={TrendingUp} accent={useLatest && useLatest.netMargin >= 15 ? "emerald" : "amber"} />
-        <StatCard label="Labour Hours" value={useLatest ? `${useLatest.totalHours.toFixed(0)}h` : "—"} sub="This week" icon={Clock} accent="indigo" />
+        <StatCard label="SPLH" value={splh != null ? fmtSPLH(splh) : "—"} sub="Gross sales / labour hr" icon={Zap} accent={splh != null && splh >= 8 ? "emerald" : splh != null && splh >= 5 ? "amber" : "red"} />
+        <StatCard label="Net Margin" value="Pending COGS" sub="Awaiting COGS module" icon={TrendingUp} accent="slate" />
+        <StatCard label="Labour Hours" value={`${weekHours.toFixed(0)}h`} sub={weekTarget ? `Target ${weekTarget.hours.toFixed(0)}h · 7d` : "This week (actual)"} icon={Clock} accent={weekTarget && weekHours > weekTarget.hours ? "amber" : "indigo"} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <AnalysisBlock title="14-Day Revenue & Cost Trend" className="xl:col-span-2">
+        <AnalysisBlock title="14-Day Gross Revenue &amp; Labour %" className="xl:col-span-2">
           <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
+            <ComposedChart data={daily} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} />
+              <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
               <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `£${(v/1000).toFixed(0)}k`} />
               <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />
               <Tooltip content={<ChartTooltip/>} />
               <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-              <Bar yAxisId="left" dataKey="revenue" name="£ Revenue" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]} />
+              <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]} />
               <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />
-              <Line yAxisId="right" type="monotone" dataKey="primeCost" name="Prime Cost %" stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 4" dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </AnalysisBlock>
@@ -6293,11 +6359,10 @@ function DashboardView({ brands, entries, issues }) {
         </AnalysisBlock>
       </div>
 
-      {/* Active Issues Summary */}
-      {issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && !["Resolved","Closed"].includes(i.status)).length > 0 && (
+      {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).length > 0 && (
         <AnalysisBlock title="Active Issues Requiring Attention">
           <div className="space-y-2">
-            {issues.filter(i => visibleBrands.some(b => b.id === i.brandId) && !["Resolved","Closed"].includes(i.status)).slice(0, 5).map(issue => {
+            {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).slice(0, 5).map(issue => {
               const sc = STATUS_CONFIG[issue.status];
               const pc = PRIORITY_CONFIG[issue.priority];
               const brand = brands.find(b => b.id === issue.brandId);
@@ -24568,7 +24633,7 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
-            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} entries={entries} issues={issues}/>}
+            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && currentUser.role === "manager" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}

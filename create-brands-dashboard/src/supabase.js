@@ -1849,6 +1849,19 @@ export async function fetchSalesAggregated({ from, to, brandId = "chocoberry" } 
   }));
 }
 
+// Day-resolved gross sales (for trend charts) — ONE call returns all days in range.
+export async function fetchSalesDaily({ from, to, brandId = "chocoberry" } = {}) {
+  const toIsoDate = (v) => (v instanceof Date ? v.toISOString().slice(0,10) : (typeof v === "string" ? v.slice(0,10) : v));
+  const { data, error } = await supabase.rpc("agg_flipdish_sales_daily", {
+    p_brand_id: brandId, p_from: toIsoDate(from), p_to: toIsoDate(to),
+  });
+  if (error) throw error;
+  return (data || []).map(r => ({
+    businessDate: r.business_date, storeId: r.store_id, channel: r.channel,
+    saleCount: Number(r.sale_count) || 0, revenue: Number(r.revenue) || 0,
+  }));
+}
+
 // ── LABOUR vs REVENUE (Phase 0.3) ────────────────────────────────────────────
 // Reads the labour_vs_revenue view (store_day_aggregates FULL OUTER JOIN
 // labour_day_aggregates). One row per brand/store/day. NULL revenue = labour
