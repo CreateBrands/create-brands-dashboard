@@ -4376,13 +4376,27 @@ export async function fetchReviewsForDashboard({ from, to } = {}) {
 }
 
 
-// Lifetime per-store review stats (matches Google's all-time average + star counts).
+// Official per-store Google stats: averageRating + totalReviewCount as Google
+// reports them (captured by the sync from the reviews API response). Matches the
+// listing exactly, independent of how many individual reviews we've synced.
 export async function fetchReviewStats() {
-  const { data, error } = await supabase.rpc("google_review_stats");
+  const { data, error } = await supabase
+    .from("google_location_stats")
+    .select("store_id, average_rating, total_review_count");
   if (error) throw error;
-  return (data || []).map(r => ({
-    storeId: r.store_id, n: Number(r.n) || 0, avg: Number(r.avg_rating) || 0,
-    s5: Number(r.s5)||0, s4: Number(r.s4)||0, s3: Number(r.s3)||0, s2: Number(r.s2)||0, s1: Number(r.s1)||0,
+  // a store may have >1 mapped location; pool by weighted average.
+  const byStore = {};
+  (data || []).forEach(r => {
+    if (!r.store_id) return;
+    const n = Number(r.total_review_count) || 0;
+    const a = Number(r.average_rating) || 0;
+    byStore[r.store_id] = byStore[r.store_id] || { storeId: r.store_id, n: 0, weighted: 0 };
+    byStore[r.store_id].n += n;
+    byStore[r.store_id].weighted += a * n;
+  });
+  return Object.values(byStore).map(s => ({
+    storeId: s.storeId, n: s.n, avg: s.n > 0 ? s.weighted / s.n : 0,
+    s5: 0, s4: 0, s3: 0, s2: 0, s1: 0,  // per-star counts come from synced reviews (period distribution)
   }));
 }
 
