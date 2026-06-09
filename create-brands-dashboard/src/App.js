@@ -848,7 +848,7 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
                 <button onClick={exportEOD} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 text-sm font-semibold hover:bg-emerald-600/30 transition-colors">
                   <Download size={15}/> Export EOD Data (.xlsx)
                 </button>
-                <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800 border border-slate-700 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">
+                <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">
                   <FileSpreadsheet size={15}/> Download Blank Template
                 </button>
               </div>
@@ -936,11 +936,11 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
         </div>
 
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          {step === "upload" && <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Close</button>}
+          {step === "upload" && <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Close</button>}
           {step === "preview" && (
             <>
               <button onClick={() => { setStep("upload"); setPreview([]); setErrors([]); }}
-                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Re-upload</button>
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Re-upload</button>
               {preview.length > 0 && (
                 <button onClick={handleImport} disabled={loading} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 transition-colors">
                   {loading ? "Saving to database…" : `Import ${preview.length} Rows`}
@@ -1064,7 +1064,7 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
           )}
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!form.title.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">
             {isEdit ? "Save Changes" : `Report ${form.type}`}
           </button>
@@ -1130,7 +1130,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
           {issue.description && (
             <div>
               <div className="text-xs text-slate-600 font-semibold mb-2 uppercase tracking-widest">Description</div>
-              <div className="text-sm text-slate-700 bg-slate-800/40 rounded-xl p-3 border border-slate-800/60">{issue.description}</div>
+              <div className="text-sm text-slate-300 bg-slate-800/40 rounded-xl p-3 border border-slate-800/60">{issue.description}</div>
             </div>
           )}
 
@@ -1379,7 +1379,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-700 hover:bg-slate-700 transition-colors">View</button>
+                      <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">View</button>
                       <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
                       {isHqOrAbove(user.role) && (
                         <button onClick={() => setDeleteId(issue.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 transition-colors"><Trash2 size={13}/></button>
@@ -1405,7 +1405,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
               <div className="text-sm text-slate-700">Delete this issue? This cannot be undone.</div>
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+              <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
               <button onClick={() => { onDeleteIssue(deleteId); setDeleteId(null); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button>
             </div>
           </div>
@@ -2724,7 +2724,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <div className="text-xs text-slate-500">{currentUser.employeeRole} · {brand?.name || "—"}</div>
           </div>
           <div className="flex items-center gap-2">
-            {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-700"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
+            {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
             <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
             <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 text-xs font-semibold transition-all">
               <LogOut size={13}/> Sign out
@@ -7478,7 +7478,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
       </div>
 
       <div className="flex gap-3">
-        {zone > 0 && <button onClick={()=>setZone(z=>z-1)} className="px-5 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors flex items-center gap-2"><ChevronLeft size={14}/>Back</button>}
+        {zone > 0 && <button onClick={()=>setZone(z=>z-1)} className="px-5 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors flex items-center gap-2"><ChevronLeft size={14}/>Back</button>}
         <button onClick={handleSubmit} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl py-2.5 text-sm transition-colors flex items-center justify-center gap-2">
           {zone < 3 ? <><span>Next</span><ChevronRight size={14}/></> : <><CheckCircle size={14}/> Submit Report</>}
         </button>
@@ -7520,7 +7520,7 @@ function KPITargetModal({ brand, onSave, onClose }) {
           ))}
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
           <button onClick={()=>{onSave(brand.id,t);onClose();}} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 transition-colors">Save</button>
         </div>
       </div>
@@ -7573,7 +7573,7 @@ function LocationEditorModal({ brand, onSave, onClose }) {
           </div>
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!name.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">{isCreate?"Create":"Save"}</button>
         </div>
       </div>
@@ -7738,7 +7738,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
           )}
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
           <button onClick={handleSave} disabled={!name.trim()||!email.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors">{isCreate?"Create":"Save"}</button>
         </div>
       </div>
@@ -8405,7 +8405,7 @@ function AdminPanelView({
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
             <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-red-500/25 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div><div className="text-sm text-slate-700">{deleteModal.msg}</div></div>
-            <div className="flex gap-3"><button onClick={()=>setDeleteModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button><button onClick={()=>{deleteModal.fn();setDeleteModal(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button></div>
+            <div className="flex gap-3"><button onClick={()=>setDeleteModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button><button onClick={()=>{deleteModal.fn();setDeleteModal(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button></div>
           </div>
         </div>
       )}
@@ -9296,7 +9296,7 @@ function OpsConfirmModal({ message, onConfirm, onClose }) {
           <div className="text-sm text-slate-700">{message}</div>
         </div>
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
           <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
         </div>
       </div>
@@ -9672,7 +9672,7 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
       </div>
       {scopedLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>)}</tr></thead><tbody>{[...scopedLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-800/60"><td className="px-3 py-2 text-slate-700">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-600 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-600">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
       {showForm && (
-        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = scopedUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: unit?.brandId || writeBrandId, storeId: unit?.storeId || writeStoreId, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
+        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.unitId || form.value === "") return; const unit = scopedUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; onLog({ id: `tl-${Date.now()}`, brandId: unit?.brandId || writeBrandId, storeId: unit?.storeId || writeStoreId, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
           <div className="space-y-4">
             <div><label className={labelCls}>Unit</label><select value={form.unitId} onChange={e => set("unitId", e.target.value)} className={inputCls}>{scopedUnits.map(u => { const sn = stores?.find(s => s.id === u.storeId)?.shortName; return <option key={u.id} value={u.id}>{u.name}{sn ? ` · ${sn}` : ""} ({u.type})</option>; })}</select></div>
             <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Temperature (°C)</label><input type="number" step="0.1" value={form.value} onChange={e => set("value", e.target.value)} placeholder="e.g. 4.5" className={inputCls}/></div><div><label className={labelCls}>Time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div></div>
@@ -9756,7 +9756,7 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
         return <div key={d.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-4"><div className="text-sm font-bold text-white">{d.supplier}{storeBadge && <span className="ml-2 text-xs font-normal text-slate-500">· {storeBadge}</span>}</div><div className="text-xs text-slate-600 mt-0.5">{d.items}</div><div className="flex gap-2 mt-2 flex-wrap"><Badge label={d.date} color="slate"/><Badge label={d.time} color="slate"/>{d.temp && <Badge label={`${d.temp}°C`} color={d.tempOk === "yes" ? "green" : "red"}/>}<Badge label={d.condition === "good" ? "✓ Good" : `⚠ ${d.condition}`} color={d.condition === "good" ? "green" : "amber"}/><Badge label={`By ${d.loggedBy}`} color="slate"/></div>{d.notes && <div className="text-xs text-slate-500 mt-1.5 italic">{d.notes}</div>}</div>;
       })}</div>
       {showForm && (
-        <Modal title={`Log Delivery${writeStore ? ` — ${writeStore.shortName}` : ""}`} onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.supplier || !writeStoreId) return; onAdd({ id: `del-${Date.now()}`, brandId: writeBrandId, storeId: writeStoreId, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
+        <Modal title={`Log Delivery${writeStore ? ` — ${writeStore.shortName}` : ""}`} onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={() => { if (!form.supplier || !writeStoreId) return; onAdd({ id: `del-${Date.now()}`, brandId: writeBrandId, storeId: writeStoreId, ...form, date: getTodayStr(), timestamp: new Date().toISOString(), loggedBy: user.name || "Manager" }); setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button></>}>
           <div className="space-y-4">
             {selStore === "all" && visibleStores.length > 1 && <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 text-xs text-amber-300">📍 Logging for <strong>{writeStore?.shortName || "—"}</strong>. Switch the store filter above to log for a different store.</div>}
             <div><label className={labelCls}>Supplier *</label><input value={form.supplier} onChange={e => set("supplier", e.target.value)} className={inputCls} placeholder="e.g. Fresh Direct"/></div>
@@ -9863,7 +9863,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
 
   return (
     <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl"
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
       <div className="space-y-4">
         <div>
           <label className={labelCls}>Store *</label>
@@ -15166,7 +15166,7 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
   return (
     <Modal title={item ? `Edit Application — ${item.firstName} ${item.lastName || ""}` : "New Application"} onClose={onClose} maxW="max-w-2xl"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button>
       </>}>
       <div className="space-y-4">
@@ -15524,7 +15524,7 @@ function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
 
   return (
     <Modal title={item ? `Edit — ${item.name}` : "Add Temp Unit"} onClose={onClose}
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
       <div className="space-y-4">
         <div><label className={labelCls}>Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
         <div className="grid grid-cols-2 gap-4">
@@ -15583,7 +15583,7 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "Add Cleaning Task"} onClose={onClose}
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Add"}</button></>}>
       <div className="space-y-4">
         <div><label className={labelCls}>Task Name *</label><input value={form.name} onChange={e => set("name", e.target.value)} className={inputCls}/></div>
         <div>
@@ -15866,7 +15866,7 @@ function OpsTeamMemberFormModal({
       maxW="max-w-lg"
       footer={
         <>
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
           <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">
             {prefillApplication ? "Hire" : (item ? "Save" : "Add")}
           </button>
@@ -16105,7 +16105,7 @@ function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, on
   };
   return (
     <Modal title={item ? `Edit — ${item.name}` : "New Checklist"} onClose={onClose} maxW="max-w-2xl"
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
       <div className="space-y-4">
         <div>
           <label className={labelCls}>Store *</label>
@@ -17821,7 +17821,7 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
   return (
     <Modal title="Amend Availability" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Amendment</button>
       </>}>
       <div className="space-y-4">
@@ -17901,7 +17901,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
   return (
     <Modal title="Add Employee Availability" onClose={onClose} maxW="max-w-lg"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} disabled={!isValid()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add</button>
       </>}>
       <div className="space-y-4">
@@ -18170,7 +18170,7 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
       {rejectModal && (
         <Modal title="Reject Availability" onClose={() => setRejectModal(null)}
           footer={<>
-            <button onClick={() => setRejectModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={() => setRejectModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
             <button onClick={() => { handleReject(rejectModal, rejectNote); setRejectModal(null); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reject</button>
           </>}>
           <div className="space-y-3">
@@ -19780,7 +19780,7 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
             <Trash2 size={16}/>
           </button>
         )}
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} disabled={!employeeId || anyConflict} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
           {isEdit ? "Save changes" : "Add Shift"}
         </button>
@@ -20331,7 +20331,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           {pendingAvail > 0 && <span className="text-xs text-amber-400">· {pendingAvail} availability pending</span>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={()=>setShowCosts(s=>!s)} className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5">
+          <button onClick={()=>setShowCosts(s=>!s)} className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5">
             {showCosts ? <Eye size={13}/> : <EyeOff size={13}/>} Costs
           </button>
           <button onClick={()=>setAutofillModal({})} disabled={editLocked}
@@ -20347,7 +20347,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           )}
           {allWeekSlots.length > 0 && !editLocked && (
             <button onClick={handleCopyWeek} disabled={copying}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-700 text-xs font-semibold transition-colors disabled:opacity-50">
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50">
               {copying ? "…" : <><Plus size={13}/> Copy → next</>}
             </button>
           )}
@@ -20367,7 +20367,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
         <div className="flex items-center gap-3 bg-indigo-950/30 border border-indigo-500/30 rounded-xl px-4 py-2.5">
           <span className="text-sm font-bold text-white">{selected.size} shift{selected.size!==1?"s":""} selected</span>
           <div className="flex-1"/>
-          <button onClick={clearSelection} className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-700 text-xs font-semibold transition-colors">Clear</button>
+          <button onClick={clearSelection} className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors">Clear</button>
           <button onClick={handleBulkDelete} disabled={bulkDeleting || editLocked}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors disabled:opacity-40">
             <Trash2 size={13}/> Delete selected
@@ -20856,7 +20856,7 @@ function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, storeId, opsTeam,
   return (
     <Modal title="Auto-fill shifts from availability" onClose={onClose} maxW="max-w-2xl"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleApply} disabled={proposalsActive.length === 0}
           className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
           Create {proposalsActive.length} shift{proposalsActive.length!==1?"s":""}
@@ -20961,7 +20961,7 @@ function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClo
   return (
     <Modal title="Sales forecast for this week" onClose={onClose} maxW="max-w-md"
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={()=>onSave(forecasts)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Save Forecast</button>
       </>}>
       <div className="space-y-3">
@@ -21890,6 +21890,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   };
 
   const [weekOffset,     setWeekOffset]     = useState(0);
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
   const [viewMode,       setViewMode]       = useState("week");   // "week" | "day"
   const [dayOffset,      setDayOffset]      = useState(0);        // 0 = today, negative = past
   const [approvalFilter, setApprovalFilter] = useState("all");    // "all" | "needs" | "approved"
@@ -21937,6 +21939,15 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, gracedHours, gracedIn: gt.inIso, gracedOut: gt.outIso, isUnscheduled };
   });
 
+  // Live hours: closed -> graced stored hours; open -> elapsed since (graced) clock-in.
+  const liveHours = (r) => {
+    if (r.status === "open" && r.punchIn) {
+      let pIn = new Date(r.gracedIn ?? r.punchIn).getTime();
+      return Math.max(0, Math.round(((Date.now() - pIn) / 3600000) * 100) / 100);
+    }
+    return r.gracedHours ?? r.hoursWorked ?? 0;
+  };
+
   // Summary per employee
   const summary = {};
   enriched.forEach(r => {
@@ -21948,7 +21959,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
         totalPay: 0, days: 0, pendingApproval: 0, pendingOT: 0 };
     }
     const s = summary[r.employeeId];
-    if (r.hoursWorked) { s.totalHours += r.hoursWorked; s.days += 1; }
+    const lh = liveHours(r);
+    if (lh > 0) { s.totalHours += lh; s.days += 1; }
     if (!r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)) s.pendingApproval += 1;
     if (r.overtimeHrs > 0 && !r.overtimeApproved) s.pendingOT += 1;
     const approvedOT = (r.overtimeApproved && r.overtimeHrs > 0) ? r.overtimeHrs : 0;
@@ -21962,7 +21974,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
   const totalPay        = Object.values(summary).reduce((a, s) => a + s.totalPay, 0);
   const totalHours      = Object.values(summary).reduce((a, s) => a + s.totalHours, 0);
-  const pendingApproval = enriched.filter(r => !r.approved && r.status === "closed").length;
+  const pendingApproval = enriched.filter(r => !r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)).length;
   const pendingOT       = enriched.filter(r => r.overtimeHrs > 0 && !r.overtimeApproved && r.overtimeReason).length;
 
   const handleApprove = (r) => onUpdate({ ...r,
@@ -22016,7 +22028,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           <div className="text-xs text-slate-500 mt-0.5">Approve hours, review overtime, and amend records</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={()=>setAddManualModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-700 text-xs font-semibold transition-colors"><Plus size={13}/> Manual Entry</button>
+          <button onClick={()=>setAddManualModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"><Plus size={13}/> Manual Entry</button>
           <div className="flex bg-slate-900 border border-slate-700 rounded-xl p-0.5 gap-0.5">
             <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Records</button>
             <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Summary</button>
@@ -22065,11 +22077,13 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       {/* ── Records ── */}
       {tab === "records" && (() => {
         // Approval tab filter: needs = unapproved overtime/unscheduled; approved = the rest/settled.
-        const recNeedsApproval = (r) => r.status === "closed" && !r.approved && (r.overtimeHrs > 0 || r.isUnscheduled);
+        const isOpen = (r) => r.status === "open";
+        const recNeedsApproval = (r) => isOpen(r) || (r.status === "closed" && !r.approved && (r.overtimeHrs > 0 || r.isUnscheduled));
         const displayed = enriched.filter(r =>
           approvalFilter === "all" ? true :
           approvalFilter === "needs" ? recNeedsApproval(r) :
-          !recNeedsApproval(r)   // "approved"
+          // "approved": only settled CLOSED records (never open/still-clocked-in)
+          (r.status === "closed" && !recNeedsApproval(r))
         );
         return (
         <div className="space-y-3">
@@ -22224,7 +22238,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                       </div>
                       <div className="flex justify-between text-xs">
                         <span className="text-slate-500">Hours</span>
-                        <span className="text-white font-bold">{fmtDur(r.gracedHours ?? r.hoursWorked)}</span>
+                        <span className="text-white font-bold">{r.status === "open" ? `${fmtDur(liveHours(r))} (so far)` : fmtDur(r.gracedHours ?? r.hoursWorked)}</span>
                       </div>
                       {(r.gracedIn !== r.punchIn || (r.gracedOut && r.gracedOut !== r.punchOut)) && (
                         <div className="text-[10px] text-slate-600 italic pt-1">
@@ -22431,13 +22445,13 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
         {confirmDel ? (
           <>
             <div className="flex-1 text-xs text-red-400 font-semibold self-center">Delete this record?</div>
-            <button onClick={() => setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">No</button>
+            <button onClick={() => setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">No</button>
             <button onClick={() => { onDelete(record.id); onClose(); }} className="px-3 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
           </>
         ) : (
           <>
             <button onClick={() => setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-950/20 border border-red-500/30 text-red-400 hover:bg-red-950/20/60 transition-colors" title="Delete record"><Trash2 size={15}/></button>
-            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
             <button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save</button>
           </>
         )}
@@ -22472,7 +22486,7 @@ function RejectOTModal({ record, onReject, onClose }) {
   return (
     <Modal title="Reject Overtime" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={() => { onReject(record, reason); onClose(); }}
           className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Reject</button>
       </>}>
@@ -22613,7 +22627,7 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
   return (
     <Modal title="Add Manual Hours" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-700 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
         <button onClick={handleSave} disabled={!empId||!date||!storeId} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add Entry</button>
       </>}>
       <div className="space-y-4">
