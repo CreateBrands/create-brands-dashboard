@@ -20,7 +20,7 @@ import {
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
-  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember,
+  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -24810,6 +24810,13 @@ export default function App() {
         ? (s.storeId === opts.storeId || (!s.storeId && s.brandId === brands.find(b => stores.some(st => st.id === opts.storeId && st.brandId === b.id))?.id))
         : s.brandId === opts.brandId;
       setSchedules(ss => ss.map(s => (inScope(s) && inWeek(s)) ? { ...s, published: opts.published } : s));
+      // Notify each employee whose shifts were just published (fire-and-forget).
+      if (opts.published) {
+        const affected = schedules.filter(s => inScope(s) && inWeek(s) && s.employeeId).map(s => s.employeeId);
+        const weekLabel = new Date(opts.weekStart + "T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"});
+        notifyOpsMembers(affected, { kind: "schedule", title: "Your schedule is published",
+          body: `Your shifts for the week of ${weekLabel} are now available.`, linkView: "schedule" });
+      }
       showToast(opts.published ? "Schedule published ✓" : "Schedule unpublished");
     } catch (err) { showToast("Failed: " + err.message, "error"); }
   }, [showToast, brands, stores]);
@@ -24845,7 +24852,7 @@ export default function App() {
   const addHdTicket    = useCallback(async t=>{const s=await insertHelpdeskTicket(t);setHdTickets(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[s,...ts]);}, []);
   const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
   const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
-  const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);}, []);
+  const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);notifyMessageRecipients(s);}, []);
   const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...(m.readBy||[]),userId]}:m));}, []);
 
   // Kiosk guard — all hooks ran above

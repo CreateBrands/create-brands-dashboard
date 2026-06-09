@@ -1623,6 +1623,41 @@ export async function notifyOpsMember(opsMemberId, { kind, title, body, linkView
   } catch (e) { console.error("notifyOpsMember failed:", e); }
 }
 
+// Notify several ops members at once (fire-and-forget).
+export async function notifyOpsMembers(opsMemberIds, { kind, title, body, linkView } = {}) {
+  try {
+    const ids = [...new Set((opsMemberIds || []).filter(Boolean))];
+    if (ids.length === 0) return;
+    await insertNotifications(ids.map(id => ({ recipientType: "ops", recipientId: id, kind, title, body, linkView })));
+  } catch (e) { console.error("notifyOpsMembers failed:", e); }
+}
+
+// Notify the recipients of an inbox message (individual, location, or broadcast).
+// Excludes the sender. Resolves recipients from users + ops_team by scope.
+export async function notifyMessageRecipients(msg) {
+  try {
+    if (!msg) return;
+    const title = `New message from ${msg.fromName || "a colleague"}`;
+    const body = (msg.body || msg.text || "").slice(0, 120) || "Open Communication to read.";
+    const payload = { kind: "message", title, body, linkView: "comms" };
+    if (msg.toScope === "individual" && msg.toPersonId) {
+      // recipient may be a user OR an ops member — notify both id spaces (harmless if one misses).
+      await insertNotifications([
+        { recipientType: "ops",  recipientId: msg.toPersonId, ...payload },
+        { recipientType: "user", recipientId: msg.toPersonId, ...payload },
+      ]);
+      return;
+    }
+    // location or all_locations -> notify ops members in scope (exclude sender)
+    let q = supabase.from("ops_team").select("id, brand_id, archived_at");
+    const { data, error } = await q;
+    if (error) throw error;
+    const recipients = (data || []).filter(m => !m.archived_at && m.id !== msg.fromId &&
+      (msg.toScope === "all_locations" || (msg.toScope === "location" && m.brand_id === msg.toBrandId)));
+    await insertNotifications(recipients.map(m => ({ recipientType: "ops", recipientId: m.id, ...payload })));
+  } catch (e) { console.error("notifyMessageRecipients failed:", e); }
+}
+
 // Trigger a manual flipdish sync from the UI
 export async function runFlipdishSync(body = {}) {
   // Calls the LIVE RMS sales sync (flipdish-rms-sync). The old "flipdish-sync"
