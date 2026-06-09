@@ -1624,7 +1624,8 @@ export async function subscribeToPush({ recipientType, recipientId } = {}) {
       const perm = await Notification.requestPermission();
       if (perm !== "granted") return { ok: false, reason: "denied" };
     }
-    const reg = await navigator.serviceWorker.register("/sw.js");
+    const reg = await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
+    try { await reg.update(); } catch {}   // force-check for a newer sw.js (replaces a stale one)
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
