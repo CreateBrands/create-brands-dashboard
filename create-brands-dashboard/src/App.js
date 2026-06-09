@@ -2058,6 +2058,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
   const [items, setItems] = useState([]);   // unread only — read items are kept in DB but not shown
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [popup, setPopup] = useState(null);   // in-app toast for newly arrived notifications
   const wrapRef = useRef(null);
   const prevUnreadRef = useRef(0);
   const firstLoadRef = useRef(true);
@@ -2070,17 +2071,28 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
       if (!Ctx) return;
       const ctx = new Ctx();
       if (ctx.state === "suspended") { ctx.resume().catch(() => {}); }
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = "sine";
-      o.frequency.setValueAtTime(880, ctx.currentTime);
-      o.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.1);
-      g.gain.setValueAtTime(0.0001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.14, ctx.currentTime + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
-      o.start(ctx.currentTime); o.stop(ctx.currentTime + 0.55);
-      setTimeout(() => { ctx.close().catch(() => {}); }, 700);
+      const master = ctx.createGain();
+      master.gain.value = 0.6;            // louder overall (was ~0.14)
+      master.connect(ctx.destination);
+      // Three-note rising chime, each note a short bell-like blip.
+      const notes = [
+        { f: 880.00, t: 0.00 },          // A5
+        { f: 1174.66, t: 0.14 },         // D6
+        { f: 1567.98, t: 0.28 },         // G6
+      ];
+      for (const n of notes) {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = "triangle";             // richer/louder than pure sine
+        o.frequency.setValueAtTime(n.f, ctx.currentTime + n.t);
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + n.t);
+        g.gain.exponentialRampToValueAtTime(0.9, ctx.currentTime + n.t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + n.t + 0.30);
+        o.connect(g); g.connect(master);
+        o.start(ctx.currentTime + n.t);
+        o.stop(ctx.currentTime + n.t + 0.32);
+      }
+      setTimeout(() => { ctx.close().catch(() => {}); }, 900);
     } catch { /* autoplay blocked or unsupported — stay silent */ }
   };
   // Native OS notification (shows even when the tab is backgrounded, if permitted).
@@ -2121,7 +2133,10 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
       // the initial page load (would chime on every refresh).
       if (!firstLoadRef.current && unreadList.length > prevUnreadRef.current) {
         playDing();
-        showOSNotification(unreadList[0]);  // surface the newest as an OS notification too
+        showOSNotification(unreadList[0]);            // OS banner (when app backgrounded)
+        const n0 = unreadList[0];
+        setPopup({ title: n0?.title || "New notification", body: n0?.body || "" });
+        setTimeout(() => setPopup(null), 6000);       // in-app toast (always visible)
       }
       prevUnreadRef.current = unreadList.length;
       firstLoadRef.current = false;
@@ -2194,6 +2209,24 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
 
   return (
     <div className="relative" ref={wrapRef}>
+      {popup && (
+        <div onClick={() => { setPopup(null); setOpen(true); }}
+          className="fixed top-4 right-4 z-[9999] max-w-xs w-[calc(100vw-2rem)] sm:w-80 cursor-pointer
+                     rounded-2xl border border-indigo-500/40 bg-slate-900 shadow-2xl shadow-indigo-900/40
+                     p-4 animate-[slideIn_0.2s_ease-out]">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center">
+              <Bell size={15} className="text-white"/>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-white truncate">{popup.title}</div>
+              {popup.body && <div className="text-xs text-slate-300 mt-0.5 line-clamp-2">{popup.body}</div>}
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); setPopup(null); }}
+              className="flex-shrink-0 text-slate-500 hover:text-white transition-colors"><X size={15}/></button>
+          </div>
+        </div>
+      )}
       <button onClick={() => setOpen(o => !o)} aria-label="Notifications"
         className="relative p-1.5 text-slate-500 hover:text-white transition-colors rounded-lg hover:bg-slate-800">
         <Bell size={14}/>
