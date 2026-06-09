@@ -1620,16 +1620,16 @@ function urlBase64ToUint8Array(base64String) {
 // result so the UI can report problems (e.g. permission denied).
 export async function sendTestNotification({ recipientType, recipientId } = {}) {
   if (!recipientId) return { ok: false, reason: "no-recipient" };
-  // Subscribe this device (no-op if already), capturing ITS endpoint.
+  // Subscribe this device first (no-op if already subscribed).
   const sub = await subscribeToPush({ recipientType, recipientId });
   if (sub && sub.ok === false) return sub;   // surface denied/unsupported to UI
-  // Push to ONLY this device's endpoint (not the whole account) and write no
-  // notification row, so the test never reaches the user's other phones/colleagues.
+  // Push to this recipient's device(s). (Endpoint-precise targeting proved
+  // fragile — exact-match failures gave total:0 — so we push to the recipient,
+  // which reliably reaches this device. Acceptable: only the user's own devices.)
   try {
     await supabase.functions.invoke("send-push", {
       body: {
         recipientType, recipientId,
-        endpoint: sub?.endpoint || null,   // target just this device
         title: "Test notification ✓",
         body: "Push notifications are working on this device.",
       },
