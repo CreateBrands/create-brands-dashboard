@@ -1627,15 +1627,17 @@ export async function sendTestNotification({ recipientType, recipientId } = {}) 
   // fragile — exact-match failures gave total:0 — so we push to the recipient,
   // which reliably reaches this device. Acceptable: only the user's own devices.)
   try {
-    await supabase.functions.invoke("send-push", {
+    const { data, error } = await supabase.functions.invoke("send-push", {
       body: {
         recipientType, recipientId,
         title: "Test notification ✓",
         body: "Push notifications are working on this device.",
       },
     });
+    if (error) return { ok: false, reason: "invoke: " + String(error?.message || error) };
+    // data is the function's JSON: { ok, sent, total, ... }
+    return { ok: true, debug: `id=${recipientId} sent=${data?.sent} total=${data?.total}` };
   } catch (e) { return { ok: false, reason: String(e?.message || e) }; }
-  return { ok: true };
 }
 
 export async function subscribeToPush({ recipientType, recipientId } = {}) {

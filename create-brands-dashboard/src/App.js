@@ -2060,18 +2060,21 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState(null);   // in-app toast for newly arrived notifications
   const [testState, setTestState] = useState(null);   // null | "sending" | "ok" | "denied" | "error"
+  const [testDebug, setTestDebug] = useState("");      // TEMP: shows id/sent/total + reason
   const handleSendTest = async () => {
-    setTestState("sending");
+    setTestState("sending"); setTestDebug("");
     try {
       const res = await sendTestNotification({ recipientType, recipientId });
       if (res && res.ok === false) {
         setTestState(res.reason === "denied" ? "denied" : "error");
+        setTestDebug(String(res.reason || ""));
       } else {
         setTestState("ok");
+        setTestDebug(res?.debug || "");
         load();   // refresh the bell so the test notification shows in-list too
       }
-    } catch { setTestState("error"); }
-    setTimeout(() => setTestState(null), 5000);
+    } catch (e) { setTestState("error"); setTestDebug(String(e?.message || e)); }
+    setTimeout(() => { setTestState(null); setTestDebug(""); }, 12000);
   };
   const wrapRef = useRef(null);
   const prevUnreadRef = useRef(0);
@@ -2298,6 +2301,9 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
                 : testState === "error" ? "⚠ Couldn't send — notifications may be off"
                 : "🔔 Send me a test notification"}
             </button>
+            {testDebug && (
+              <div className="px-3 pb-2 text-center text-[9px] text-slate-500 break-all">{testDebug}</div>
+            )}
             {onViewAll && (
               <button onClick={() => { setOpen(false); onViewAll(); }}
                 className="w-full px-3 py-2 text-center text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 hover:bg-slate-800/50 border-t border-slate-800">
