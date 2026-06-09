@@ -1589,11 +1589,9 @@ export async function insertNotifications(rows) {
   }));
   const { error } = await supabase.from("notifications").insert(payload);
   if (error) throw error;
-  // WEB_PUSH_V1 — also fire a push to each recipient (fire-and-forget; never blocks).
-  rows.forEach(r => {
-    sendPush({ recipientType: r.recipientType, recipientId: r.recipientId, title: r.title, body: r.body, linkView: r.linkView })
-      .catch(() => {});
-  });
+  // WEB_PUSH_V2 — push is now sent SERVER-SIDE by the notify-push-webhook Edge
+  // Function (fires automatically on this INSERT via a Supabase Database Webhook).
+  // No browser-side sendPush here: it's more reliable and avoids double-pushing.
 }
 
 // Invoke the send-push Edge Function (background; failures are swallowed).
@@ -1626,6 +1624,16 @@ export async function subscribeToPush({ recipientType, recipientId } = {}) {
     }
     const reg = await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
     try { await reg.update(); } catch {}   // force-check for a newer sw.js (replaces a stale one)
+    // When a new SW takes control, reload once so the app runs the latest code
+    // (prevents staff getting stuck on a stale cached bundle). Guarded against loops.
+    if (!window.__swReloadHooked) {
+      window.__swReloadHooked = true;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (window.__swReloaded) return;
+        window.__swReloaded = true;
+        window.location.reload();
+      });
+    }
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
