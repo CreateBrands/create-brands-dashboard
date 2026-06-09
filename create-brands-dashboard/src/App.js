@@ -2121,13 +2121,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
           await Notification.requestPermission().catch(() => {});
         }
         if (recipientId && Notification.permission === "granted") {
-          const res = await subscribeToPush({ recipientType, recipientId }).catch(e => ({ ok: false, reason: String(e) }));
-          if (res && !res.ok) {
-            // TEMP DIAGNOSTIC: show why push subscribe failed on this device.
-            try { window.alert("Push subscribe failed: " + (res.reason || "unknown")); } catch {}
-          }
-        } else if (recipientId && Notification.permission !== "granted") {
-          try { window.alert("Notifications not granted (permission: " + (("Notification" in window) ? Notification.permission : "unsupported") + ")"); } catch {}
+          subscribeToPush({ recipientType, recipientId }).catch(() => {});
         }
       } catch { /* ignore */ }
     })();
