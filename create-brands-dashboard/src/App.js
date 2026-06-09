@@ -2087,6 +2087,24 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
   const showOSNotification = (n) => {
     try {
       if (!("Notification" in window) || Notification.permission !== "granted") return;
+      // Android Chrome forbids the page-level `new Notification()` constructor
+      // (throws "Illegal constructor"); notifications must go via the service
+      // worker. Prefer the SW registration; fall back to the constructor on
+      // platforms that support it (e.g. desktop).
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.ready.then((reg) => {
+          reg.showNotification(n?.title || "New notification", {
+            body: n?.body || "", tag: n?.id || undefined,
+            icon: "/logo192.png", badge: "/logo192.png",
+          });
+        }).catch(() => {
+          try {
+            const note = new Notification(n?.title || "New notification", { body: n?.body || "", icon: "/logo192.png" });
+            note.onclick = () => { window.focus(); note.close(); };
+          } catch { /* unsupported */ }
+        });
+        return;
+      }
       const note = new Notification(n?.title || "New notification", {
         body: n?.body || "", tag: n?.id || undefined, icon: "/logo192.png",
       });
