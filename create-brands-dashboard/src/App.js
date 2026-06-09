@@ -2794,6 +2794,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
     { key: "issues",         label: "Report an Issue", icon: Wrench },
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
+    { key: "availability",   label: "Availability",    icon: Calendar },
+    { key: "my-hours",       label: "My Hours",        icon: Clock },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
   ];
 
@@ -2958,6 +2960,20 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           {activeView === "emp-training" && (
             <StaffTrainingView
               currentUser={currentUser} brands={brands} stores={stores} opsTeam={opsTeam}
+            />
+          )}
+
+          {activeView === "availability" && (
+            <EmployeeAvailabilityView
+              brands={myBrands} currentUser={currentUser} availability={availability || []}
+              onAdd={onAddAvailability} onUpdate={onUpdateAvailability}
+            />
+          )}
+
+          {activeView === "my-hours" && (
+            <EmployeeHoursView
+              currentUser={currentUser} brands={brands} schedules={schedules || []}
+              punchRecords={punchRecords || []} onUpdate={onAmendPunch} onAddComment={onAddPunchComment}
             />
           )}
 
@@ -19662,7 +19678,7 @@ function CommunicationView({
   onUpdateBrand,
   isEmployee,
 }) {
-  const [tab, setTab] = useState("helpdesk");
+  const [tab, setTab] = useState(isEmployee ? "chat" : "helpdesk");
 
   const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
@@ -19684,55 +19700,67 @@ function CommunicationView({
     ? (availability||[]).filter(a => a.employeeId === myOpsId && a.status === "pending").length
     : (availability||[]).filter(a => brands.some(b => b.id === a.brandId) && a.status === "pending").length;
 
-  const TABS = [
-    { key: "helpdesk",     label: "Help Desk",    icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
-    { key: "chat",         label: "Chat",          icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
-    { key: "availability", label: "Availability",  icon: Calendar,      badge: pendingAvail > 0 ? pendingAvail : null },
-    ...(!isEmployee ? [
-      { key: "schedule", label: "Schedule", icon: CalendarDays, badge: null },
-    ] : [
-      { key: "emp-schedule", label: "My Schedule", icon: CalendarDays, badge: null },
-      { key: "my-hours",     label: "My Hours",    icon: Clock,         badge: (() => {
-        const records = (punchRecords||[]).filter(r => (r.employeeId===myOpsId||r.employeeId===myId));
-        const count = records.filter(r => {
-          const hasOT = (r.overtimeHours||0) > 0;
-          if (!hasOT) return false;
-          // Conclusion reached — nothing to do
-          if (r.overtimeApproved || r.overtimeRejectedReason) return false;
-          // No reason yet — employee needs to start
-          if (!r.overtimeReason && (r.overtimeComments?.length||0) === 0) return true;
-          // Last comment was from the manager → employee's turn
-          const cs = r.overtimeComments || [];
-          if (cs.length > 0 && cs[cs.length-1].authorRole === "manager") return true;
-          return false;
-        }).length;
-        return count > 0 ? count.toString() : null;
-      })() },
-    ]),
-  ];
+  const TABS = isEmployee
+    ? [
+        // EMP_COMMS_SLIDER_V1: employees get a two-way Chat / Help Desk toggle only.
+        // Availability, My Schedule and My Hours now live in the bottom-nav "More" sheet.
+        { key: "chat",     label: "Chat",      icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
+        { key: "helpdesk", label: "Help Desk", icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
+      ]
+    : [
+        { key: "helpdesk",     label: "Help Desk",    icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
+        { key: "chat",         label: "Chat",          icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
+        { key: "availability", label: "Availability",  icon: Calendar,      badge: pendingAvail > 0 ? pendingAvail : null },
+        { key: "schedule",     label: "Schedule",      icon: CalendarDays,  badge: null },
+      ];
 
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
       {/* Tab bar */}
-      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 flex-wrap">
-        {TABS.map(t => {
-          const TIcon = t.icon;
-          return (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
-                tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
-              }`}>
-              <TIcon size={13}/>
-              {t.label}
-              {t.badge && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === t.key ? "bg-slate-900/20 text-white" : "bg-red-500 text-white"}`}>
-                  {t.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {isEmployee ? (
+        // EMP_COMMS_SLIDER_V1: segmented slider (Chat / Help Desk)
+        <div className="relative flex bg-slate-800 rounded-2xl p-1 mb-4 select-none">
+          <div
+            className="absolute top-1 bottom-1 rounded-xl bg-indigo-600 shadow-sm transition-transform duration-200 ease-out"
+            style={{ width: `calc(50% - 0.25rem)`, transform: TABS.findIndex(t => t.key === tab) === 1 ? "translateX(calc(100% + 0.5rem))" : "translateX(0)" }}
+          />
+          {TABS.map(t => {
+            const TIcon = t.icon; const active = tab === t.key;
+            return (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${active ? "text-white" : "text-slate-400 hover:text-white"}`}>
+                <TIcon size={15}/>
+                {t.label}
+                {t.badge && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${active ? "bg-slate-900/25 text-white" : "bg-red-500 text-white"}`}>
+                    {t.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 flex-wrap">
+          {TABS.map(t => {
+            const TIcon = t.icon;
+            return (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                }`}>
+                <TIcon size={13}/>
+                {t.label}
+                {t.badge && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === t.key ? "bg-slate-900/20 text-white" : "bg-red-500 text-white"}`}>
+                    {t.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Panels */}
       <div className="flex-1 min-h-0 overflow-auto">
