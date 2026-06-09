@@ -6243,6 +6243,8 @@ function DashboardView({ brands, stores, entries, issues }) {
 
   // ── Filters: period + store ───────────────────────────────────────────────
   const [preset, setPreset] = useState("today");
+  const [dashTick, setDashTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setDashTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [storeId, setStoreId] = useState("all");
@@ -6384,14 +6386,34 @@ function DashboardView({ brands, stores, entries, issues }) {
     });
   };
 
+  // Live punch hours: closed -> stored hours; open -> elapsed since (graced) clock-in.
+  const punchHours = (r) => {
+    if ((r.status === "open" || !r.punchOut) && r.punchIn) {
+      let pIn = new Date(r.punchIn).getTime();
+      if (r.scheduledStart && r.date) {
+        const ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
+        const earlyMs = ssMs - pIn;
+        if (earlyMs > 0 && earlyMs <= 15 * 60000) pIn = ssMs; // grace early clock-in
+      }
+      return Math.max(0, (Date.now() - pIn) / 3600000);
+    }
+    return r.hoursWorked || 0;
+  };
+  const punchCost = (r) => {
+    if ((r.status === "open" || !r.punchOut) && r.punchIn) {
+      return punchHours(r) * (r.hourlyRate || 0);
+    }
+    return r.grossPay || 0;
+  };
+
   // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
   const rollup = (sales, punch) => {
     const s = sales.filter(r => scopedStoreIds.has(r.storeId));
     const p = punch.filter(r => scopedStoreIds.has(r.storeId));
     const revenue = s.reduce((a, r) => a + r.revenue, 0);
     const orders = s.reduce((a, r) => a + r.saleCount, 0);
-    const hours = p.reduce((a, r) => a + (r.hoursWorked || 0), 0);
-    const labourCost = p.reduce((a, r) => a + (r.grossPay || 0), 0);
+    const hours = Math.round(p.reduce((a, r) => a + punchHours(r), 0) * 100) / 100;
+    const labourCost = Math.round(p.reduce((a, r) => a + punchCost(r), 0) * 100) / 100;
     return {
       revenue, orders, hours, labourCost,
       wagePct: revenue > 0 ? (labourCost / revenue) * 100 : null,
@@ -6399,7 +6421,7 @@ function DashboardView({ brands, stores, entries, issues }) {
       atv: orders > 0 ? revenue / orders : null,
     };
   };
-  const cur = useMemo(() => rollup(data.curSales, data.curPunch), [data, scopedStoreIds]);
+  const cur = useMemo(() => rollup(data.curSales, data.curPunch), [data, scopedStoreIds, dashTick]);
   const prev = useMemo(() => rollup(data.prevSales, data.prevPunch), [data, scopedStoreIds]);
 
   // ── Targets for the selected period + stores ──────────────────────────────
@@ -6492,11 +6514,14 @@ function DashboardView({ brands, stores, entries, issues }) {
     const punches = data.curPunch.filter(r => scopedStoreIds.has(r.storeId))
       .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (a.employeeName||"").localeCompare(b.employeeName||""));
     if (mode === "cost") {
-      const rows = punches.map(p => [
-        p.employeeName || "—", nameOfStore(p.storeId), p.date || "—",
-        p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "on shift",
-        fmtCurrency(p.grossPay || 0),
-      ]);
+      const rows = punches.map(p => {
+        const open = (p.status === "open" || !p.punchOut);
+        return [
+          p.employeeName || "—", nameOfStore(p.storeId), p.date || "—",
+          open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`,
+          open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0),
+        ];
+      });
       setDrill({
         title: `Labour cost breakdown · ${period.label}`,
         columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
@@ -6506,13 +6531,16 @@ function DashboardView({ brands, stores, entries, issues }) {
     } else {
       // hours: Name, Start, End, Worked hours, Overtime
       const totOt = punches.reduce((a, p) => a + (p.overtimeHours || 0), 0);
-      const rows = punches.map(p => [
-        p.employeeName || "—",
-        fmtTime(p.punchIn),
-        p.punchOut ? fmtTime(p.punchOut) : "on shift",
-        p.punchOut ? `${(p.hoursWorked||0).toFixed(2)}h` : "—",
-        p.overtimeHours ? `${p.overtimeHours.toFixed(2)}h` : "—",
-      ]);
+      const rows = punches.map(p => {
+        const open = (p.status === "open" || !p.punchOut);
+        return [
+          p.employeeName || "—",
+          fmtTime(p.punchIn),
+          open ? "on shift" : fmtTime(p.punchOut),
+          open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`,
+          p.overtimeHours ? `${p.overtimeHours.toFixed(2)}h` : "—",
+        ];
+      });
       setDrill({
         title: `Labour hours breakdown · ${period.label}`,
         columns: ["Employee", "Start", "End", "Worked", "Overtime"],
