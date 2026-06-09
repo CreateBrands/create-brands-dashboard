@@ -2131,12 +2131,20 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
       const unreadList = fetched.filter(n => !n.readAt);
       // Ding only when NEW notifications arrive on a background poll — never on
       // the initial page load (would chime on every refresh).
+      // New notification (not first load). Always chime. Then route the visual:
+      //   page VISIBLE -> in-app toast (Chrome suppresses OS banners when focused)
+      //   page HIDDEN  -> OS banner via service worker (in-app toast can't draw)
       if (!firstLoadRef.current && unreadList.length > prevUnreadRef.current) {
         playDing();
-        showOSNotification(unreadList[0]);            // OS banner (when app backgrounded)
         const n0 = unreadList[0];
-        setPopup({ title: n0?.title || "New notification", body: n0?.body || "" });
-        setTimeout(() => setPopup(null), 6000);       // in-app toast (always visible)
+        const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+        if (hidden) {
+          showOSNotification(n0);                       // backgrounded -> OS banner
+        } else {
+          setPopup({ title: n0?.title || "New notification", body: n0?.body || "" });
+          setTimeout(() => setPopup(null), 6000);       // foreground -> in-app toast
+          showOSNotification(n0);                       // also attempt OS (no-op if focused)
+        }
       }
       prevUnreadRef.current = unreadList.length;
       firstLoadRef.current = false;
