@@ -1589,6 +1589,62 @@ export async function insertNotifications(rows) {
   }));
   const { error } = await supabase.from("notifications").insert(payload);
   if (error) throw error;
+  // WEB_PUSH_V1 — also fire a push to each recipient (fire-and-forget; never blocks).
+  rows.forEach(r => {
+    sendPush({ recipientType: r.recipientType, recipientId: r.recipientId, title: r.title, body: r.body, linkView: r.linkView })
+      .catch(() => {});
+  });
+}
+
+// Invoke the send-push Edge Function (background; failures are swallowed).
+export async function sendPush({ recipientType, recipientId, title, body, linkView } = {}) {
+  try {
+    await supabase.functions.invoke("send-push", {
+      body: { recipientType, recipientId, title, body, linkView },
+    });
+  } catch (e) { /* push is best-effort */ }
+}
+
+// WEB_PUSH_V1 — register the service worker + subscribe this device to push,
+// then store the subscription. Call after the user grants notification permission.
+const VAPID_PUBLIC_KEY = process.env.REACT_APP_VAPID_PUBLIC_KEY || "";
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+export async function subscribeToPush({ recipientType, recipientId } = {}) {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return { ok: false, reason: "unsupported" };
+    if (!VAPID_PUBLIC_KEY) return { ok: false, reason: "no-vapid-key" };
+    if (Notification.permission !== "granted") {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return { ok: false, reason: "denied" };
+    }
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    const json = sub.toJSON();
+    await supabase.from("push_subscriptions").upsert({
+      id: `ps-${recipientType}-${recipientId}-${btoa(json.endpoint).slice(0, 24)}`,
+      recipient_type: recipientType, recipient_id: recipientId,
+      endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
+      user_agent: navigator.userAgent || null,
+    }, { onConflict: "endpoint" });
+    return { ok: true };
+  } catch (e) {
+    console.error("subscribeToPush failed:", e);
+    return { ok: false, reason: String(e?.message || e) };
+  }
 }
 
 // Notify the relevant managers/owners/HQ. Owners + hq_staff always receive;

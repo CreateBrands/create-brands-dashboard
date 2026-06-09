@@ -20,7 +20,7 @@ import {
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
-  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, notifyOpsMembers, notifyMessageRecipients,
+  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -2077,11 +2077,21 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
       o.frequency.setValueAtTime(880, ctx.currentTime);
       o.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.1);
       g.gain.setValueAtTime(0.0001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.14, ctx.currentTime + 0.02);
       g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
       o.start(ctx.currentTime); o.stop(ctx.currentTime + 0.55);
       setTimeout(() => { ctx.close().catch(() => {}); }, 700);
     } catch { /* autoplay blocked or unsupported — stay silent */ }
+  };
+  // Native OS notification (shows even when the tab is backgrounded, if permitted).
+  const showOSNotification = (n) => {
+    try {
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+      const note = new Notification(n?.title || "New notification", {
+        body: n?.body || "", tag: n?.id || undefined, icon: "/logo192.png",
+      });
+      note.onclick = () => { window.focus(); note.close(); };
+    } catch { /* unsupported — stay silent */ }
   };
 
   const load = useCallback(async () => {
@@ -2091,7 +2101,10 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
       const unreadList = fetched.filter(n => !n.readAt);
       // Ding only when NEW notifications arrive on a background poll — never on
       // the initial page load (would chime on every refresh).
-      if (!firstLoadRef.current && unreadList.length > prevUnreadRef.current) playDing();
+      if (!firstLoadRef.current && unreadList.length > prevUnreadRef.current) {
+        playDing();
+        showOSNotification(unreadList[0]);  // surface the newest as an OS notification too
+      }
       prevUnreadRef.current = unreadList.length;
       firstLoadRef.current = false;
       setItems(unreadList);
@@ -2100,10 +2113,22 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
   }, [recipientType, recipientId]);
 
   useEffect(() => {
+    // Ask for OS-notification permission, then subscribe THIS device to web push
+    // so notifications arrive even when the app is closed (WEB_PUSH_V1).
+    (async () => {
+      try {
+        if ("Notification" in window && Notification.permission === "default") {
+          await Notification.requestPermission().catch(() => {});
+        }
+        if (recipientId && Notification.permission === "granted") {
+          subscribeToPush({ recipientType, recipientId }).catch(() => {});
+        }
+      } catch { /* ignore */ }
+    })();
     load();
-    const t = setInterval(load, 60000);
+    const t = setInterval(load, 25000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, recipientType, recipientId]);
 
   useEffect(() => {
     if (!open) return;
