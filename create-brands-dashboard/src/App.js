@@ -2121,7 +2121,13 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
           await Notification.requestPermission().catch(() => {});
         }
         if (recipientId && Notification.permission === "granted") {
-          subscribeToPush({ recipientType, recipientId }).catch(() => {});
+          const res = await subscribeToPush({ recipientType, recipientId }).catch(e => ({ ok: false, reason: String(e) }));
+          if (res && !res.ok) {
+            // TEMP DIAGNOSTIC: show why push subscribe failed on this device.
+            try { window.alert("Push subscribe failed: " + (res.reason || "unknown")); } catch {}
+          }
+        } else if (recipientId && Notification.permission !== "granted") {
+          try { window.alert("Notifications not granted (permission: " + (("Notification" in window) ? Notification.permission : "unsupported") + ")"); } catch {}
         }
       } catch { /* ignore */ }
     })();
@@ -19163,8 +19169,8 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
       fromId:    myId, fromName: currentUser.name, fromRole: currentUser.role,
       toScope:   thread.type === "location" ? "location" : thread.type === "broadcast" ? "all_locations" : "individual",
       toBrandId: thread.type === "location" ? thread.brandId : null,
-      toPersonId:   (thread.type === "user" || thread.type === "ops" || thread.type === "dm") ? (thread.personId || thread.id) : null,
-      toPersonName: (thread.type === "user" || thread.type === "ops" || thread.type === "dm") ? (thread.personName || thread.name) : null,
+      toPersonId:   thread.type === "dm" ? thread.personId   : null,
+      toPersonName: thread.type === "dm" ? thread.personName : null,
       subject: thread.name, body: text,
       readBy:  [myId],
       createdAt: new Date().toISOString(),
