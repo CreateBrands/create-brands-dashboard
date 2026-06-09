@@ -1614,6 +1614,23 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
+// Send a test notification to the CURRENT user's own device. Ensures a fresh
+// subscription exists, then inserts a self-addressed notification row — which
+// fires the push webhook just like a real notification. Returns the subscribe
+// result so the UI can report problems (e.g. permission denied).
+export async function sendTestNotification({ recipientType, recipientId } = {}) {
+  if (!recipientId) return { ok: false, reason: "no-recipient" };
+  // Make sure this device is subscribed first (no-op if already is).
+  const sub = await subscribeToPush({ recipientType, recipientId });
+  // Insert a self-addressed notification -> DB webhook -> server-side push.
+  await insertNotifications([{
+    recipientType, recipientId, kind: "message",
+    title: "Test notification ✓", body: "If you can see this, push notifications are working on this device.",
+    linkView: null,
+  }]);
+  return sub || { ok: true };
+}
+
 export async function subscribeToPush({ recipientType, recipientId } = {}) {
   try {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return { ok: false, reason: "unsupported" };

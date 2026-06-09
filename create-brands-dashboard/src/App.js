@@ -20,7 +20,7 @@ import {
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
-  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, notifyOpsMembers, notifyMessageRecipients,
+  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -2059,6 +2059,20 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState(null);   // in-app toast for newly arrived notifications
+  const [testState, setTestState] = useState(null);   // null | "sending" | "ok" | "denied" | "error"
+  const handleSendTest = async () => {
+    setTestState("sending");
+    try {
+      const res = await sendTestNotification({ recipientType, recipientId });
+      if (res && res.ok === false) {
+        setTestState(res.reason === "denied" ? "denied" : "error");
+      } else {
+        setTestState("ok");
+        load();   // refresh the bell so the test notification shows in-list too
+      }
+    } catch { setTestState("error"); }
+    setTimeout(() => setTestState(null), 5000);
+  };
   const wrapRef = useRef(null);
   const prevUnreadRef = useRef(0);
   const firstLoadRef = useRef(true);
@@ -2275,12 +2289,22 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
               </button>
             ))
           )}
-          {onViewAll && (
-            <button onClick={() => { setOpen(false); onViewAll(); }}
-              className="w-full px-3 py-2 text-center text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 hover:bg-slate-800/50 sticky bottom-0 bg-slate-900 border-t border-slate-800">
-              View all notifications →
+          <div className="sticky bottom-0 bg-slate-900 border-t border-slate-800">
+            <button onClick={handleSendTest} disabled={testState === "sending"}
+              className="w-full px-3 py-2 text-center text-[10px] font-semibold text-slate-300 hover:text-white hover:bg-slate-800/50 disabled:opacity-50">
+              {testState === "sending" ? "Sending test…"
+                : testState === "ok" ? "✓ Test sent — check your notifications"
+                : testState === "denied" ? "⚠ Allow notifications in your browser first"
+                : testState === "error" ? "⚠ Couldn't send — notifications may be off"
+                : "🔔 Send me a test notification"}
             </button>
-          )}
+            {onViewAll && (
+              <button onClick={() => { setOpen(false); onViewAll(); }}
+                className="w-full px-3 py-2 text-center text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 hover:bg-slate-800/50 border-t border-slate-800">
+                View all notifications →
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
