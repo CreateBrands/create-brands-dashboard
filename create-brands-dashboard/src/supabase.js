@@ -1620,15 +1620,22 @@ function urlBase64ToUint8Array(base64String) {
 // result so the UI can report problems (e.g. permission denied).
 export async function sendTestNotification({ recipientType, recipientId } = {}) {
   if (!recipientId) return { ok: false, reason: "no-recipient" };
-  // Make sure this device is subscribed first (no-op if already is).
+  // Subscribe this device (no-op if already), capturing ITS endpoint.
   const sub = await subscribeToPush({ recipientType, recipientId });
-  // Insert a self-addressed notification -> DB webhook -> server-side push.
-  await insertNotifications([{
-    recipientType, recipientId, kind: "message",
-    title: "Test notification ✓", body: "If you can see this, push notifications are working on this device.",
-    linkView: null,
-  }]);
-  return sub || { ok: true };
+  if (sub && sub.ok === false) return sub;   // surface denied/unsupported to UI
+  // Push to ONLY this device's endpoint (not the whole account) and write no
+  // notification row, so the test never reaches the user's other phones/colleagues.
+  try {
+    await supabase.functions.invoke("send-push", {
+      body: {
+        recipientType, recipientId,
+        endpoint: sub?.endpoint || null,   // target just this device
+        title: "Test notification ✓",
+        body: "Push notifications are working on this device.",
+      },
+    });
+  } catch (e) { return { ok: false, reason: String(e?.message || e) }; }
+  return { ok: true };
 }
 
 export async function subscribeToPush({ recipientType, recipientId } = {}) {
@@ -1666,7 +1673,7 @@ export async function subscribeToPush({ recipientType, recipientId } = {}) {
       endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
       user_agent: navigator.userAgent || null,
     }, { onConflict: "endpoint" });
-    return { ok: true };
+    return { ok: true, endpoint: json.endpoint };
   } catch (e) {
     console.error("subscribeToPush failed:", e);
     return { ok: false, reason: String(e?.message || e) };
