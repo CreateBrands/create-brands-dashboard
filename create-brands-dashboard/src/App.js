@@ -96,6 +96,7 @@ import {
 } from "recharts";
 import {
   Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight,
+  Home, MoreHorizontal,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle,
   Plus, Trash2, Edit, Eye, EyeOff, Download, Upload, RotateCcw,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
@@ -2761,30 +2762,39 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     return [...ids];
   }, [stores, currentUser.brandIds, currentUser.role, myOpsMember]);
   const [activeView, setActiveView] = useState("ops-tasks");
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false); // EMP_BOTTOMNAV_V1: "More" sheet
   const overdueCount = assignments.filter(a =>
     currentUser.brandIds.includes(a.brandId) && isActiveToday(a) && isOverdue(a)
   ).length;
 
-  const NAV = [
-    { key: "ops-tasks",      label: "Today's Tasks",    icon: ListChecks,  badge: overdueCount > 0 ? overdueCount.toString() : null },
-    { key: "ops-temps",      label: "Temperature Log",  icon: Thermometer },
-    { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
-    { key: "ops-network",    label: "Ops Status",       icon: ShieldCheck },
-    { key: "issues",         label: "Report Issue",     icon: Wrench },
-    { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => {
-        const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
-        const unread = (messages || []).filter(m => {
-          if (m.fromId === myId || m.fromId === myOpsId) return false;
-          if (m.toScope === "all_locations") return true;
-          if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
-          if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
-          return false;
-        }).filter(m => !m.readBy?.includes(myId)).length;
-        return unread > 0 ? unread.toString() : null;
-      })() },
-    { key: "emp-training",   label: "Training",         icon: GraduationCap },
-    { key: "emp-contracts",  label: "Contracts",        icon: FileText },
+  // EMP_BOTTOMNAV_V1: unread chat count (used by header Chat icon)
+  const chatUnread = (() => {
+    const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+    return (messages || []).filter(m => {
+      if (m.fromId === myId || m.fromId === myOpsId) return false;
+      if (m.toScope === "all_locations") return true;
+      if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+      if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
+      return false;
+    }).filter(m => !m.readBy?.includes(myId)).length;
+  })();
+
+  // EMP_BOTTOMNAV_V1: four fixed bottom tabs (4th = More opens the sheet)
+  const PRIMARY_NAV = [
+    { key: "ops-tasks",    label: "Home",      icon: Home,          badge: overdueCount > 0 ? overdueCount.toString() : null },
+    { key: "emp-schedule", label: "Schedule",  icon: CalendarDays },
+    { key: "emp-training", label: "Training",  icon: GraduationCap },
+    { key: "__more",       label: "More",      icon: MoreHorizontal },
+  ];
+
+  // EMP_BOTTOMNAV_V1: everything else lives in the More sheet
+  const MORE_NAV = [
+    { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
+    { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
+    { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
+    { key: "issues",         label: "Report an Issue", icon: Wrench },
+    { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
+    { key: "emp-contracts",  label: "Contracts",       icon: FileText },
   ];
 
   const titles = {
@@ -2800,19 +2810,66 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-contracts":  "Contracts",
   };
 
-  const NavBar = () => (
-    <nav className="MOBILE_NAV_WRAP_V1 flex flex-wrap sm:flex-nowrap items-center justify-center sm:justify-start gap-1.5 sm:overflow-x-auto px-3 py-2 bg-slate-900 border-b border-slate-800/60">
-      {NAV.map(n => {
-        const NIcon = n.icon; const active = activeView === n.key;
+  // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
+  // OR (for More) if the current view is one of the More items.
+  const moreKeys = MORE_NAV.map(n => n.key);
+  const goTo = (key) => { setActiveView(key); setMoreOpen(false); };
+
+  const BottomNav = () => (
+    <nav className="EMP_BOTTOMNAV_V1 fixed bottom-0 inset-x-0 z-30 flex items-stretch justify-around bg-slate-900 border-t border-slate-800/60 pb-[env(safe-area-inset-bottom)]">
+      {PRIMARY_NAV.map(n => {
+        const NIcon = n.icon;
+        const active = n.key === "__more"
+          ? (moreOpen || moreKeys.includes(activeView))
+          : (activeView === n.key && !moreOpen);
         return (
-          <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 sm:py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-800 hover:text-white"}`}>
-            <NIcon size={13}/>{n.label}
-            {n.badge && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+          <button key={n.key}
+            onClick={() => n.key === "__more" ? setMoreOpen(o => !o) : goTo(n.key)}
+            className={`relative flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-semibold transition-colors ${active ? "text-indigo-400" : "text-slate-500 hover:text-slate-300"}`}>
+            <NIcon size={20}/>
+            <span>{n.label}</span>
+            {n.badge && <span className="absolute top-1.5 right-[28%] bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
           </button>
         );
       })}
     </nav>
+  );
+
+  const MoreSheet = () => (
+    <>
+      {/* backdrop */}
+      <div onClick={() => setMoreOpen(false)}
+        className={`fixed inset-0 z-40 bg-black/50 transition-opacity ${moreOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}/>
+      {/* sheet */}
+      <div className={`fixed inset-x-0 bottom-0 z-50 bg-slate-900 border-t border-slate-800 rounded-t-2xl pb-[env(safe-area-inset-bottom)] transition-transform duration-200 ${moreOpen ? "translate-y-0" : "translate-y-full"}`}>
+        <div className="flex items-center justify-between px-5 pt-3 pb-2">
+          <div className="mx-auto w-10 h-1 rounded-full bg-slate-700 absolute left-1/2 -translate-x-1/2 top-2"/>
+          <div className="text-sm font-bold text-white mt-1">More</div>
+          <button onClick={() => setMoreOpen(false)} className="text-slate-500 hover:text-white"><X size={18}/></button>
+        </div>
+        <div className="px-3 pb-2 max-h-[60vh] overflow-auto">
+          {MORE_NAV.map(n => {
+            const NIcon = n.icon; const active = activeView === n.key;
+            return (
+              <button key={n.key} onClick={() => goTo(n.key)}
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold transition-colors ${active ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+                <NIcon size={18} className="flex-shrink-0"/>
+                <span className="flex-1 text-left">{n.label}</span>
+                {n.badge && <span className="bg-red-500 text-white text-[11px] px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+                <ChevronRight size={16} className="text-slate-600"/>
+              </button>
+            );
+          })}
+          {/* Sign out lives in More now */}
+          <div className="border-t border-slate-800 my-2"/>
+          <button onClick={onLogout}
+            className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-red-400 hover:bg-red-950/20 transition-colors">
+            <LogOut size={18} className="flex-shrink-0"/>
+            <span className="flex-1 text-left">Sign out</span>
+          </button>
+        </div>
+      </div>
+    </>
   );
 
   // Employee-filtered versions
@@ -2833,18 +2890,17 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
-            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
-            <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 text-xs font-semibold transition-all">
-              <LogOut size={13}/> Sign out
+            <button onClick={() => goTo("comms")} aria-label="Messages"
+              className={`relative flex items-center justify-center w-9 h-9 rounded-xl transition-colors ${activeView === "comms" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}>
+              <MessageSquare size={16}/>
+              {chatUnread > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{chatUnread}</span>}
             </button>
+            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
           </div>
         </header>
 
-        {/* Nav bar */}
-        <NavBar />
-
-        {/* Content */}
-        <main className="flex-1 overflow-auto p-4 lg:p-6">
+        {/* Content (pb-20 leaves room for the fixed bottom nav) */}
+        <main className="flex-1 overflow-auto p-4 lg:p-6 pb-24">
           {activeView === "ops-tasks" && (
             <TodaysTasks
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
@@ -2893,6 +2949,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             />
           )}
 
+          {activeView === "emp-schedule" && (
+            <EmployeeScheduleView
+              currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules || []}
+            />
+          )}
+
           {activeView === "emp-training" && (
             <StaffTrainingView
               currentUser={currentUser} brands={brands} stores={stores} opsTeam={opsTeam}
@@ -2914,6 +2976,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             </div>
           )}
         </main>
+
+        {/* EMP_BOTTOMNAV_V1: fixed bottom tab bar + More sheet */}
+        <BottomNav />
+        <MoreSheet />
       </div>
     </AuthContext.Provider>
   );
