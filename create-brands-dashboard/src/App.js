@@ -2765,40 +2765,69 @@ function EmployeeReviewQR({ stores = [], visibleStoreIds = [] }) {
   const store = myStores.find(s => s.id === storeId) || myStores[0];
   const url = reviewUrlForStore(store);
   const usingFallback = !(store.metadata && store.metadata.google_review_url);
-  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=8&data=${encodeURIComponent(url)}`;
+  // QR in brand colours: dark-brown modules on cream, no harsh white box.
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=0&qzone=2&color=66-32-20&bgcolor=255-251-242&data=${encodeURIComponent(url)}`;
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch {}
   };
 
   return (
-    <div className="max-w-md mx-auto">
-      <div className="text-center mb-4">
-        <h2 className="text-lg font-bold text-white flex items-center justify-center gap-2"><QrCode size={18}/> Leave us a review</h2>
-        <p className="text-sm text-slate-500 mt-1">Show this to a customer — they scan it to leave a Google review.</p>
-      </div>
-
-      {myStores.length > 1 && (
+    <div className="max-w-sm mx-auto">
+      {/* staff-only controls: store picker + copy (compact, above the customer card) */}
+      {(myStores.length > 1) && (
         <select value={store.id} onChange={e => setStoreId(e.target.value)}
-          className="w-full mb-4 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none">
+          className="w-full mb-4 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
           {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       )}
 
-      <div className="bg-white rounded-2xl p-6 flex flex-col items-center shadow-sm">
-        <img src={qrSrc} width={260} height={260} alt={`Google review QR for ${store.name}`} className="rounded-lg"/>
-        <div className="mt-4 text-base font-bold text-slate-900">{store.name}</div>
-        {store.address && <div className="text-xs text-slate-500 mt-0.5 text-center">{[store.address, store.city, store.postcode].filter(Boolean).join(", ")}</div>}
+      {/* CUSTOMER-FACING CARD */}
+      <div className="rounded-3xl overflow-hidden shadow-xl"
+        style={{ background: "linear-gradient(160deg,#FFFBF2 0%,#F7ECD8 100%)", border: "1px solid #E7D9BF" }}>
+
+        {/* top ribbon */}
+        <div className="px-6 pt-6 pb-4 text-center" style={{ background: "linear-gradient(135deg,#7A3D24 0%,#A0623F 100%)" }}>
+          <div className="text-[11px] font-bold tracking-[0.18em] uppercase text-white/70">Chocoberry</div>
+          <div className="text-xl font-extrabold text-white mt-1 leading-tight">Enjoyed your treat?</div>
+          {/* stars */}
+          <div className="flex items-center justify-center gap-1 mt-2">
+            {[0,1,2,3,4].map(i => (
+              <svg key={i} width="22" height="22" viewBox="0 0 24 24" fill="#FFD27D" stroke="none">
+                <path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.3l1.4-6.8L2.2 9.7l6.9-.7z"/>
+              </svg>
+            ))}
+          </div>
+        </div>
+
+        {/* body */}
+        <div className="px-6 pt-5 pb-6 text-center">
+          <p className="text-[15px] leading-relaxed font-medium" style={{ color: "#5A3A28" }}>
+            The team at <span className="font-extrabold" style={{ color: "#7A3D24" }}>{store.name}</span> would
+            love to hear how we did. It only takes a few seconds and means the world to us. 💛
+          </p>
+
+          {/* QR in a brand frame, no white box */}
+          <div className="mx-auto mt-5 inline-flex items-center justify-center rounded-2xl p-3"
+            style={{ background: "#FFFBF2", border: "3px solid #7A3D24", boxShadow: "0 6px 18px rgba(122,61,36,0.18)" }}>
+            <img src={qrSrc} width={210} height={210} alt={`Scan to review ${store.name}`} style={{ display: "block", borderRadius: 10 }}/>
+          </div>
+
+          <div className="mt-4 flex items-center justify-center gap-2 text-sm font-bold" style={{ color: "#7A3D24" }}>
+            <QrCode size={16}/> Scan to leave a Google review
+          </div>
+          <p className="text-xs mt-1" style={{ color: "#A07A5E" }}>Point your camera at the code — no app needed.</p>
+        </div>
       </div>
 
+      {/* staff utility */}
       <button onClick={copy}
-        className="w-full mt-4 px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors">
-        {copied ? "Link copied ✓" : "Copy review link"}
+        className="w-full mt-4 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors">
+        {copied ? "Link copied ✓" : "Copy review link (staff)"}
       </button>
-
       {usingFallback && (
-        <p className="text-xs text-slate-500 mt-3 text-center">
-          Using a Google Maps link for this store. A direct "write a review" link can be set up per store for an even smoother scan.
+        <p className="text-[11px] text-slate-500 mt-2 text-center">
+          This store uses a Google Maps link. A direct review link can be set up for an even smoother scan.
         </p>
       )}
     </div>
