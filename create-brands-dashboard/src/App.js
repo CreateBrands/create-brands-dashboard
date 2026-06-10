@@ -2144,7 +2144,16 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
     if (!recipientId) return;
     try {
       const fetched = await fetchNotifications({ recipientType, recipientId });
-      const unreadList = fetched.filter(n => !n.readAt);
+      // CHAT_72H_HIDE_V1: chat-message notifications auto-hide after 72h to
+      // match the chat-message retention rule. Other kinds are unaffected.
+      const notExpired = fetched.filter(n => {
+        if (n.kind !== "message") return true;
+        if (!n.createdAt) return true;
+        const t = new Date(n.createdAt).getTime();
+        if (Number.isNaN(t)) return true;
+        return (Date.now() - t) < 72 * 60 * 60 * 1000;
+      });
+      const unreadList = notExpired.filter(n => !n.readAt);
       // Ding only when NEW notifications arrive on a background poll — never on
       // the initial page load (would chime on every refresh).
       // New notification (not first load). Always chime. Then route the visual:
@@ -2325,7 +2334,15 @@ function NotificationsView({ currentUser, onNavigate }) {
   const load = useCallback(async () => {
     if (!currentUser?.id) return;
     setLoading(true);
-    try { setItems(await fetchNotifications({ recipientType: "user", recipientId: currentUser.id, limit: 100 })); }
+    try {
+      const all = await fetchNotifications({ recipientType: "user", recipientId: currentUser.id, limit: 100 });
+      // CHAT_72H_HIDE_V1: hide chat-message notifications older than 72h.
+      setItems(all.filter(n => {
+        if (n.kind !== "message" || !n.createdAt) return true;
+        const t = new Date(n.createdAt).getTime();
+        return Number.isNaN(t) ? true : (Date.now() - t) < 72 * 60 * 60 * 1000;
+      }));
+    }
     catch (e) { console.error("Notifications fetch failed:", e); }
     finally { setLoading(false); }
   }, [currentUser?.id]);
@@ -9728,6 +9745,19 @@ const PROFILE_REQUIRED_FIELDS = [
 function missingProfileFields(member) {
   if (!member) return PROFILE_REQUIRED_FIELDS.map(f => f.label);
   return PROFILE_REQUIRED_FIELDS.filter(f => !f.test(member)).map(f => f.label);
+}
+
+// CHAT_72H_HIDE_V1: chat messages auto-hide 72 hours after they were sent.
+// This is a display filter only — nothing is deleted from the database.
+const CHAT_TTL_MS = 72 * 60 * 60 * 1000;
+function isMessageVisible(m) {
+  if (!m?.createdAt) return true;
+  const sent = new Date(m.createdAt).getTime();
+  if (Number.isNaN(sent)) return true;
+  return (Date.now() - sent) < CHAT_TTL_MS;
+}
+function visibleChatMessages(messages) {
+  return (messages || []).filter(isMessageVisible);
 }
 
 function isActiveToday(a) {
@@ -25349,6 +25379,11 @@ export default function App() {
   const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);notifyMessageRecipients(s);}, []);
   const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...(m.readBy||[]),userId]}:m));}, []);
 
+  // CHAT_72H_HIDE_V1: chat messages older than 72h are hidden from view
+  // (display-only; not deleted). Recomputed each render so they drop off
+  // naturally as time passes.
+  const visibleMessages = visibleChatMessages(messages);
+
   // Kiosk guard — all hooks ran above
   if (IS_APPLY) return <ApplyShell />;
   if (IS_SELFFILL) return <SelfFillShell />;
@@ -25414,7 +25449,7 @@ export default function App() {
           onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
           onAddIssue={addIssue} onUpdateIssue={updateIssue}
           hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
-          messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
+          messages={visibleMessages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
           availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
           schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch} onAddPunchComment={handleAddPunchComment}
           onLogout={handleLogout}
@@ -25428,7 +25463,7 @@ export default function App() {
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
   const inboxUnread = (() => {
     const meId = currentUser.id; const meOps = currentUser.opsTeamMemberId || currentUser.id;
-    return messages.filter(m => {
+    return visibleMessages.filter(m => {
       if (m.fromId===meId || m.fromId===meOps) return false;
       if (m.toScope==="all_locations") return true;
       if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
@@ -25692,7 +25727,7 @@ export default function App() {
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
-              messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
+              messages={visibleMessages} onSend={sendMessage} onMarkRead={handleMarkRead}
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
               availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
               schedules={schedules} shiftPresets={shiftPresets} onAddSchedule={addSchedule} onDeleteSchedule={deleteSchedule} onPublishWeek={handlePublishWeek}
