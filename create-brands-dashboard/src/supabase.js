@@ -750,15 +750,20 @@ export async function insertInboxMessage(msg) {
 }
 
 export async function markMessageRead(id, readerId) {
-  // Append readerId to read_by array if not already present
-  const { error } = await supabase.rpc("mark_message_read", { msg_id: id, reader_id: readerId })
-    .catch(() => null); // graceful fallback if RPC not set up
-  // Fallback: fetch + update
-  if (error || true) {
-    const { data: existing } = await supabase.from("inbox_messages").select("read_by").eq("id", id).single();
-    if (existing && !existing.read_by.includes(readerId)) {
-      await supabase.from("inbox_messages").update({ read_by: [...existing.read_by, readerId] }).eq("id", id);
-    }
+  // UNREAD_FIX_V1: previously this threw when read_by was NULL (NULL.includes),
+  // so the read never persisted and the unread badge kept climbing. Now we
+  // coalesce NULL -> [], dedupe, and only write when the id is actually missing.
+  if (!id || !readerId) return;
+  try {
+    const { data: existing, error: selErr } = await supabase
+      .from("inbox_messages").select("read_by").eq("id", id).single();
+    if (selErr || !existing) return;
+    const current = Array.isArray(existing.read_by) ? existing.read_by : [];
+    if (current.includes(readerId)) return; // already read — nothing to do
+    await supabase.from("inbox_messages")
+      .update({ read_by: [...current, readerId] }).eq("id", id);
+  } catch (e) {
+    // swallow — a failed mark-read should never crash the chat UI
   }
 }
 

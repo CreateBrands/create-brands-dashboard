@@ -2144,16 +2144,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
     if (!recipientId) return;
     try {
       const fetched = await fetchNotifications({ recipientType, recipientId });
-      // CHAT_72H_HIDE_V1: chat-message notifications auto-hide after 72h to
-      // match the chat-message retention rule. Other kinds are unaffected.
-      const notExpired = fetched.filter(n => {
-        if (n.kind !== "message") return true;
-        if (!n.createdAt) return true;
-        const t = new Date(n.createdAt).getTime();
-        if (Number.isNaN(t)) return true;
-        return (Date.now() - t) < 72 * 60 * 60 * 1000;
-      });
-      const unreadList = notExpired.filter(n => !n.readAt);
+      const unreadList = fetched.filter(n => !n.readAt);
       // Ding only when NEW notifications arrive on a background poll — never on
       // the initial page load (would chime on every refresh).
       // New notification (not first load). Always chime. Then route the visual:
@@ -2334,15 +2325,7 @@ function NotificationsView({ currentUser, onNavigate }) {
   const load = useCallback(async () => {
     if (!currentUser?.id) return;
     setLoading(true);
-    try {
-      const all = await fetchNotifications({ recipientType: "user", recipientId: currentUser.id, limit: 100 });
-      // CHAT_72H_HIDE_V1: hide chat-message notifications older than 72h.
-      setItems(all.filter(n => {
-        if (n.kind !== "message" || !n.createdAt) return true;
-        const t = new Date(n.createdAt).getTime();
-        return Number.isNaN(t) ? true : (Date.now() - t) < 72 * 60 * 60 * 1000;
-      }));
-    }
+    try { setItems(await fetchNotifications({ recipientType: "user", recipientId: currentUser.id, limit: 100 })); }
     catch (e) { console.error("Notifications fetch failed:", e); }
     finally { setLoading(false); }
   }, [currentUser?.id]);
@@ -2777,19 +2760,15 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
     (s.employeeId === myId || s.employeeId === currentUser.id)
   );
 
-  // Active tasks today, scoped to the employee's assigned stores (matches
-  // TodaysTasks). Store-scoped rows must be in visibleStoreIds; legacy rows
-  // without a storeId fall back to a brand match.
-  const storeIdSet = new Set(visibleStoreIds);
-  const inScopeBrandIds = new Set(
-    (stores || []).filter(s => storeIdSet.has(s.id)).map(s => s.brandId)
-  );
-  const activeTasks = (assignments || []).filter(a => {
+  // Tasks today, scoped to the employee's own store(s) — mirrors TodaysTasks.
+  // A row with a storeId must be in the employee's visible stores; a legacy
+  // row without storeId falls back to a brand match.
+  const visibleSet = new Set(visibleStoreIds || []);
+  const taskCount = (assignments || []).filter(a => {
     if (!isActiveToday(a)) return false;
-    if (a.storeId) return storeIdSet.has(a.storeId);
-    return inScopeBrandIds.has(a.brandId) || currentUser.brandIds?.includes(a.brandId);
-  });
-  const taskCount = activeTasks.length;
+    if (a.storeId) return visibleSet.has(a.storeId);
+    return currentUser.brandIds?.includes(a.brandId);
+  }).length;
 
   // Weather (Open-Meteo, no key) via geolocation; fails silently if denied
   const [weather, setWeather] = useState(null); // { temp, code }
@@ -2931,7 +2910,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
       if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
       return false;
-    }).filter(m => !(m.readBy?.includes(myId) || m.readBy?.includes(myOpsId))).length;
+    }).filter(m => !m.readBy?.includes(myId)).length;
   })();
 
   // EMP_BOTTOMNAV_V1: four fixed bottom tabs (4th = More opens the sheet)
@@ -3019,7 +2998,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             </div>
             <div className="min-w-0">
               <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
-              <div className="text-xs text-slate-500 truncate">{currentUser.employeeRole} · {brand?.name || "—"}</div>
+              <div className="text-xs text-slate-500 truncate">{brand?.name || "—"}</div>
             </div>
           </div>
 
@@ -3154,21 +3133,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 .emp-theme .emp-greeting .text-slate-500,
 .emp-theme .emp-greeting .text-slate-400 { color: var(--ink-soft) !important; }
 .emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
-
-/* Chat readability: received bubbles get a distinct white surface with a
-   soft border so they don't blend into the cream page; text is dark ink. */
-.emp-theme .bg-slate-800.rounded-bl-md,
-.emp-theme .bg-slate-800.text-slate-100.rounded-bl-md {
-  background-color: var(--cream-card) !important;
-  border: 0.5px solid var(--brown-faint) !important;
-  color: var(--ink) !important;
-}
-/* My (sent) bubble: solid brown, white text */
-.emp-theme .bg-indigo-600.rounded-br-md { background-color: var(--brown) !important; }
-.emp-theme .bg-indigo-600.rounded-br-md.text-white,
-.emp-theme .bg-indigo-600.rounded-br-md .text-white { color: #fff !important; }
-/* Date divider pill */
-.emp-theme .bg-slate-800\\/80 { background-color: var(--cream-deep) !important; color: var(--ink-soft) !important; }
 `}</style>
         {/* Header */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
@@ -3177,6 +3141,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
+            <div className="text-xs text-slate-500">{brand?.name || "—"}</div>
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
@@ -9745,19 +9710,6 @@ const PROFILE_REQUIRED_FIELDS = [
 function missingProfileFields(member) {
   if (!member) return PROFILE_REQUIRED_FIELDS.map(f => f.label);
   return PROFILE_REQUIRED_FIELDS.filter(f => !f.test(member)).map(f => f.label);
-}
-
-// CHAT_72H_HIDE_V1: chat messages auto-hide 72 hours after they were sent.
-// This is a display filter only — nothing is deleted from the database.
-const CHAT_TTL_MS = 72 * 60 * 60 * 1000;
-function isMessageVisible(m) {
-  if (!m?.createdAt) return true;
-  const sent = new Date(m.createdAt).getTime();
-  if (Number.isNaN(sent)) return true;
-  return (Date.now() - sent) < CHAT_TTL_MS;
-}
-function visibleChatMessages(messages) {
-  return (messages || []).filter(isMessageVisible);
 }
 
 function isActiveToday(a) {
@@ -19614,18 +19566,18 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
     .filter(m => threadKey(m, myId, myOpsId) === thread.key)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  // Mark unread on mount / when thread changes.
-  // FIX_UNREAD_ID_V1: mark read under BOTH the auth id and the ops-team id,
-  // because the header/badge unread counts check currentUser.id while threads
-  // historically marked under opsTeamMemberId — the mismatch left messages
-  // "unread" forever and the badge climbed without ever clearing.
+  // Mark unread on mount / when thread changes
+  // UNREAD_FIX_V2: mark read against BOTH identities (auth id + ops-team id).
+  // The unread badges count against currentUser.id in some places and
+  // opsTeamMemberId in others; writing both guarantees the badge clears.
   useEffect(() => {
+    const ids = [...new Set([myId, myOpsId].filter(Boolean))];
     threadMsgs.forEach(m => {
       const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
       if (!isForMe) return;
-      const rb = m.readBy || [];
-      if (!rb.includes(myId))    onMarkRead(m.id, myId);
-      if (myOpsId !== myId && !rb.includes(myOpsId)) onMarkRead(m.id, myOpsId);
+      ids.forEach(rid => {
+        if (!m.readBy?.includes(rid)) onMarkRead(m.id, rid);
+      });
     });
   }, [thread.key]);
 
@@ -19775,6 +19727,23 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
 
   const myMessages = messages.filter(isVisible);
 
+  // UNREAD_FIX_V2: clear unread as soon as the chat is opened. Previously a
+  // read only registered when you opened a specific thread, so broadcast /
+  // location messages you never tapped into kept the badge climbing forever.
+  // Marking every visible, not-from-me message read against both identities
+  // makes the badge actually clear wherever it appears.
+  useEffect(() => {
+    const ids = [...new Set([myId, myOpsId].filter(Boolean))];
+    myMessages.forEach(m => {
+      const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
+      if (!isForMe) return;
+      ids.forEach(rid => {
+        if (!m.readBy?.includes(rid)) onMarkRead(m.id, rid);
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+
   // Group messages into threads (conversations)
   const threadMap = {};
   myMessages.forEach(m => {
@@ -19842,7 +19811,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   };
 
   const getThreadUnread = (thread) =>
-    thread.messages.filter(m => m.fromId !== myId && m.fromId !== myOpsId && !(m.readBy?.includes(myId) || m.readBy?.includes(myOpsId))).length;
+    thread.messages.filter(m => m.fromId !== myId && m.fromId !== myOpsId && !m.readBy?.includes(myId)).length;
 
   const getLastMsg = (thread) => thread.messages[thread.messages.length - 1];
 
@@ -20008,7 +19977,7 @@ function CommunicationView({
     if (m.toScope === "location" && myBrandIds.includes(m.toBrandId)) return true;
     if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
     return false;
-  }).filter(m => !(m.readBy?.includes(myId) || m.readBy?.includes(myOpsId))).length;
+  }).filter(m => !m.readBy?.includes(myId)).length;
 
   const hdBadge = isEmployee
     ? tickets.filter(t => t.createdById === myOpsId && ["Open","In Progress","Pending"].includes(t.status)).length
@@ -25377,12 +25346,7 @@ export default function App() {
   const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
   const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
   const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);notifyMessageRecipients(s);}, []);
-  const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...(m.readBy||[]),userId]}:m));}, []);
-
-  // CHAT_72H_HIDE_V1: chat messages older than 72h are hidden from view
-  // (display-only; not deleted). Recomputed each render so they drop off
-  // naturally as time passes.
-  const visibleMessages = visibleChatMessages(messages);
+  const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...new Set([...(m.readBy||[]),userId])]}:m));}, []);
 
   // Kiosk guard — all hooks ran above
   if (IS_APPLY) return <ApplyShell />;
@@ -25449,7 +25413,7 @@ export default function App() {
           onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
           onAddIssue={addIssue} onUpdateIssue={updateIssue}
           hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
-          messages={visibleMessages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
+          messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
           availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
           schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch} onAddPunchComment={handleAddPunchComment}
           onLogout={handleLogout}
@@ -25461,16 +25425,13 @@ export default function App() {
   // Manager / Owner
   const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
-  const inboxUnread = (() => {
-    const meId = currentUser.id; const meOps = currentUser.opsTeamMemberId || currentUser.id;
-    return visibleMessages.filter(m => {
-      if (m.fromId===meId || m.fromId===meOps) return false;
-      if (m.toScope==="all_locations") return true;
-      if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
-      if (m.toScope==="individual" && (m.toPersonId===meId || m.toPersonId===meOps)) return true;
-      return false;
-    }).filter(m => !(m.readBy?.includes(meId) || m.readBy?.includes(meOps))).length;
-  })();
+  const inboxUnread = messages.filter(m => {
+    if (m.fromId===currentUser.id) return false;
+    if (m.toScope==="all_locations") return true;
+    if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+    if (m.toScope==="individual" && m.toPersonId===currentUser.id) return true;
+    return false;
+  }).filter(m => !m.readBy?.includes(currentUser.id)).length;
   const pendingAvail = availability.filter(a => visibleBrands.some(b=>b.id===a.brandId) && a.status==="pending").length;
   const commsBadge = inboxUnread + pendingAvail;
 
@@ -25727,7 +25688,7 @@ export default function App() {
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
-              messages={visibleMessages} onSend={sendMessage} onMarkRead={handleMarkRead}
+              messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
               availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
               schedules={schedules} shiftPresets={shiftPresets} onAddSchedule={addSchedule} onDeleteSchedule={deleteSchedule} onPublishWeek={handlePublishWeek}
