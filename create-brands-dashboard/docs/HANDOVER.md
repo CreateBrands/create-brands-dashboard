@@ -1,195 +1,65 @@
-# Chocoberry Dashboard — Session Handover (9 June 2026)
+# Handover — 2026-06-10 session (Chocoberry dashboard)
 
-This document hands over the state of work for the **Chocoberry / Create Brands operations dashboard**
-after a long session focused on **building a complete Web Push notification system + branding**.
-Read this first in the next chat.
+## Current live state (verify byte counts before editing!)
+- **src/App.js = 1416771 bytes** — `App_REVIEWSCANS_v2_20260610.js` (review-scan QR pointing at `review_scans` function slug).
+- **src/supabase.js = 218964 bytes** — `supabase_REVIEWSCANS_20260610.js`.
+- **public/index.html — UNCHANGED** (Tailwind CDN is load-bearing; never add CDN `<script>` tags or all styling breaks).
+- App icons: brown+cream theme deployed (logo192/512, apple-touch-icon, favicon, badge-96).
 
----
-
-## 0. PROJECT BASICS (carry-forward)
-
-- **Repo (local):** `C:\dev\create-brands-dashboard\create-brands-dashboard`
-- **GitHub:** github.com/CreateBrands/create-brands-dashboard (branch `main`)
-- **Production:** create-brands-dashboard.vercel.app (Vercel, Hobby plan — **one concurrent build**)
-- **Stack:** React CRA. `src/App.js` is a monolith (~1.39 MB). `src/supabase.js` (~214 KB) holds all DB/Edge-function helpers.
-- **Supabase project ID:** `qtjsdbasoouslcpinqhu` (PRO)
-- **User (Atif):** Windows CMD, one command per line, pastes whole files. Downloads dir `C:\Users\conta\Downloads`. Email `atifrazzaqfast@gmail.com`. Brief/direct; wants work done now, even late.
-
-### Deploy discipline (FOLLOW EXACTLY)
-1. Claude outputs full files to `/mnt/user-data/outputs/` with **distinct filenames** + states the **byte count**.
-2. User `copy /Y "C:\Users\conta\Downloads\<file>" src\App.js` (or supabase.js).
-3. Verify bytes: `for %F in (src\App.js) do @echo %~zF bytes` — must match.
-4. `git status` must say **modified** (if "working tree clean", the copy didn't land — the Downloads `(1)` trap).
-5. `git add ... && git commit -m "..." && git push` → Vercel auto-builds (runs ESLint; catches no-undef/no-unused).
-6. **`git` must be run from the repo dir** (`cd C:\dev\create-brands-dashboard\create-brands-dashboard` first), else "not a git repository".
-
-### Validation Claude does before staging (container resets each session)
-- `npm i @babel/parser` then `node -e "require('@babel/parser').parse(fs.readFileSync('App.js','utf8'),{sourceType:'module',plugins:['jsx']})"` → PARSE OK.
-- `grep -c 'React\.use' App.js` must be **0** (bare hook imports only).
-- A distinct findstr/grep marker per change; verify import counts before staging.
-
-### Known gotchas (HARD-WON — don't repeat)
-- **Downloads `(1)` trap:** re-downloading saves `App_X (1).js`; copying the OLD file = "working tree clean". Use fresh distinct filenames, confirm `git status` says modified.
-- **Working-copy drift:** Claude's `/home/claude/work4/*.js` can reset/diverge between turns. ALWAYS restore from the latest known-good `/mnt/user-data/outputs/` file before editing, and confirm which base (grep for expected markers) before applying edits. This session we twice edited a stale base and had to redo.
-- **str_replace wrong file / non-unique anchor:** anchor only on grep-confirmed-unique strings; confirm which working file.
-- New Supabase tables come up **RLS-enabled** → app (anon key) reads zero → must `ALTER TABLE x DISABLE ROW LEVEL SECURITY`.
-- Edge Function secrets only take effect on **redeploy** (cold start).
-- BST/UTC off-by-one: local-midnight vs `toISOString()`. Use local date formatter for date strings; `AT TIME ZONE 'Europe/London'` in SQL.
+Deploy discipline unchanged: full file → `copy /Y` → byte-check → `git status` modified (watch the Downloads `(1)` trap) → commit → push. PWA caches HARD — after deploy, test in **incognito / fresh tab**, not the installed home-screen app (a stale cache caused ~30 min of false "it's broken" debugging this session — the code was right, the device was cached).
 
 ---
 
-## 1. WHAT WAS BUILT THIS SESSION (all DEPLOYED & working unless noted)
+## What shipped this session (employee app)
 
-Earlier in the session (before the big push project): Add-Manual-Hours store dropdown (brand removed, store-only, derives brandId); Time & Attendance **Day/Week toggle**, **approval tabs** (All / Needs approval / Approved — open shifts are "active", never "Approved"); **live wages everywhere** (Dashboard rollup + labour drill + T&A tiles count in-progress shifts = elapsed × rate, 60s ticks); fixed 36 invisible buttons (`text-slate-700` on `bg-slate-800` → `text-slate-300`); staff notifications for **chat messages** + **schedule published** (DM `toPersonId` bug fixed — threads are type `user`/`ops`, not `dm`); in-app **chime** + OS notification on new unread (poll 25s).
+All built on the recovered "old" employee app base after another app's deploy had wiped the formatting. Sequence of live files: EMPNAV → EMPCOMMS → CHATUI → CHATFIX → HOME → HOMEFIX → THEME → NAVCONTRAST → UNREADBADGE → REVIEWQR v2/v3 → REVIEWSCANS v2.
 
-### THE MAIN WORK: Web Push notification system (now fully working)
+1. **Bottom tab nav** (Home / Schedule / Training / More) + slide-up More sheet. Replaced the cluttered wrapping top nav. Chat icon + bell in header; Sign out moved into More.
+2. **Communication = Chat/Help Desk slider** (Chat default). Availability + My Hours moved into More; My Schedule is its own bottom tab.
+3. **Home greeting card** — avatar, date, live weather (Open-Meteo via geolocation, silent fallback), greeting, today's shift (from `schedules`), task count scoped to the employee's stores. Role removed from header/More (name + brand only).
+4. **Cream/brown theme** — scoped via `.emp-theme` wrapper + a `<style>` block remapping slate/indigo utilities to cream/brown. **Employee app only** — manager/admin stays dark. Bottom nav dark-brown with light text; chat/helpdesk slider contrast fixed.
+5. **iPhone safe-area padding** on bottom nav, More sheet, main content, chat input (`max(env(safe-area-inset-bottom), …)`).
+6. **Chat UI polish** + fixed an invalid Tailwind class `border-slate-800/60/80` (22 occurrences) that rendered borders invisible.
+7. **Unread badge fix** — root cause history: (a) `markMessageRead` had `if (error||true)` forcing a fallback that threw on NULL `read_by`; rewrote it (supabase). (b) A blanket "mark all visible read on every messages change" effect cleared the badge instantly so it never showed — **removed** that; marking-read now happens per-conversation in `ChatThread` against BOTH `currentUser.id` and `opsTeamMemberId`. Badge now shows for unread and clears when a conversation is opened.
 
-**Goal:** staff get push notifications (chat, schedule, tasks) even when the app is closed, on iPhone + Android.
+## Google Review QR feature (employee app) — COMPLETE
+- Employee **More → Review QR**: warm customer-facing card (brown ribbon, gold stars, team message), QR rendered brown-on-cream (goqr.me API `color`/`bgcolor` params — NO white box, NO CDN script, just an `<img>`). Uses inline hex colors so the cream theme can't alter it.
+- **Per-store direct review links** stored in `stores.metadata.google_review_url`. 7 stores set (evington-road, gipsy-lane, london-road, loughborough, narborough, rotherham, tove). Remaining 16 use a Google Maps name+address fallback. Helper `reviewUrlForStore(store)` prefers the direct link.
+- **Per-staff scan tracking (option 1, scan-only):**
+  - Table `review_scans` (staff_id, store_id, scanned_at, user_agent), RLS off.
+  - Edge Function deployed with **slug `review_scans`** (display name may say "review-redirect" — the SLUG is what the URL uses; the app points at `/functions/v1/review_scans`). Verify-JWT OFF (customers have no token). Logs a scan, 302-redirects to the store's review URL.
+  - Staff QR encodes `${REACT_APP_SUPABASE_URL}/functions/v1/review_scans?s=<opsTeamMemberId|id>&store=<storeId>`.
+  - Manager app **Review Scans** view (under Reports, owner/hq/manager): leaderboard of scans per staff, period filter, top performer.
+  - NOTE: Google gives no way to attribute a review to a person — this measures scan TRAFFIC driven, not confirmed reviews (the agreed metric).
 
-**Final working architecture:**
-1. Any notification row inserted into `notifications` table →
-2. **Database trigger `push_on_notification`** (AFTER INSERT) fires →
-3. calls Edge Function **`notify-push-webhook`** (server-side) →
-4. which looks up the recipient's rows in `push_subscriptions` and sends Web Push (signed with VAPID) →
-5. the **service worker `sw.js`** receives the push event and shows the notification on the device.
-
-This is **server-side and reliable** — does NOT depend on the sender's browser. Dead subscriptions auto-prune (404/410).
-
----
-
-## 2. CURRENT DEPLOYED STATE — what is LIVE right now
-
-### Git / Vercel (frontend)
-Latest deployed code as of end of session:
-- **App.js** = `App_TESTDEBUG` version (1387311 bytes) — has the test button WITH a temporary on-screen debug line.
-- **supabase.js** = `supabase_TESTDEBUG` version (214385 bytes).
-
-> **⚠️ PENDING DEPLOY (staged, not yet pushed by user):** the **debug-cleanup** versions:
-> - `App_CLEAN2_20260609.js` (**1386895** bytes)
-> - `supabase_CLEAN2_20260609.js` (**214237** bytes)
-> These remove the temporary grey `id=... sent=...` debug line under the test button. **First action in next chat: confirm the user deployed these.** Commit msg: `cleanup: remove temporary test-button debug line`.
-
-### Supabase Edge Functions (deployed separately from git)
-- **`send-push`** (JWT OFF) — manual/test sends, browser-invoked by the test button.
-  - LIVE version must be **`send-push_fn_cors_20260609.ts`** (has CORS headers + OPTIONS preflight — this was the final fix that made the test button work). If unsure, redeploy that file.
-  - Accepts optional `endpoint` param to target one device (currently unused by the button — see §3).
-- **`notify-push-webhook`** (JWT OFF) — `notify-push-webhook_fn_20260609.ts`. Called by the DB trigger on every notification INSERT. Reads `payload.record`, sends push to that recipient's subscriptions. **This is the one that fires automatically.**
-- Old/legacy (can be deleted): earlier `send-push` versions v1–v5 + `send-push_fn_clean`/`endpoint`. The npm `web-push` library does **NOT** work on Deno Edge (WORKER_ERROR) — we use **`jsr:@negrel/webpush@0.5`** (Web Crypto based).
-
-### Supabase secrets (on the Edge Functions)
-- `VAPID_JSON` = (the negrel-library JWK pair — set, length 420) — **the active key**.
-- `VAPID_SUBJECT` = `mailto:atifrazzaqfast@gmail.com`
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (auto-provided).
-- **Unused (can delete):** `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (the original npm web-push keys — superseded).
-
-**Active VAPID public key** (in Vercel env `REACT_APP_VAPID_PUBLIC_KEY`):
-`BC2LHyaAaAQ5GVEvXkG3W8xVgtNQ_oEYwS8FqFt9WTl0HvmdJkYrUxhSy6h7GiH7OAx63REs9yGhU-AA-NEQSvY`
-(matching VAPID_JSON private d=`4OWZr6zWGgoe-dZJF2ZULOC-bpbUUr_vd2JHzMlTtOU`). If keys ever need regenerating, the function had a `?generate=1` route in dev versions — but the **current clean/cors function does NOT** (removed for security). To rotate: regenerate, set VAPID_JSON + Vercel public key, then **delete all push_subscriptions and have devices re-subscribe** (mismatched keys = 403).
-
-### Supabase tables (RLS DISABLED on all)
-- **`push_subscriptions`** — `id, recipient_type ('user'|'ops'), recipient_id, endpoint (UNIQUE), p256dh, auth, user_agent, created_at`. SQL: `push_subscriptions_schema_20260609.sql`.
-- **`notifications`** (pre-existing) — `recipient_type, recipient_id, kind, title, body, link_view, read_at, created_at`.
-
-### Supabase trigger (wired via SQL, equivalent to the dashboard "Database Webhooks" entry `push_on_notification`)
-```sql
-CREATE TRIGGER push_on_notification
-AFTER INSERT ON public.notifications
-FOR EACH ROW
-EXECUTE FUNCTION supabase_functions.http_request(
-  'https://qtjsdbasoouslcpinqhu.supabase.co/functions/v1/notify-push-webhook',
-  'POST', '{"Content-Type":"application/json"}', '{}', '5000');
-```
-Verified working: `INSERT INTO notifications(...)` → `net._http_response` shows `200 {"ok":true,"sent":1,...}`.
-
-### Service worker + PWA (in repo `public/`)
-- **`public/sw.js`** (latest = `sw.js` in outputs) — push handler uses `self.registration.showNotification` with `icon:/logo192.png`, `badge:/badge-96.png`, vibrate, notificationclick → focus/open at linkView.
-- **`public/manifest.json`** (= `manifest_20260609.json`) — name "Chocoberry Dashboard", start_url `/`, display standalone, navy theme, maskable icons. (Also `manifest-kiosk.json` for /kiosk.)
-- **`public/index.html`** (= `index_20260609.html`) — **added the missing `<link rel="manifest">`** (was absent → Android wouldn't offer Install), title "Chocoberry Dashboard", navy theme-color, kiosk-swap script preserved.
-- **Icons (in `public/`):** `logo192.png`, `logo512.png`, `favicon.ico`, `apple-touch-icon.png` = navy roundel + cream Chocoberry logo. `badge-96.png` = monochrome script-"c" for Android status bar. (Generated from user's logo `WhatsApp_Image_2026-06-09_at_22_40_04.jpeg`.)
-
-### supabase.js push helpers (current)
-- `subscribeToPush({recipientType, recipientId})` — registers `/sw.js` with `{updateViaCache:"none"}` + `reg.update()` + **controllerchange auto-reload** (so stale SW self-heals), creates PushSubscription with VAPID public key, upserts to push_subscriptions. Returns `{ok, endpoint}` or `{ok:false, reason}`.
-- `sendPush({...})` — manual invoke of `send-push` (kept as fallback; NOT auto-called anymore).
-- `sendTestNotification({recipientType, recipientId})` — subscribes this device, then invokes `send-push` to the recipient (reliable; no fragile endpoint match). Used by the bell's test button.
-- `insertNotifications(rows)` — inserts rows; **no longer calls sendPush** (the DB trigger handles push server-side now — WEB_PUSH_V2).
-- `notifyMessageRecipients`, `notifyOpsMembers`, `notifyManagers`, `notifyOpsMember` — create notification rows for events.
-
-### App.js bell (`NotificationBell`)
-- Polls every 25s; on new unread: `playDing()` (loud 3-note triangle chime) + visibility-gated visual (in-app **toast** when focused, `showOSNotification` via SW when hidden).
-- `showOSNotification` uses **`reg.showNotification`** (the page-level `new Notification()` throws "Illegal constructor" on Android Chrome).
-- **"Send me a test notification"** button in the bell footer → `handleSendTest` → `sendTestNotification`. Feedback states: sending / "✓ Test sent" / "⚠ Allow notifications…" / "⚠ Couldn't send".
-- Employee/trainee bells use `recipientType="ops" recipientId={opsTeamMemberId||id}`; sidebar uses `"user"`.
+## NOT live / parked
+- **COGS view + GP%** (`App_COGS` 1421171, `App_COGSGP` 1423576) were built but NOT deployed (live App is the QR line). COGS *tables/SQL* WERE run in Supabase, but the model is being **rebuilt** (see below), so the old COGS screen is intentionally not live.
+- supabase COGS helpers (fetchCogsAll/updateCogs…) ARE in the live supabase.js (218964) but unused by the live App — harmless.
 
 ---
 
-## 3. HOW PUSH BEHAVES (important for future debugging)
+## COGS — where we are (the rebuild)
 
-- **A notification to a person reaches ALL their subscribed devices.** This is correct/desired. During testing, multiple test phones were logged into the **same account**, so a test "went to all phones" — that was just test setup, not a bug. (User confirmed this is acceptable.)
-- **iPhone:** push ONLY works if the app is **Added to Home Screen** (iOS 16.4+) and opened from the icon. A Safari **tab** subscription accepts the push (`sent:1`) but **will not display**. This caused hours of confusion. Endpoints: iPhone = `web.push.apple.com`, Android/Chrome = `fcm.googleapis.com`.
-- **Samsung / One UI:** aggressive battery "sleeping apps" can suppress background push. Set Chrome/PWA to Unrestricted. Also a **stale service worker** (old cached SW with no/old push handler) silently breaks display — fix by clearing site data / reinstalling; the controllerchange auto-reload now mitigates this going forward.
-- **The #1 recurring debugging trap: device/id mismatch.** With many subscriptions across accounts/devices, tests kept targeting the wrong `recipient_id`. RELIABLE METHOD: `DELETE FROM push_subscriptions;` → re-subscribe ONE device → it's the only row → test against THAT exact id, watching THAT device.
-- **`functions.invoke` (browser) vs `net.http_post` (SQL) differ:** the browser path enforces **CORS**. The `send-push` function MUST return CORS headers + handle OPTIONS preflight (done in `send-push_fn_cors`), or the test button fails with "failed to send request to edge function" while SQL tests still work.
+We corrected the model twice and landed on the right architecture:
 
-### Diagnostic recipes
-- See subscriptions: `SELECT recipient_type, recipient_id, left(endpoint,30), created_at FROM push_subscriptions ORDER BY created_at DESC;`
-- Test push directly (server-side, bypasses browser/CORS):
-```sql
-SELECT net.http_post(
-  url := 'https://qtjsdbasoouslcpinqhu.supabase.co/functions/v1/send-push',
-  headers := jsonb_build_object('Content-Type','application/json'),
-  body := jsonb_build_object('recipientType','ops','recipientId','<ID>','title','Test','body','x'));
--- then:
-SELECT id, status_code, content FROM net._http_response ORDER BY id DESC LIMIT 1;
-```
-  `{"ok":true,"sent":1}` = sent (then device display is separate). `total:0` = wrong/no subscription for that id.
-- Test the auto-pipeline (trigger → webhook): `INSERT INTO notifications(recipient_type,recipient_id,kind,title,body) VALUES('ops','<ID>','message','Test','x');` then check `net._http_response`.
+**Two SEPARATE inventory masters — never mixed:**
+1. **Store master** — what each shop buys/holds: raw ingredients from suppliers + finished goods from Central Kitchen. **CK is treated as a supplier.** Shared across all stores (same items/prices).
+2. **CK master** — CK's own raw ingredients (from its suppliers) used to make the goods it sells to shops.
 
----
+CK output items appear in the STORE master as `ck_supplied` line items at a **transfer price**; CK's recipes/ingredients live ONLY in the CK master.
 
-## 4. PENDING / NEXT STEPS
+**Costing rule (unified):** every component cost = `portion_qty ÷ pack_size × pack_price`. Applies to raw ingredients, CK items, and prep ingredients.
+- **Preps** are 2-stage: a mix is made (e.g. waffle mix from 1 of 6 bags + water + oil → 4400g yield), then a **portion** goes into each product (155g per waffle).
+- **CK items** are purchasable with pack qty + transfer price (cake = 14 slices → ÷14; butter chicken = 1kg → ÷1000g; banana pudding = pack of 25 → ÷25). Can be sold direct (portioned) OR used inside a product.
+- **Chocolate + toppings = MODIFIERS**, not base cost. Base product cost = always-included parts (batter + ice cream + packaging). Modifiers have their own cost, applied per customer selection at sale. Modifiers are a shared library, attached per product.
 
-1. **[FIRST] Confirm debug cleanup deployed.** Staged: `App_CLEAN2_20260609.js` (1386895) + `supabase_CLEAN2_20260609.js` (214237). If user hasn't pushed them, do that (removes the on-screen test-button debug line). The live `send-push` function (cors version) is fine and unaffected.
-2. **[OPTIONAL CLEANUP]** Delete unused `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` secrets. Optionally delete legacy `send-push` function versions. Keep `send-push` (cors) + `notify-push-webhook`.
-3. **[ROLLOUT]** Staff guide created: `Chocoberry_Notifications_Staff_Guide.docx`. Before sharing, replace placeholder "your dashboard link" with `create-brands-dashboard.vercel.app`. Ensure each staff member logs into their OWN account (so they only get their own notifications).
-4. **[KNOWN-OPEN] Samsung Fold 6 specifically** — got it working after clean re-subscribe, but One UI battery suppression may recur for some staff. Mitigations documented (battery Unrestricted, reinstall to clear stale SW).
-5. **[CONSIDERED, NOT BUILT] WhatsApp notifications** — user asked; researched. Requires WhatsApp Business Cloud API + a BSP (Twilio/360dialog/Wati) + Meta-approved **utility** templates (~<1p/msg UK) + staff phone numbers/consent. Would hook into `insertNotifications` the same way as push (channel-agnostic). Not started — revisit if push reliability on some devices stays poor.
+**Plan:** build a **recipe builder in the app** so Atif inputs products/variations directly; the builder's structure defines the schema; then generate a fill-in file in that format for bulk entry.
 
-### Older pending items from prior sessions (still open)
-- Farsam Bano / Manpreet Kaur: no `hourly_rate` on punch records → gross not calculating. Check rate flow from profile.
-- Stage 2: point Performance (TacticalOpsView) + Chain Performance at the same gross-sales + live-punch-labour model as the Dashboard.
-- COGS module → unlocks Prime Cost / Net Margin (currently "Pending COGS").
-- Connect 2nd Google account for 5 unmapped stores (cafe-leyton/colindale/derby/leicester/whitechapel).
-- Tailwind via CDN warning (cosmetic, "should not be used in production").
+**Deliverables produced (need filling by Atif):**
+- `INVENTORY_MASTERS_20260610.xlsx` — 2 tabs: Store Inventory Master (359 items, CK pre-tagged) + CK Inventory Master (152 ingredients). Pre-filled from costing sheets; pack-qty/unit need cleaning (source sheets mixed pack size and portion), suppliers mostly blank, Source tags are heuristic guesses.
+- Source files used: Costing version 1, Chocoberry food costing, Food_Unit_Prep, Baking_Unit_Prep, COGS_DATA_PACK, COGS_INGREDIENT_RESOLUTION.
 
----
+**Key reference (Atif's worked example):** Waffle Bites — mix prep (£8.14/4400g) → 155g portion (£0.287) + 1 chosen chocolate (modifier, £0.60–0.92/100g) + toppings (modifiers) + whippy ice cream (£0.117) + packaging (£0.175).
 
-## 5. KEY OUTPUT FILES (latest of each — in /mnt/user-data/outputs/)
-
-**Frontend (deploy to repo):**
-- `App_CLEAN2_20260609.js` (1386895) — latest App.js (debug removed). ← deploy this
-- `supabase_CLEAN2_20260609.js` (214237) — latest supabase.js. ← deploy this
-- `index_20260609.html`, `manifest_20260609.json`, `sw.js` → `public/`
-- Icons → `public/`: `logo192.png`, `logo512.png`, `favicon.ico`, `apple-touch-icon.png`, `badge-96.png`
-
-**Edge Functions (deploy in Supabase):**
-- `send-push_fn_cors_20260609.ts` → function slug `send-push` (LIVE/correct version)
-- `notify-push-webhook_fn_20260609.ts` → function slug `notify-push-webhook`
-
-**SQL (run in Supabase):**
-- `push_subscriptions_schema_20260609.sql` (table — already applied)
-- Trigger `push_on_notification` — already applied (see §2)
-
-**Deliverable:**
-- `Chocoberry_Notifications_Staff_Guide.docx` — staff rollout one-pager
-
-**Reference (older checkpoints / superseded — don't deploy):** App_TESTDEBUG, supabase_TESTDEBUG (currently live but to be replaced by CLEAN2), App_TESTBTN/2/3, supabase_TESTBTN/2/3, App_WEBPUSH, supabase_WEBPUSH, App_NOTIFY_RING, App_TOAST, App_NOTIFVIS, App_NOTIFFIX, App_PUSHDEBUG, supabase_PUSHDEBUG/SWUPDATE/WEBHOOK/CLEAN, send-push_fn v1–v5/clean/endpoint, App_DMFIX.
-
----
-
-## 6. STYLE / PROCESS NOTES FOR NEXT CLAUDE
-
-- User is mid-build owner-operator; wants results fast, even very late. Be concise and direct.
-- This is `claude.ai` web chat — Claude outputs files to `/mnt/user-data/outputs/`; user copies them into the repo and deploys. Claude cannot see `public/` or run the user's git/Vercel/Supabase.
-- When debugging device-side push, **don't guess repeatedly** — use the clean-single-subscription method and read the actual `sent`/`total` and the device. Many "it doesn't work" turns were id mismatches or stale caches, not code.
-- Always reconcile working copies against the latest `/mnt/user-data/outputs/` file at session start (drift is real).
-- Verify byte counts and `git status` modified; one change at a time; bare React hooks; no `React.use`.
+## Next COGS step
+Start the build per Atif's request. Sequence: finalize Store master structure → recipe builder UI (defines schema) → fill-in file → import. CK master second.
