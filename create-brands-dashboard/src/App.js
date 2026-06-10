@@ -2754,6 +2754,51 @@ function reviewUrlForStore(store) {
 
 // ── REVIEW_SCANS_V1: manager leaderboard of per-staff review QR scans ──
 // ═══════════════════════════════════════════════════════════════════════════
+// ── DUP_CHECK_V1: reusable fuzzy name matcher (reused by products later) ──
+// Normalises (lowercase, strip punctuation, singularise plurals, sort words),
+// then scores similarity. Returns existing entries that look like duplicates.
+function normForMatch(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map(w => w.replace(/(ies)$/, "y").replace(/(ses)$/, "s").replace(/s$/, "")) // crude singularise
+    .filter(Boolean)
+    .sort()
+    .join(" ");
+}
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    let cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i-1] === b[j-1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+function findSimilar(name, candidates, getName = (x) => x.name) {
+  const target = normForMatch(name);
+  if (!target) return [];
+  const out = [];
+  for (const c of candidates) {
+    const cn = normForMatch(getName(c));
+    if (!cn) continue;
+    if (cn === target) { out.push({ item: c, score: 1, exact: true }); continue; }
+    const dist = levenshtein(target, cn);
+    const sim = 1 - dist / Math.max(target.length, cn.length);
+    // also catch substring/contains (e.g. "milk choc" vs "milk chocolate")
+    const contains = cn.includes(target) || target.includes(cn);
+    if (sim >= 0.78 || contains) out.push({ item: c, score: contains ? Math.max(sim, 0.85) : sim, exact: false });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 6);
+}
+
 // COGS / INVENTORY BUILDER — two masters (store + CK), fully editable, no seed
 // ═══════════════════════════════════════════════════════════════════════════
 function CogsView() {
@@ -2783,8 +2828,15 @@ function CogsView() {
   const match = (s) => !q || (s || "").toLowerCase().includes(q.toLowerCase());
   const shown = items.filter(i => match(i.name) || match(i.category) || match(i.supplier));
 
-  const addRow = async () => {
-    try { await addInventoryItem(scope, { name: "New item" }); await load(); }
+  const [adding, setAdding] = useState(false);     // dialog open
+  const [addName, setAddName] = useState("");
+
+  const confirmAdd = async (force) => {
+    const n = addName.trim();
+    if (!n) return;
+    const matches = findSimilar(n, items);
+    if (matches.length && !force) return;            // dialog shows matches; user must confirm
+    try { await addInventoryItem(scope, { name: n }); setAdding(false); setAddName(""); await load(); }
     catch (e) { setErr(e.message || String(e)); }
   };
   const saveField = async (id, patch) => {
@@ -2829,6 +2881,49 @@ function CogsView() {
         </div>
       )}
 
+      {/* add-item dialog with duplicate check */}
+      {adding && (() => {
+        const matches = addName.trim() ? findSimilar(addName, items) : [];
+        const exact = matches.some(m => m.exact);
+        return (
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-xl p-4 space-y-3">
+            <div className="text-sm font-semibold text-white">Add {scope === "ck" ? "CK" : "store"} item</div>
+            <input autoFocus value={addName} onChange={e=>setAddName(e.target.value)}
+              onKeyDown={e=>{ if(e.key==="Enter" && matches.length===0) confirmAdd(false); if(e.key==="Escape") setAdding(false); }}
+              placeholder="Item name…"
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+
+            {matches.length > 0 && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                <div className="text-xs font-semibold text-amber-300 mb-1.5">
+                  {exact ? "An item with this name already exists:" : "Possible duplicates already in this list:"}
+                </div>
+                <ul className="space-y-1">
+                  {matches.map(m => (
+                    <li key={m.item.id} className="text-xs text-slate-300 flex items-center justify-between">
+                      <span>{m.item.name}{m.item.category ? <span className="text-slate-500"> · {m.item.category}</span> : null}</span>
+                      <span className="text-slate-500">{Math.round(m.score*100)}% match</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => { setAdding(false); setAddName(""); }}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Cancel</button>
+              {matches.length === 0 ? (
+                <button onClick={() => confirmAdd(false)} disabled={!addName.trim()}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold">Add item</button>
+              ) : (
+                <button onClick={() => confirmAdd(true)}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Add anyway</button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* scope tabs */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
@@ -2841,7 +2936,7 @@ function CogsView() {
           className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
         <button onClick={() => setShowCats(v => !v)}
           className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Lists</button>
-        <button onClick={addRow}
+        <button onClick={() => { setAdding(true); setAddName(""); }}
           className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={14}/> Add item</button>
       </div>
 
