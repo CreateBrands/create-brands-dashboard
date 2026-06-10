@@ -4555,3 +4555,79 @@ export async function fetchReviewStats() {
 }
 
 // ===== end GBP_REVIEWS_V1 =====
+
+// ===== COGS_V1 — cost of goods / recipe costing =============================
+// Tables: cogs_ingredients, cogs_preps, cogs_prep_components,
+//         cogs_products, cogs_product_components, cogs_pos_map. RLS off.
+
+export async function fetchCogsAll() {
+  const [ings, preps, prepComps, prods, prodComps, posMap] = await Promise.all([
+    supabase.from("cogs_ingredients").select("*").order("name"),
+    supabase.from("cogs_preps").select("*").order("name"),
+    supabase.from("cogs_prep_components").select("*"),
+    supabase.from("cogs_products").select("*").order("name"),
+    supabase.from("cogs_product_components").select("*"),
+    supabase.from("cogs_pos_map").select("*"),
+  ]);
+  const err = ings.error || preps.error || prepComps.error || prods.error || prodComps.error || posMap.error;
+  if (err) throw err;
+  const map = (r) => ({
+    id: r.id, name: r.name, nameNorm: (r.name||"").trim().toLowerCase(), category: r.category,
+    baseUnit: r.base_unit, packDesc: r.pack_desc, packQty: r.pack_qty, packUnit: r.pack_unit,
+    packPrice: r.pack_price, supplier: r.supplier, notes: r.notes,
+    costPerBaseUnit: r.cost_per_base_unit,
+  });
+  const mapPrep = (r) => ({
+    id: r.id, name: r.name, nameNorm: (r.name||"").trim().toLowerCase(), production: r.production,
+    yieldQty: r.yield_qty, yieldUnit: r.yield_unit, transferPrice: r.transfer_price, notes: r.notes,
+  });
+  const mapComp = (r) => ({
+    id: r.id, prepId: r.prep_id, productId: r.product_id, name: r.component_name,
+    kind: r.component_kind, ingredientId: r.ingredient_id, prepId2: r.prep_id ?? r.sub_prep_id,
+    subPrepId: r.sub_prep_id, linkedPrepId: r.prep_id, qty: r.qty, unit: r.unit, notes: r.notes,
+  });
+  return {
+    ingredients: (ings.data || []).map(map),
+    preps: (preps.data || []).map(mapPrep),
+    prepComponents: (prepComps.data || []).map(r => ({
+      id: r.id, prepId: r.prep_id, name: r.component_name, kind: r.component_kind,
+      ingredientId: r.ingredient_id, subPrepId: r.sub_prep_id, qty: r.qty, unit: r.unit,
+    })),
+    products: (prods.data || []).map(r => ({
+      id: r.id, name: r.name, nameNorm: (r.name||"").trim().toLowerCase(), category: r.category, notes: r.notes,
+    })),
+    productComponents: (prodComps.data || []).map(r => ({
+      id: r.id, productId: r.product_id, name: r.component_name, kind: r.component_kind,
+      ingredientId: r.ingredient_id, prepId: r.prep_id, qty: r.qty, unit: r.unit,
+    })),
+    posMap: (posMap.data || []).map(r => ({
+      id: r.id, posName: r.pos_name, productId: r.product_id, confirmed: r.confirmed,
+    })),
+  };
+}
+
+export async function updateCogsIngredient(id, patch) {
+  const body = {};
+  if ("packPrice" in patch) body.pack_price = patch.packPrice;
+  if ("packQty"   in patch) body.pack_qty   = patch.packQty;
+  if ("supplier"  in patch) body.supplier   = patch.supplier;
+  if ("category"  in patch) body.category   = patch.category;
+  if ("baseUnit"  in patch) body.base_unit  = patch.baseUnit;
+  if ("notes"     in patch) body.notes      = patch.notes;
+  body.updated_at = new Date().toISOString();
+  const { error } = await supabase.from("cogs_ingredients").update(body).eq("id", id);
+  if (error) throw error;
+}
+
+export async function updateCogsPrep(id, patch) {
+  const body = {};
+  if ("production"    in patch) body.production     = patch.production;
+  if ("yieldQty"      in patch) body.yield_qty      = patch.yieldQty;
+  if ("yieldUnit"     in patch) body.yield_unit     = patch.yieldUnit;
+  if ("transferPrice" in patch) body.transfer_price = patch.transferPrice;
+  if ("notes"         in patch) body.notes          = patch.notes;
+  body.updated_at = new Date().toISOString();
+  const { error } = await supabase.from("cogs_preps").update(body).eq("id", id);
+  if (error) throw error;
+}
+// ===== end COGS_V1 =====

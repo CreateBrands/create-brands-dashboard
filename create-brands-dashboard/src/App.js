@@ -89,6 +89,9 @@ import {
   fetchSalesDaily,
   fetchReviewsForDashboard,
   fetchReviewStats,
+  fetchCogsAll,
+  updateCogsIngredient,
+  updateCogsPrep,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -3619,6 +3622,298 @@ function InvoiceLineRow({ line, domain, onChanged }) {
         <div className="text-[10px] text-amber-400">needs: ingredient match + pack qty + price before it can be confirmed</div>
       )}
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COGS_V1 — Recipe costing view (theoretical COGS + GP% per product)
+// ═══════════════════════════════════════════════════════════════════════════
+function CogsView({ currentUser }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [tab, setTab] = useState("products");
+  const [q, setQ] = useState("");
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try { setData(await fetchCogsAll()); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  // ---- cost engine -------------------------------------------------------
+  const engine = useMemo(() => {
+    if (!data) return null;
+    const ingById = new Map(data.ingredients.map(i => [i.id, i]));
+    const ingByName = new Map(data.ingredients.map(i => [i.nameNorm, i]));
+    const prepById = new Map(data.preps.map(p => [p.id, p]));
+    const prepByName = new Map(data.preps.map(p => [p.nameNorm, p]));
+    const norm = (s) => (s || "").trim().toLowerCase();
+
+    const ingCost = (ing) => {
+      if (!ing) return null;
+      // cost per base unit (already computed server-side when pack_qty present)
+      return ing.costPerBaseUnit != null ? Number(ing.costPerBaseUnit) : null;
+    };
+
+    // prep cost PER YIELD UNIT
+    const prepCostCache = new Map();
+    const prepUnitCost = (prep, seen = new Set()) => {
+      if (!prep) return null;
+      if (prepCostCache.has(prep.id)) return prepCostCache.get(prep.id);
+      if (seen.has(prep.id)) return null; // cycle guard
+      seen.add(prep.id);
+      // central kitchen: stores pay the transfer price per yield unit
+      if (prep.production === "central_kitchen") {
+        const v = prep.transferPrice != null ? Number(prep.transferPrice) : null;
+        prepCostCache.set(prep.id, v); return v;
+      }
+      // in-store: sum of component costs / yield
+      const comps = data.prepComponents.filter(c => c.prepId === prep.id);
+      let total = 0, ok = comps.length > 0;
+      for (const c of comps) {
+        let unit = null;
+        const ing = c.ingredientId ? ingById.get(c.ingredientId) : ingByName.get(norm(c.name));
+        if (ing) unit = ingCost(ing);
+        else {
+          const sp = c.subPrepId ? prepById.get(c.subPrepId) : prepByName.get(norm(c.name));
+          if (sp) unit = prepUnitCost(sp, seen);
+        }
+        if (unit == null || c.qty == null) { ok = false; continue; }
+        total += unit * Number(c.qty);
+      }
+      const per = (ok && prep.yieldQty) ? total / Number(prep.yieldQty) : null;
+      prepCostCache.set(prep.id, per); return per;
+    };
+
+    // product cost
+    const productCost = (prod) => {
+      const comps = data.productComponents.filter(c => c.productId === prod.id);
+      let total = 0, missing = [];
+      for (const c of comps) {
+        if (c.kind === "packaging") { /* packaging costed if matched as ingredient */ }
+        let unit = null;
+        const ing = c.ingredientId ? ingById.get(c.ingredientId) : ingByName.get(norm(c.name));
+        if (ing) unit = ingCost(ing);
+        else {
+          const sp = c.prepId ? prepById.get(c.prepId) : prepByName.get(norm(c.name));
+          if (sp) unit = prepUnitCost(sp);
+        }
+        if (unit == null || c.qty == null) { missing.push(c.name); continue; }
+        total += unit * Number(c.qty);
+      }
+      return { cost: total, missing, components: comps.length };
+    };
+
+    const products = data.products.map(p => {
+      const { cost, missing, components } = productCost(p);
+      return { ...p, cost, missing, components, costable: missing.length === 0 && components > 0 };
+    });
+    const costableCount = products.filter(p => p.costable).length;
+    return { products, costableCount, prepUnitCost, ingById, prepById };
+  }, [data]);
+
+  const cur = (n) => n == null ? "—" : "£" + Number(n).toFixed(3);
+
+  if (loading) return <div className="p-6 text-slate-400 text-sm">Loading COGS data…</div>;
+  if (err) return (
+    <div className="p-6">
+      <div className="text-sm font-semibold text-red-400 mb-2">Couldn't load COGS data</div>
+      <div className="text-xs text-slate-500 mb-3">{err}</div>
+      <div className="text-xs text-slate-500">If the tables don't exist yet, run the COGS schema SQL in Supabase first.</div>
+      <button onClick={load} className="mt-3 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Retry</button>
+    </div>
+  );
+
+  const TABS = [
+    { key: "products",    label: `Products (${data.products.length})` },
+    { key: "ingredients", label: `Ingredients (${data.ingredients.length})` },
+    { key: "preps",       label: `Preps (${data.preps.length})` },
+  ];
+  const match = (s) => !q || (s || "").toLowerCase().includes(q.toLowerCase());
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Recipes</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Theoretical recipe costing. Central-kitchen preps cost at their transfer price; in-store preps cost from raw ingredients.</p>
+      </div>
+
+      {/* summary tiles */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-xs text-slate-500">Products</div>
+          <div className="text-xl font-bold text-white">{data.products.length}</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-xs text-slate-500">Fully costable</div>
+          <div className="text-xl font-bold text-emerald-400">{engine.costableCount}<span className="text-sm text-slate-600 font-normal"> / {data.products.length}</span></div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-xs text-slate-500">Ingredients</div>
+          <div className="text-xl font-bold text-white">{data.ingredients.length}</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-xs text-slate-500">Preps (CK / in-store)</div>
+          <div className="text-xl font-bold text-white">{data.preps.filter(p=>p.production==="central_kitchen").length} / {data.preps.filter(p=>p.production==="in_store").length}</div>
+        </div>
+      </div>
+
+      {/* tabs + search */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
+          ))}
+        </div>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…"
+          className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+      </div>
+
+      {/* PRODUCTS */}
+      {tab === "products" && (
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs">
+              <tr>
+                <th className="text-left px-3 py-2">Product</th>
+                <th className="text-left px-3 py-2">Category</th>
+                <th className="text-right px-3 py-2">Unit cost</th>
+                <th className="text-left px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {engine.products.filter(p=>match(p.name)).map(p => (
+                <tr key={p.id} className="border-t border-slate-800/60">
+                  <td className="px-3 py-2 text-slate-200 font-medium">{p.name}</td>
+                  <td className="px-3 py-2 text-slate-500 text-xs">{p.category||"—"}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-200">{p.costable ? cur(p.cost) : "—"}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {p.costable
+                      ? <span className="text-emerald-400">✓ costable</span>
+                      : <span className="text-amber-400" title={p.missing.join(", ")}>missing {p.missing.length}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* INGREDIENTS (editable price/supplier) */}
+      {tab === "ingredients" && (
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs">
+              <tr>
+                <th className="text-left px-3 py-2">Ingredient</th>
+                <th className="text-left px-3 py-2">Base unit</th>
+                <th className="text-right px-3 py-2">Pack qty</th>
+                <th className="text-right px-3 py-2">Pack £</th>
+                <th className="text-right px-3 py-2">£/unit</th>
+                <th className="text-left px-3 py-2">Supplier</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.ingredients.filter(i=>match(i.name)).map(i => (
+                <CogsIngredientRow key={i.id} ing={i} onSaved={load}/>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* PREPS (editable production / transfer price / yield) */}
+      {tab === "preps" && (
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs">
+              <tr>
+                <th className="text-left px-3 py-2">Prep</th>
+                <th className="text-left px-3 py-2">Production</th>
+                <th className="text-right px-3 py-2">Yield</th>
+                <th className="text-right px-3 py-2">Transfer £</th>
+                <th className="text-right px-3 py-2">Cost / unit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.preps.filter(p=>match(p.name)).map(p => (
+                <CogsPrepRow key={p.id} prep={p} unitCost={engine.prepUnitCost(p)} onSaved={load}/>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CogsIngredientRow({ ing, onSaved }) {
+  const [price, setPrice] = useState(ing.packPrice ?? "");
+  const [qty, setQty] = useState(ing.packQty ?? "");
+  const [supplier, setSupplier] = useState(ing.supplier ?? "");
+  const [saving, setSaving] = useState(false);
+  const dirty = String(price) !== String(ing.packPrice ?? "") || String(qty) !== String(ing.packQty ?? "") || supplier !== (ing.supplier ?? "");
+  const save = async () => {
+    setSaving(true);
+    try { await updateCogsIngredient(ing.id, { packPrice: price===""?null:Number(price), packQty: qty===""?null:Number(qty), supplier }); onSaved(); }
+    finally { setSaving(false); }
+  };
+  const perUnit = (Number(price)>0 && Number(qty)>0) ? (Number(price)/Number(qty)) : null;
+  return (
+    <tr className="border-t border-slate-800/60">
+      <td className="px-3 py-2 text-slate-200">{ing.name}</td>
+      <td className="px-3 py-2 text-slate-500 text-xs">{ing.baseUnit||"—"}</td>
+      <td className="px-3 py-2 text-right"><input value={qty} onChange={e=>setQty(e.target.value)} className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-right text-white"/></td>
+      <td className="px-3 py-2 text-right"><input value={price} onChange={e=>setPrice(e.target.value)} className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-right text-white"/></td>
+      <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs">{perUnit!=null?"£"+perUnit.toFixed(4):"—"}</td>
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-1">
+          <input value={supplier} onChange={e=>setSupplier(e.target.value)} placeholder="—" className="w-28 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white"/>
+          {dirty && <button onClick={save} disabled={saving} className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">{saving?"…":"Save"}</button>}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function CogsPrepRow({ prep, unitCost, onSaved }) {
+  const [production, setProduction] = useState(prep.production);
+  const [yieldQty, setYieldQty] = useState(prep.yieldQty ?? "");
+  const [transfer, setTransfer] = useState(prep.transferPrice ?? "");
+  const [saving, setSaving] = useState(false);
+  const dirty = production !== prep.production || String(yieldQty)!==String(prep.yieldQty ?? "") || String(transfer)!==String(prep.transferPrice ?? "");
+  const save = async () => {
+    setSaving(true);
+    try { await updateCogsPrep(prep.id, { production, yieldQty: yieldQty===""?null:Number(yieldQty), transferPrice: transfer===""?null:Number(transfer) }); onSaved(); }
+    finally { setSaving(false); }
+  };
+  return (
+    <tr className="border-t border-slate-800/60">
+      <td className="px-3 py-2 text-slate-200">{prep.name}</td>
+      <td className="px-3 py-2">
+        <select value={production} onChange={e=>setProduction(e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white">
+          <option value="central_kitchen">Central kitchen</option>
+          <option value="in_store">In-store</option>
+        </select>
+      </td>
+      <td className="px-3 py-2 text-right">
+        <input value={yieldQty} onChange={e=>setYieldQty(e.target.value)} className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-right text-white"/>
+        <span className="text-slate-600 text-xs ml-1">{prep.yieldUnit||""}</span>
+      </td>
+      <td className="px-3 py-2 text-right">
+        {production==="central_kitchen"
+          ? <input value={transfer} onChange={e=>setTransfer(e.target.value)} className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-right text-white"/>
+          : <span className="text-slate-600 text-xs">n/a</span>}
+      </td>
+      <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs">
+        {unitCost!=null?"£"+Number(unitCost).toFixed(4):"—"}
+        {dirty && <button onClick={save} disabled={saving} className="ml-2 px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">{saving?"…":"Save"}</button>}
+      </td>
+    </tr>
   );
 }
 
@@ -25479,6 +25774,7 @@ export default function App() {
       { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"] },
       { key: "google-reviews", label: "Google Reviews", icon: Star, roles: ["owner", "hq_staff", "manager"] },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
+      { key: "cogs", label: "COGS / Recipes", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -25689,6 +25985,7 @@ export default function App() {
             {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
             {effectiveActiveView === "google-reviews" && ["owner","hq_staff","manager"].includes(currentUser.role) && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView currentUser={currentUser}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
