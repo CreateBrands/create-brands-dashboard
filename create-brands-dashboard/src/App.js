@@ -2914,7 +2914,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
       if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
       return false;
-    }).filter(m => !m.readBy?.includes(myId)).length;
+    }).filter(m => !(m.readBy?.includes(myId) || m.readBy?.includes(myOpsId))).length;
   })();
 
   // EMP_BOTTOMNAV_V1: four fixed bottom tabs (4th = More opens the sheet)
@@ -3137,6 +3137,21 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 .emp-theme .emp-greeting .text-slate-500,
 .emp-theme .emp-greeting .text-slate-400 { color: var(--ink-soft) !important; }
 .emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
+
+/* Chat readability: received bubbles get a distinct white surface with a
+   soft border so they don't blend into the cream page; text is dark ink. */
+.emp-theme .bg-slate-800.rounded-bl-md,
+.emp-theme .bg-slate-800.text-slate-100.rounded-bl-md {
+  background-color: var(--cream-card) !important;
+  border: 0.5px solid var(--brown-faint) !important;
+  color: var(--ink) !important;
+}
+/* My (sent) bubble: solid brown, white text */
+.emp-theme .bg-indigo-600.rounded-br-md { background-color: var(--brown) !important; }
+.emp-theme .bg-indigo-600.rounded-br-md.text-white,
+.emp-theme .bg-indigo-600.rounded-br-md .text-white { color: #fff !important; }
+/* Date divider pill */
+.emp-theme .bg-slate-800\\/80 { background-color: var(--cream-deep) !important; color: var(--ink-soft) !important; }
 `}</style>
         {/* Header */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
@@ -19569,11 +19584,18 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
     .filter(m => threadKey(m, myId, myOpsId) === thread.key)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  // Mark unread on mount / when thread changes
+  // Mark unread on mount / when thread changes.
+  // FIX_UNREAD_ID_V1: mark read under BOTH the auth id and the ops-team id,
+  // because the header/badge unread counts check currentUser.id while threads
+  // historically marked under opsTeamMemberId — the mismatch left messages
+  // "unread" forever and the badge climbed without ever clearing.
   useEffect(() => {
     threadMsgs.forEach(m => {
       const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
-      if (isForMe && !m.readBy?.includes(myId)) onMarkRead(m.id, myId);
+      if (!isForMe) return;
+      const rb = m.readBy || [];
+      if (!rb.includes(myId))    onMarkRead(m.id, myId);
+      if (myOpsId !== myId && !rb.includes(myOpsId)) onMarkRead(m.id, myOpsId);
     });
   }, [thread.key]);
 
@@ -19790,7 +19812,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   };
 
   const getThreadUnread = (thread) =>
-    thread.messages.filter(m => m.fromId !== myId && m.fromId !== myOpsId && !m.readBy?.includes(myId)).length;
+    thread.messages.filter(m => m.fromId !== myId && m.fromId !== myOpsId && !(m.readBy?.includes(myId) || m.readBy?.includes(myOpsId))).length;
 
   const getLastMsg = (thread) => thread.messages[thread.messages.length - 1];
 
@@ -19956,7 +19978,7 @@ function CommunicationView({
     if (m.toScope === "location" && myBrandIds.includes(m.toBrandId)) return true;
     if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
     return false;
-  }).filter(m => !m.readBy?.includes(myId)).length;
+  }).filter(m => !(m.readBy?.includes(myId) || m.readBy?.includes(myOpsId))).length;
 
   const hdBadge = isEmployee
     ? tickets.filter(t => t.createdById === myOpsId && ["Open","In Progress","Pending"].includes(t.status)).length
@@ -25404,13 +25426,16 @@ export default function App() {
   // Manager / Owner
   const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
-  const inboxUnread = messages.filter(m => {
-    if (m.fromId===currentUser.id) return false;
-    if (m.toScope==="all_locations") return true;
-    if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
-    if (m.toScope==="individual" && m.toPersonId===currentUser.id) return true;
-    return false;
-  }).filter(m => !m.readBy?.includes(currentUser.id)).length;
+  const inboxUnread = (() => {
+    const meId = currentUser.id; const meOps = currentUser.opsTeamMemberId || currentUser.id;
+    return messages.filter(m => {
+      if (m.fromId===meId || m.fromId===meOps) return false;
+      if (m.toScope==="all_locations") return true;
+      if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+      if (m.toScope==="individual" && (m.toPersonId===meId || m.toPersonId===meOps)) return true;
+      return false;
+    }).filter(m => !(m.readBy?.includes(meId) || m.readBy?.includes(meOps))).length;
+  })();
   const pendingAvail = availability.filter(a => visibleBrands.some(b=>b.id===a.brandId) && a.status==="pending").length;
   const commsBadge = inboxUnread + pendingAvail;
 
