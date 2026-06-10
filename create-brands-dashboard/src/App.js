@@ -3630,6 +3630,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
 // ═══════════════════════════════════════════════════════════════════════════
 function CogsView({ currentUser }) {
   const [data, setData] = useState(null);
+  const [priceMap, setPriceMap] = useState(null); // norm(item) -> avg selling price
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [tab, setTab] = useState("products");
@@ -3637,7 +3638,25 @@ function CogsView({ currentUser }) {
 
   const load = async () => {
     setLoading(true); setErr(null);
-    try { setData(await fetchCogsAll()); }
+    try {
+      const [cogs, aggs] = await Promise.all([
+        fetchCogsAll(),
+        fetchItemDayAggregates().catch(() => []),  // sales optional; GP blank if unavailable
+      ]);
+      setData(cogs);
+      // avg selling price per item = total revenue / total qty (all available)
+      const acc = {};
+      (aggs || []).forEach(a => {
+        const k = (a.item || "").trim().toLowerCase();
+        if (!k) return;
+        acc[k] = acc[k] || { rev: 0, qty: 0 };
+        acc[k].rev += a.revenue || 0;
+        acc[k].qty += a.qty || 0;
+      });
+      const pm = {};
+      Object.entries(acc).forEach(([k, v]) => { if (v.qty > 0) pm[k] = v.rev / v.qty; });
+      setPriceMap(pm);
+    }
     catch (e) { setErr(e.message || String(e)); }
     finally { setLoading(false); }
   };
@@ -3709,11 +3728,22 @@ function CogsView({ currentUser }) {
 
     const products = data.products.map(p => {
       const { cost, missing, components } = productCost(p);
-      return { ...p, cost, missing, components, costable: missing.length === 0 && components > 0 };
+      // selling price: POS-map any pos_name pointing at this product, else direct name
+      let sell = null;
+      if (priceMap) {
+        const posNames = data.posMap.filter(m => m.productId === p.id).map(m => (m.posName||"").trim().toLowerCase());
+        for (const pn of posNames) { if (priceMap[pn] != null) { sell = priceMap[pn]; break; } }
+        if (sell == null && priceMap[norm(p.name)] != null) sell = priceMap[norm(p.name)];
+      }
+      const costable = missing.length === 0 && components > 0;
+      const gp = (sell != null && costable && sell > 0) ? (sell - cost) / sell : null;
+      return { ...p, cost, missing, components, costable, sell, gp };
     });
     const costableCount = products.filter(p => p.costable).length;
-    return { products, costableCount, prepUnitCost, ingById, prepById };
-  }, [data]);
+    const withGp = products.filter(p => p.gp != null);
+    const avgGp = withGp.length ? withGp.reduce((s,p)=>s+p.gp,0)/withGp.length : null;
+    return { products, costableCount, prepUnitCost, ingById, prepById, pricedCount: withGp.length, avgGp };
+  }, [data, priceMap]);
 
   const cur = (n) => n == null ? "—" : "£" + Number(n).toFixed(3);
 
@@ -3742,7 +3772,7 @@ function CogsView({ currentUser }) {
       </div>
 
       {/* summary tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
           <div className="text-xs text-slate-500">Products</div>
           <div className="text-xl font-bold text-white">{data.products.length}</div>
@@ -3750,6 +3780,10 @@ function CogsView({ currentUser }) {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
           <div className="text-xs text-slate-500">Fully costable</div>
           <div className="text-xl font-bold text-emerald-400">{engine.costableCount}<span className="text-sm text-slate-600 font-normal"> / {data.products.length}</span></div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-xs text-slate-500">Avg GP %</div>
+          <div className="text-xl font-bold text-white">{engine.avgGp!=null ? (engine.avgGp*100).toFixed(0)+"%" : "—"}<span className="text-sm text-slate-600 font-normal"> ({engine.pricedCount} priced)</span></div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
           <div className="text-xs text-slate-500">Ingredients</div>
@@ -3782,6 +3816,8 @@ function CogsView({ currentUser }) {
                 <th className="text-left px-3 py-2">Product</th>
                 <th className="text-left px-3 py-2">Category</th>
                 <th className="text-right px-3 py-2">Unit cost</th>
+                <th className="text-right px-3 py-2">Sell £</th>
+                <th className="text-right px-3 py-2">GP %</th>
                 <th className="text-left px-3 py-2">Status</th>
               </tr>
             </thead>
@@ -3791,6 +3827,10 @@ function CogsView({ currentUser }) {
                   <td className="px-3 py-2 text-slate-200 font-medium">{p.name}</td>
                   <td className="px-3 py-2 text-slate-500 text-xs">{p.category||"—"}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-200">{p.costable ? cur(p.cost) : "—"}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{p.sell!=null ? "£"+Number(p.sell).toFixed(2) : "—"}</td>
+                  <td className={`px-3 py-2 text-right font-mono font-bold ${p.gp==null?"text-slate-600":p.gp>=0.7?"text-emerald-400":p.gp>=0.6?"text-amber-400":"text-red-400"}`}>
+                    {p.gp!=null ? (p.gp*100).toFixed(0)+"%" : "—"}
+                  </td>
                   <td className="px-3 py-2 text-xs">
                     {p.costable
                       ? <span className="text-emerald-400">✓ costable</span>
