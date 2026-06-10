@@ -3064,6 +3064,7 @@ function RecipeBuilder({ mode }) {
   const [adding, setAdding] = useState(false);
   const [addName, setAddName] = useState("");
   const [q, setQ] = useState("");
+  const [collapsed, setCollapsed] = useState({});
 
   const load = async () => {
     setErr(null);
@@ -3160,18 +3161,48 @@ function RecipeBuilder({ mode }) {
         {/* list */}
         <div className="lg:col-span-1 rounded-xl border border-slate-800 overflow-hidden">
           <div className="bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-400">{list.length} {label}s</div>
-          <div className="max-h-[480px] overflow-y-auto">
+          <div className="max-h-[560px] overflow-y-auto">
             {shown.length===0 && <div className="px-3 py-6 text-center text-slate-500 text-sm">None yet.</div>}
-            {shown.map(x => {
-              const c = mode==="preps" ? prepCost(x) : productBaseCost(x).cost;
-              return (
-                <button key={x.id} onClick={()=>setSelId(x.id)}
-                  className={`w-full text-left px-3 py-2 border-t border-slate-800/60 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
-                  <span className="text-sm text-slate-200">{x.name}</span>
-                  <span className="text-xs font-mono text-slate-400">{c!=null?"£"+c.toFixed(3):"—"}</span>
-                </button>
-              );
-            })}
+            {mode === "products" ? (
+              // grouped by category, collapsible
+              Object.entries(shown.reduce((acc,x)=>{ const k=x.category||"Uncategorised"; (acc[k]=acc[k]||[]).push(x); return acc; },{}))
+                .sort((a,b)=>a[0].localeCompare(b[0]))
+                .map(([cat,items]) => {
+                  const open = !collapsed[cat];
+                  return (
+                    <div key={cat}>
+                      <button onClick={()=>setCollapsed(s=>({...s,[cat]:!s[cat]}))}
+                        className="w-full text-left px-3 py-2 bg-slate-900/60 border-t border-slate-800 flex items-center justify-between hover:bg-slate-800/50">
+                        <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                          {open ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}{cat}
+                        </span>
+                        <span className="text-[10px] text-slate-500">{items.length}</span>
+                      </button>
+                      {open && items.map(x => {
+                        const c = productBaseCost(x).cost;
+                        return (
+                          <button key={x.id} onClick={()=>setSelId(x.id)}
+                            className={`w-full text-left pl-7 pr-3 py-2 border-t border-slate-800/40 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                            <span className="text-sm text-slate-200">{x.name}</span>
+                            <span className="text-xs font-mono text-slate-400">{c>0?"£"+c.toFixed(3):"—"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })
+            ) : (
+              shown.map(x => {
+                const c = prepCost(x);
+                return (
+                  <button key={x.id} onClick={()=>setSelId(x.id)}
+                    className={`w-full text-left px-3 py-2 border-t border-slate-800/60 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                    <span className="text-sm text-slate-200">{x.name}</span>
+                    <span className="text-xs font-mono text-slate-400">{c!=null?"£"+c.toFixed(3):"—"}</span>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
         {/* detail */}
