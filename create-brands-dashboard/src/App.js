@@ -2815,7 +2815,7 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
   const shiftWord = myShifts.length === 0 ? "no shifts" : myShifts.length === 1 ? "one shift" : `${myShifts.length} shifts`;
 
   return (
-    <div className="rounded-3xl bg-indigo-600 p-5 mb-5 text-white">
+    <div className="emp-greeting rounded-3xl bg-indigo-600 p-5 mb-5 text-white">
       {/* avatar */}
       <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center text-base font-bold mb-4">
         {`${(myMember?.firstName||currentUser.name||"?")[0] || ""}${myMember?.lastName?.[0] || ""}`.toUpperCase()}
@@ -3031,7 +3031,105 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   return (
     <AuthContext.Provider value={{ user: currentUser }}>
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+      <div className="emp-theme min-h-screen flex flex-col">
+        <style>{`
+/* EMP_THEME_CREAM_V1 — cream + brown, scoped to the employee app only.
+   Remaps the dark slate/indigo Tailwind utilities used across employee
+   (and shared) components to the Chocoberry cream palette. Manager/admin
+   app is outside .emp-theme and stays dark. */
+.emp-theme {
+  --cream:        #FDF2E0;
+  --cream-card:   #FFFFFF;
+  --cream-soft:   #F5EBD9;
+  --cream-deep:   #EFE3CB;
+  --brown:        #844429;
+  --brown-soft:   #A86A4D;
+  --brown-faint:  #C9A98F;
+  --ink:          #3A2418;
+  --ink-soft:     #6B5443;
+  background: var(--cream);
+  color: var(--ink);
+}
+
+/* Backgrounds: dark slates -> cream surfaces */
+.emp-theme .bg-slate-950,
+.emp-theme .bg-slate-900 { background-color: var(--cream) !important; }
+.emp-theme .bg-slate-800 { background-color: var(--cream-soft) !important; }
+.emp-theme .bg-slate-700 { background-color: var(--cream-deep) !important; }
+.emp-theme .bg-slate-900\\/40,
+.emp-theme .bg-slate-900\\/60,
+.emp-theme .bg-slate-800\\/60,
+.emp-theme .bg-slate-800\\/70,
+.emp-theme .bg-slate-800\\/80,
+.emp-theme .bg-slate-800\\/40 { background-color: var(--cream-soft) !important; }
+
+/* Indigo accents -> brown */
+.emp-theme .bg-indigo-600 { background-color: var(--brown) !important; }
+.emp-theme .bg-indigo-500 { background-color: var(--brown-soft) !important; }
+.emp-theme .hover\\:bg-indigo-500:hover { background-color: var(--brown-soft) !important; }
+.emp-theme .bg-indigo-600\\/15,
+.emp-theme .bg-indigo-600\\/20,
+.emp-theme .bg-indigo-950\\/30 { background-color: var(--cream-deep) !important; }
+
+/* Text: light text -> dark ink, EXCEPT on coloured backgrounds where white must stay white */
+.emp-theme .text-white { color: var(--ink) !important; }
+.emp-theme .bg-indigo-600 .text-white,
+.emp-theme .bg-indigo-500 .text-white,
+.emp-theme .bg-red-500 .text-white,
+.emp-theme .bg-red-500.text-white,
+.emp-theme button.bg-indigo-600 .text-white,
+.emp-theme .bg-indigo-600.text-white,
+.emp-theme .bg-indigo-500.text-white { color: #fff !important; }
+.emp-theme .text-slate-100,
+.emp-theme .text-slate-200,
+.emp-theme .text-slate-300 { color: var(--ink) !important; }
+.emp-theme .text-slate-400,
+.emp-theme .text-slate-500,
+.emp-theme .text-slate-600,
+.emp-theme .text-slate-700 { color: var(--ink-soft) !important; }
+.emp-theme .text-indigo-300,
+.emp-theme .text-indigo-400 { color: var(--brown) !important; }
+
+/* Borders -> soft brown */
+.emp-theme [class*="border-slate-700"],
+.emp-theme [class*="border-slate-800"],
+.emp-theme [class*="border-indigo-500"] { border-color: var(--brown-faint) !important; }
+
+/* Inputs / textareas */
+.emp-theme input,
+.emp-theme textarea,
+.emp-theme select {
+  background-color: var(--cream-card) !important;
+  color: var(--ink) !important;
+  border-color: var(--brown-faint) !important;
+}
+.emp-theme input::placeholder,
+.emp-theme textarea::placeholder { color: var(--brown-faint) !important; }
+.emp-theme .focus\\:border-indigo-500:focus,
+.emp-theme input:focus,
+.emp-theme textarea:focus { border-color: var(--brown) !important; }
+
+/* Chat bubbles: my bubble brown, received cream-soft */
+.emp-theme .bg-indigo-600.text-white { color: #fff !important; }
+
+/* Buttons that were indigo keep white text on brown */
+.emp-theme .bg-indigo-600 .text-white,
+.emp-theme .bg-indigo-600.text-white,
+.emp-theme button.bg-indigo-600 { color: #fff !important; }
+
+/* Greeting card: brown panel, white text stays white */
+.emp-theme .emp-greeting,
+.emp-theme .emp-greeting .text-white { color: #fff !important; }
+.emp-theme .emp-greeting { background-color: var(--brown) !important; }
+
+/* Cards/white surfaces inside greeting stay readable */
+.emp-theme .emp-greeting .text-slate-900 { color: var(--ink) !important; }
+.emp-theme .emp-greeting .text-slate-700,
+.emp-theme .emp-greeting .text-slate-600,
+.emp-theme .emp-greeting .text-slate-500,
+.emp-theme .emp-greeting .text-slate-400 { color: var(--ink-soft) !important; }
+.emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
+`}</style>
         {/* Header */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
