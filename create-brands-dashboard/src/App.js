@@ -89,6 +89,7 @@ import {
   fetchSalesDaily,
   fetchReviewsForDashboard,
   fetchReviewStats,
+  fetchReviewScanStats,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -2745,7 +2746,111 @@ function reviewUrlForStore(store) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts)}`;
 }
 
-function EmployeeReviewQR({ stores = [], visibleStoreIds = [] }) {
+// ── REVIEW_SCANS_V1: manager leaderboard of per-staff review QR scans ──
+function ReviewScansView({ stores = [], opsTeam = [] }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [period, setPeriod] = useState("30");  // days; "all" for everything
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const since = period === "all" ? null : new Date(Date.now() - Number(period)*86400000).toISOString();
+      setRows(await fetchReviewScanStats({ since }));
+    } catch (e) { setErr(e.message || String(e)); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [period]);
+
+  const staffName = (id) => {
+    const m = (opsTeam || []).find(x => x.id === id);
+    return m ? [m.firstName, m.lastName].filter(Boolean).join(" ") || m.nickname || id : (id || "Unknown");
+  };
+  const storeName = (id) => (stores || []).find(s => s.id === id)?.name || id || "—";
+
+  const board = useMemo(() => {
+    if (!rows) return [];
+    const acc = {};
+    rows.forEach(r => {
+      const k = r.staffId || "unknown";
+      acc[k] = acc[k] || { staffId: k, scans: 0, stores: {} };
+      acc[k].scans += 1;
+      if (r.storeId) acc[k].stores[r.storeId] = (acc[k].stores[r.storeId]||0) + 1;
+    });
+    return Object.values(acc).sort((a,b) => b.scans - a.scans);
+  }, [rows]);
+
+  const total = rows ? rows.length : 0;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-white flex items-center gap-2"><QrCode size={18}/> Review Scans</h2>
+          <p className="text-xs text-slate-500 mt-0.5">How many customers scanned each staff member's review QR. Recognises who's driving reviews.</p>
+        </div>
+        <select value={period} onChange={e=>setPeriod(e.target.value)}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="all">All time</option>
+        </select>
+      </div>
+
+      {err && <div className="text-sm text-red-400">Couldn't load scans: {err}. If the table doesn't exist yet, run the review_scans schema SQL.</div>}
+
+      {!err && (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="text-xs text-slate-500">Total scans</div>
+              <div className="text-xl font-bold text-white">{total}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="text-xs text-slate-500">Staff with scans</div>
+              <div className="text-xl font-bold text-white">{board.length}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="text-xs text-slate-500">Top performer</div>
+              <div className="text-base font-bold text-emerald-400 truncate">{board[0] ? staffName(board[0].staffId) : "—"}</div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-900 text-slate-400 text-xs">
+                <tr>
+                  <th className="text-left px-3 py-2 w-10">#</th>
+                  <th className="text-left px-3 py-2">Staff member</th>
+                  <th className="text-right px-3 py-2">Scans</th>
+                  <th className="text-left px-3 py-2">Top store</th>
+                </tr>
+              </thead>
+              <tbody>
+                {board.length === 0 && (
+                  <tr><td colSpan={4} className="px-3 py-6 text-center text-slate-500 text-sm">No scans yet for this period.</td></tr>
+                )}
+                {board.map((b, i) => {
+                  const topStore = Object.entries(b.stores).sort((x,y)=>y[1]-x[1])[0];
+                  return (
+                    <tr key={b.staffId} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-500">{i+1}</td>
+                      <td className="px-3 py-2 text-slate-200 font-medium">{staffName(b.staffId)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-white">{b.scans}</td>
+                      <td className="px-3 py-2 text-slate-400 text-xs">{topStore ? storeName(topStore[0]) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function EmployeeReviewQR({ currentUser, stores = [], visibleStoreIds = [] }) {
   const myStores = (stores || []).filter(s => !s.archivedAt && visibleStoreIds.includes(s.id));
   const [storeId, setStoreId] = useState(myStores[0]?.id || null);
   const [copied, setCopied] = useState(false);
@@ -2763,9 +2868,17 @@ function EmployeeReviewQR({ stores = [], visibleStoreIds = [] }) {
   }
 
   const store = myStores.find(s => s.id === storeId) || myStores[0];
-  const url = reviewUrlForStore(store);
   const usingFallback = !(store.metadata && store.metadata.google_review_url);
-  // QR in brand colours: dark-brown modules on cream, no harsh white box.
+  // REVIEW_SCANS_V1: QR points at the tracked redirect (logs scan -> redirects
+  // to Google), carrying this staff member's id + the store id so scans are
+  // attributed. Falls back to the direct review URL if the redirect base is
+  // unavailable for any reason.
+  const staffId = currentUser?.opsTeamMemberId || currentUser?.id || "";
+  const base = process.env.REACT_APP_SUPABASE_URL;
+  const trackedUrl = base
+    ? `${base}/functions/v1/review-redirect?s=${encodeURIComponent(staffId)}&store=${encodeURIComponent(store.id)}`
+    : reviewUrlForStore(store);
+  const url = trackedUrl;
   const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=0&qzone=2&color=66-32-20&bgcolor=255-251-242&data=${encodeURIComponent(url)}`;
 
   const copy = async () => {
@@ -3370,7 +3483,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
 
           {activeView === "review-qr" && (
-            <EmployeeReviewQR stores={stores} visibleStoreIds={myVisibleStoreIds} />
+            <EmployeeReviewQR currentUser={currentUser} stores={stores} visibleStoreIds={myVisibleStoreIds} />
           )}
         </main>
 
@@ -25600,6 +25713,7 @@ export default function App() {
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
+      { key: "review-scans", label: "Review Scans",      icon: QrCode, roles: ["owner", "hq_staff", "manager"] },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
@@ -25796,6 +25910,7 @@ export default function App() {
             {effectiveActiveView === "google-reviews" && ["owner","hq_staff","manager"].includes(currentUser.role) && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
+            {effectiveActiveView === "review-scans" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}

@@ -4631,3 +4631,16 @@ export async function updateCogsPrep(id, patch) {
   if (error) throw error;
 }
 // ===== end COGS_V1 =====
+
+// ===== REVIEW_SCANS_V1 — per-staff review QR scan tracking ==================
+// The redirect Edge Function logs scans into review_scans. This fetches a
+// leaderboard for managers (scans per staff, optionally per store/period).
+export async function fetchReviewScanStats({ since = null, storeId = null } = {}) {
+  let q = supabase.from("review_scans").select("staff_id, store_id, scanned_at");
+  if (since)   q = q.gte("scanned_at", since);
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({ staffId: r.staff_id, storeId: r.store_id, scannedAt: r.scanned_at }));
+}
+// ===== end REVIEW_SCANS_V1 =====
