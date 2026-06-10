@@ -97,6 +97,7 @@ import {
 import {
   Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight,
   Home, MoreHorizontal,
+  Cloud, Sun, CloudRain, ArrowRight,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle,
   Plus, Trash2, Edit, Eye, EyeOff, Download, Upload, RotateCcw,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
@@ -2733,6 +2734,135 @@ function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
   );
 }
 
+// ── EMP_HOME_GREETING_V1: Home greeting card (date/weather, greeting, today's shift, task count) ──
+function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [] }) {
+  const myId = currentUser.opsTeamMemberId || currentUser.id;
+  const myMember = (opsTeam || []).find(m => m.id === myId);
+  const firstName = myMember?.firstName || myMember?.nickname || (currentUser.name || "").split(" ")[0] || "there";
+  const myBrandId = currentUser.brandIds?.[0];
+
+  // Greeting by time of day
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  // Local date string (BST-safe)
+  const toLocalDateStr = (d) => {
+    const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,"0"); const day = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  };
+  const now = new Date();
+  const todayStr = toLocalDateStr(now);
+  const dateLabel = now.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "long" });
+
+  // Today's published shifts for me
+  const myShifts = (schedules || []).filter(s =>
+    s.brandId === myBrandId && s.date === todayStr && !!s.published && s.status !== "cancelled" &&
+    (s.employeeId === myId || s.employeeId === currentUser.id)
+  );
+
+  // Active tasks today in my brand(s)
+  const activeTasks = (assignments || []).filter(a =>
+    currentUser.brandIds?.includes(a.brandId) && isActiveToday(a)
+  );
+  const taskCount = activeTasks.length;
+
+  // Weather (Open-Meteo, no key) via geolocation; fails silently if denied
+  const [weather, setWeather] = useState(null); // { temp, code }
+  useEffect(() => {
+    if (!("geolocation" in navigator)) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude.toFixed(2)}&longitude=${longitude.toFixed(2)}&current=temperature_2m,weather_code`);
+          const j = await r.json();
+          if (!cancelled && j?.current) setWeather({ temp: Math.round(j.current.temperature_2m), code: j.current.weather_code });
+        } catch { /* silent */ }
+      },
+      () => { /* denied — no weather */ },
+      { timeout: 8000, maximumAge: 30 * 60 * 1000 }
+    );
+    return () => { cancelled = true; };
+  }, []);
+
+  // Map Open-Meteo weather code → icon + label
+  const weatherView = (() => {
+    if (!weather) return null;
+    const c = weather.code;
+    let Icon = Cloud, label = "Cloudy";
+    if (c === 0) { Icon = Sun; label = "Clear"; }
+    else if (c >= 1 && c <= 3) { Icon = Sun; label = "Partly cloudy"; }
+    else if (c >= 45 && c <= 48) { Icon = Cloud; label = "Fog"; }
+    else if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) { Icon = CloudRain; label = "Rain"; }
+    else if (c >= 71 && c <= 86) { Icon = Cloud; label = "Snow"; }
+    else if (c >= 95) { Icon = CloudRain; label = "Storm"; }
+    return { Icon, label };
+  })();
+
+  const fmtTime = (t) => {
+    if (!t) return "";
+    const [h, m] = t.split(":").map(Number);
+    const ampm = h >= 12 ? "PM" : "AM"; const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2,"0")} ${ampm}`;
+  };
+
+  const storeName = (s) => {
+    const st = (stores || []).find(x => x.id === s.storeId);
+    return st?.name || s.storeName || "";
+  };
+
+  const shiftWord = myShifts.length === 0 ? "no shifts" : myShifts.length === 1 ? "one shift" : `${myShifts.length} shifts`;
+
+  return (
+    <div className="rounded-3xl bg-indigo-600 p-5 mb-5 text-white">
+      {/* avatar */}
+      <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center text-base font-bold mb-4">
+        {`${(myMember?.firstName||currentUser.name||"?")[0] || ""}${myMember?.lastName?.[0] || ""}`.toUpperCase()}
+      </div>
+
+      {/* date + weather */}
+      <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-white/80 mb-2">
+        <span>{dateLabel}</span>
+        {weatherView && (
+          <span className="flex items-center gap-1">
+            <weatherView.Icon size={14}/> {weather.temp}°C
+          </span>
+        )}
+      </div>
+
+      {/* greeting */}
+      <div className="text-2xl font-bold leading-tight">{greeting}, {firstName}.</div>
+      <div className="text-lg font-semibold text-white/90 mt-1">You have {shiftWord} today.</div>
+
+      {/* shift card */}
+      <div className="mt-4 rounded-2xl bg-white text-slate-900 overflow-hidden">
+        {myShifts.length > 0 ? (
+          myShifts.map((s, i) => (
+            <div key={s.id || i} className={`px-4 py-3.5 ${i > 0 ? "border-t border-slate-100" : ""}`}>
+              <div className="flex items-center gap-2 text-xl font-bold">
+                <span>{fmtTime(s.startTime)}</span>
+                <ArrowRight size={16} className="text-slate-400"/>
+                <span>{fmtTime(s.endTime)}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-slate-600 mt-1">
+                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: myMember?.color || "#6366f1" }}/>
+                {s.shift || s.role || "Shift"}{storeName(s) ? ` · ${storeName(s)}` : ""}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="px-4 py-3.5 text-sm text-slate-500">No shift scheduled today.</div>
+        )}
+        <div className="px-4 py-3 border-t border-slate-100 flex items-center gap-2 text-sm text-slate-700">
+          <CheckCircle size={15} className="text-slate-400 flex-shrink-0"/>
+          You have {taskCount} {taskCount === 1 ? "task" : "tasks"} today.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -2925,13 +3055,19 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         {/* Content (bottom padding clears the fixed bottom nav + iPhone safe area) */}
         <main className="flex-1 overflow-auto p-4 lg:p-6" style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}>
           {activeView === "ops-tasks" && (
-            <TodaysTasks
-              brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
-              assignments={assignments} checklists={checklists}
-              tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
-              checklistStates={checklistStates} onSignOff={onSignOff}
-              onChecklistItemToggle={onChecklistItemToggle}
-            />
+            <>
+              <EmployeeHomeGreeting
+                currentUser={currentUser} brands={brands} opsTeam={opsTeam}
+                schedules={schedules || []} assignments={assignments} stores={stores}
+              />
+              <TodaysTasks
+                brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
+                assignments={assignments} checklists={checklists}
+                tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
+                checklistStates={checklistStates} onSignOff={onSignOff}
+                onChecklistItemToggle={onChecklistItemToggle}
+              />
+            </>
           )}
           {activeView === "ops-temps" && (
             <TemperatureLog
