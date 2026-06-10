@@ -4798,3 +4798,45 @@ export async function attachProductModifier(productId, modifierId) {
 }
 export async function detachProductModifier(id) { const { error } = await supabase.from("cogs_product_modifiers").delete().eq("id", id); if (error) throw error; }
 // ===== end RECIPE_BUILDER_V1 =====
+
+// ===== POS_MAPPER_V1 — per-store till name -> master product ===============
+// Distinct till (item) names per store from sales, with total qty/revenue.
+export async function fetchStoreTillNames(storeId) {
+  let q = supabase.from("item_day_aggregates").select("item, qty, revenue").eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  const acc = {};
+  (data || []).forEach(r => {
+    const name = (r.item || "").trim(); if (!name) return;
+    acc[name] = acc[name] || { name, qty: 0, revenue: 0 };
+    acc[name].qty += Number(r.qty) || 0;
+    acc[name].revenue += Number(r.revenue) || 0;
+  });
+  return Object.values(acc).sort((a, b) => b.revenue - a.revenue);
+}
+
+export async function fetchPosMappings(storeId = null) {
+  let q = supabase.from("cogs_pos_mappings").select("*");
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, storeId: r.store_id, posName: r.pos_name, productId: r.product_id }));
+}
+
+// upsert a (store, pos_name) -> product mapping
+export async function setPosMapping(storeId, posName, productId) {
+  const { data: existing } = await supabase
+    .from("cogs_pos_mappings").select("id").eq("store_id", storeId).ilike("pos_name", posName).maybeSingle();
+  if (existing) {
+    const { error } = await supabase.from("cogs_pos_mappings").update({ product_id: productId }).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("cogs_pos_mappings").insert({ store_id: storeId, pos_name: posName, product_id: productId });
+    if (error) throw error;
+  }
+}
+export async function deletePosMapping(id) {
+  const { error } = await supabase.from("cogs_pos_mappings").delete().eq("id", id);
+  if (error) throw error;
+}
+// ===== end POS_MAPPER_V1 =====

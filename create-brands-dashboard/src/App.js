@@ -103,6 +103,7 @@ import {
   addProduct, updateProduct, deleteProduct,
   addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
   attachProductModifier, detachProductModifier,
+  fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -2808,13 +2809,14 @@ function findSimilar(name, candidates, getName = (x) => x.name) {
 
 // COGS / INVENTORY BUILDER — two masters (store + CK), fully editable, no seed
 // ═══════════════════════════════════════════════════════════════════════════
-function CogsView() {
+function CogsView({ stores = [] }) {
   const [tab, setTab] = useState("inventory");
   const TABS = [
     { key: "inventory", label: "Inventory" },
     { key: "preps",     label: "Preps" },
     { key: "modifiers", label: "Modifiers" },
     { key: "products",  label: "Products" },
+    { key: "mapping",   label: "Mapping" },
   ];
   return (
     <div className="space-y-4">
@@ -2832,6 +2834,7 @@ function CogsView() {
       {tab === "preps"     && <RecipeBuilder mode="preps"/>}
       {tab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
       {tab === "products"  && <RecipeBuilder mode="products"/>}
+      {tab === "mapping"   && <PosMapper stores={stores}/>}
     </div>
   );
 }
@@ -3384,6 +3387,132 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
           {rec.modifiers.filter(mo=>!attached.some(a=>a.modifierId===mo.id)).map(mo=><option key={mo.id} value={mo.id}>{mo.groupLabel?mo.groupLabel+" · ":""}{mo.name}</option>)}
         </select>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POS MAPPER — per-store till name -> master product
+// ═══════════════════════════════════════════════════════════════════════════
+function PosMapper({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const [tillNames, setTillNames] = useState(null);   // [{name,qty,revenue}]
+  const [mappings, setMappings] = useState([]);        // existing
+  const [products, setProducts] = useState([]);        // master list
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [manualName, setManualName] = useState("");
+
+  const load = async (sid) => {
+    if (!sid) return;
+    setLoading(true); setErr(null);
+    try {
+      const [names, maps, rec] = await Promise.all([
+        fetchStoreTillNames(sid).catch(() => []),
+        fetchPosMappings(sid),
+        fetchRecipes(),
+      ]);
+      setTillNames(names); setMappings(maps); setProducts(rec.products);
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { if (storeId) load(storeId); /* eslint-disable-next-line */ }, [storeId]);
+
+  const mapFor = (name) => mappings.find(m => (m.posName||"").trim().toLowerCase() === name.trim().toLowerCase());
+  // high-confidence auto-suggest (>=0.9) for unmapped names
+  const suggest = (name) => {
+    const hit = findSimilar(name, products)[0];
+    return hit && hit.score >= 0.9 ? hit.item : null;
+  };
+  const productName = (id) => products.find(p => p.id === id)?.name || "—";
+
+  const save = async (posName, productId) => {
+    try { await setPosMapping(storeId, posName, productId); await load(storeId); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+  const unset = async (id) => { try { await deletePosMapping(id); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
+  const addManual = async () => {
+    const n = manualName.trim(); if (!n) return;
+    try { await setPosMapping(storeId, n, null); setManualName(""); await load(storeId); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+
+  // build combined rows: every till name from sales + any manually-added mappings not in sales
+  const rows = (() => {
+    const seen = new Set();
+    const out = [];
+    (tillNames || []).forEach(t => { seen.add(t.name.trim().toLowerCase()); out.push({ name: t.name, qty: t.qty, revenue: t.revenue }); });
+    mappings.forEach(m => { const k = (m.posName||"").trim().toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push({ name: m.posName, qty: 0, revenue: 0 }); } });
+    return out;
+  })();
+  const unmappedCount = rows.filter(r => !mapFor(r.name)?.productId).length;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">Map each store's till / Flipdish item names to a master product, so sales roll up correctly per store. Till names are pulled from sales; add any missing ones manually.</p>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={storeId || ""} onChange={e=>setStoreId(e.target.value)}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+          {activeStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        {products.length === 0 && <span className="text-xs text-amber-400">No master products yet — build some in the Products tab first.</span>}
+      </div>
+
+      {err && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{err}{err.toLowerCase().includes("relation")||err.includes("does not exist")?" — run pos_mapper_schema SQL first.":""}</div>}
+
+      {loading ? <div className="p-6 text-slate-400 text-sm">Loading…</div> : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-xs text-slate-500">Till names</div><div className="text-xl font-bold text-white">{rows.length}</div></div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-xs text-slate-500">Unmapped</div><div className="text-xl font-bold text-amber-400">{unmappedCount}</div></div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-xs text-slate-500">Master products</div><div className="text-xl font-bold text-white">{products.length}</div></div>
+          </div>
+
+          {/* manual add */}
+          <div className="flex items-center gap-2">
+            <input value={manualName} onChange={e=>setManualName(e.target.value)} placeholder="Add a till name manually…"
+              className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+            <button onClick={addManual} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Add</button>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+                <th className="text-left px-3 py-2">Till name</th>
+                <th className="text-right px-3 py-2">Sales £</th>
+                <th className="text-left px-3 py-2">Mapped to master product</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                {rows.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-500 text-sm">No till names found for this store (no sales synced yet). Add manually above.</td></tr>}
+                {rows.map(r => {
+                  const m = mapFor(r.name);
+                  const sug = !m?.productId ? suggest(r.name) : null;
+                  return (
+                    <tr key={r.name} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-200">{r.name}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs">{r.revenue>0?"£"+r.revenue.toFixed(0):"—"}</td>
+                      <td className="px-3 py-2">
+                        <select value={m?.productId || ""} onChange={e=>save(r.name, e.target.value?Number(e.target.value):null)}
+                          className={`bg-slate-800 border rounded px-2 py-1 text-xs text-white w-52 ${m?.productId?"border-slate-700":"border-amber-500/40"}`}>
+                          <option value="">{sug ? `— unmapped (suggest: ${sug.name}) —` : "— unmapped —"}</option>
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        {sug && !m?.productId && (
+                          <button onClick={()=>save(r.name, sug.id)} className="ml-2 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Use suggestion</button>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">{m && <button onClick={()=>unset(m.id)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -26595,7 +26724,7 @@ export default function App() {
             {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
             {effectiveActiveView === "google-reviews" && ["owner","hq_staff","manager"].includes(currentUser.role) && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView/>}
+            {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "review-scans" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "comms" && <CommunicationView
