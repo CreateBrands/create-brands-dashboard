@@ -3065,6 +3065,7 @@ function RecipeBuilder({ mode }) {
   const [addName, setAddName] = useState("");
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState({});
+  const [openCats, setOpenCats] = useState({});
 
   const load = async () => {
     setErr(null);
@@ -3182,29 +3183,41 @@ function RecipeBuilder({ mode }) {
             onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
         )}
 
-        {/* category grid — all products visible, organised */}
+        {/* category grid — all products, organised, collapsed by default */}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {grouped.map(([cat,items]) => (
-            <div key={cat} className="rounded-xl border border-slate-800 overflow-hidden bg-slate-900/40">
-              <div className="px-3 py-2 bg-slate-900 flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-200 uppercase tracking-wide truncate">{cat}</span>
-                <span className="text-[10px] text-slate-500 shrink-0">{items.length}</span>
+          {grouped.map(([cat,items]) => {
+            const open = q.trim() ? true : openCats[cat];   // searching expands all
+            const doneCount = items.filter(x=>productBaseCost(x).count>0).length;
+            return (
+              <div key={cat} className="rounded-xl border border-slate-800 overflow-hidden bg-slate-900/40 self-start">
+                <button onClick={()=>setOpenCats(s=>({...s,[cat]:!s[cat]}))}
+                  className="w-full px-3 py-2.5 bg-slate-900 flex items-center justify-between hover:bg-slate-800/70">
+                  <span className="text-xs font-bold text-slate-200 uppercase tracking-wide truncate flex items-center gap-1.5">
+                    {open?<ChevronDown size={13}/>:<ChevronRight size={13}/>}{cat}
+                  </span>
+                  <span className="text-[10px] text-slate-500 shrink-0">{doneCount>0 && <span className="text-emerald-400 mr-1">{doneCount} costed</span>}{items.length}</span>
+                </button>
+                {open && (
+                  <div>
+                    {items.map(x => {
+                      const bc = productBaseCost(x);
+                      const isSel = selId===x.id;
+                      const done = bc.count>0;
+                      return (
+                        <button key={x.id} onClick={()=>setSelId(isSel?null:x.id)}
+                          className={`w-full text-left px-3 py-2 border-t border-slate-800/50 flex items-center justify-between gap-2 ${isSel?"bg-indigo-600 text-white":"text-slate-300 hover:bg-slate-800/60"}`}>
+                          <span className="text-sm truncate flex items-center gap-1.5">
+                            {done && <Check size={13} className={isSel?"text-indigo-100":"text-emerald-400"}/>}{x.name}
+                          </span>
+                          <span className={`text-[11px] font-mono shrink-0 ${isSel?"text-indigo-100":done?"text-emerald-400":"text-slate-600"}`}>{bc.cost>0?"£"+bc.cost.toFixed(2):done?"£0.00":"—"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <div>
-                {items.map(x => {
-                  const bc = productBaseCost(x);
-                  const isSel = selId===x.id;
-                  return (
-                    <button key={x.id} onClick={()=>setSelId(isSel?null:x.id)}
-                      className={`w-full text-left px-3 py-2 border-t border-slate-800/50 flex items-center justify-between gap-2 ${isSel?"bg-indigo-600 text-white":"text-slate-300 hover:bg-slate-800/60"}`}>
-                      <span className="text-sm truncate">{x.name}</span>
-                      <span className={`text-[11px] font-mono shrink-0 ${isSel?"text-indigo-100":bc.cost>0?"text-emerald-400":"text-slate-600"}`}>{bc.cost>0?"£"+bc.cost.toFixed(2):"—"}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {grouped.length===0 && <div className="col-span-full rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">No products match "{q}".</div>}
         </div>
       </div>
@@ -3395,8 +3408,9 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
   const { cost, missing } = productBaseCost(product);
   const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
 
-  const addItemComp = async () => { await addProductComponent(product.id, { kind:"item", portionQty:null, unit:"" }); await reload(); };
-  const addPrepComp = async () => { await addProductComponent(product.id, { kind:"prep", portionQty:null, unit:"" }); await reload(); };
+  const [editErr, setEditErr] = useState(null);
+  const addItemComp = async () => { try { await addProductComponent(product.id, { kind:"item", portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
+  const addPrepComp = async () => { try { await addProductComponent(product.id, { kind:"prep", portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
   const compCost = (c) => {
     let unit = c.kind==="prep" ? prepCostPerUnit(c.prepId) : (c.itemScope ? (m.get(c.itemScope+":"+c.itemId)?.costPerBaseUnit ?? null) : null);
     return (unit!=null && c.portionQty!=null) ? Number(unit)*Number(c.portionQty) : null;
@@ -3451,9 +3465,9 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
           </table>
         </div>
         <div className="flex gap-2 mt-3">
-          <button onClick={addItemComp} className="px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>
-          <button onClick={addPrepComp} className="px-4 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add prep</button>
+          <button onClick={addItemComp} className="px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>          <button onClick={addPrepComp} className="px-4 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add prep</button>
         </div>
+        {editErr && <div className="mt-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">Couldn't add: {editErr}{editErr.toLowerCase().includes("relation")||editErr.includes("does not exist")?" — the recipe tables may be missing; run recipe_builder_schema SQL.":""}</div>}
       </div>
 
       {/* modifiers */}
@@ -3495,6 +3509,7 @@ function PosMapper({ stores = [] }) {
   const [loading, setLoading] = useState(false);
   const [manualName, setManualName] = useState("");
   const [mq, setMq] = useState("");
+  const [onlyUnmapped, setOnlyUnmapped] = useState(false);
 
   const load = async (sid) => {
     if (!sid) return;
@@ -3539,7 +3554,11 @@ function PosMapper({ stores = [] }) {
     return out;
   })();
   const unmappedCount = rows.filter(r => !mapFor(r.name)?.productId).length;
-  const shownRows = rows.filter(r => !mq || r.name.toLowerCase().includes(mq.toLowerCase()) || (productName(mapFor(r.name)?.productId)||"").toLowerCase().includes(mq.toLowerCase()));
+  const shownRows = rows.filter(r => {
+    if (onlyUnmapped && mapFor(r.name)?.productId) return false;
+    if (!mq) return true;
+    return r.name.toLowerCase().includes(mq.toLowerCase()) || (productName(mapFor(r.name)?.productId)||"").toLowerCase().includes(mq.toLowerCase());
+  });
 
   return (
     <div className="space-y-4">
@@ -3571,11 +3590,17 @@ function PosMapper({ stores = [] }) {
           </div>
 
           {/* search */}
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"/>
-            <input value={mq} onChange={e=>setMq(e.target.value)} placeholder="Search till names or mapped products…"
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
-            {mq && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">{shownRows.length} of {rows.length}</span>}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"/>
+              <input value={mq} onChange={e=>setMq(e.target.value)} placeholder="Search till names or mapped products…"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+              {mq && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">{shownRows.length} of {rows.length}</span>}
+            </div>
+            <button onClick={()=>setOnlyUnmapped(v=>!v)}
+              className={`px-3 py-2.5 rounded-xl text-xs font-semibold border ${onlyUnmapped?"bg-amber-600 border-amber-500 text-white":"bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800"}`}>
+              {onlyUnmapped?"Showing unmapped":"Unmapped only"} ({unmappedCount})
+            </button>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-slate-800">
