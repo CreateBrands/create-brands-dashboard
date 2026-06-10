@@ -19742,22 +19742,11 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
 
   const myMessages = messages.filter(isVisible);
 
-  // UNREAD_FIX_V2: clear unread as soon as the chat is opened. Previously a
-  // read only registered when you opened a specific thread, so broadcast /
-  // location messages you never tapped into kept the badge climbing forever.
-  // Marking every visible, not-from-me message read against both identities
-  // makes the badge actually clear wherever it appears.
-  useEffect(() => {
-    const ids = [...new Set([myId, myOpsId].filter(Boolean))];
-    myMessages.forEach(m => {
-      const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
-      if (!isForMe) return;
-      ids.forEach(rid => {
-        if (!m.readBy?.includes(rid)) onMarkRead(m.id, rid);
-      });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages]);
+  // UNREAD_FIX_V3: marking-read happens per-conversation in ChatThread (on open),
+  // NOT here. The previous blanket effect marked every visible message read on
+  // any `messages` change — which fired the instant a new message arrived, so
+  // the badge never got to show. Removed so genuinely-unread messages count,
+  // and a conversation clears only when the user actually opens it.
 
   // Group messages into threads (conversations)
   const threadMap = {};
