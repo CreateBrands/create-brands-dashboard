@@ -2876,7 +2876,7 @@ function EmployeeReviewQR({ currentUser, stores = [], visibleStoreIds = [] }) {
   const staffId = currentUser?.opsTeamMemberId || currentUser?.id || "";
   const base = process.env.REACT_APP_SUPABASE_URL;
   const trackedUrl = base
-    ? `${base}/functions/v1/review-redirect?s=${encodeURIComponent(staffId)}&store=${encodeURIComponent(store.id)}`
+    ? `${base}/functions/v1/review_scans?s=${encodeURIComponent(staffId)}&store=${encodeURIComponent(store.id)}`
     : reviewUrlForStore(store);
   const url = trackedUrl;
   const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=0&qzone=2&color=66-32-20&bgcolor=255-251-242&data=${encodeURIComponent(url)}`;
