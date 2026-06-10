@@ -90,6 +90,12 @@ import {
   fetchReviewsForDashboard,
   fetchReviewStats,
   fetchReviewScanStats,
+  fetchInventory,
+  addInventoryItem,
+  updateInventoryItem,
+  deleteInventoryItem,
+  addCategory,
+  deleteCategory,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -2747,6 +2753,192 @@ function reviewUrlForStore(store) {
 }
 
 // ── REVIEW_SCANS_V1: manager leaderboard of per-staff review QR scans ──
+// ═══════════════════════════════════════════════════════════════════════════
+// COGS / INVENTORY BUILDER — two masters (store + CK), fully editable, no seed
+// ═══════════════════════════════════════════════════════════════════════════
+function CogsView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [scope, setScope] = useState("store");   // 'store' | 'ck'
+  const [q, setQ] = useState("");
+  const [savingId, setSavingId] = useState(null);
+  const [showCats, setShowCats] = useState(false);
+  const [newCat, setNewCat] = useState("");
+
+  const load = async () => {
+    setErr(null);
+    try { setData(await fetchInventory()); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const items = data ? (scope === "ck" ? data.ck : data.store) : [];
+  const cats = data ? data.categories.filter(c => c.scope === scope) : [];
+  const match = (s) => !q || (s || "").toLowerCase().includes(q.toLowerCase());
+  const shown = items.filter(i => match(i.name) || match(i.category) || match(i.supplier));
+
+  const addRow = async () => {
+    try { await addInventoryItem(scope, { name: "New item", source: scope === "store" ? "supplier_raw" : undefined }); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+  const saveField = async (id, patch) => {
+    setSavingId(id);
+    try { await updateInventoryItem(scope, id, patch); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setSavingId(null); }
+  };
+  const removeRow = async (id) => {
+    if (!window.confirm("Delete this item?")) return;
+    try { await deleteInventoryItem(scope, id); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+  const addCat = async () => {
+    const n = newCat.trim(); if (!n) return;
+    try { await addCategory(scope, n); setNewCat(""); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+  const removeCat = async (id) => { try { await deleteCategory(id); await load(); } catch (e) { setErr(e.message || String(e)); } };
+
+  if (loading) return <div className="p-6 text-slate-400 text-sm">Loading inventory…</div>;
+
+  const totalCost = shown.reduce((s, i) => s + (i.costPerBaseUnit || 0), 0);
+  const priced = shown.filter(i => i.packPrice > 0 && i.packQty > 0).length;
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Inventory</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Two separate masters. Store = what shops buy (incl. Central Kitchen as a supplier). CK = the kitchen's own raw ingredients.</p>
+      </div>
+
+      {err && (
+        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
+          {err}{err.includes("does not exist") || err.toLowerCase().includes("relation") ? " — run inventory_builder_schema SQL in Supabase first." : ""}
+        </div>
+      )}
+
+      {/* scope tabs */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
+          <button onClick={() => setScope("store")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${scope==="store"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Store inventory ({data?.store.length || 0})</button>
+          <button onClick={() => setScope("ck")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${scope==="ck"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>CK inventory ({data?.ck.length || 0})</button>
+        </div>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…"
+          className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+        <button onClick={() => setShowCats(v => !v)}
+          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Categories</button>
+        <button onClick={addRow}
+          className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={14}/> Add item</button>
+      </div>
+
+      {/* categories manager */}
+      {showCats && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
+          <div className="text-xs font-semibold text-slate-300">Categories ({scope})</div>
+          <div className="flex flex-wrap gap-2">
+            {cats.length === 0 && <span className="text-xs text-slate-500">None yet.</span>}
+            {cats.map(c => (
+              <span key={c.id} className="inline-flex items-center gap-1 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1">
+                {c.name}
+                <button onClick={() => removeCat(c.id)} className="text-slate-500 hover:text-red-400"><X size={12}/></button>
+              </span>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <input value={newCat} onChange={e=>setNewCat(e.target.value)} placeholder="New category"
+              className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"/>
+            <button onClick={addCat} className="px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Add</button>
+          </div>
+        </div>
+      )}
+
+      {/* summary */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-xs text-slate-500">Items</div><div className="text-xl font-bold text-white">{shown.length}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-xs text-slate-500">Priced</div><div className="text-xl font-bold text-emerald-400">{priced}<span className="text-sm text-slate-600 font-normal"> / {shown.length}</span></div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-xs text-slate-500">Categories</div><div className="text-xl font-bold text-white">{cats.length}</div></div>
+      </div>
+
+      {/* table */}
+      <div className="overflow-x-auto rounded-xl border border-slate-800">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-900 text-slate-400 text-xs">
+            <tr>
+              <th className="text-left px-2 py-2">Name</th>
+              <th className="text-left px-2 py-2">Category</th>
+              {scope === "store" && <th className="text-left px-2 py-2">Source</th>}
+              <th className="text-left px-2 py-2">Supplier</th>
+              <th className="text-left px-2 py-2">Pack desc</th>
+              <th className="text-right px-2 py-2">Pack qty</th>
+              <th className="text-left px-2 py-2">Unit</th>
+              <th className="text-right px-2 py-2">Pack £</th>
+              <th className="text-right px-2 py-2">£/unit</th>
+              <th className="px-2 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.length === 0 && (
+              <tr><td colSpan={scope==="store"?10:9} className="px-3 py-8 text-center text-slate-500 text-sm">No items yet. Click "Add item" to start building.</td></tr>
+            )}
+            {shown.map(it => (
+              <CogsItemRow key={it.id} item={it} scope={scope} cats={cats} saving={savingId===it.id}
+                onSave={(patch) => saveField(it.id, patch)} onDelete={() => removeRow(it.id)}/>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CogsItemRow({ item, scope, cats, saving, onSave, onDelete }) {
+  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
+  const [f, setF] = useState({
+    name: item.name || "", category: item.category || "", source: item.source || "supplier_raw",
+    supplier: item.supplier || "", packDesc: item.packDesc || "",
+    packQty: item.packQty ?? "", baseUnit: item.baseUnit || "", packPrice: item.packPrice ?? "",
+  });
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const blur = (k) => { if (String(f[k] ?? "") !== String(item[k] ?? "")) onSave({ [k]: f[k] }); };
+  const perUnit = (Number(f.packPrice) > 0 && Number(f.packQty) > 0) ? Number(f.packPrice) / Number(f.packQty) : null;
+
+  return (
+    <tr className="border-t border-slate-800/60">
+      <td className="px-2 py-1.5"><input value={f.name} onChange={e=>set("name",e.target.value)} onBlur={()=>blur("name")} className={cell+" w-32"}/></td>
+      <td className="px-2 py-1.5">
+        <input list={`cats-${scope}`} value={f.category} onChange={e=>set("category",e.target.value)} onBlur={()=>blur("category")} className={cell+" w-24"}/>
+        <datalist id={`cats-${scope}`}>{cats.map(c => <option key={c.id} value={c.name}/>)}</datalist>
+      </td>
+      {scope === "store" && (
+        <td className="px-2 py-1.5">
+          <select value={f.source} onChange={e=>{set("source",e.target.value); onSave({source:e.target.value});}} className={cell}>
+            <option value="supplier_raw">Supplier</option>
+            <option value="ck_supplied">CK supplied</option>
+          </select>
+        </td>
+      )}
+      <td className="px-2 py-1.5"><input value={f.supplier} onChange={e=>set("supplier",e.target.value)} onBlur={()=>blur("supplier")} className={cell+" w-24"} placeholder={scope==="store"&&f.source==="ck_supplied"?"Central Kitchen":""}/></td>
+      <td className="px-2 py-1.5"><input value={f.packDesc} onChange={e=>set("packDesc",e.target.value)} onBlur={()=>blur("packDesc")} className={cell+" w-28"} placeholder="6x2.3kg box"/></td>
+      <td className="px-2 py-1.5 text-right"><input value={f.packQty} onChange={e=>set("packQty",e.target.value)} onBlur={()=>blur("packQty")} className={cell+" w-16 text-right"}/></td>
+      <td className="px-2 py-1.5">
+        <select value={f.baseUnit} onChange={e=>{set("baseUnit",e.target.value); onSave({baseUnit:e.target.value});}} className={cell}>
+          <option value=""></option><option value="g">g</option><option value="ml">ml</option><option value="ea">ea</option>
+        </select>
+      </td>
+      <td className="px-2 py-1.5 text-right"><input value={f.packPrice} onChange={e=>set("packPrice",e.target.value)} onBlur={()=>blur("packPrice")} className={cell+" w-16 text-right"}/></td>
+      <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{perUnit!=null?"£"+perUnit.toFixed(4):"—"}</td>
+      <td className="px-2 py-1.5 text-right">
+        {saving ? <span className="text-xs text-slate-500">…</span> :
+          <button onClick={onDelete} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button>}
+      </td>
+    </tr>
+  );
+}
+
 function ReviewScansView({ stores = [], opsTeam = [] }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
@@ -25698,6 +25890,7 @@ export default function App() {
       { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"] },
       { key: "google-reviews", label: "Google Reviews", icon: Star, roles: ["owner", "hq_staff", "manager"] },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
+      { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
       { key: "tactical",    label: "Performance",   icon: TrendingUp },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -25909,6 +26102,7 @@ export default function App() {
             {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
             {effectiveActiveView === "google-reviews" && ["owner","hq_staff","manager"].includes(currentUser.role) && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "review-scans" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "comms" && <CommunicationView

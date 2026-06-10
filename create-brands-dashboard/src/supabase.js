@@ -4644,3 +4644,68 @@ export async function fetchReviewScanStats({ since = null, storeId = null } = {}
   return (data || []).map(r => ({ staffId: r.staff_id, storeId: r.store_id, scannedAt: r.scanned_at }));
 }
 // ===== end REVIEW_SCANS_V1 =====
+
+// ===== INVENTORY_BUILDER_V1 — store + CK inventory masters ==================
+const _invMap = (r) => ({
+  id: r.id, name: r.name, category: r.category, source: r.source, supplier: r.supplier,
+  packDesc: r.pack_desc, packQty: r.pack_qty, baseUnit: r.base_unit, packPrice: r.pack_price,
+  costPerBaseUnit: r.cost_per_base_unit, notes: r.notes,
+});
+function _invBody(p) {
+  const b = {};
+  if ("name" in p) b.name = p.name;
+  if ("category" in p) b.category = p.category;
+  if ("source" in p) b.source = p.source;
+  if ("supplier" in p) b.supplier = p.supplier;
+  if ("packDesc" in p) b.pack_desc = p.packDesc;
+  if ("packQty" in p) b.pack_qty = p.packQty === "" || p.packQty == null ? null : Number(p.packQty);
+  if ("baseUnit" in p) b.base_unit = p.baseUnit;
+  if ("packPrice" in p) b.pack_price = p.packPrice === "" || p.packPrice == null ? null : Number(p.packPrice);
+  if ("notes" in p) b.notes = p.notes;
+  return b;
+}
+
+export async function fetchInventory() {
+  const [store, ck, cats] = await Promise.all([
+    supabase.from("cogs_store_items").select("*").order("name"),
+    supabase.from("cogs_ck_items").select("*").order("name"),
+    supabase.from("cogs_categories").select("*"),
+  ]);
+  const err = store.error || ck.error || cats.error;
+  if (err) throw err;
+  return {
+    store: (store.data || []).map(_invMap),
+    ck: (ck.data || []).map(_invMap),
+    categories: (cats.data || []).map(c => ({ id: c.id, scope: c.scope, name: c.name })),
+  };
+}
+
+// scope: 'store' | 'ck'
+export async function addInventoryItem(scope, patch) {
+  const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
+  const body = _invBody(patch);
+  if (!body.name) body.name = "New item";
+  const { data, error } = await supabase.from(table).insert(body).select().single();
+  if (error) throw error;
+  return _invMap(data);
+}
+export async function updateInventoryItem(scope, id, patch) {
+  const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
+  const body = _invBody(patch); body.updated_at = new Date().toISOString();
+  const { error } = await supabase.from(table).update(body).eq("id", id);
+  if (error) throw error;
+}
+export async function deleteInventoryItem(scope, id) {
+  const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
+  const { error } = await supabase.from(table).delete().eq("id", id);
+  if (error) throw error;
+}
+export async function addCategory(scope, name) {
+  const { error } = await supabase.from("cogs_categories").insert({ scope, name });
+  if (error && error.code !== "23505") throw error; // ignore duplicates
+}
+export async function deleteCategory(id) {
+  const { error } = await supabase.from("cogs_categories").delete().eq("id", id);
+  if (error) throw error;
+}
+// ===== end INVENTORY_BUILDER_V1 =====
