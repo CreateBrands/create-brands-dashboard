@@ -2952,7 +2952,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const goTo = (key) => { setActiveView(key); setMoreOpen(false); };
 
   const BottomNav = () => (
-    <nav className="EMP_BOTTOMNAV_V1 fixed bottom-0 inset-x-0 z-30 flex items-stretch justify-around bg-slate-900 border-t border-slate-800/60"
+    <nav className="EMP_BOTTOMNAV_V1 emp-bottomnav fixed bottom-0 inset-x-0 z-30 flex items-stretch justify-around bg-slate-900 border-t border-slate-800/60"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom), 8px)" }}>
       {PRIMARY_NAV.map(n => {
         const NIcon = n.icon;
@@ -3133,6 +3133,21 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 .emp-theme .emp-greeting .text-slate-500,
 .emp-theme .emp-greeting .text-slate-400 { color: var(--ink-soft) !important; }
 .emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
+
+/* Bottom nav: dark brown bar, light text */
+.emp-theme .emp-bottomnav { background-color: var(--brown) !important; border-top-color: #6e3621 !important; }
+.emp-theme .emp-bottomnav button { color: rgba(255,255,255,0.65) !important; }
+.emp-theme .emp-bottomnav button.text-indigo-400 { color: #fff !important; }
+.emp-theme .emp-bottomnav .text-indigo-400 { color: #fff !important; }
+.emp-theme .emp-bottomnav .text-slate-500,
+.emp-theme .emp-bottomnav .text-slate-300 { color: rgba(255,255,255,0.65) !important; }
+
+/* Chat / Help Desk slider: track cream, pill brown, selected text white, unselected ink */
+.emp-theme .emp-slider { background-color: var(--cream-deep) !important; }
+.emp-theme .emp-slider .bg-indigo-600 { background-color: var(--brown) !important; }
+.emp-theme .emp-slider button.text-white { color: #fff !important; }
+.emp-theme .emp-slider button.text-slate-400 { color: var(--ink-soft) !important; }
+
 `}</style>
         {/* Header */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
@@ -20010,7 +20025,7 @@ function CommunicationView({
       {/* Tab bar */}
       {isEmployee ? (
         // EMP_COMMS_SLIDER_V1: segmented slider (Chat / Help Desk)
-        <div className="relative flex bg-slate-800 rounded-2xl p-1 mb-4 select-none">
+        <div className="emp-slider relative flex bg-slate-800 rounded-2xl p-1 mb-4 select-none">
           <div
             className="absolute top-1 bottom-1 rounded-xl bg-indigo-600 shadow-sm transition-transform duration-200 ease-out"
             style={{ width: `calc(50% - 0.25rem)`, transform: TABS.findIndex(t => t.key === tab) === 1 ? "translateX(calc(100% + 0.5rem))" : "translateX(0)" }}
