@@ -98,6 +98,7 @@ import {
   Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight,
   Home, MoreHorizontal,
   Cloud, Sun, CloudRain, ArrowRight,
+  QrCode,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle,
   Plus, Trash2, Edit, Eye, EyeOff, Download, Upload, RotateCcw,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
@@ -2734,6 +2735,76 @@ function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
   );
 }
 
+// ── EMP_REVIEW_QR_V1: scannable Google-review QR for the employee's store ──
+function reviewUrlForStore(store) {
+  if (!store) return "";
+  const direct = store.metadata && store.metadata.google_review_url;
+  if (direct) return direct;
+  // fallback: Google Maps search by name + address (lands on the listing → review)
+  const parts = [store.name, store.address, store.city, store.postcode].filter(Boolean).join(" ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts)}`;
+}
+
+function EmployeeReviewQR({ stores = [], visibleStoreIds = [] }) {
+  const myStores = (stores || []).filter(s => !s.archivedAt && visibleStoreIds.includes(s.id));
+  const [storeId, setStoreId] = useState(myStores[0]?.id || null);
+  const [copied, setCopied] = useState(false);
+
+  if (myStores.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center py-16 px-6">
+        <div className="w-16 h-16 rounded-2xl bg-indigo-600/15 flex items-center justify-center mb-4">
+          <QrCode size={28} className="text-indigo-400"/>
+        </div>
+        <div className="text-base font-bold text-slate-200">No store linked</div>
+        <div className="text-sm text-slate-500 mt-1">Ask your manager to assign you to a store to show its review QR.</div>
+      </div>
+    );
+  }
+
+  const store = myStores.find(s => s.id === storeId) || myStores[0];
+  const url = reviewUrlForStore(store);
+  const usingFallback = !(store.metadata && store.metadata.google_review_url);
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=8&data=${encodeURIComponent(url)}`;
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch {}
+  };
+
+  return (
+    <div className="max-w-md mx-auto">
+      <div className="text-center mb-4">
+        <h2 className="text-lg font-bold text-white flex items-center justify-center gap-2"><QrCode size={18}/> Leave us a review</h2>
+        <p className="text-sm text-slate-500 mt-1">Show this to a customer — they scan it to leave a Google review.</p>
+      </div>
+
+      {myStores.length > 1 && (
+        <select value={store.id} onChange={e => setStoreId(e.target.value)}
+          className="w-full mb-4 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none">
+          {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      )}
+
+      <div className="bg-white rounded-2xl p-6 flex flex-col items-center shadow-sm">
+        <img src={qrSrc} width={260} height={260} alt={`Google review QR for ${store.name}`} className="rounded-lg"/>
+        <div className="mt-4 text-base font-bold text-slate-900">{store.name}</div>
+        {store.address && <div className="text-xs text-slate-500 mt-0.5 text-center">{[store.address, store.city, store.postcode].filter(Boolean).join(", ")}</div>}
+      </div>
+
+      <button onClick={copy}
+        className="w-full mt-4 px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors">
+        {copied ? "Link copied ✓" : "Copy review link"}
+      </button>
+
+      {usingFallback && (
+        <p className="text-xs text-slate-500 mt-3 text-center">
+          Using a Google Maps link for this store. A direct "write a review" link can be set up per store for an even smoother scan.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── EMP_HOME_GREETING_V1: Home greeting card (date/weather, greeting, today's shift, task count) ──
 function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
@@ -2931,6 +3002,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Hours",        icon: Clock },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
+    { key: "review-qr",      label: "Review QR",       icon: QrCode },
   ];
 
   const titles = {
@@ -2944,6 +3016,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-schedule":   "My Schedule",
     "emp-training":   "Training",
     "emp-contracts":  "Contracts",
+    "review-qr":      "Review QR",
   };
 
   // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
@@ -3265,6 +3338,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 asPage
               />
             </div>
+          )}
+
+          {activeView === "review-qr" && (
+            <EmployeeReviewQR stores={stores} visibleStoreIds={myVisibleStoreIds} />
           )}
         </main>
 
