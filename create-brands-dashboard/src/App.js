@@ -3154,51 +3154,59 @@ function RecipeBuilder({ mode }) {
   // PREPS / PRODUCTS: master list + detail editor --------------------------
   const selected = selId ? list.find(x => x.id === selId) : null;
 
-  // PRODUCTS: full-width stacked layout (categories on top, big editor below)
+  // PRODUCTS: clean searchable category grid; editor opens as a focused panel
   if (mode === "products") {
     const grouped = Object.entries(shown.reduce((acc,x)=>{ const k=x.category||"Uncategorised"; (acc[k]=acc[k]||[]).push(x); return acc; },{}))
       .sort((a,b)=>a[0].localeCompare(b[0]));
     return (
       <div className="space-y-4">
-        <AddBar label={label} q={q} setQ={setQ} adding={adding} setAdding={setAdding} addName={addName} setAddName={setAddName} list={list} onAdd={doAdd}/>
-        {/* category grid */}
-        <div className="rounded-xl border border-slate-800 p-3">
-          <div className="text-xs font-semibold text-slate-400 mb-2">{list.length} products · {grouped.length} categories</div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-4 gap-y-1">
-            {grouped.map(([cat,items]) => {
-              const open = !collapsed[cat];
-              return (
-                <div key={cat} className="min-w-0">
-                  <button onClick={()=>setCollapsed(s=>({...s,[cat]:!s[cat]}))}
-                    className="w-full text-left py-1.5 flex items-center justify-between hover:text-white text-slate-300">
-                    <span className="text-xs font-bold flex items-center gap-1 truncate">{open?<ChevronDown size={13}/>:<ChevronRight size={13}/>}{cat}</span>
-                    <span className="text-[10px] text-slate-500 shrink-0">{items.length}</span>
-                  </button>
-                  {open && (
-                    <div className="pl-2 pb-2">
-                      {items.map(x => {
-                        const c = productBaseCost(x).cost;
-                        return (
-                          <button key={x.id} onClick={()=>setSelId(x.id)}
-                            className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between ${selId===x.id?"bg-indigo-600 text-white":"text-slate-300 hover:bg-slate-800/60"}`}>
-                            <span className="text-sm truncate">{x.name}</span>
-                            <span className={`text-[11px] font-mono shrink-0 ${selId===x.id?"text-indigo-100":"text-slate-500"}`}>{c>0?"£"+c.toFixed(2):""}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        {/* search + add */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"/>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search products…"
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
           </div>
+          <div className="text-xs text-slate-500 px-1">{shown.length} of {list.length}</div>
+          <button onClick={()=>{setAdding(true); setAddName("");}}
+            className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={16}/> Add product</button>
         </div>
-        {/* editor full-width below */}
-        {!selected ? (
-          <div className="rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">Select a product above to edit its recipe and modifiers.</div>
-        ) : (
-          <ProductEditor product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load} onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
+        {adding && (
+          <AddInline label="product" addName={addName} setAddName={setAddName} list={list} onAdd={doAdd} onCancel={()=>setAdding(false)}/>
         )}
+
+        {/* editor panel — opens at top when a product is selected */}
+        {selected && (
+          <ProductEditor product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load}
+            onClose={()=>setSelId(null)}
+            onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
+        )}
+
+        {/* category grid — all products visible, organised */}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {grouped.map(([cat,items]) => (
+            <div key={cat} className="rounded-xl border border-slate-800 overflow-hidden bg-slate-900/40">
+              <div className="px-3 py-2 bg-slate-900 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wide truncate">{cat}</span>
+                <span className="text-[10px] text-slate-500 shrink-0">{items.length}</span>
+              </div>
+              <div>
+                {items.map(x => {
+                  const bc = productBaseCost(x);
+                  const isSel = selId===x.id;
+                  return (
+                    <button key={x.id} onClick={()=>setSelId(isSel?null:x.id)}
+                      className={`w-full text-left px-3 py-2 border-t border-slate-800/50 flex items-center justify-between gap-2 ${isSel?"bg-indigo-600 text-white":"text-slate-300 hover:bg-slate-800/60"}`}>
+                      <span className="text-sm truncate">{x.name}</span>
+                      <span className={`text-[11px] font-mono shrink-0 ${isSel?"text-indigo-100":bc.cost>0?"text-emerald-400":"text-slate-600"}`}>{bc.cost>0?"£"+bc.cost.toFixed(2):"—"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {grouped.length===0 && <div className="col-span-full rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">No products match "{q}".</div>}
+        </div>
       </div>
     );
   }
@@ -3273,15 +3281,16 @@ function AddBar({ label, q, setQ, adding, setAdding, addName, setAddName, list, 
 }
 
 // shared inventory item picker (returns scope+id+name)
-function ItemPicker({ inv, value, onChange }) {
+function ItemPicker({ inv, value, onChange, highlight }) {
   const opts = [
     ...inv.store.map(x => ({ key: "store:"+x.id, scope: "store", id: x.id, name: x.name, label: x.name })),
     ...inv.ck.map(x => ({ key: "ck:"+x.id, scope: "ck", id: x.id, name: x.name, label: "CK · "+x.name })),
   ];
   return (
-    <select value={value || ""} onChange={e=>{ const o = opts.find(o=>o.key===e.target.value); onChange(o||null); }}
-      className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs">
-      <option value="">— pick item —</option>
+    <select autoFocus={highlight} value={value || ""} onChange={e=>{ const o = opts.find(o=>o.key===e.target.value); onChange(o||null); }}
+      className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs ${highlight?"border-amber-500/60":"border-slate-700"}`}>
+      <option value="">⬇ choose an item…</option>
+      {opts.length===0 && <option value="" disabled>No inventory items yet — add them in the Inventory tab</option>}
       {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
     </select>
   );
@@ -3355,7 +3364,31 @@ function PrepCompRow({ c, inv, reload }) {
   );
 }
 
-function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, modifierCost, reload, onDelete }) {
+function AddInline({ label, addName, setAddName, list, onAdd, onCancel }) {
+  const matches = addName.trim() ? findSimilar(addName, list) : [];
+  return (
+    <div className="bg-slate-900 border border-indigo-500/40 rounded-xl p-4 space-y-3">
+      <div className="text-sm font-semibold text-white">Add {label}</div>
+      <input autoFocus value={addName} onChange={e=>setAddName(e.target.value)}
+        onKeyDown={e=>{ if(e.key==="Enter"&&matches.length===0) onAdd(false); if(e.key==="Escape") onCancel(); }}
+        placeholder={`${label} name…`} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+      {matches.length>0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+          <div className="text-xs font-semibold text-amber-300 mb-1.5">{matches.some(m=>m.exact)?"Already exists:":"Possible duplicates:"}</div>
+          <ul className="space-y-1">{matches.map(m=><li key={m.item.id} className="text-xs text-slate-300 flex justify-between"><span>{m.item.name}</span><span className="text-slate-500">{Math.round(m.score*100)}%</span></li>)}</ul>
+        </div>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Cancel</button>
+        {matches.length===0
+          ? <button onClick={()=>onAdd(false)} disabled={!addName.trim()} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold">Add</button>
+          : <button onClick={()=>onAdd(true)} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Add anyway</button>}
+      </div>
+    </div>
+  );
+}
+
+function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, modifierCost, reload, onDelete, onClose }) {
   const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
   const comps = rec.productComponents.filter(c => c.productId === product.id);
   const attached = rec.productModifiers.filter(pm => pm.productId === product.id);
@@ -3370,10 +3403,16 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
   };
 
   return (
-    <div className="rounded-xl border border-slate-800 p-5 space-y-5">
-      <div className="flex items-center justify-between">
-        <input defaultValue={product.name} onBlur={async e=>{ if(e.target.value!==product.name){await updateProduct(product.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-xl font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none"/>
-        <button onClick={onDelete} className="text-slate-500 hover:text-red-400 text-sm flex items-center gap-1"><Trash2 size={15}/> Delete</button>
+    <div className="rounded-xl border-2 border-indigo-500/40 bg-slate-900/60 p-5 space-y-5 shadow-lg shadow-indigo-900/20">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-indigo-400 bg-indigo-500/15 px-2 py-1 rounded">Editing</span>
+          <input defaultValue={product.name} onBlur={async e=>{ if(e.target.value!==product.name){await updateProduct(product.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-xl font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none min-w-0 flex-1"/>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <button onClick={onDelete} className="text-slate-500 hover:text-red-400 text-sm flex items-center gap-1"><Trash2 size={15}/> Delete</button>
+          {onClose && <button onClick={onClose} className="text-slate-400 hover:text-white text-sm flex items-center gap-1 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg"><X size={15}/> Close</button>}
+        </div>
       </div>
       <div className="flex items-center gap-3 text-sm flex-wrap">
         <input defaultValue={product.category||""} onBlur={async e=>{await updateProduct(product.id,{category:e.target.value}); await reload();}} placeholder="Category" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-44"/>
@@ -3389,22 +3428,25 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
             <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2 w-20">Type</th><th className="text-left px-3 py-2">Component</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
             <tbody>
               {comps.length===0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500 text-sm">No components yet. Use "Add ingredient" (from inventory) or "Add prep" (from preps) below.</td></tr>}
-              {comps.map(c => (
-                <tr key={c.id} className="border-t border-slate-800/60">
+              {comps.map(c => {
+                const incomplete = c.kind==="prep" ? !c.prepId : !c.itemId;
+                return (
+                <tr key={c.id} className={`border-t border-slate-800/60 ${incomplete?"bg-amber-500/5":""}`}>
                   <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${c.kind==="prep"?"bg-purple-600/30 text-purple-200":"bg-sky-600/30 text-sky-200"}`}>{c.kind==="prep"?"Prep":"Item"}</span></td>
                   <td className="px-3 py-2">
                     {c.kind==="prep"
-                      ? <select value={c.prepId||""} onChange={async e=>{const pid=Number(e.target.value); await updateProductComponentRef(c.id,{kind:"prep",prepId:pid,itemScope:null,itemId:null}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs">
-                          <option value="">— pick prep —</option>{rec.preps.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                      ? <select autoFocus={incomplete} value={c.prepId||""} onChange={async e=>{const pid=Number(e.target.value); await updateProductComponentRef(c.id,{kind:"prep",prepId:pid,itemScope:null,itemId:null}); await reload();}} className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs ${incomplete?"border-amber-500/60":"border-slate-700"}`}>
+                          <option value="">⬇ choose a prep…</option>{rec.preps.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
-                      : <ItemPicker inv={inv} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updateProductComponentRef(c.id,{kind:"item",itemScope:o?.scope||null,itemId:o?.id||null,prepId:null,label:o?.name||null}); await reload();}}/>}
+                      : <ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updateProductComponentRef(c.id,{kind:"item",itemScope:o?.scope||null,itemId:o?.id||null,prepId:null,label:o?.name||null}); await reload();}}/>}
                   </td>
-                  <td className="px-3 py-2 text-right"><input defaultValue={c.portionQty??""} onBlur={async e=>{await updateProductComponent(c.id,{portionQty:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right"/></td>
+                  <td className="px-3 py-2 text-right"><input defaultValue={c.portionQty??""} onBlur={async e=>{await updateProductComponent(c.id,{portionQty:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right" placeholder="0"/></td>
                   <td className="px-3 py-2"><input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/></td>
                   <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{compCost(c)!=null?"£"+compCost(c).toFixed(4):"—"}</td>
                   <td className="px-3 py-2 text-right"><button onClick={async()=>{await deleteProductComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -3452,6 +3494,7 @@ function PosMapper({ stores = [] }) {
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(false);
   const [manualName, setManualName] = useState("");
+  const [mq, setMq] = useState("");
 
   const load = async (sid) => {
     if (!sid) return;
@@ -3496,6 +3539,7 @@ function PosMapper({ stores = [] }) {
     return out;
   })();
   const unmappedCount = rows.filter(r => !mapFor(r.name)?.productId).length;
+  const shownRows = rows.filter(r => !mq || r.name.toLowerCase().includes(mq.toLowerCase()) || (productName(mapFor(r.name)?.productId)||"").toLowerCase().includes(mq.toLowerCase()));
 
   return (
     <div className="space-y-4">
@@ -3526,6 +3570,14 @@ function PosMapper({ stores = [] }) {
             <button onClick={addManual} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Add</button>
           </div>
 
+          {/* search */}
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"/>
+            <input value={mq} onChange={e=>setMq(e.target.value)} placeholder="Search till names or mapped products…"
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+            {mq && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">{shownRows.length} of {rows.length}</span>}
+          </div>
+
           <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full text-sm">
               <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
@@ -3536,7 +3588,8 @@ function PosMapper({ stores = [] }) {
               </tr></thead>
               <tbody>
                 {rows.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-500 text-sm">No till names found for this store (no sales synced yet). Add manually above.</td></tr>}
-                {rows.map(r => {
+                {rows.length > 0 && shownRows.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-500 text-sm">No till names match "{mq}".</td></tr>}
+                {shownRows.map(r => {
                   const m = mapFor(r.name);
                   const sug = !m?.productId ? suggest(r.name) : null;
                   return (
