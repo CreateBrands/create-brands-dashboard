@@ -4168,12 +4168,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               const NIcon = n.icon; const active = activeView === n.key;
               return (
                 <button key={n.key} onClick={() => goTo(n.key)}
-                  style={active ? {} : { backgroundColor: "#3b2a20" }}
-                  className={`relative flex flex-col items-start gap-2.5 p-3.5 rounded-2xl text-left transition-all active:scale-[0.97] ${active ? "bg-indigo-600" : "hover:opacity-90"}`}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={active ? { backgroundColor: "rgba(255,255,255,0.2)" } : { backgroundColor: "rgba(255,255,255,0.12)" }}>
-                    <NIcon size={18} style={{ color: active ? "#ffffff" : "#f5ead9" }}/>
+                  style={{ backgroundColor: active ? "#6B3520" : "#844429" }}
+                  className="relative flex flex-col items-start gap-2.5 p-3.5 rounded-2xl text-left transition-all active:scale-[0.97] hover:opacity-90">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(253,242,224,0.18)" }}>
+                    <NIcon size={18} style={{ color: "#FDF2E0" }}/>
                   </div>
-                  <span className="text-sm font-semibold" style={{ color: active ? "#ffffff" : "#1c130d" }}>{n.label}</span>
+                  <span className="text-sm font-semibold" style={{ color: "#FDF2E0" }}>{n.label}</span>
                   {n.badge && <span className="absolute top-3 right-3 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
                 </button>
               );
