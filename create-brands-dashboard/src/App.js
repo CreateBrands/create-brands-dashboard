@@ -2842,33 +2842,53 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     <>
       {/* backdrop */}
       <div onClick={() => setMoreOpen(false)}
-        className={`fixed inset-0 z-40 bg-black/50 transition-opacity ${moreOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}/>
+        className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity ${moreOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}/>
       {/* sheet */}
-      <div style={{ paddingBottom: "max(env(safe-area-inset-bottom), 8px)" }} className={`fixed inset-x-0 bottom-0 z-50 bg-slate-900 border-t border-slate-800 rounded-t-2xl transition-transform duration-200 ${moreOpen ? "translate-y-0" : "translate-y-full"}`}>
-        <div className="flex items-center justify-between px-5 pt-3 pb-2">
-          <div className="mx-auto w-10 h-1 rounded-full bg-slate-700 absolute left-1/2 -translate-x-1/2 top-2"/>
-          <div className="text-sm font-bold text-white mt-1">More</div>
-          <button onClick={() => setMoreOpen(false)} className="text-slate-500 hover:text-white"><X size={18}/></button>
+      <div style={{ paddingBottom: "max(env(safe-area-inset-bottom), 12px)" }} className={`fixed inset-x-0 bottom-0 z-50 bg-slate-900 border-t border-slate-800 rounded-t-3xl shadow-2xl transition-transform duration-300 ease-out ${moreOpen ? "translate-y-0" : "translate-y-full"}`}>
+        {/* grab handle */}
+        <div className="flex justify-center pt-2.5 pb-1">
+          <div className="w-10 h-1.5 rounded-full bg-slate-700"/>
         </div>
-        <div className="px-3 pb-2 max-h-[60vh] overflow-auto">
-          {MORE_NAV.map(n => {
-            const NIcon = n.icon; const active = activeView === n.key;
-            return (
-              <button key={n.key} onClick={() => goTo(n.key)}
-                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold transition-colors ${active ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
-                <NIcon size={18} className="flex-shrink-0"/>
-                <span className="flex-1 text-left">{n.label}</span>
-                {n.badge && <span className="bg-red-500 text-white text-[11px] px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
-                <ChevronRight size={16} className="text-slate-600"/>
-              </button>
-            );
-          })}
-          {/* Sign out lives in More now */}
-          <div className="border-t border-slate-800 my-2"/>
+        {/* header row */}
+        <div className="flex items-center justify-between px-5 pt-1 pb-3">
+          <div className="text-base font-bold text-white">More</div>
+          <button onClick={() => setMoreOpen(false)} aria-label="Close"
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors"><X size={16}/></button>
+        </div>
+
+        <div className="px-4 pb-3 max-h-[64vh] overflow-auto">
+          {/* user card */}
+          <div className="flex items-center gap-3 px-3 py-3 mb-3 rounded-2xl bg-slate-800/60">
+            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
+              {(currentUser.name || "?").split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
+              <div className="text-xs text-slate-500 truncate">{currentUser.employeeRole} · {brand?.name || "—"}</div>
+            </div>
+          </div>
+
+          {/* tile grid */}
+          <div className="grid grid-cols-2 gap-2.5">
+            {MORE_NAV.map(n => {
+              const NIcon = n.icon; const active = activeView === n.key;
+              return (
+                <button key={n.key} onClick={() => goTo(n.key)}
+                  className={`relative flex flex-col items-start gap-2.5 p-3.5 rounded-2xl text-left transition-all active:scale-[0.97] ${active ? "bg-indigo-600" : "bg-slate-800/70 hover:bg-slate-800"}`}>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${active ? "bg-white/20" : "bg-slate-700/60"}`}>
+                    <NIcon size={18} className={active ? "text-white" : "text-indigo-400"}/>
+                  </div>
+                  <span className={`text-sm font-semibold ${active ? "text-white" : "text-slate-200"}`}>{n.label}</span>
+                  {n.badge && <span className="absolute top-3 right-3 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* sign out */}
           <button onClick={onLogout}
-            className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-red-400 hover:bg-red-950/20 transition-colors">
-            <LogOut size={18} className="flex-shrink-0"/>
-            <span className="flex-1 text-left">Sign out</span>
+            className="w-full flex items-center justify-center gap-2 mt-3 px-3 py-3.5 rounded-2xl text-sm font-semibold text-red-400 bg-red-950/20 hover:bg-red-950/40 transition-colors">
+            <LogOut size={17}/> Sign out
           </button>
         </div>
       </div>
@@ -2883,7 +2903,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     <AuthContext.Provider value={{ user: currentUser }}>
       <div className="min-h-screen bg-slate-950 text-white flex flex-col">
         {/* Header */}
-        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-10">
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
             <BarChart2 size={15} className="text-white"/>
           </div>
@@ -2903,7 +2923,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         </header>
 
         {/* Content (bottom padding clears the fixed bottom nav + iPhone safe area) */}
-        <main className="flex-1 overflow-auto p-4 lg:p-6" style={{ paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom))" }}>
+        <main className="flex-1 overflow-auto p-4 lg:p-6" style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}>
           {activeView === "ops-tasks" && (
             <TodaysTasks
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
@@ -19413,7 +19433,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
       </div>
 
       {/* Input bar */}
-      <div className="flex-shrink-0 px-3 pt-3 border-t border-slate-800/60 bg-slate-900" style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}>
+      <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900">
         <div className="flex items-end gap-2">
           <textarea
             value={body}
@@ -19719,7 +19739,11 @@ function CommunicationView({
       ];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
+    <div
+      className="flex flex-col min-h-[500px]"
+      style={isEmployee
+        ? { height: "calc(100vh - 64px - 4.5rem - env(safe-area-inset-bottom))" }
+        : { height: "calc(100vh - 120px)" }}>
       {/* Tab bar */}
       {isEmployee ? (
         // EMP_COMMS_SLIDER_V1: segmented slider (Chat / Help Desk)
