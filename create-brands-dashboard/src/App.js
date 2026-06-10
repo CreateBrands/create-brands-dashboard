@@ -96,6 +96,13 @@ import {
   deleteInventoryItem,
   addCategory,
   deleteCategory,
+  fetchRecipes,
+  addPrep, updatePrep, deletePrep,
+  addPrepComponent, updatePrepComponent, deletePrepComponent,
+  addModifier, updateModifier, deleteModifier,
+  addProduct, updateProduct, deleteProduct,
+  addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
+  attachProductModifier, detachProductModifier,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -2802,6 +2809,35 @@ function findSimilar(name, candidates, getName = (x) => x.name) {
 // COGS / INVENTORY BUILDER — two masters (store + CK), fully editable, no seed
 // ═══════════════════════════════════════════════════════════════════════════
 function CogsView() {
+  const [tab, setTab] = useState("inventory");
+  const TABS = [
+    { key: "inventory", label: "Inventory" },
+    { key: "preps",     label: "Preps" },
+    { key: "modifiers", label: "Modifiers" },
+    { key: "products",  label: "Products" },
+  ];
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Recipes</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Build inventory, preps, modifiers, and products. Costs roll up from your inventory prices.</p>
+      </div>
+      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit">
+        {TABS.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
+        ))}
+      </div>
+      {tab === "inventory" && <InventoryBuilder/>}
+      {tab === "preps"     && <RecipeBuilder mode="preps"/>}
+      {tab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
+      {tab === "products"  && <RecipeBuilder mode="products"/>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+function InventoryBuilder() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -2870,10 +2906,7 @@ function CogsView() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Inventory</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Two separate masters. Store = what shops buy (incl. Central Kitchen as a supplier). CK = the kitchen's own raw ingredients.</p>
-      </div>
+      <p className="text-xs text-slate-500">Store = what shops buy (incl. Central Kitchen as a supplier). CK = the kitchen's own raw ingredients.</p>
 
       {err && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
@@ -3011,6 +3044,345 @@ function CogsView() {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECIPE BUILDER — preps / modifiers / products (cost rolls up from inventory)
+// ═══════════════════════════════════════════════════════════════════════════
+function RecipeBuilder({ mode }) {
+  const [inv, setInv] = useState(null);     // inventory (for pickers + costing)
+  const [rec, setRec] = useState(null);     // recipes data
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selId, setSelId] = useState(null); // selected prep/product to edit
+  const [adding, setAdding] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [q, setQ] = useState("");
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const [i, r] = await Promise.all([fetchInventory(), fetchRecipes()]);
+      setInv(i); setRec(r);
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  // cost helpers -----------------------------------------------------------
+  const itemById = useMemo(() => {
+    const m = new Map();
+    if (inv) { inv.store.forEach(x => m.set("store:"+x.id, x)); inv.ck.forEach(x => m.set("ck:"+x.id, x)); }
+    return m;
+  }, [inv]);
+  const itemCost = (scope, id) => { const it = itemById.get(scope+":"+id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
+
+  const prepCost = (prep) => {
+    if (!rec) return null;
+    const comps = rec.prepComponents.filter(c => c.prepId === prep.id);
+    if (!comps.length || !prep.yieldQty) return null;
+    let total = 0, ok = true;
+    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
+    return ok ? total / Number(prep.yieldQty) : null;
+  };
+  const prepCostPerUnit = (prepId) => { const p = rec?.preps.find(x => x.id === prepId); return p ? prepCost(p) : null; };
+  const modifierCost = (m) => { const u = itemCost(m.itemScope, m.itemId); return (u != null && m.portionQty != null) ? u * Number(m.portionQty) : null; };
+  const productBaseCost = (prod) => {
+    const comps = rec.productComponents.filter(c => c.productId === prod.id);
+    let total = 0, missing = 0;
+    comps.forEach(c => {
+      let unit = null;
+      if (c.kind === "prep") unit = prepCostPerUnit(c.prepId);
+      else unit = itemCost(c.itemScope, c.itemId);
+      if (unit == null || c.portionQty == null) missing++;
+      else total += unit * Number(c.portionQty);
+    });
+    return { cost: total, missing, count: comps.length };
+  };
+
+  if (loading) return <div className="p-6 text-slate-400 text-sm">Loading…</div>;
+  if (err) return <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{err}{err.toLowerCase().includes("relation")||err.includes("does not exist")?" — run recipe_builder_schema SQL in Supabase first.":""}</div>;
+
+  const list = mode === "preps" ? rec.preps : mode === "products" ? rec.products : rec.modifiers;
+  const label = mode === "preps" ? "prep" : mode === "products" ? "product" : "modifier";
+  const shown = list.filter(x => !q || (x.name||"").toLowerCase().includes(q.toLowerCase()));
+
+  // ADD (with dup check) ---------------------------------------------------
+  const doAdd = async (force) => {
+    const n = addName.trim(); if (!n) return;
+    const matches = findSimilar(n, list);
+    if (matches.length && !force) return;
+    try {
+      if (mode === "preps") { const id = await addPrep({ name: n }); setSelId(id); }
+      else if (mode === "products") { const id = await addProduct({ name: n }); setSelId(id); }
+      else { await addModifier({ name: n }); }
+      setAdding(false); setAddName(""); await load();
+    } catch (e) { setErr(e.message || String(e)); }
+  };
+
+  // MODIFIERS mode is a flat editable list (no detail editor) --------------
+  if (mode === "modifiers") {
+    return (
+      <div className="space-y-4">
+        <AddBar label={label} q={q} setQ={setQ} adding={adding} setAdding={setAdding} addName={addName} setAddName={setAddName} list={list} onAdd={doAdd}/>
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+              <th className="text-left px-2 py-2">Modifier</th><th className="text-left px-2 py-2">Group</th>
+              <th className="text-left px-2 py-2">Inventory item</th><th className="text-right px-2 py-2">Portion</th>
+              <th className="text-left px-2 py-2">Unit</th><th className="text-right px-2 py-2">Cost</th><th></th>
+            </tr></thead>
+            <tbody>
+              {shown.length===0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500 text-sm">No modifiers yet.</td></tr>}
+              {shown.map(m => (
+                <ModifierRow key={m.id} m={m} inv={inv} cost={modifierCost(m)} onSave={async(p)=>{await updateModifier(m.id,p); await load();}} onDelete={async()=>{if(window.confirm("Delete modifier?")){await deleteModifier(m.id); await load();}}}/>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // PREPS / PRODUCTS: master list + detail editor --------------------------
+  const selected = selId ? list.find(x => x.id === selId) : null;
+
+  return (
+    <div className="space-y-4">
+      <AddBar label={label} q={q} setQ={setQ} adding={adding} setAdding={setAdding} addName={addName} setAddName={setAddName} list={list} onAdd={doAdd}/>
+      <div className="grid lg:grid-cols-3 gap-4">
+        {/* list */}
+        <div className="lg:col-span-1 rounded-xl border border-slate-800 overflow-hidden">
+          <div className="bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-400">{list.length} {label}s</div>
+          <div className="max-h-[480px] overflow-y-auto">
+            {shown.length===0 && <div className="px-3 py-6 text-center text-slate-500 text-sm">None yet.</div>}
+            {shown.map(x => {
+              const c = mode==="preps" ? prepCost(x) : productBaseCost(x).cost;
+              return (
+                <button key={x.id} onClick={()=>setSelId(x.id)}
+                  className={`w-full text-left px-3 py-2 border-t border-slate-800/60 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                  <span className="text-sm text-slate-200">{x.name}</span>
+                  <span className="text-xs font-mono text-slate-400">{c!=null?"£"+c.toFixed(3):"—"}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {/* detail */}
+        <div className="lg:col-span-2">
+          {!selected ? (
+            <div className="rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">Select a {label} to edit, or add a new one.</div>
+          ) : mode === "preps" ? (
+            <PrepEditor prep={selected} rec={rec} inv={inv} prepCost={prepCost} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
+          ) : (
+            <ProductEditor product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load} onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddBar({ label, q, setQ, adding, setAdding, addName, setAddName, list, onAdd }) {
+  const matches = adding && addName.trim() ? findSimilar(addName, list) : [];
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder={`Search ${label}s…`}
+          className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+        <button onClick={()=>{setAdding(true); setAddName("");}}
+          className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={14}/> Add {label}</button>
+      </div>
+      {adding && (
+        <div className="bg-slate-900 border border-indigo-500/40 rounded-xl p-4 space-y-3">
+          <div className="text-sm font-semibold text-white">Add {label}</div>
+          <input autoFocus value={addName} onChange={e=>setAddName(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter"&&matches.length===0) onAdd(false); if(e.key==="Escape") setAdding(false); }}
+            placeholder={`${label} name…`} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
+          {matches.length>0 && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="text-xs font-semibold text-amber-300 mb-1.5">{matches.some(m=>m.exact)?"Already exists:":"Possible duplicates:"}</div>
+              <ul className="space-y-1">{matches.map(m=><li key={m.item.id} className="text-xs text-slate-300 flex justify-between"><span>{m.item.name}</span><span className="text-slate-500">{Math.round(m.score*100)}%</span></li>)}</ul>
+            </div>
+          )}
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={()=>setAdding(false)} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Cancel</button>
+            {matches.length===0
+              ? <button onClick={()=>onAdd(false)} disabled={!addName.trim()} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold">Add</button>
+              : <button onClick={()=>onAdd(true)} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Add anyway</button>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// shared inventory item picker (returns scope+id+name)
+function ItemPicker({ inv, value, onChange }) {
+  const opts = [
+    ...inv.store.map(x => ({ key: "store:"+x.id, scope: "store", id: x.id, name: x.name, label: x.name })),
+    ...inv.ck.map(x => ({ key: "ck:"+x.id, scope: "ck", id: x.id, name: x.name, label: "CK · "+x.name })),
+  ];
+  return (
+    <select value={value || ""} onChange={e=>{ const o = opts.find(o=>o.key===e.target.value); onChange(o||null); }}
+      className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white w-40">
+      <option value="">— pick item —</option>
+      {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+    </select>
+  );
+}
+
+function ModifierRow({ m, inv, cost, onSave, onDelete }) {
+  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
+  const [f, setF] = useState({ name: m.name||"", groupLabel: m.groupLabel||"", portionQty: m.portionQty??"", unit: m.unit||"" });
+  const set = (k,v)=>setF(s=>({...s,[k]:v}));
+  const blur = (k)=>{ if(String(f[k]??"")!==String(m[k]??"")) onSave({[k]:f[k]}); };
+  return (
+    <tr className="border-t border-slate-800/60">
+      <td className="px-2 py-1.5"><input value={f.name} onChange={e=>set("name",e.target.value)} onBlur={()=>blur("name")} className={cell+" w-28"}/></td>
+      <td className="px-2 py-1.5"><input value={f.groupLabel} onChange={e=>set("groupLabel",e.target.value)} onBlur={()=>blur("groupLabel")} className={cell+" w-24"} placeholder="Chocolate"/></td>
+      <td className="px-2 py-1.5"><ItemPicker inv={inv} value={m.itemScope?m.itemScope+":"+m.itemId:""} onChange={o=>onSave({itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null})}/></td>
+      <td className="px-2 py-1.5 text-right"><input value={f.portionQty} onChange={e=>set("portionQty",e.target.value)} onBlur={()=>blur("portionQty")} className={cell+" w-14 text-right"}/></td>
+      <td className="px-2 py-1.5"><input value={f.unit} onChange={e=>set("unit",e.target.value)} onBlur={()=>blur("unit")} className={cell+" w-12"} placeholder="g"/></td>
+      <td className="px-2 py-1.5 text-right font-mono text-slate-300 text-xs">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
+      <td className="px-2 py-1.5 text-right"><button onClick={onDelete} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
+    </tr>
+  );
+}
+
+function PrepEditor({ prep, rec, inv, prepCost, reload, onDelete }) {
+  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
+  const comps = rec.prepComponents.filter(c => c.prepId === prep.id);
+  const [y, setY] = useState({ qty: prep.yieldQty??"", unit: prep.yieldUnit||"" });
+  const cost = prepCost(prep);
+  const addComp = async () => { await addPrepComponent(prep.id, { portionQty:null, unit:"" }); await reload(); };
+  return (
+    <div className="rounded-xl border border-slate-800 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <input defaultValue={prep.name} onBlur={async e=>{ if(e.target.value!==prep.name){await updatePrep(prep.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-base font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none"/>
+        <button onClick={onDelete} className="text-slate-600 hover:text-red-400 text-xs flex items-center gap-1"><Trash2 size={13}/> Delete</button>
+      </div>
+      <div className="flex items-center gap-2 text-xs text-slate-400">
+        Yield:
+        <input value={y.qty} onChange={e=>setY(s=>({...s,qty:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldQty:y.qty}); await reload();}} className={cell+" w-20 text-right"}/>
+        <input value={y.unit} onChange={e=>setY(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldUnit:y.unit}); await reload();}} className={cell+" w-14"} placeholder="g"/>
+        <span className="ml-auto text-slate-300">Cost/unit: <span className="font-mono font-bold text-white">{cost!=null?"£"+cost.toFixed(4):"—"}</span></span>
+      </div>
+      <div className="rounded-lg border border-slate-800 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-2 py-1.5">Ingredient</th><th className="text-right px-2 py-1.5">Portion</th><th className="text-left px-2 py-1.5">Unit</th><th className="text-right px-2 py-1.5">Cost</th><th></th></tr></thead>
+          <tbody>
+            {comps.length===0 && <tr><td colSpan={5} className="px-2 py-4 text-center text-slate-500 text-xs">No ingredients. Add one.</td></tr>}
+            {comps.map(c => <PrepCompRow key={c.id} c={c} inv={inv} reload={reload}/>)}
+          </tbody>
+        </table>
+      </div>
+      <button onClick={addComp} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add ingredient</button>
+    </div>
+  );
+}
+
+function PrepCompRow({ c, inv, reload }) {
+  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
+  const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
+  const it = c.itemScope ? m.get(c.itemScope+":"+c.itemId) : null;
+  const unit = it && it.costPerBaseUnit!=null ? Number(it.costPerBaseUnit) : null;
+  const cost = (unit!=null && c.portionQty!=null) ? unit*Number(c.portionQty) : null;
+  const [f, setF] = useState({ portionQty:c.portionQty??"", unit:c.unit||"" });
+  return (
+    <tr className="border-t border-slate-800/60">
+      <td className="px-2 py-1.5"><ItemPicker inv={inv} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null}); await reload();}}/></td>
+      <td className="px-2 py-1.5 text-right"><input value={f.portionQty} onChange={e=>setF(s=>({...s,portionQty:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{portionQty:f.portionQty}); await reload();}} className={cell+" w-16 text-right"}/></td>
+      <td className="px-2 py-1.5"><input value={f.unit} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className={cell+" w-12"} placeholder="g"/></td>
+      <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
+      <td className="px-2 py-1.5 text-right"><button onClick={async()=>{await deletePrepComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={13}/></button></td>
+    </tr>
+  );
+}
+
+function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, modifierCost, reload, onDelete }) {
+  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
+  const comps = rec.productComponents.filter(c => c.productId === product.id);
+  const attached = rec.productModifiers.filter(pm => pm.productId === product.id);
+  const { cost, missing } = productBaseCost(product);
+  const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
+
+  const addItemComp = async () => { await addProductComponent(product.id, { kind:"item", portionQty:null, unit:"" }); await reload(); };
+  const addPrepComp = async () => { await addProductComponent(product.id, { kind:"prep", portionQty:null, unit:"" }); await reload(); };
+  const compCost = (c) => {
+    let unit = c.kind==="prep" ? prepCostPerUnit(c.prepId) : (c.itemScope ? (m.get(c.itemScope+":"+c.itemId)?.costPerBaseUnit ?? null) : null);
+    return (unit!=null && c.portionQty!=null) ? Number(unit)*Number(c.portionQty) : null;
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-800 p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <input defaultValue={product.name} onBlur={async e=>{ if(e.target.value!==product.name){await updateProduct(product.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-base font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none"/>
+        <button onClick={onDelete} className="text-slate-600 hover:text-red-400 text-xs flex items-center gap-1"><Trash2 size={13}/> Delete</button>
+      </div>
+      <div className="flex items-center gap-3 text-xs">
+        <input defaultValue={product.category||""} onBlur={async e=>{await updateProduct(product.id,{category:e.target.value}); await reload();}} placeholder="Category" className={cell+" w-32"}/>
+        <input defaultValue={product.posName||""} onBlur={async e=>{await updateProduct(product.id,{posName:e.target.value}); await reload();}} placeholder="POS name (optional)" className={cell+" w-40"}/>
+        <span className="ml-auto text-slate-300">Base cost: <span className="font-mono font-bold text-white">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400"> ({missing} unpriced)</span>}</span>
+      </div>
+
+      {/* base components */}
+      <div>
+        <div className="text-xs font-semibold text-slate-400 mb-1">Base recipe (always included)</div>
+        <div className="rounded-lg border border-slate-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-2 py-1.5">Type</th><th className="text-left px-2 py-1.5">Component</th><th className="text-right px-2 py-1.5">Portion</th><th className="text-left px-2 py-1.5">Unit</th><th className="text-right px-2 py-1.5">Cost</th><th></th></tr></thead>
+            <tbody>
+              {comps.length===0 && <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-500 text-xs">No components yet.</td></tr>}
+              {comps.map(c => (
+                <tr key={c.id} className="border-t border-slate-800/60">
+                  <td className="px-2 py-1.5 text-xs text-slate-500">{c.kind}</td>
+                  <td className="px-2 py-1.5">
+                    {c.kind==="prep"
+                      ? <select value={c.prepId||""} onChange={async e=>{const pid=Number(e.target.value); await updateProductComponentRef(c.id,{kind:"prep",prepId:pid,itemScope:null,itemId:null}); await reload();}} className={cell+" w-40"}>
+                          <option value="">— pick prep —</option>{rec.preps.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      : <ItemPicker inv={inv} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updateProductComponentRef(c.id,{kind:"item",itemScope:o?.scope||null,itemId:o?.id||null,prepId:null,label:o?.name||null}); await reload();}}/>}
+                  </td>
+                  <td className="px-2 py-1.5 text-right"><input defaultValue={c.portionQty??""} onBlur={async e=>{await updateProductComponent(c.id,{portionQty:e.target.value}); await reload();}} className={cell+" w-16 text-right"}/></td>
+                  <td className="px-2 py-1.5"><input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className={cell+" w-12"} placeholder="g"/></td>
+                  <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{compCost(c)!=null?"£"+compCost(c).toFixed(4):"—"}</td>
+                  <td className="px-2 py-1.5 text-right"><button onClick={async()=>{await deleteProductComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={13}/></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex gap-2 mt-2">
+          <button onClick={addItemComp} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add ingredient</button>
+          <button onClick={addPrepComp} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add prep</button>
+        </div>
+      </div>
+
+      {/* modifiers */}
+      <div>
+        <div className="text-xs font-semibold text-slate-400 mb-1">Modifiers (selected at sale, not in base cost)</div>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {attached.length===0 && <span className="text-xs text-slate-500">None attached.</span>}
+          {attached.map(pm => {
+            const mod = rec.modifiers.find(x=>x.id===pm.modifierId);
+            const c = mod ? modifierCost(mod) : null;
+            return (
+              <span key={pm.id} className="inline-flex items-center gap-1 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1">
+                {mod?.name || "?"}{c!=null && <span className="text-slate-500 font-mono">£{c.toFixed(2)}</span>}
+                <button onClick={async()=>{await detachProductModifier(pm.id); await reload();}} className="text-slate-500 hover:text-red-400"><X size={12}/></button>
+              </span>
+            );
+          })}
+        </div>
+        <select value="" onChange={async e=>{ if(e.target.value){await attachProductModifier(product.id, Number(e.target.value)); await reload();} }}
+          className={cell+" w-48"}>
+          <option value="">+ attach modifier…</option>
+          {rec.modifiers.filter(mo=>!attached.some(a=>a.modifierId===mo.id)).map(mo=><option key={mo.id} value={mo.id}>{mo.groupLabel?mo.groupLabel+" · ":""}{mo.name}</option>)}
+        </select>
       </div>
     </div>
   );

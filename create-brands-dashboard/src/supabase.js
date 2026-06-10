@@ -4708,3 +4708,93 @@ export async function deleteCategory(id) {
   if (error) throw error;
 }
 // ===== end INVENTORY_BUILDER_V1 =====
+
+// ===== RECIPE_BUILDER_V1 — preps, modifiers, products =======================
+export async function fetchRecipes() {
+  const [preps, prepComps, mods, prods, prodComps, prodMods] = await Promise.all([
+    supabase.from("cogs_preps").select("*").order("name"),
+    supabase.from("cogs_prep_components").select("*"),
+    supabase.from("cogs_modifiers").select("*").order("group_label").order("name"),
+    supabase.from("cogs_products").select("*").order("name"),
+    supabase.from("cogs_product_components").select("*"),
+    supabase.from("cogs_product_modifiers").select("*"),
+  ]);
+  const err = preps.error || prepComps.error || mods.error || prods.error || prodComps.error || prodMods.error;
+  if (err) throw err;
+  return {
+    preps: (preps.data||[]).map(p => ({ id:p.id, name:p.name, yieldQty:p.yield_qty, yieldUnit:p.yield_unit, notes:p.notes })),
+    prepComponents: (prepComps.data||[]).map(c => ({ id:c.id, prepId:c.prep_id, itemScope:c.item_scope, itemId:c.item_id, itemName:c.item_name, portionQty:c.portion_qty, unit:c.unit })),
+    modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit })),
+    products: (prods.data||[]).map(p => ({ id:p.id, name:p.name, category:p.category, posName:p.pos_name, notes:p.notes })),
+    productComponents: (prodComps.data||[]).map(c => ({ id:c.id, productId:c.product_id, kind:c.kind, itemScope:c.item_scope, itemId:c.item_id, prepId:c.prep_id, label:c.label, portionQty:c.portion_qty, unit:c.unit })),
+    productModifiers: (prodMods.data||[]).map(m => ({ id:m.id, productId:m.product_id, modifierId:m.modifier_id })),
+  };
+}
+
+// --- preps ---
+export async function addPrep(patch) {
+  const { data, error } = await supabase.from("cogs_preps").insert({ name: patch.name || "New prep", yield_qty: patch.yieldQty ?? null, yield_unit: patch.yieldUnit ?? null }).select().single();
+  if (error) throw error; return data.id;
+}
+export async function updatePrep(id, patch) {
+  const b = {}; if ("name" in patch) b.name = patch.name; if ("yieldQty" in patch) b.yield_qty = patch.yieldQty===""?null:Number(patch.yieldQty);
+  if ("yieldUnit" in patch) b.yield_unit = patch.yieldUnit; if ("notes" in patch) b.notes = patch.notes; b.updated_at = new Date().toISOString();
+  const { error } = await supabase.from("cogs_preps").update(b).eq("id", id); if (error) throw error;
+}
+export async function deletePrep(id) { const { error } = await supabase.from("cogs_preps").delete().eq("id", id); if (error) throw error; }
+export async function addPrepComponent(prepId, c) {
+  const { error } = await supabase.from("cogs_prep_components").insert({ prep_id: prepId, item_scope: c.itemScope, item_id: c.itemId, item_name: c.itemName, portion_qty: c.portionQty ?? null, unit: c.unit });
+  if (error) throw error;
+}
+export async function updatePrepComponent(id, c) {
+  const b = {}; if ("portionQty" in c) b.portion_qty = c.portionQty===""?null:Number(c.portionQty); if ("unit" in c) b.unit = c.unit;
+  if ("itemScope" in c) b.item_scope = c.itemScope; if ("itemId" in c) b.item_id = c.itemId; if ("itemName" in c) b.item_name = c.itemName;
+  const { error } = await supabase.from("cogs_prep_components").update(b).eq("id", id); if (error) throw error;
+}
+export async function deletePrepComponent(id) { const { error } = await supabase.from("cogs_prep_components").delete().eq("id", id); if (error) throw error; }
+
+// --- modifiers ---
+export async function addModifier(patch) {
+  const { error } = await supabase.from("cogs_modifiers").insert({ name: patch.name || "New modifier", group_label: patch.groupLabel, item_scope: patch.itemScope, item_id: patch.itemId, item_name: patch.itemName, portion_qty: patch.portionQty ?? null, unit: patch.unit });
+  if (error) throw error;
+}
+export async function updateModifier(id, patch) {
+  const b = {}; ["name","groupLabel","itemScope","itemId","itemName","unit"].forEach(k => { if (k in patch) b[{name:"name",groupLabel:"group_label",itemScope:"item_scope",itemId:"item_id",itemName:"item_name",unit:"unit"}[k]] = patch[k]; });
+  if ("portionQty" in patch) b.portion_qty = patch.portionQty===""?null:Number(patch.portionQty);
+  const { error } = await supabase.from("cogs_modifiers").update(b).eq("id", id); if (error) throw error;
+}
+export async function deleteModifier(id) { const { error } = await supabase.from("cogs_modifiers").delete().eq("id", id); if (error) throw error; }
+
+// --- products ---
+export async function addProduct(patch) {
+  const { data, error } = await supabase.from("cogs_products").insert({ name: patch.name || "New product", category: patch.category, pos_name: patch.posName }).select().single();
+  if (error) throw error; return data.id;
+}
+export async function updateProduct(id, patch) {
+  const b = {}; if ("name" in patch) b.name = patch.name; if ("category" in patch) b.category = patch.category; if ("posName" in patch) b.pos_name = patch.posName; if ("notes" in patch) b.notes = patch.notes; b.updated_at = new Date().toISOString();
+  const { error } = await supabase.from("cogs_products").update(b).eq("id", id); if (error) throw error;
+}
+export async function deleteProduct(id) { const { error } = await supabase.from("cogs_products").delete().eq("id", id); if (error) throw error; }
+export async function addProductComponent(productId, c) {
+  const { error } = await supabase.from("cogs_product_components").insert({ product_id: productId, kind: c.kind, item_scope: c.itemScope, item_id: c.itemId, prep_id: c.prepId, label: c.label, portion_qty: c.portionQty ?? null, unit: c.unit });
+  if (error) throw error;
+}
+export async function updateProductComponent(id, c) {
+  const b = {}; if ("portionQty" in c) b.portion_qty = c.portionQty===""?null:Number(c.portionQty); if ("unit" in c) b.unit = c.unit;
+  const { error } = await supabase.from("cogs_product_components").update(b).eq("id", id); if (error) throw error;
+}
+export async function updateProductComponentRef(id, c) {
+  const b = {};
+  if ("kind" in c) b.kind = c.kind;
+  if ("itemScope" in c) b.item_scope = c.itemScope;
+  if ("itemId" in c) b.item_id = c.itemId;
+  if ("prepId" in c) b.prep_id = c.prepId;
+  if ("label" in c) b.label = c.label;
+  const { error } = await supabase.from("cogs_product_components").update(b).eq("id", id); if (error) throw error;
+}
+export async function deleteProductComponent(id) { const { error } = await supabase.from("cogs_product_components").delete().eq("id", id); if (error) throw error; }
+export async function attachProductModifier(productId, modifierId) {
+  const { error } = await supabase.from("cogs_product_modifiers").insert({ product_id: productId, modifier_id: modifierId }); if (error) throw error;
+}
+export async function detachProductModifier(id) { const { error } = await supabase.from("cogs_product_modifiers").delete().eq("id", id); if (error) throw error; }
+// ===== end RECIPE_BUILDER_V1 =====
