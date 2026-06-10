@@ -2765,6 +2765,7 @@ function CogsView() {
   const [savingId, setSavingId] = useState(null);
   const [showCats, setShowCats] = useState(false);
   const [newCat, setNewCat] = useState("");
+  const [newSup, setNewSup] = useState("");
 
   const load = async () => {
     setErr(null);
@@ -2775,12 +2776,15 @@ function CogsView() {
   useEffect(() => { load(); }, []);
 
   const items = data ? (scope === "ck" ? data.ck : data.store) : [];
-  const cats = data ? data.categories.filter(c => c.scope === scope) : [];
+  const catScope = scope;                                   // 'store' | 'ck'
+  const supScope = scope === "ck" ? "supplier_ck" : "supplier_store";
+  const cats = data ? data.categories.filter(c => c.scope === catScope) : [];
+  const sups = data ? data.categories.filter(c => c.scope === supScope) : [];
   const match = (s) => !q || (s || "").toLowerCase().includes(q.toLowerCase());
   const shown = items.filter(i => match(i.name) || match(i.category) || match(i.supplier));
 
   const addRow = async () => {
-    try { await addInventoryItem(scope, { name: "New item", source: scope === "store" ? "supplier_raw" : undefined }); await load(); }
+    try { await addInventoryItem(scope, { name: "New item" }); await load(); }
     catch (e) { setErr(e.message || String(e)); }
   };
   const saveField = async (id, patch) => {
@@ -2796,10 +2800,16 @@ function CogsView() {
   };
   const addCat = async () => {
     const n = newCat.trim(); if (!n) return;
-    try { await addCategory(scope, n); setNewCat(""); await load(); }
+    try { await addCategory(catScope, n); setNewCat(""); await load(); }
     catch (e) { setErr(e.message || String(e)); }
   };
   const removeCat = async (id) => { try { await deleteCategory(id); await load(); } catch (e) { setErr(e.message || String(e)); } };
+  const addSup = async () => {
+    const n = newSup.trim(); if (!n) return;
+    try { await addCategory(supScope, n); setNewSup(""); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+  const removeSup = async (id) => { try { await deleteCategory(id); await load(); } catch (e) { setErr(e.message || String(e)); } };
 
   if (loading) return <div className="p-6 text-slate-400 text-sm">Loading inventory…</div>;
 
@@ -2830,28 +2840,45 @@ function CogsView() {
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…"
           className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
         <button onClick={() => setShowCats(v => !v)}
-          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Categories</button>
+          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Lists</button>
         <button onClick={addRow}
           className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={14}/> Add item</button>
       </div>
 
-      {/* categories manager */}
+      {/* categories + suppliers manager */}
       {showCats && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
-          <div className="text-xs font-semibold text-slate-300">Categories ({scope})</div>
-          <div className="flex flex-wrap gap-2">
-            {cats.length === 0 && <span className="text-xs text-slate-500">None yet.</span>}
-            {cats.map(c => (
-              <span key={c.id} className="inline-flex items-center gap-1 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1">
-                {c.name}
-                <button onClick={() => removeCat(c.id)} className="text-slate-500 hover:text-red-400"><X size={12}/></button>
-              </span>
-            ))}
+        <div className="grid lg:grid-cols-2 gap-3">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
+            <div className="text-xs font-semibold text-slate-300">Categories ({scope})</div>
+            <div className="flex flex-wrap gap-2">
+              {cats.length === 0 && <span className="text-xs text-slate-500">None yet.</span>}
+              {cats.map(c => (
+                <span key={c.id} className="inline-flex items-center gap-1 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1">
+                  {c.name}<button onClick={() => removeCat(c.id)} className="text-slate-500 hover:text-red-400"><X size={12}/></button>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <input value={newCat} onChange={e=>setNewCat(e.target.value)} placeholder="New category"
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"/>
+              <button onClick={addCat} className="px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Add</button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <input value={newCat} onChange={e=>setNewCat(e.target.value)} placeholder="New category"
-              className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"/>
-            <button onClick={addCat} className="px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Add</button>
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
+            <div className="text-xs font-semibold text-slate-300">Suppliers ({scope})</div>
+            <div className="flex flex-wrap gap-2">
+              {sups.length === 0 && <span className="text-xs text-slate-500">None yet.</span>}
+              {sups.map(c => (
+                <span key={c.id} className="inline-flex items-center gap-1 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1">
+                  {c.name}<button onClick={() => removeSup(c.id)} className="text-slate-500 hover:text-red-400"><X size={12}/></button>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <input value={newSup} onChange={e=>setNewSup(e.target.value)} placeholder="New supplier"
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"/>
+              <button onClick={addSup} className="px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Add</button>
+            </div>
           </div>
         </div>
       )}
@@ -2870,7 +2897,6 @@ function CogsView() {
             <tr>
               <th className="text-left px-2 py-2">Name</th>
               <th className="text-left px-2 py-2">Category</th>
-              {scope === "store" && <th className="text-left px-2 py-2">Source</th>}
               <th className="text-left px-2 py-2">Supplier</th>
               <th className="text-left px-2 py-2">Pack desc</th>
               <th className="text-right px-2 py-2">Pack qty</th>
@@ -2882,10 +2908,10 @@ function CogsView() {
           </thead>
           <tbody>
             {shown.length === 0 && (
-              <tr><td colSpan={scope==="store"?10:9} className="px-3 py-8 text-center text-slate-500 text-sm">No items yet. Click "Add item" to start building.</td></tr>
+              <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-500 text-sm">No items yet. Click "Add item" to start building.</td></tr>
             )}
             {shown.map(it => (
-              <CogsItemRow key={it.id} item={it} scope={scope} cats={cats} saving={savingId===it.id}
+              <CogsItemRow key={it.id} item={it} scope={scope} cats={cats} sups={sups} saving={savingId===it.id}
                 onSave={(patch) => saveField(it.id, patch)} onDelete={() => removeRow(it.id)}/>
             ))}
           </tbody>
@@ -2895,37 +2921,37 @@ function CogsView() {
   );
 }
 
-function CogsItemRow({ item, scope, cats, saving, onSave, onDelete }) {
+function CogsItemRow({ item, scope, cats, sups, saving, onSave, onDelete }) {
   const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
   const [f, setF] = useState({
-    name: item.name || "", category: item.category || "", source: item.source || "supplier_raw",
+    name: item.name || "", category: item.category || "",
     supplier: item.supplier || "", packDesc: item.packDesc || "",
     packQty: item.packQty ?? "", baseUnit: item.baseUnit || "", packPrice: item.packPrice ?? "",
   });
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
   const blur = (k) => { if (String(f[k] ?? "") !== String(item[k] ?? "")) onSave({ [k]: f[k] }); };
+  const pick = (k, v) => { set(k, v); onSave({ [k]: v }); };
   const perUnit = (Number(f.packPrice) > 0 && Number(f.packQty) > 0) ? Number(f.packPrice) / Number(f.packQty) : null;
 
   return (
     <tr className="border-t border-slate-800/60">
       <td className="px-2 py-1.5"><input value={f.name} onChange={e=>set("name",e.target.value)} onBlur={()=>blur("name")} className={cell+" w-32"}/></td>
       <td className="px-2 py-1.5">
-        <input list={`cats-${scope}`} value={f.category} onChange={e=>set("category",e.target.value)} onBlur={()=>blur("category")} className={cell+" w-24"}/>
-        <datalist id={`cats-${scope}`}>{cats.map(c => <option key={c.id} value={c.name}/>)}</datalist>
+        <select value={f.category} onChange={e=>pick("category",e.target.value)} className={cell+" w-28"}>
+          <option value=""></option>
+          {cats.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+        </select>
       </td>
-      {scope === "store" && (
-        <td className="px-2 py-1.5">
-          <select value={f.source} onChange={e=>{set("source",e.target.value); onSave({source:e.target.value});}} className={cell}>
-            <option value="supplier_raw">Supplier</option>
-            <option value="ck_supplied">CK supplied</option>
-          </select>
-        </td>
-      )}
-      <td className="px-2 py-1.5"><input value={f.supplier} onChange={e=>set("supplier",e.target.value)} onBlur={()=>blur("supplier")} className={cell+" w-24"} placeholder={scope==="store"&&f.source==="ck_supplied"?"Central Kitchen":""}/></td>
+      <td className="px-2 py-1.5">
+        <select value={f.supplier} onChange={e=>pick("supplier",e.target.value)} className={cell+" w-28"}>
+          <option value=""></option>
+          {sups.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+        </select>
+      </td>
       <td className="px-2 py-1.5"><input value={f.packDesc} onChange={e=>set("packDesc",e.target.value)} onBlur={()=>blur("packDesc")} className={cell+" w-28"} placeholder="6x2.3kg box"/></td>
       <td className="px-2 py-1.5 text-right"><input value={f.packQty} onChange={e=>set("packQty",e.target.value)} onBlur={()=>blur("packQty")} className={cell+" w-16 text-right"}/></td>
       <td className="px-2 py-1.5">
-        <select value={f.baseUnit} onChange={e=>{set("baseUnit",e.target.value); onSave({baseUnit:e.target.value});}} className={cell}>
+        <select value={f.baseUnit} onChange={e=>pick("baseUnit",e.target.value)} className={cell}>
           <option value=""></option><option value="g">g</option><option value="ml">ml</option><option value="ea">ea</option>
         </select>
       </td>

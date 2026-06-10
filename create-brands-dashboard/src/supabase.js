@@ -4647,7 +4647,7 @@ export async function fetchReviewScanStats({ since = null, storeId = null } = {}
 
 // ===== INVENTORY_BUILDER_V1 — store + CK inventory masters ==================
 const _invMap = (r) => ({
-  id: r.id, name: r.name, category: r.category, source: r.source, supplier: r.supplier,
+  id: r.id, name: r.name, category: r.category, supplier: r.supplier,
   packDesc: r.pack_desc, packQty: r.pack_qty, baseUnit: r.base_unit, packPrice: r.pack_price,
   costPerBaseUnit: r.cost_per_base_unit, notes: r.notes,
 });
@@ -4655,7 +4655,6 @@ function _invBody(p) {
   const b = {};
   if ("name" in p) b.name = p.name;
   if ("category" in p) b.category = p.category;
-  if ("source" in p) b.source = p.source;
   if ("supplier" in p) b.supplier = p.supplier;
   if ("packDesc" in p) b.pack_desc = p.packDesc;
   if ("packQty" in p) b.pack_qty = p.packQty === "" || p.packQty == null ? null : Number(p.packQty);
