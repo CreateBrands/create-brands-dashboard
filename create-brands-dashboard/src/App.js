@@ -3154,6 +3154,56 @@ function RecipeBuilder({ mode }) {
   // PREPS / PRODUCTS: master list + detail editor --------------------------
   const selected = selId ? list.find(x => x.id === selId) : null;
 
+  // PRODUCTS: full-width stacked layout (categories on top, big editor below)
+  if (mode === "products") {
+    const grouped = Object.entries(shown.reduce((acc,x)=>{ const k=x.category||"Uncategorised"; (acc[k]=acc[k]||[]).push(x); return acc; },{}))
+      .sort((a,b)=>a[0].localeCompare(b[0]));
+    return (
+      <div className="space-y-4">
+        <AddBar label={label} q={q} setQ={setQ} adding={adding} setAdding={setAdding} addName={addName} setAddName={setAddName} list={list} onAdd={doAdd}/>
+        {/* category grid */}
+        <div className="rounded-xl border border-slate-800 p-3">
+          <div className="text-xs font-semibold text-slate-400 mb-2">{list.length} products · {grouped.length} categories</div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-4 gap-y-1">
+            {grouped.map(([cat,items]) => {
+              const open = !collapsed[cat];
+              return (
+                <div key={cat} className="min-w-0">
+                  <button onClick={()=>setCollapsed(s=>({...s,[cat]:!s[cat]}))}
+                    className="w-full text-left py-1.5 flex items-center justify-between hover:text-white text-slate-300">
+                    <span className="text-xs font-bold flex items-center gap-1 truncate">{open?<ChevronDown size={13}/>:<ChevronRight size={13}/>}{cat}</span>
+                    <span className="text-[10px] text-slate-500 shrink-0">{items.length}</span>
+                  </button>
+                  {open && (
+                    <div className="pl-2 pb-2">
+                      {items.map(x => {
+                        const c = productBaseCost(x).cost;
+                        return (
+                          <button key={x.id} onClick={()=>setSelId(x.id)}
+                            className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between ${selId===x.id?"bg-indigo-600 text-white":"text-slate-300 hover:bg-slate-800/60"}`}>
+                            <span className="text-sm truncate">{x.name}</span>
+                            <span className={`text-[11px] font-mono shrink-0 ${selId===x.id?"text-indigo-100":"text-slate-500"}`}>{c>0?"£"+c.toFixed(2):""}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* editor full-width below */}
+        {!selected ? (
+          <div className="rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">Select a product above to edit its recipe and modifiers.</div>
+        ) : (
+          <ProductEditor product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load} onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
+        )}
+      </div>
+    );
+  }
+
+  // PREPS: side-by-side list + editor
   return (
     <div className="space-y-4">
       <AddBar label={label} q={q} setQ={setQ} adding={adding} setAdding={setAdding} addName={addName} setAddName={setAddName} list={list} onAdd={doAdd}/>
@@ -3163,56 +3213,24 @@ function RecipeBuilder({ mode }) {
           <div className="bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-400">{list.length} {label}s</div>
           <div className="max-h-[560px] overflow-y-auto">
             {shown.length===0 && <div className="px-3 py-6 text-center text-slate-500 text-sm">None yet.</div>}
-            {mode === "products" ? (
-              // grouped by category, collapsible
-              Object.entries(shown.reduce((acc,x)=>{ const k=x.category||"Uncategorised"; (acc[k]=acc[k]||[]).push(x); return acc; },{}))
-                .sort((a,b)=>a[0].localeCompare(b[0]))
-                .map(([cat,items]) => {
-                  const open = !collapsed[cat];
-                  return (
-                    <div key={cat}>
-                      <button onClick={()=>setCollapsed(s=>({...s,[cat]:!s[cat]}))}
-                        className="w-full text-left px-3 py-2 bg-slate-900/60 border-t border-slate-800 flex items-center justify-between hover:bg-slate-800/50">
-                        <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                          {open ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}{cat}
-                        </span>
-                        <span className="text-[10px] text-slate-500">{items.length}</span>
-                      </button>
-                      {open && items.map(x => {
-                        const c = productBaseCost(x).cost;
-                        return (
-                          <button key={x.id} onClick={()=>setSelId(x.id)}
-                            className={`w-full text-left pl-7 pr-3 py-2 border-t border-slate-800/40 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
-                            <span className="text-sm text-slate-200">{x.name}</span>
-                            <span className="text-xs font-mono text-slate-400">{c>0?"£"+c.toFixed(3):"—"}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })
-            ) : (
-              shown.map(x => {
-                const c = prepCost(x);
-                return (
-                  <button key={x.id} onClick={()=>setSelId(x.id)}
-                    className={`w-full text-left px-3 py-2 border-t border-slate-800/60 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
-                    <span className="text-sm text-slate-200">{x.name}</span>
-                    <span className="text-xs font-mono text-slate-400">{c!=null?"£"+c.toFixed(3):"—"}</span>
-                  </button>
-                );
-              })
-            )}
+            {shown.map(x => {
+              const c = prepCost(x);
+              return (
+                <button key={x.id} onClick={()=>setSelId(x.id)}
+                  className={`w-full text-left px-3 py-2 border-t border-slate-800/60 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                  <span className="text-sm text-slate-200">{x.name}</span>
+                  <span className="text-xs font-mono text-slate-400">{c!=null?"£"+c.toFixed(3):"—"}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
         {/* detail */}
         <div className="lg:col-span-2">
           {!selected ? (
             <div className="rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">Select a {label} to edit, or add a new one.</div>
-          ) : mode === "preps" ? (
-            <PrepEditor prep={selected} rec={rec} inv={inv} prepCost={prepCost} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
           ) : (
-            <ProductEditor product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load} onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
+            <PrepEditor prep={selected} rec={rec} inv={inv} prepCost={prepCost} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
           )}
         </div>
       </div>
@@ -3262,7 +3280,7 @@ function ItemPicker({ inv, value, onChange }) {
   ];
   return (
     <select value={value || ""} onChange={e=>{ const o = opts.find(o=>o.key===e.target.value); onChange(o||null); }}
-      className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white w-40">
+      className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs">
       <option value="">— pick item —</option>
       {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
     </select>
@@ -3352,62 +3370,62 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
   };
 
   return (
-    <div className="rounded-xl border border-slate-800 p-4 space-y-4">
+    <div className="rounded-xl border border-slate-800 p-5 space-y-5">
       <div className="flex items-center justify-between">
-        <input defaultValue={product.name} onBlur={async e=>{ if(e.target.value!==product.name){await updateProduct(product.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-base font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none"/>
-        <button onClick={onDelete} className="text-slate-600 hover:text-red-400 text-xs flex items-center gap-1"><Trash2 size={13}/> Delete</button>
+        <input defaultValue={product.name} onBlur={async e=>{ if(e.target.value!==product.name){await updateProduct(product.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-xl font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none"/>
+        <button onClick={onDelete} className="text-slate-500 hover:text-red-400 text-sm flex items-center gap-1"><Trash2 size={15}/> Delete</button>
       </div>
-      <div className="flex items-center gap-3 text-xs">
-        <input defaultValue={product.category||""} onBlur={async e=>{await updateProduct(product.id,{category:e.target.value}); await reload();}} placeholder="Category" className={cell+" w-32"}/>
-        <input defaultValue={product.posName||""} onBlur={async e=>{await updateProduct(product.id,{posName:e.target.value}); await reload();}} placeholder="POS name (optional)" className={cell+" w-40"}/>
-        <span className="ml-auto text-slate-300">Base cost: <span className="font-mono font-bold text-white">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400"> ({missing} unpriced)</span>}</span>
+      <div className="flex items-center gap-3 text-sm flex-wrap">
+        <input defaultValue={product.category||""} onBlur={async e=>{await updateProduct(product.id,{category:e.target.value}); await reload();}} placeholder="Category" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-44"/>
+        <input defaultValue={product.posName||""} onBlur={async e=>{await updateProduct(product.id,{posName:e.target.value}); await reload();}} placeholder="POS name (optional)" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-52"/>
+        <span className="ml-auto text-slate-300 text-base">Base cost: <span className="font-mono font-bold text-white text-lg">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-sm"> ({missing} unpriced)</span>}</span>
       </div>
 
       {/* base components */}
       <div>
-        <div className="text-xs font-semibold text-slate-400 mb-1">Base recipe (always included)</div>
+        <div className="text-sm font-semibold text-slate-300 mb-2">Base recipe (always included)</div>
         <div className="rounded-lg border border-slate-800 overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-2 py-1.5">Type</th><th className="text-left px-2 py-1.5">Component</th><th className="text-right px-2 py-1.5">Portion</th><th className="text-left px-2 py-1.5">Unit</th><th className="text-right px-2 py-1.5">Cost</th><th></th></tr></thead>
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2 w-20">Type</th><th className="text-left px-3 py-2">Component</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
             <tbody>
-              {comps.length===0 && <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-500 text-xs">No components yet.</td></tr>}
+              {comps.length===0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500 text-sm">No components yet. Use "Add ingredient" (from inventory) or "Add prep" (from preps) below.</td></tr>}
               {comps.map(c => (
                 <tr key={c.id} className="border-t border-slate-800/60">
-                  <td className="px-2 py-1.5 text-xs text-slate-500">{c.kind}</td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${c.kind==="prep"?"bg-purple-600/30 text-purple-200":"bg-sky-600/30 text-sky-200"}`}>{c.kind==="prep"?"Prep":"Item"}</span></td>
+                  <td className="px-3 py-2">
                     {c.kind==="prep"
-                      ? <select value={c.prepId||""} onChange={async e=>{const pid=Number(e.target.value); await updateProductComponentRef(c.id,{kind:"prep",prepId:pid,itemScope:null,itemId:null}); await reload();}} className={cell+" w-40"}>
+                      ? <select value={c.prepId||""} onChange={async e=>{const pid=Number(e.target.value); await updateProductComponentRef(c.id,{kind:"prep",prepId:pid,itemScope:null,itemId:null}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs">
                           <option value="">— pick prep —</option>{rec.preps.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
                       : <ItemPicker inv={inv} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updateProductComponentRef(c.id,{kind:"item",itemScope:o?.scope||null,itemId:o?.id||null,prepId:null,label:o?.name||null}); await reload();}}/>}
                   </td>
-                  <td className="px-2 py-1.5 text-right"><input defaultValue={c.portionQty??""} onBlur={async e=>{await updateProductComponent(c.id,{portionQty:e.target.value}); await reload();}} className={cell+" w-16 text-right"}/></td>
-                  <td className="px-2 py-1.5"><input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className={cell+" w-12"} placeholder="g"/></td>
-                  <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{compCost(c)!=null?"£"+compCost(c).toFixed(4):"—"}</td>
-                  <td className="px-2 py-1.5 text-right"><button onClick={async()=>{await deleteProductComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={13}/></button></td>
+                  <td className="px-3 py-2 text-right"><input defaultValue={c.portionQty??""} onBlur={async e=>{await updateProductComponent(c.id,{portionQty:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right"/></td>
+                  <td className="px-3 py-2"><input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/></td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{compCost(c)!=null?"£"+compCost(c).toFixed(4):"—"}</td>
+                  <td className="px-3 py-2 text-right"><button onClick={async()=>{await deleteProductComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="flex gap-2 mt-2">
-          <button onClick={addItemComp} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add ingredient</button>
-          <button onClick={addPrepComp} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add prep</button>
+        <div className="flex gap-2 mt-3">
+          <button onClick={addItemComp} className="px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>
+          <button onClick={addPrepComp} className="px-4 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add prep</button>
         </div>
       </div>
 
       {/* modifiers */}
       <div>
-        <div className="text-xs font-semibold text-slate-400 mb-1">Modifiers (selected at sale, not in base cost)</div>
+        <div className="text-sm font-semibold text-slate-300 mb-2">Modifiers (selected at sale, not in base cost)</div>
         <div className="flex flex-wrap gap-2 mb-2">
-          {attached.length===0 && <span className="text-xs text-slate-500">None attached.</span>}
+          {attached.length===0 && <span className="text-sm text-slate-500">None attached.</span>}
           {attached.map(pm => {
             const mod = rec.modifiers.find(x=>x.id===pm.modifierId);
             const c = mod ? modifierCost(mod) : null;
             return (
-              <span key={pm.id} className="inline-flex items-center gap-1 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1">
+              <span key={pm.id} className="inline-flex items-center gap-1.5 bg-slate-800 text-slate-300 text-sm rounded-lg px-3 py-1.5">
                 {mod?.name || "?"}{c!=null && <span className="text-slate-500 font-mono">£{c.toFixed(2)}</span>}
-                <button onClick={async()=>{await detachProductModifier(pm.id); await reload();}} className="text-slate-500 hover:text-red-400"><X size={12}/></button>
+                <button onClick={async()=>{await detachProductModifier(pm.id); await reload();}} className="text-slate-500 hover:text-red-400"><X size={13}/></button>
               </span>
             );
           })}
@@ -3523,19 +3541,23 @@ function PosMapper({ stores = [] }) {
                   const sug = !m?.productId ? suggest(r.name) : null;
                   return (
                     <tr key={r.name} className="border-t border-slate-800/60">
-                      <td className="px-3 py-2 text-slate-200">{r.name}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs">{r.revenue>0?"£"+r.revenue.toFixed(0):"—"}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2.5 text-slate-200 text-sm">{r.name}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-slate-400 text-xs">{r.revenue>0?"£"+r.revenue.toFixed(0):"—"}</td>
+                      <td className="px-3 py-2.5">
                         <select value={m?.productId || ""} onChange={e=>save(r.name, e.target.value?Number(e.target.value):null)}
-                          className={`bg-slate-800 border rounded px-2 py-1 text-xs text-white w-52 ${m?.productId?"border-slate-700":"border-amber-500/40"}`}>
+                          className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-72 ${m?.productId?"border-slate-700":"border-amber-500/40"}`}>
                           <option value="">{sug ? `— unmapped (suggest: ${sug.name}) —` : "— unmapped —"}</option>
-                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          {Object.entries(products.reduce((acc,p)=>{ const k=p.category||"Uncategorised"; (acc[k]=acc[k]||[]).push(p); return acc; },{})).sort((a,b)=>a[0].localeCompare(b[0])).map(([cat,items])=>(
+                            <optgroup key={cat} label={cat}>
+                              {items.sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                            </optgroup>
+                          ))}
                         </select>
                         {sug && !m?.productId && (
-                          <button onClick={()=>save(r.name, sug.id)} className="ml-2 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Use suggestion</button>
+                          <button onClick={()=>save(r.name, sug.id)} className="ml-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Use suggestion</button>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right">{m && <button onClick={()=>unset(m.id)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}</td>
+                      <td className="px-3 py-2.5 text-right">{m && <button onClick={()=>unset(m.id)} className="text-slate-600 hover:text-red-400"><X size={16}/></button>}</td>
                     </tr>
                   );
                 })}
