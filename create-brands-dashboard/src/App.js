@@ -2735,7 +2735,7 @@ function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
 }
 
 // ── EMP_HOME_GREETING_V1: Home greeting card (date/weather, greeting, today's shift, task count) ──
-function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [] }) {
+function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myMember = (opsTeam || []).find(m => m.id === myId);
   const firstName = myMember?.firstName || myMember?.nickname || (currentUser.name || "").split(" ")[0] || "there";
@@ -2760,10 +2760,18 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
     (s.employeeId === myId || s.employeeId === currentUser.id)
   );
 
-  // Active tasks today in my brand(s)
-  const activeTasks = (assignments || []).filter(a =>
-    currentUser.brandIds?.includes(a.brandId) && isActiveToday(a)
+  // Active tasks today, scoped to the employee's assigned stores (matches
+  // TodaysTasks). Store-scoped rows must be in visibleStoreIds; legacy rows
+  // without a storeId fall back to a brand match.
+  const storeIdSet = new Set(visibleStoreIds);
+  const inScopeBrandIds = new Set(
+    (stores || []).filter(s => storeIdSet.has(s.id)).map(s => s.brandId)
   );
+  const activeTasks = (assignments || []).filter(a => {
+    if (!isActiveToday(a)) return false;
+    if (a.storeId) return storeIdSet.has(a.storeId);
+    return inScopeBrandIds.has(a.brandId) || currentUser.brandIds?.includes(a.brandId);
+  });
   const taskCount = activeTasks.length;
 
   // Weather (Open-Meteo, no key) via geolocation; fails silently if denied
@@ -3137,7 +3145,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
-            <div className="text-xs text-slate-500">{currentUser.employeeRole} · {brand?.name || "—"}</div>
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
@@ -3157,6 +3164,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               <EmployeeHomeGreeting
                 currentUser={currentUser} brands={brands} opsTeam={opsTeam}
                 schedules={schedules || []} assignments={assignments} stores={stores}
+                visibleStoreIds={myVisibleStoreIds}
               />
               <TodaysTasks
                 brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
