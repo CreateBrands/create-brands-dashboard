@@ -96,6 +96,8 @@ import {
 } from "recharts";
 import {
   Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight,
+  Home, MoreHorizontal,
+  Cloud, Sun, CloudRain, ArrowRight,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle,
   Plus, Trash2, Edit, Eye, EyeOff, Download, Upload, RotateCcw,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
@@ -2732,6 +2734,139 @@ function StaffTrainingView({ currentUser, brands, stores = [], opsTeam }) {
   );
 }
 
+// ── EMP_HOME_GREETING_V1: Home greeting card (date/weather, greeting, today's shift, task count) ──
+function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
+  const myId = currentUser.opsTeamMemberId || currentUser.id;
+  const myMember = (opsTeam || []).find(m => m.id === myId);
+  const firstName = myMember?.firstName || myMember?.nickname || (currentUser.name || "").split(" ")[0] || "there";
+  const myBrandId = currentUser.brandIds?.[0];
+
+  // Greeting by time of day
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  // Local date string (BST-safe)
+  const toLocalDateStr = (d) => {
+    const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,"0"); const day = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  };
+  const now = new Date();
+  const todayStr = toLocalDateStr(now);
+  const dateLabel = now.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "long" });
+
+  // Today's published shifts for me
+  const myShifts = (schedules || []).filter(s =>
+    s.brandId === myBrandId && s.date === todayStr && !!s.published && s.status !== "cancelled" &&
+    (s.employeeId === myId || s.employeeId === currentUser.id)
+  );
+
+  // Tasks today, scoped to the employee's own store(s) — mirrors TodaysTasks.
+  // A row with a storeId must be in the employee's visible stores; a legacy
+  // row without storeId falls back to a brand match.
+  const visibleSet = new Set(visibleStoreIds || []);
+  const taskCount = (assignments || []).filter(a => {
+    if (!isActiveToday(a)) return false;
+    if (a.storeId) return visibleSet.has(a.storeId);
+    return currentUser.brandIds?.includes(a.brandId);
+  }).length;
+
+  // Weather (Open-Meteo, no key) via geolocation; fails silently if denied
+  const [weather, setWeather] = useState(null); // { temp, code }
+  useEffect(() => {
+    if (!("geolocation" in navigator)) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude.toFixed(2)}&longitude=${longitude.toFixed(2)}&current=temperature_2m,weather_code`);
+          const j = await r.json();
+          if (!cancelled && j?.current) setWeather({ temp: Math.round(j.current.temperature_2m), code: j.current.weather_code });
+        } catch { /* silent */ }
+      },
+      () => { /* denied — no weather */ },
+      { timeout: 8000, maximumAge: 30 * 60 * 1000 }
+    );
+    return () => { cancelled = true; };
+  }, []);
+
+  // Map Open-Meteo weather code → icon + label
+  const weatherView = (() => {
+    if (!weather) return null;
+    const c = weather.code;
+    let Icon = Cloud, label = "Cloudy";
+    if (c === 0) { Icon = Sun; label = "Clear"; }
+    else if (c >= 1 && c <= 3) { Icon = Sun; label = "Partly cloudy"; }
+    else if (c >= 45 && c <= 48) { Icon = Cloud; label = "Fog"; }
+    else if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) { Icon = CloudRain; label = "Rain"; }
+    else if (c >= 71 && c <= 86) { Icon = Cloud; label = "Snow"; }
+    else if (c >= 95) { Icon = CloudRain; label = "Storm"; }
+    return { Icon, label };
+  })();
+
+  const fmtTime = (t) => {
+    if (!t) return "";
+    const [h, m] = t.split(":").map(Number);
+    const ampm = h >= 12 ? "PM" : "AM"; const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2,"0")} ${ampm}`;
+  };
+
+  const storeName = (s) => {
+    const st = (stores || []).find(x => x.id === s.storeId);
+    return st?.name || s.storeName || "";
+  };
+
+  const shiftWord = myShifts.length === 0 ? "no shifts" : myShifts.length === 1 ? "one shift" : `${myShifts.length} shifts`;
+
+  return (
+    <div className="emp-greeting rounded-3xl bg-indigo-600 p-5 mb-5 text-white">
+      {/* avatar */}
+      <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center text-base font-bold mb-4">
+        {`${(myMember?.firstName||currentUser.name||"?")[0] || ""}${myMember?.lastName?.[0] || ""}`.toUpperCase()}
+      </div>
+
+      {/* date + weather */}
+      <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-white/80 mb-2">
+        <span>{dateLabel}</span>
+        {weatherView && (
+          <span className="flex items-center gap-1">
+            <weatherView.Icon size={14}/> {weather.temp}°C
+          </span>
+        )}
+      </div>
+
+      {/* greeting */}
+      <div className="text-2xl font-bold leading-tight">{greeting}, {firstName}.</div>
+      <div className="text-lg font-semibold text-white/90 mt-1">You have {shiftWord} today.</div>
+
+      {/* shift card */}
+      <div className="mt-4 rounded-2xl bg-white text-slate-900 overflow-hidden">
+        {myShifts.length > 0 ? (
+          myShifts.map((s, i) => (
+            <div key={s.id || i} className={`px-4 py-3.5 ${i > 0 ? "border-t border-slate-100" : ""}`}>
+              <div className="flex items-center gap-2 text-xl font-bold">
+                <span>{fmtTime(s.startTime)}</span>
+                <ArrowRight size={16} className="text-slate-400"/>
+                <span>{fmtTime(s.endTime)}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-slate-600 mt-1">
+                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: myMember?.color || "#6366f1" }}/>
+                {s.shift || s.role || "Shift"}{storeName(s) ? ` · ${storeName(s)}` : ""}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="px-4 py-3.5 text-sm text-slate-500">No shift scheduled today.</div>
+        )}
+        <div className="px-4 py-3 border-t border-slate-100 flex items-center gap-2 text-sm text-slate-700">
+          <CheckCircle size={15} className="text-slate-400 flex-shrink-0"/>
+          You have {taskCount} {taskCount === 1 ? "task" : "tasks"} today.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -2761,30 +2896,41 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     return [...ids];
   }, [stores, currentUser.brandIds, currentUser.role, myOpsMember]);
   const [activeView, setActiveView] = useState("ops-tasks");
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false); // EMP_BOTTOMNAV_V1: "More" sheet
   const overdueCount = assignments.filter(a =>
     currentUser.brandIds.includes(a.brandId) && isActiveToday(a) && isOverdue(a)
   ).length;
 
-  const NAV = [
-    { key: "ops-tasks",      label: "Today's Tasks",    icon: ListChecks,  badge: overdueCount > 0 ? overdueCount.toString() : null },
-    { key: "ops-temps",      label: "Temperature Log",  icon: Thermometer },
-    { key: "ops-deliveries", label: "Deliveries",       icon: Truck },
-    { key: "ops-network",    label: "Ops Status",       icon: ShieldCheck },
-    { key: "issues",         label: "Report Issue",     icon: Wrench },
-    { key: "comms", label: "Communication", icon: MessageSquare, badge: (() => {
-        const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
-        const unread = (messages || []).filter(m => {
-          if (m.fromId === myId || m.fromId === myOpsId) return false;
-          if (m.toScope === "all_locations") return true;
-          if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
-          if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
-          return false;
-        }).filter(m => !m.readBy?.includes(myId)).length;
-        return unread > 0 ? unread.toString() : null;
-      })() },
-    { key: "emp-training",   label: "Training",         icon: GraduationCap },
-    { key: "emp-contracts",  label: "Contracts",        icon: FileText },
+  // EMP_BOTTOMNAV_V1: unread chat count (used by header Chat icon)
+  const chatUnread = (() => {
+    const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+    return (messages || []).filter(m => {
+      if (m.fromId === myId || m.fromId === myOpsId) return false;
+      if (m.toScope === "all_locations") return true;
+      if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+      if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
+      return false;
+    }).filter(m => !m.readBy?.includes(myId)).length;
+  })();
+
+  // EMP_BOTTOMNAV_V1: four fixed bottom tabs (4th = More opens the sheet)
+  const PRIMARY_NAV = [
+    { key: "ops-tasks",    label: "Home",      icon: Home,          badge: overdueCount > 0 ? overdueCount.toString() : null },
+    { key: "emp-schedule", label: "Schedule",  icon: CalendarDays },
+    { key: "emp-training", label: "Training",  icon: GraduationCap },
+    { key: "__more",       label: "More",      icon: MoreHorizontal },
+  ];
+
+  // EMP_BOTTOMNAV_V1: everything else lives in the More sheet
+  const MORE_NAV = [
+    { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
+    { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
+    { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
+    { key: "issues",         label: "Report an Issue", icon: Wrench },
+    { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
+    { key: "availability",   label: "Availability",    icon: Calendar },
+    { key: "my-hours",       label: "My Hours",        icon: Clock },
+    { key: "emp-contracts",  label: "Contracts",       icon: FileText },
   ];
 
   const titles = {
@@ -2800,19 +2946,87 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-contracts":  "Contracts",
   };
 
-  const NavBar = () => (
-    <nav className="MOBILE_NAV_WRAP_V1 flex flex-wrap sm:flex-nowrap items-center justify-center sm:justify-start gap-1.5 sm:overflow-x-auto px-3 py-2 bg-slate-900 border-b border-slate-800/60">
-      {NAV.map(n => {
-        const NIcon = n.icon; const active = activeView === n.key;
+  // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
+  // OR (for More) if the current view is one of the More items.
+  const moreKeys = MORE_NAV.map(n => n.key);
+  const goTo = (key) => { setActiveView(key); setMoreOpen(false); };
+
+  const BottomNav = () => (
+    <nav className="EMP_BOTTOMNAV_V1 emp-bottomnav fixed bottom-0 inset-x-0 z-30 flex items-stretch justify-around bg-slate-900 border-t border-slate-800/60"
+      style={{ paddingBottom: "max(env(safe-area-inset-bottom), 8px)" }}>
+      {PRIMARY_NAV.map(n => {
+        const NIcon = n.icon;
+        const active = n.key === "__more"
+          ? (moreOpen || moreKeys.includes(activeView))
+          : (activeView === n.key && !moreOpen);
         return (
-          <button key={n.key} onClick={() => { setActiveView(n.key); setDrawerOpen(false); }}
-            className={`flex items-center gap-1.5 px-3.5 py-2.5 sm:py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 relative ${active ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-800 hover:text-white"}`}>
-            <NIcon size={13}/>{n.label}
-            {n.badge && <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+          <button key={n.key}
+            onClick={() => n.key === "__more" ? setMoreOpen(o => !o) : goTo(n.key)}
+            className={`relative flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-semibold transition-colors ${active ? "text-indigo-400" : "text-slate-500 hover:text-slate-300"}`}>
+            <NIcon size={20}/>
+            <span>{n.label}</span>
+            {n.badge && <span className="absolute top-1.5 right-[28%] bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
           </button>
         );
       })}
     </nav>
+  );
+
+  const MoreSheet = () => (
+    <>
+      {/* backdrop */}
+      <div onClick={() => setMoreOpen(false)}
+        className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity ${moreOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}/>
+      {/* sheet */}
+      <div style={{ paddingBottom: "max(env(safe-area-inset-bottom), 12px)" }} className={`fixed inset-x-0 bottom-0 z-50 bg-slate-900 border-t border-slate-800 rounded-t-3xl shadow-2xl transition-transform duration-300 ease-out ${moreOpen ? "translate-y-0" : "translate-y-full"}`}>
+        {/* grab handle */}
+        <div className="flex justify-center pt-2.5 pb-1">
+          <div className="w-10 h-1.5 rounded-full bg-slate-700"/>
+        </div>
+        {/* header row */}
+        <div className="flex items-center justify-between px-5 pt-1 pb-3">
+          <div className="text-base font-bold text-white">More</div>
+          <button onClick={() => setMoreOpen(false)} aria-label="Close"
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors"><X size={16}/></button>
+        </div>
+
+        <div className="px-4 pb-3 max-h-[64vh] overflow-auto">
+          {/* user card */}
+          <div className="flex items-center gap-3 px-3 py-3 mb-3 rounded-2xl bg-slate-800/60">
+            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
+              {(currentUser.name || "?").split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
+              <div className="text-xs text-slate-500 truncate">{brand?.name || "—"}</div>
+            </div>
+          </div>
+
+          {/* tile grid */}
+          <div className="grid grid-cols-2 gap-2.5">
+            {MORE_NAV.map(n => {
+              const NIcon = n.icon; const active = activeView === n.key;
+              return (
+                <button key={n.key} onClick={() => goTo(n.key)}
+                  className={`relative flex flex-col items-start gap-2.5 p-3.5 rounded-2xl text-left transition-all active:scale-[0.97] ${active ? "bg-indigo-600" : "bg-slate-800/70 hover:bg-slate-800"}`}>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${active ? "bg-white/20" : "bg-slate-700/60"}`}>
+                    <NIcon size={18} className={active ? "text-white" : "text-indigo-400"}/>
+                  </div>
+                  <span className={`text-sm font-semibold ${active ? "text-white" : "text-slate-200"}`}>{n.label}</span>
+                  {n.badge && <span className="absolute top-3 right-3 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* sign out */}
+          <button onClick={onLogout}
+            className="w-full flex items-center justify-center gap-2 mt-3 px-3 py-3.5 rounded-2xl text-sm font-semibold text-red-400 bg-red-950/20 hover:bg-red-950/40 transition-colors">
+            <LogOut size={17}/> Sign out
+          </button>
+        </div>
+      </div>
+    </>
   );
 
   // Employee-filtered versions
@@ -2821,38 +3035,157 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   return (
     <AuthContext.Provider value={{ user: currentUser }}>
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+      <div className="emp-theme min-h-screen flex flex-col">
+        <style>{`
+/* EMP_THEME_CREAM_V1 — cream + brown, scoped to the employee app only.
+   Remaps the dark slate/indigo Tailwind utilities used across employee
+   (and shared) components to the Chocoberry cream palette. Manager/admin
+   app is outside .emp-theme and stays dark. */
+.emp-theme {
+  --cream:        #FDF2E0;
+  --cream-card:   #FFFFFF;
+  --cream-soft:   #F5EBD9;
+  --cream-deep:   #EFE3CB;
+  --brown:        #844429;
+  --brown-soft:   #A86A4D;
+  --brown-faint:  #C9A98F;
+  --ink:          #3A2418;
+  --ink-soft:     #6B5443;
+  background: var(--cream);
+  color: var(--ink);
+}
+
+/* Backgrounds: dark slates -> cream surfaces */
+.emp-theme .bg-slate-950,
+.emp-theme .bg-slate-900 { background-color: var(--cream) !important; }
+.emp-theme .bg-slate-800 { background-color: var(--cream-soft) !important; }
+.emp-theme .bg-slate-700 { background-color: var(--cream-deep) !important; }
+.emp-theme .bg-slate-900\\/40,
+.emp-theme .bg-slate-900\\/60,
+.emp-theme .bg-slate-800\\/60,
+.emp-theme .bg-slate-800\\/70,
+.emp-theme .bg-slate-800\\/80,
+.emp-theme .bg-slate-800\\/40 { background-color: var(--cream-soft) !important; }
+
+/* Indigo accents -> brown */
+.emp-theme .bg-indigo-600 { background-color: var(--brown) !important; }
+.emp-theme .bg-indigo-500 { background-color: var(--brown-soft) !important; }
+.emp-theme .hover\\:bg-indigo-500:hover { background-color: var(--brown-soft) !important; }
+.emp-theme .bg-indigo-600\\/15,
+.emp-theme .bg-indigo-600\\/20,
+.emp-theme .bg-indigo-950\\/30 { background-color: var(--cream-deep) !important; }
+
+/* Text: light text -> dark ink, EXCEPT on coloured backgrounds where white must stay white */
+.emp-theme .text-white { color: var(--ink) !important; }
+.emp-theme .bg-indigo-600 .text-white,
+.emp-theme .bg-indigo-500 .text-white,
+.emp-theme .bg-red-500 .text-white,
+.emp-theme .bg-red-500.text-white,
+.emp-theme button.bg-indigo-600 .text-white,
+.emp-theme .bg-indigo-600.text-white,
+.emp-theme .bg-indigo-500.text-white { color: #fff !important; }
+.emp-theme .text-slate-100,
+.emp-theme .text-slate-200,
+.emp-theme .text-slate-300 { color: var(--ink) !important; }
+.emp-theme .text-slate-400,
+.emp-theme .text-slate-500,
+.emp-theme .text-slate-600,
+.emp-theme .text-slate-700 { color: var(--ink-soft) !important; }
+.emp-theme .text-indigo-300,
+.emp-theme .text-indigo-400 { color: var(--brown) !important; }
+
+/* Borders -> soft brown */
+.emp-theme [class*="border-slate-700"],
+.emp-theme [class*="border-slate-800"],
+.emp-theme [class*="border-indigo-500"] { border-color: var(--brown-faint) !important; }
+
+/* Inputs / textareas */
+.emp-theme input,
+.emp-theme textarea,
+.emp-theme select {
+  background-color: var(--cream-card) !important;
+  color: var(--ink) !important;
+  border-color: var(--brown-faint) !important;
+}
+.emp-theme input::placeholder,
+.emp-theme textarea::placeholder { color: var(--brown-faint) !important; }
+.emp-theme .focus\\:border-indigo-500:focus,
+.emp-theme input:focus,
+.emp-theme textarea:focus { border-color: var(--brown) !important; }
+
+/* Chat bubbles: my bubble brown, received cream-soft */
+.emp-theme .bg-indigo-600.text-white { color: #fff !important; }
+
+/* Buttons that were indigo keep white text on brown */
+.emp-theme .bg-indigo-600 .text-white,
+.emp-theme .bg-indigo-600.text-white,
+.emp-theme button.bg-indigo-600 { color: #fff !important; }
+
+/* Greeting card: brown panel, white text stays white */
+.emp-theme .emp-greeting,
+.emp-theme .emp-greeting .text-white { color: #fff !important; }
+.emp-theme .emp-greeting { background-color: var(--brown) !important; }
+
+/* Cards/white surfaces inside greeting stay readable */
+.emp-theme .emp-greeting .text-slate-900 { color: var(--ink) !important; }
+.emp-theme .emp-greeting .text-slate-700,
+.emp-theme .emp-greeting .text-slate-600,
+.emp-theme .emp-greeting .text-slate-500,
+.emp-theme .emp-greeting .text-slate-400 { color: var(--ink-soft) !important; }
+.emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
+
+/* Bottom nav: dark brown bar, light text */
+.emp-theme .emp-bottomnav { background-color: var(--brown) !important; border-top-color: #6e3621 !important; }
+.emp-theme .emp-bottomnav button { color: rgba(255,255,255,0.65) !important; }
+.emp-theme .emp-bottomnav button.text-indigo-400 { color: #fff !important; }
+.emp-theme .emp-bottomnav .text-indigo-400 { color: #fff !important; }
+.emp-theme .emp-bottomnav .text-slate-500,
+.emp-theme .emp-bottomnav .text-slate-300 { color: rgba(255,255,255,0.65) !important; }
+
+/* Chat / Help Desk slider: track cream, pill brown, selected text white, unselected ink */
+.emp-theme .emp-slider { background-color: var(--cream-deep) !important; }
+.emp-theme .emp-slider .bg-indigo-600 { background-color: var(--brown) !important; }
+.emp-theme .emp-slider button.text-white { color: #fff !important; }
+.emp-theme .emp-slider button.text-slate-400 { color: var(--ink-soft) !important; }
+
+`}</style>
         {/* Header */}
-        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-10">
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
             <BarChart2 size={15} className="text-white"/>
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
-            <div className="text-xs text-slate-500">{currentUser.employeeRole} · {brand?.name || "—"}</div>
+            <div className="text-xs text-slate-500">{brand?.name || "—"}</div>
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
-            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
-            <button onClick={onLogout} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 text-xs font-semibold transition-all">
-              <LogOut size={13}/> Sign out
+            <button onClick={() => goTo("comms")} aria-label="Messages"
+              className={`relative flex items-center justify-center w-9 h-9 rounded-xl transition-colors ${activeView === "comms" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}>
+              <MessageSquare size={16}/>
+              {chatUnread > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{chatUnread}</span>}
             </button>
+            <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
           </div>
         </header>
 
-        {/* Nav bar */}
-        <NavBar />
-
-        {/* Content */}
-        <main className="flex-1 overflow-auto p-4 lg:p-6">
+        {/* Content (bottom padding clears the fixed bottom nav + iPhone safe area) */}
+        <main className="flex-1 overflow-auto p-4 lg:p-6" style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}>
           {activeView === "ops-tasks" && (
-            <TodaysTasks
-              brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
-              assignments={assignments} checklists={checklists}
-              tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
-              checklistStates={checklistStates} onSignOff={onSignOff}
-              onChecklistItemToggle={onChecklistItemToggle}
-            />
+            <>
+              <EmployeeHomeGreeting
+                currentUser={currentUser} brands={brands} opsTeam={opsTeam}
+                schedules={schedules || []} assignments={assignments} stores={stores}
+                visibleStoreIds={myVisibleStoreIds}
+              />
+              <TodaysTasks
+                brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
+                assignments={assignments} checklists={checklists}
+                tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
+                checklistStates={checklistStates} onSignOff={onSignOff}
+                onChecklistItemToggle={onChecklistItemToggle}
+              />
+            </>
           )}
           {activeView === "ops-temps" && (
             <TemperatureLog
@@ -2893,9 +3226,29 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             />
           )}
 
+          {activeView === "emp-schedule" && (
+            <EmployeeScheduleView
+              currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules || []}
+            />
+          )}
+
           {activeView === "emp-training" && (
             <StaffTrainingView
               currentUser={currentUser} brands={brands} stores={stores} opsTeam={opsTeam}
+            />
+          )}
+
+          {activeView === "availability" && (
+            <EmployeeAvailabilityView
+              brands={myBrands} currentUser={currentUser} availability={availability || []}
+              onAdd={onAddAvailability} onUpdate={onUpdateAvailability}
+            />
+          )}
+
+          {activeView === "my-hours" && (
+            <EmployeeHoursView
+              currentUser={currentUser} brands={brands} schedules={schedules || []}
+              punchRecords={punchRecords || []} onUpdate={onAmendPunch} onAddComment={onAddPunchComment}
             />
           )}
 
@@ -2914,6 +3267,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             </div>
           )}
         </main>
+
+        {/* EMP_BOTTOMNAV_V1: fixed bottom tab bar + More sheet */}
+        <BottomNav />
+        <MoreSheet />
       </div>
     </AuthContext.Provider>
   );
@@ -17516,7 +17873,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60/80 bg-slate-900 flex-shrink-0">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 flex-shrink-0">
         <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
           <ChevronLeft size={18}/>
         </button>
@@ -17598,7 +17955,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
         </div>
       </div>
 
-      <div className="flex-shrink-0 p-4 border-t border-slate-800/60/80">
+      <div className="flex-shrink-0 p-4 border-t border-slate-800/60">
         <button onClick={handleSubmit} disabled={!isValid()}
           className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
           <Send size={14}/> Submit Availability
@@ -17785,7 +18142,7 @@ function AvailabilityDetailModal({ item, currentUser, onUpdate, onClose }) {
         </div>
 
         {/* Message input */}
-        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60/80 bg-slate-900/40">
+        <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900/40">
           {!isManager && (
             <div className="text-xs text-slate-500 mb-2 px-1">
               💬 Reply to your manager
@@ -18389,7 +18746,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
   return (
     <div className="flex flex-col h-full">
       {/* Thread header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60/80 bg-slate-900 flex-shrink-0">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 flex-shrink-0">
         <div className="flex-1 min-w-0">
           <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -18481,11 +18838,11 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
 
           {/* Input bar */}
           {isClosed ? (
-            <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800/60/80 text-center text-xs text-slate-600">
+            <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800/60 text-center text-xs text-slate-600">
               This ticket is closed
             </div>
           ) : (
-            <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60/80 bg-slate-900/40">
+            <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900/40">
               <div className="flex items-end gap-2">
                 <textarea value={body} onChange={e => setBody(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
@@ -18503,7 +18860,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
 
         {/* Manager info side panel */}
         {isManager && showInfo && (
-          <div className="w-56 flex-shrink-0 border-l border-slate-800/60/80 bg-slate-900/40 overflow-y-auto p-4 space-y-4">
+          <div className="w-56 flex-shrink-0 border-l border-slate-800/60 bg-slate-900/40 overflow-y-auto p-4 space-y-4">
             <div>
               <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Status</div>
               <div className="space-y-1">
@@ -18600,7 +18957,7 @@ function NewTicketForm({ brands, stores = [], currentUser, onSubmit, onCancel })
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60/80 bg-slate-900 flex-shrink-0">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 flex-shrink-0">
         <button onClick={onCancel} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
           <ChevronLeft size={18}/>
         </button>
@@ -18649,7 +19006,7 @@ function NewTicketForm({ brands, stores = [], currentUser, onSubmit, onCancel })
           </div>
         </div>
       </div>
-      <div className="flex-shrink-0 p-4 border-t border-slate-800/60/80">
+      <div className="flex-shrink-0 p-4 border-t border-slate-800/60">
         <button onClick={handleSubmit} disabled={!form.title.trim()}
           className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
           <Send size={14}/> Submit Ticket
@@ -18830,10 +19187,10 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
   }
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60/80 bg-slate-950">
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60 bg-slate-950">
       {/* Left panel */}
-      <div className={`flex flex-col border-r border-slate-800/60/80 bg-slate-900 flex-shrink-0 w-full lg:w-80 xl:w-96 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
-        <div className="px-4 py-3.5 border-b border-slate-800/60/80 space-y-3">
+      <div className={`flex flex-col border-r border-slate-800/60 bg-slate-900 flex-shrink-0 w-full lg:w-80 xl:w-96 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        <div className="px-4 py-3.5 border-b border-slate-800/60 space-y-3">
           <div className="flex items-center justify-between">
             <div className="text-sm font-bold text-white">Help Desk</div>
             <div className="flex items-center gap-1">
@@ -18930,7 +19287,7 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
           </div>
         ) : (
           <>
-            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/60/80 bg-slate-900/40">
+            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/60 bg-slate-900/40">
               <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
               <span className="text-xs text-slate-600">Back to tickets</span>
             </div>
@@ -18994,10 +19351,10 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
   const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60/80 bg-slate-950">
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60 bg-slate-950">
       {/* Left panel */}
-      <div className={`flex flex-col border-r border-slate-800/60/80 bg-slate-900 flex-shrink-0 w-full lg:w-72 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/60/80">
+      <div className={`flex flex-col border-r border-slate-800/60 bg-slate-900 flex-shrink-0 w-full lg:w-72 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/60">
           <div>
             <div className="text-sm font-bold text-white">Help Desk</div>
             {myTickets.length > 0 && <div className="text-xs text-slate-500">{myTickets.length} open</div>}
@@ -19062,7 +19419,7 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
             onCancel={() => { setShowNewForm(false); setMobileShowChat(false); }}/>
         ) : activeTicket ? (
           <>
-            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/60/80 bg-slate-900/40">
+            <div className="lg:hidden flex items-center gap-2 px-3 py-2 border-b border-slate-800/60 bg-slate-900/40">
               <button onClick={() => setMobileShowChat(false)} className="p-1.5 text-slate-400 hover:text-white"><ChevronLeft size={18}/></button>
               <span className="text-xs text-slate-600">Back to my tickets</span>
             </div>
@@ -19225,10 +19582,17 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
   // Mark unread on mount / when thread changes
+  // UNREAD_FIX_V2: mark read against BOTH identities (auth id + ops-team id).
+  // The unread badges count against currentUser.id in some places and
+  // opsTeamMemberId in others; writing both guarantees the badge clears.
   useEffect(() => {
+    const ids = [...new Set([myId, myOpsId].filter(Boolean))];
     threadMsgs.forEach(m => {
       const isForMe = m.fromId !== myId && m.fromId !== myOpsId;
-      if (isForMe && !m.readBy?.includes(myId)) onMarkRead(m.id, myId);
+      if (!isForMe) return;
+      ids.forEach(rid => {
+        if (!m.readBy?.includes(rid)) onMarkRead(m.id, rid);
+      });
     });
   }, [thread.key]);
 
@@ -19268,19 +19632,21 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
   return (
     <div className="flex flex-col h-full">
       {/* Thread messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+      <div className="flex-1 overflow-y-auto px-4 py-5 space-y-2">
         {threadMsgs.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-slate-600">
-            <MessageSquare size={32} className="mb-3 text-slate-700"/>
-            <div className="text-sm font-semibold">No messages yet</div>
-            <div className="text-xs mt-1">Send the first message below</div>
+          <div className="flex flex-col items-center justify-center h-full text-center px-6">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-600/15 flex items-center justify-center mb-4">
+              <MessageSquare size={28} className="text-indigo-400"/>
+            </div>
+            <div className="text-base font-bold text-slate-200">No messages yet</div>
+            <div className="text-sm text-slate-500 mt-1">Say hello — your first message starts the thread.</div>
           </div>
         )}
         {grouped.map((item, idx) => {
           if (item.type === "date") {
             return (
-              <div key={`date-${idx}`} className="flex items-center justify-center my-3">
-                <span className="bg-slate-800 border border-slate-700 text-slate-600 text-xs px-3 py-1 rounded-full">{item.label}</span>
+              <div key={`date-${idx}`} className="flex items-center justify-center my-4">
+                <span className="bg-slate-800/80 text-slate-400 text-xs font-medium px-3 py-1 rounded-full">{item.label}</span>
               </div>
             );
           }
@@ -19302,10 +19668,10 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
                   <div className="text-xs font-semibold mb-0.5 px-1" style={{ color: av.bg }}>{m.fromName}</div>
                 )}
                 {/* Bubble */}
-                <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
                   isMe
                     ? "bg-indigo-600 text-white rounded-br-md"
-                    : "bg-slate-800 text-slate-100 border border-slate-700 rounded-bl-md"
+                    : "bg-slate-800 text-slate-100 rounded-bl-md"
                 }`}>
                   {m.body}
                 </div>
@@ -19328,7 +19694,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
       </div>
 
       {/* Input bar */}
-      <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60/80 bg-slate-900">
+      <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900">
         <div className="flex items-end gap-2">
           <textarea
             value={body}
@@ -19336,18 +19702,19 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             placeholder="Type a message…"
             rows={1}
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-32 transition-colors"
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-3xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 focus:outline-none resize-none max-h-32 transition-all"
             style={{ lineHeight: "1.5" }}
           />
           <button
             onClick={handleSend}
             disabled={!body.trim()}
-            className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0"
+            aria-label="Send message"
+            className="w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0 shadow-lg shadow-indigo-600/20"
           >
-            <Send size={16} className="text-white ml-0.5"/>
+            <Send size={18} className="text-white ml-0.5"/>
           </button>
         </div>
-        <div className="text-xs text-slate-700 mt-1 px-1">Enter to send · Shift+Enter for new line</div>
+        <div className="text-[11px] text-slate-600 mt-1.5 px-2">Enter to send · Shift+Enter for new line</div>
       </div>
     </div>
   );
@@ -19374,6 +19741,12 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   };
 
   const myMessages = messages.filter(isVisible);
+
+  // UNREAD_FIX_V3: marking-read happens per-conversation in ChatThread (on open),
+  // NOT here. The previous blanket effect marked every visible message read on
+  // any `messages` change — which fired the instant a new message arrived, so
+  // the badge never got to show. Removed so genuinely-unread messages count,
+  // and a conversation clears only when the user actually opens it.
 
   // Group messages into threads (conversations)
   const threadMap = {};
@@ -19447,14 +19820,14 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   const getLastMsg = (thread) => thread.messages[thread.messages.length - 1];
 
   return (
-    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60/80 bg-slate-950">
+    <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60 bg-slate-950">
 
       {/* ── Left panel: thread list ─────────────────────────────────────────── */}
-      <div className={`flex flex-col border-r border-slate-800/60/80 bg-slate-900 flex-shrink-0
+      <div className={`flex flex-col border-r border-slate-800/60 bg-slate-900 flex-shrink-0
         ${mobileShowThread ? "hidden" : "flex"} w-full lg:flex lg:w-80 xl:w-96`}>
 
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/60/80">
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/60">
           <div>
             <div className="text-sm font-bold text-white">Messages</div>
             {totalUnread > 0 && <div className="text-xs text-indigo-400">{totalUnread} unread</div>}
@@ -19537,7 +19910,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
         ) : (
           <>
             {/* Thread header */}
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60/80 bg-slate-900 flex-shrink-0">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 flex-shrink-0">
               {/* Back button on mobile */}
               <button onClick={() => setMobileShowThread(false)} className="lg:hidden p-1.5 -ml-1 text-slate-400 hover:text-white transition-colors">
                 <ChevronLeft size={20}/>
@@ -19596,7 +19969,7 @@ function CommunicationView({
   onUpdateBrand,
   isEmployee,
 }) {
-  const [tab, setTab] = useState("helpdesk");
+  const [tab, setTab] = useState(isEmployee ? "chat" : "helpdesk");
 
   const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
@@ -19618,55 +19991,71 @@ function CommunicationView({
     ? (availability||[]).filter(a => a.employeeId === myOpsId && a.status === "pending").length
     : (availability||[]).filter(a => brands.some(b => b.id === a.brandId) && a.status === "pending").length;
 
-  const TABS = [
-    { key: "helpdesk",     label: "Help Desk",    icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
-    { key: "chat",         label: "Chat",          icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
-    { key: "availability", label: "Availability",  icon: Calendar,      badge: pendingAvail > 0 ? pendingAvail : null },
-    ...(!isEmployee ? [
-      { key: "schedule", label: "Schedule", icon: CalendarDays, badge: null },
-    ] : [
-      { key: "emp-schedule", label: "My Schedule", icon: CalendarDays, badge: null },
-      { key: "my-hours",     label: "My Hours",    icon: Clock,         badge: (() => {
-        const records = (punchRecords||[]).filter(r => (r.employeeId===myOpsId||r.employeeId===myId));
-        const count = records.filter(r => {
-          const hasOT = (r.overtimeHours||0) > 0;
-          if (!hasOT) return false;
-          // Conclusion reached — nothing to do
-          if (r.overtimeApproved || r.overtimeRejectedReason) return false;
-          // No reason yet — employee needs to start
-          if (!r.overtimeReason && (r.overtimeComments?.length||0) === 0) return true;
-          // Last comment was from the manager → employee's turn
-          const cs = r.overtimeComments || [];
-          if (cs.length > 0 && cs[cs.length-1].authorRole === "manager") return true;
-          return false;
-        }).length;
-        return count > 0 ? count.toString() : null;
-      })() },
-    ]),
-  ];
+  const TABS = isEmployee
+    ? [
+        // EMP_COMMS_SLIDER_V1: employees get a two-way Chat / Help Desk toggle only.
+        // Availability, My Schedule and My Hours now live in the bottom-nav "More" sheet.
+        { key: "chat",     label: "Chat",      icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
+        { key: "helpdesk", label: "Help Desk", icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
+      ]
+    : [
+        { key: "helpdesk",     label: "Help Desk",    icon: LifeBuoy,      badge: hdBadge > 0 ? hdBadge : null },
+        { key: "chat",         label: "Chat",          icon: MessageSquare, badge: inboxUnread > 0 ? inboxUnread : null },
+        { key: "availability", label: "Availability",  icon: Calendar,      badge: pendingAvail > 0 ? pendingAvail : null },
+        { key: "schedule",     label: "Schedule",      icon: CalendarDays,  badge: null },
+      ];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] min-h-[500px]">
+    <div
+      className="flex flex-col min-h-[500px]"
+      style={isEmployee
+        ? { height: "calc(100vh - 64px - 4.5rem - env(safe-area-inset-bottom))" }
+        : { height: "calc(100vh - 120px)" }}>
       {/* Tab bar */}
-      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 flex-wrap">
-        {TABS.map(t => {
-          const TIcon = t.icon;
-          return (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
-                tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
-              }`}>
-              <TIcon size={13}/>
-              {t.label}
-              {t.badge && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === t.key ? "bg-slate-900/20 text-white" : "bg-red-500 text-white"}`}>
-                  {t.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {isEmployee ? (
+        // EMP_COMMS_SLIDER_V1: segmented slider (Chat / Help Desk)
+        <div className="emp-slider relative flex bg-slate-800 rounded-2xl p-1 mb-4 select-none">
+          <div
+            className="absolute top-1 bottom-1 rounded-xl bg-indigo-600 shadow-sm transition-transform duration-200 ease-out"
+            style={{ width: `calc(50% - 0.25rem)`, transform: TABS.findIndex(t => t.key === tab) === 1 ? "translateX(calc(100% + 0.5rem))" : "translateX(0)" }}
+          />
+          {TABS.map(t => {
+            const TIcon = t.icon; const active = tab === t.key;
+            return (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${active ? "text-white" : "text-slate-400 hover:text-white"}`}>
+                <TIcon size={15}/>
+                {t.label}
+                {t.badge && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${active ? "bg-slate-900/25 text-white" : "bg-red-500 text-white"}`}>
+                    {t.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 flex-wrap">
+          {TABS.map(t => {
+            const TIcon = t.icon;
+            return (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                }`}>
+                <TIcon size={13}/>
+                {t.label}
+                {t.badge && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold leading-none ${tab === t.key ? "bg-slate-900/20 text-white" : "bg-red-500 text-white"}`}>
+                    {t.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Panels */}
       <div className="flex-1 min-h-0 overflow-auto">
@@ -24961,7 +25350,7 @@ export default function App() {
   const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
   const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
   const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);notifyMessageRecipients(s);}, []);
-  const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...(m.readBy||[]),userId]}:m));}, []);
+  const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...new Set([...(m.readBy||[]),userId])]}:m));}, []);
 
   // Kiosk guard — all hooks ran above
   if (IS_APPLY) return <ApplyShell />;
