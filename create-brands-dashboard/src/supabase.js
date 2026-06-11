@@ -1135,6 +1135,7 @@ function dbStoreToApp(s) {
     name:             s.name,
     shortName:        s.short_name,
     ownershipModel:   (s.ownership_model || "").toLowerCase().trim().replace(/\s+/g, "_"),
+    siteType:         s.site_type || "shop",   // 'shop' | 'central_kitchen' | 'distribution' | 'franchise_ops'
     franchiseeName:   s.franchisee_name,
     status:           s.status,
     address:          s.address,
@@ -1229,6 +1230,7 @@ function appStoreToDb(s) {
   if (s.shortName       !== undefined) row.short_name       = s.shortName;
   if (s.name            !== undefined) row.name             = s.name;
   if (s.ownershipModel  !== undefined) row.ownership_model  = s.ownershipModel;
+  if (s.siteType        !== undefined) row.site_type        = s.siteType || "shop";
   if (s.franchiseeName  !== undefined) row.franchisee_name  = s.franchiseeName || null;
   if (s.status          !== undefined) row.status           = s.status;
   if (s.address         !== undefined) row.address          = s.address || null;

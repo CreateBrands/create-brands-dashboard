@@ -26991,8 +26991,8 @@ export default function App() {
       { key: "ops-tasks",      label: "Today's Tasks",   icon: CheckSquare },
       { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
       { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
-      { key: "eod",            label: "EOD Report",      icon: FileText },
-      { key: "eod-recon",      label: "EOD Reconciliation", icon: ClipboardList, roles: ["owner", "hq_staff", "manager"] },
+      { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
+      { key: "eod-recon",      label: "EOD Reconciliation", icon: ClipboardList, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
@@ -27020,8 +27020,14 @@ export default function App() {
     ]},
   ];
 
+  // When the user's visible sites are all Central Kitchen (a production facility,
+  // no end-of-day cash/sales), hide EOD-type features.
+  const ckOnly = visibleStores.length > 0 && visibleStores.every(s => s.siteType === "central_kitchen");
   const NAV_GROUPS = NAV_GROUPS_RAW
-    .map(g => ({ ...g, items: g.items.filter(item => !item.roles || item.roles.includes(currentUser?.role)) }))
+    .map(g => ({ ...g, items: g.items.filter(item =>
+      (!item.roles || item.roles.includes(currentUser?.role)) &&
+      !(ckOnly && item.hideForCK)
+    ) }))
     .filter(g => g.items.length > 0);
 
   // If after role-filtering the current activeView is no longer in the menu
