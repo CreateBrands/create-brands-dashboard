@@ -22835,6 +22835,39 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 // KIOSK — Punch In / Punch Out (tablet-optimised, /kiosk route)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Tactile, physical-feeling keypad button for the kiosk.
+// Raised 3D face (gradient + drop shadow) that depresses + flashes on press,
+// with a brief scale-up "punch" so staff get clear feedback on every tap.
+function KioskKey({ label, onPress, tall, faint }) {
+  const [pressed, setPressed] = useState(false);
+  const fire = () => {
+    setPressed(true);
+    try { navigator.vibrate?.(15); } catch (_) {}
+    onPress();
+    setTimeout(() => setPressed(false), 130);
+  };
+  return (
+    <button
+      onPointerDown={(e) => { e.preventDefault(); fire(); }}
+      className={`${tall ? "h-20" : "h-16"} rounded-2xl font-black select-none touch-manipulation flex items-center justify-center`}
+      style={{
+        fontSize: faint ? "1.6rem" : "2rem",
+        color: faint ? "rgba(253,242,224,0.7)" : "#FFF6E9",
+        background: pressed
+          ? "linear-gradient(180deg, #4a3324 0%, #3a261a 100%)"
+          : "linear-gradient(180deg, #56402f 0%, #3a261a 100%)",
+        border: "1px solid rgba(253,242,224,0.10)",
+        boxShadow: pressed
+          ? "inset 0 3px 8px rgba(0,0,0,0.55), 0 1px 0 rgba(253,242,224,0.05)"
+          : "0 5px 0 #241710, 0 7px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(253,242,224,0.18)",
+        transform: pressed ? "translateY(4px) scale(1.04)" : "translateY(0) scale(1)",
+        transition: "transform 90ms cubic-bezier(.2,.8,.3,1), box-shadow 90ms ease, background 90ms ease",
+      }}>
+      {label}
+    </button>
+  );
+}
+
 function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], assignments = [], checklists = [], cleaningTasks = [], storeRoles = [], storeDepartments = [], onPunchIn, onPunchOut, onLogout }) {
   const [pin,         setPin]       = useState("");
   const [matched,     setMatched]   = useState(null); // ops_team member
@@ -23357,19 +23390,17 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           )}
         </div>
 
-        {/* Numpad */}
-        <div className="grid grid-cols-3 gap-3">
-          {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
-            if (key === "") return <div key={idx}/>;
-            return (
-              <button key={key}
-                onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
-                className={`${isLandscape ? "h-14" : "h-20"} rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation`}
-                style={{ backgroundColor: "#3D2A1E", color: key === "⌫" ? "rgba(253,242,224,0.55)" : "#FDF2E0" }}>
-                {key}
-              </button>
-            );
-          })}
+        {/* Numpad — tactile keypad on a recessed panel */}
+        <div className="rounded-3xl p-3" style={{ background: "rgba(0,0,0,0.22)", boxShadow: "inset 0 2px 10px rgba(0,0,0,0.4)" }}>
+          <div className="grid grid-cols-3 gap-3">
+            {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
+              if (key === "") return <div key={idx}/>;
+              return (
+                <KioskKey key={key} label={key} tall={!isLandscape} faint={key==="⌫"}
+                  onPress={() => key === "⌫" ? handleBackspace() : handleDigit(key)}/>
+              );
+            })}
+          </div>
         </div>
 
         {/* Confirm + Clear */}
