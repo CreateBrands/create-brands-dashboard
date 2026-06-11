@@ -22838,7 +22838,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
 // Tactile, physical-feeling keypad button for the kiosk.
 // Raised 3D face (gradient + drop shadow) that depresses + flashes on press,
 // with a brief scale-up "punch" so staff get clear feedback on every tap.
-function KioskKey({ label, onPress, tall, faint }) {
+function KioskKey({ label, onPress, tall, faint, variant }) {
   const [pressed, setPressed] = useState(false);
   const fire = () => {
     setPressed(true);
@@ -22846,20 +22846,26 @@ function KioskKey({ label, onPress, tall, faint }) {
     onPress();
     setTimeout(() => setPressed(false), 130);
   };
+  const isClear = variant === "clear";
+  const faceTop = isClear ? "#C0563A" : "#56402f";
+  const faceBot = isClear ? "#9A3F28" : "#3a261a";
+  const facePressTop = isClear ? "#A8472F" : "#4a3324";
+  const facePressBot = isClear ? "#86341F" : "#3a261a";
+  const edge = isClear ? "#6E2A18" : "#241710";
   return (
     <button
       onPointerDown={(e) => { e.preventDefault(); fire(); }}
       className={`${tall ? "h-20" : "h-16"} rounded-2xl font-black select-none touch-manipulation flex items-center justify-center`}
       style={{
-        fontSize: faint ? "1.6rem" : "2rem",
-        color: faint ? "rgba(253,242,224,0.7)" : "#FFF6E9",
+        fontSize: faint || isClear ? "1.6rem" : "2rem",
+        color: isClear ? "#FFFFFF" : (faint ? "rgba(253,242,224,0.7)" : "#FFF6E9"),
         background: pressed
-          ? "linear-gradient(180deg, #4a3324 0%, #3a261a 100%)"
-          : "linear-gradient(180deg, #56402f 0%, #3a261a 100%)",
+          ? `linear-gradient(180deg, ${facePressTop} 0%, ${facePressBot} 100%)`
+          : `linear-gradient(180deg, ${faceTop} 0%, ${faceBot} 100%)`,
         border: "1px solid rgba(253,242,224,0.10)",
         boxShadow: pressed
           ? "inset 0 3px 8px rgba(0,0,0,0.55), 0 1px 0 rgba(253,242,224,0.05)"
-          : "0 5px 0 #241710, 0 7px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(253,242,224,0.18)",
+          : `0 5px 0 ${edge}, 0 7px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(253,242,224,0.18)`,
         transform: pressed ? "translateY(4px) scale(1.04)" : "translateY(0) scale(1)",
         transition: "transform 90ms cubic-bezier(.2,.8,.3,1), box-shadow 90ms ease, background 90ms ease",
       }}>
@@ -23390,11 +23396,16 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           )}
         </div>
 
-        {/* Numpad — tactile keypad on a recessed panel */}
+        {/* Numpad — tactile keypad on a recessed panel; bottom-left = Clear */}
         <div className="rounded-3xl p-3" style={{ background: "rgba(0,0,0,0.22)", boxShadow: "inset 0 2px 10px rgba(0,0,0,0.4)" }}>
           <div className="grid grid-cols-3 gap-3">
-            {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((key, idx) => {
-              if (key === "") return <div key={idx}/>;
+            {["1","2","3","4","5","6","7","8","9","C","0","⌫"].map((key, idx) => {
+              if (key === "C") {
+                return (
+                  <KioskKey key="clear" label="✕" tall={!isLandscape} variant="clear"
+                    onPress={handleClear}/>
+                );
+              }
               return (
                 <KioskKey key={key} label={key} tall={!isLandscape} faint={key==="⌫"}
                   onPress={() => key === "⌫" ? handleBackspace() : handleDigit(key)}/>
@@ -23403,7 +23414,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           </div>
         </div>
 
-        {/* Confirm + Clear */}
+        {/* Confirm */}
         <div className="space-y-3">
           {submitting && (
             <div className="w-full py-4 rounded-2xl text-xl font-black text-center" style={{ backgroundColor: "#3D2A1E", color: "rgba(253,242,224,0.7)" }}>
@@ -23416,13 +23427,6 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 isClockedIn ? "bg-amber-500 hover:bg-amber-400 text-white" : "bg-emerald-600 hover:bg-emerald-500 text-white"
               }`}>
               {isClockedIn ? `→ Yes, I'm ${matched.firstName} — Continue` : `▶ Yes, I'm ${matched.firstName} — Clock In`}
-            </button>
-          )}
-          {pin.length > 0 && !submitting && (
-            <button onClick={handleClear}
-              className="w-full py-4 rounded-2xl text-lg font-black transition-all active:scale-95 touch-manipulation"
-              style={{ backgroundColor: "#C0563A", color: "#FFFFFF" }}>
-              ✕ Clear
             </button>
           )}
         </div>
