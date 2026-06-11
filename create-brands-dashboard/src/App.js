@@ -23968,28 +23968,28 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     updatedAt: new Date().toISOString() });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Top stats strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Hours worked</div>
-          <div className="text-xl font-black text-white mt-1 tabular-nums">{totalHours.toFixed(1)}<span className="text-base text-slate-500 font-bold ml-1">h</span></div>
-          <div className="text-xs text-slate-500 mt-0.5">this week</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="bg-slate-900 border border-slate-800/60 rounded-xl px-3 py-2.5">
+          <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Hours worked</div>
+          <div className="text-lg font-black text-white mt-0.5 tabular-nums">{totalHours.toFixed(1)}<span className="text-sm text-slate-500 font-bold ml-1">h</span></div>
+          <div className="text-[10px] text-slate-500">this week</div>
         </div>
-        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Total pay</div>
-          <div className="text-xl font-black text-emerald-400 mt-1 tabular-nums">£{totalPay.toFixed(2)}</div>
-          <div className="text-xs text-slate-500 mt-0.5">incl. approved OT</div>
+        <div className="bg-slate-900 border border-slate-800/60 rounded-xl px-3 py-2.5">
+          <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Total pay</div>
+          <div className="text-lg font-black text-emerald-400 mt-0.5 tabular-nums">£{totalPay.toFixed(2)}</div>
+          <div className="text-[10px] text-slate-500">incl. approved OT</div>
         </div>
-        <div className={`bg-slate-900 border rounded-2xl p-3 ${pendingApproval > 0 ? "border-amber-500/30" : "border-slate-800/60"}`}>
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Pending approval</div>
-          <div className={`text-xl font-black mt-1 tabular-nums ${pendingApproval > 0 ? "text-amber-400" : "text-white"}`}>{pendingApproval}</div>
-          <div className="text-xs text-slate-500 mt-0.5">{pendingApproval === 1 ? "record" : "records"}</div>
+        <div className={`bg-slate-900 border rounded-xl px-3 py-2.5 ${pendingApproval > 0 ? "border-amber-500/30" : "border-slate-800/60"}`}>
+          <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Pending approval</div>
+          <div className={`text-lg font-black mt-0.5 tabular-nums ${pendingApproval > 0 ? "text-amber-400" : "text-white"}`}>{pendingApproval}</div>
+          <div className="text-[10px] text-slate-500">{pendingApproval === 1 ? "record" : "records"}</div>
         </div>
-        <div className={`bg-slate-900 border rounded-2xl p-3 ${pendingOT > 0 ? "border-red-500/30" : "border-slate-800/60"}`}>
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Overtime to review</div>
-          <div className={`text-xl font-black mt-1 tabular-nums ${pendingOT > 0 ? "text-red-400" : "text-white"}`}>{pendingOT}</div>
-          <div className="text-xs text-slate-500 mt-0.5">awaiting decision</div>
+        <div className={`bg-slate-900 border rounded-xl px-3 py-2.5 ${pendingOT > 0 ? "border-red-500/30" : "border-slate-800/60"}`}>
+          <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Overtime to review</div>
+          <div className={`text-lg font-black mt-0.5 tabular-nums ${pendingOT > 0 ? "text-red-400" : "text-white"}`}>{pendingOT}</div>
+          <div className="text-[10px] text-slate-500">awaiting decision</div>
         </div>
       </div>
 
@@ -24071,8 +24071,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                 <th className="text-left font-semibold px-3 py-2.5 w-8"></th>
                 <th className="text-left font-semibold px-3 py-2.5">Date</th>
                 <th className="text-left font-semibold px-3 py-2.5">Employee</th>
-                <th className="text-left font-semibold px-3 py-2.5 hidden md:table-cell">Location</th>
-                <th className="text-left font-semibold px-3 py-2.5">In&nbsp;–&nbsp;Out</th>
+                <th className="text-left font-semibold px-3 py-2.5 hidden lg:table-cell">Location</th>
+                <th className="text-left font-semibold px-3 py-2.5 hidden md:table-cell">Scheduled</th>
+                <th className="text-left font-semibold px-3 py-2.5">Actual In&nbsp;–&nbsp;Out</th>
                 <th className="text-right font-semibold px-3 py-2.5">Hours</th>
                 <th className="text-left font-semibold px-3 py-2.5">Status</th>
                 <th className="text-right font-semibold px-3 py-2.5">Actions</th>
@@ -24122,9 +24123,14 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     </div>
                   </div>
                 </td>
-                <td className="px-3 py-2 hidden md:table-cell text-slate-400 whitespace-nowrap">
+                <td className="px-3 py-2 hidden lg:table-cell text-slate-400 whitespace-nowrap">
                   {store ? (store.shortName || store.name) : brand ? brand.name : "—"}
                   {r.isUnscheduled && <span className="ml-1 text-[10px] text-red-400">· unsched</span>}
+                </td>
+                <td className="px-3 py-2 hidden md:table-cell whitespace-nowrap font-mono text-xs">
+                  {r.scheduledStart
+                    ? <span className="text-slate-400">{r.scheduledStart}<span className="text-slate-600 mx-1">–</span>{r.scheduledEnd || "—"}</span>
+                    : <span className="text-red-400/70">none</span>}
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">
                   <span className="text-emerald-400">{fmtTime(r.gracedIn ?? r.punchIn)}</span>
@@ -24146,13 +24152,14 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {needsOTApproval && (
                       <button onClick={()=>handleApproveOT(r)} className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors whitespace-nowrap">✓ OT</button>
                     )}
-                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={12}/></button>
+                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Edit / amend"><Edit size={12}/></button>
+                    <button onClick={()=>{ if(window.confirm(`Delete ${r.employeeName}'s punch on ${new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}? This cannot be undone.`)) onDelete(r.id); }} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-slate-700 transition-colors" title="Delete"><Trash2 size={12}/></button>
                   </div>
                 </td>
               </tr>
               {isExpanded && (
                 <tr className="border-t border-slate-800/60">
-                  <td colSpan={8} className={`px-4 py-4 ${attention ? "bg-amber-950/10" : "bg-slate-950/40"}`}>
+                  <td colSpan={9} className={`px-4 py-4 ${attention ? "bg-amber-950/10" : "bg-slate-950/40"}`}>
               <div className="space-y-3">
                 {/* Schedule vs Actual comparison */}
                 <div className="grid grid-cols-2 gap-3">
@@ -24288,37 +24295,56 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
       {/* ── Summary ── */}
       {tab === "summary" && (
-        <div className="space-y-3">
-          {Object.entries(summary).length === 0 && <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>}
-          {Object.entries(summary).map(([empId, s]) => (
-            <div key={empId} className="rounded-2xl border border-slate-700 bg-slate-900 p-5">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-bold text-white">{s.name}</div>
-                    {s.pendingApproval > 0 && <Badge label={`${s.pendingApproval} pending`} color="amber"/>}
-                    {s.pendingOT > 0 && <Badge label={`${s.pendingOT} OT pending`} color="red"/>}
-                  </div>
-                  <div className="text-xs text-slate-600 mt-0.5">{s.role} · {s.days} days worked</div>
-                </div>
-                <div className="flex gap-4 text-right flex-wrap">
-                  <div><div className="text-xs text-slate-500">Regular</div><div className="text-sm font-bold text-white">{fmtDur(s.regularHours)}</div></div>
-                  {s.overtimeHours > 0 && <div><div className="text-xs text-slate-500">Approved OT</div><div className="text-sm font-bold text-amber-400">{fmtDur(s.overtimeHours)}</div></div>}
-                  <div><div className="text-xs text-slate-500">Total</div><div className="text-sm font-bold text-white">{fmtDur(s.totalHours)}</div></div>
-                  <div><div className="text-xs text-slate-500">Rate</div><div className="text-sm font-bold text-slate-700">£{(s.hourlyRate||0).toFixed(2)}/hr</div></div>
-                  <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-sm font-bold text-emerald-400">£{(s.totalPay||0).toFixed(2)}</div></div>
-                </div>
-              </div>
-            </div>
-          ))}
-          {Object.entries(summary).length > 0 && (
-            <div className="rounded-2xl bg-indigo-950/30 border border-indigo-500/30 px-5 py-4 flex items-center justify-between">
-              <div className="text-sm font-bold text-white">Week Total</div>
-              <div className="flex gap-6 text-right">
-                <div><div className="text-xs text-slate-500">Hours</div><div className="text-sm font-bold text-white">{fmtDur(totalHours)}</div></div>
-                <div><div className="text-xs text-slate-500">Gross Pay</div><div className="text-lg font-black text-emerald-400">£{totalPay.toFixed(2)}</div></div>
-              </div>
-            </div>
+        <div className="rounded-2xl border border-slate-800 overflow-hidden">
+          {Object.entries(summary).length === 0 ? (
+            <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>
+          ) : (
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-900/80 text-slate-400 text-[11px] uppercase tracking-wide">
+                <th className="text-left font-semibold px-3 py-2.5">Employee</th>
+                <th className="text-center font-semibold px-3 py-2.5 hidden sm:table-cell">Days</th>
+                <th className="text-right font-semibold px-3 py-2.5">Regular</th>
+                <th className="text-right font-semibold px-3 py-2.5 hidden md:table-cell">Approved OT</th>
+                <th className="text-right font-semibold px-3 py-2.5">Total</th>
+                <th className="text-right font-semibold px-3 py-2.5 hidden md:table-cell">Rate</th>
+                <th className="text-right font-semibold px-3 py-2.5">Gross pay</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(summary).map(([empId, s], i) => (
+                <tr key={empId} className={`border-t border-slate-800/60 ${i % 2 ? "bg-slate-900/30" : ""}`}>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-white">{s.name}</span>
+                      {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold">{s.pendingApproval} pending</span>}
+                      {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold">{s.pendingOT} OT</span>}
+                    </div>
+                    <div className="text-[10px] text-slate-500">{s.role}</div>
+                  </td>
+                  <td className="px-3 py-2 text-center text-slate-400 hidden sm:table-cell tabular-nums">{s.days}</td>
+                  <td className="px-3 py-2 text-right text-white tabular-nums">{fmtDur(s.regularHours)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums hidden md:table-cell">{s.overtimeHours > 0 ? <span className="text-amber-400">{fmtDur(s.overtimeHours)}</span> : <span className="text-slate-600">—</span>}</td>
+                  <td className="px-3 py-2 text-right font-bold text-white tabular-nums">{fmtDur(s.totalHours)}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 tabular-nums hidden md:table-cell">£{(s.hourlyRate||0).toFixed(2)}</td>
+                  <td className="px-3 py-2 text-right font-bold text-emerald-400 tabular-nums">£{(s.totalPay||0).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-indigo-500/30 bg-indigo-950/30 font-bold">
+                <td className="px-3 py-2.5 text-white">Week total</td>
+                <td className="px-3 py-2.5 hidden sm:table-cell"></td>
+                <td className="px-3 py-2.5 hidden md:table-cell"></td>
+                <td className="px-3 py-2.5 text-right text-white tabular-nums hidden md:table-cell"></td>
+                <td className="px-3 py-2.5 text-right text-white tabular-nums">{fmtDur(totalHours)}</td>
+                <td className="px-3 py-2.5 hidden md:table-cell"></td>
+                <td className="px-3 py-2.5 text-right text-emerald-400 text-base tabular-nums">£{totalPay.toFixed(2)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          </div>
           )}
         </div>
       )}
