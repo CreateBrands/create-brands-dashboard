@@ -4726,6 +4726,12 @@ export async function bulkAddInventory(scope, rows, wipe = false) {
   for (const name of cats) {
     await supabase.from("cogs_categories").insert({ scope, name }).then(() => {}, () => {});
   }
+  // ensure any new suppliers exist in the supplier list (scope supplier_store / supplier_ck)
+  const supScope = scope === "ck" ? "supplier_ck" : "supplier_store";
+  const suppliers = [...new Set(rows.map(r => r.supplier).filter(Boolean))];
+  for (const name of suppliers) {
+    await supabase.from("cogs_categories").insert({ scope: supScope, name }).then(() => {}, () => {});
+  }
   return inserted;
 }
 export async function addCategory(scope, name) {

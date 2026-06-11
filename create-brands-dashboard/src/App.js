@@ -2986,12 +2986,13 @@ function InventoryImport({ scope, onClose, onDone }) {
             </div>
             <div className="rounded-lg border border-slate-800 overflow-hidden max-h-64 overflow-y-auto">
               <table className="w-full text-xs">
-                <thead className="bg-slate-800 text-slate-400 sticky top-0"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5">Category</th><th className="text-right px-2 py-1.5">Price</th><th className="text-right px-2 py-1.5">Pack qty</th><th className="text-left px-2 py-1.5">Unit</th></tr></thead>
+                <thead className="bg-slate-800 text-slate-400 sticky top-0"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5">Category</th><th className="text-left px-2 py-1.5">Supplier</th><th className="text-right px-2 py-1.5">Price</th><th className="text-right px-2 py-1.5">Pack qty</th><th className="text-left px-2 py-1.5">Unit</th></tr></thead>
                 <tbody>
                   {rows.slice(0, 100).map((r, i) => (
                     <tr key={i} className="border-t border-slate-800/60">
                       <td className="px-2 py-1 text-slate-200">{r.name}</td>
                       <td className="px-2 py-1 text-slate-400">{r.category}</td>
+                      <td className="px-2 py-1 text-slate-400">{r.supplier || "—"}</td>
                       <td className="px-2 py-1 text-right font-mono text-slate-300">{r.packPrice!=null?"£"+r.packPrice:"—"}</td>
                       <td className={`px-2 py-1 text-right font-mono ${r.packQty?"text-slate-300":"text-amber-400"}`}>{r.packQty??"—"}</td>
                       <td className="px-2 py-1 text-slate-400">{r.baseUnit||"—"}</td>
@@ -3879,6 +3880,7 @@ function CogsItemRow({ item, scope, cats, sups, saving, onSave, onDelete }) {
       <td className="px-2 py-1.5">
         <select value={f.supplier} onChange={e=>pick("supplier",e.target.value)} className={cell+" w-28"}>
           <option value=""></option>
+          {f.supplier && !sups.some(s => s.name === f.supplier) && <option value={f.supplier}>{f.supplier}</option>}
           {sups.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
         </select>
       </td>
