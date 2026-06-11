@@ -569,6 +569,10 @@ function LocationDropdown({ brands, value, onChange, allLabel = null, className 
 // Returns null if there are 0 stores (caller renders an empty state).
 // Hidden entirely for single-store managers (no choice to make).
 function StoreScopeDropdown({ stores, brands, value, onChange, className = "" }) {
+  // Never list production/distribution/franchise facilities as selectable
+  // "stores" inside a shop brand's scope — they're operational entities, not shops.
+  const opsSite = new Set(["central_kitchen", "distribution", "franchise_ops"]);
+  stores = (stores || []).filter(s => !opsSite.has(s.siteType));
   if (!stores || stores.length === 0) return null;
   if (stores.length === 1) return null; // one store = nothing to pick
   // For multi-brand contexts (owner/HQ seeing Chocoberry + Tove), prefix the
@@ -27114,14 +27118,14 @@ export default function App() {
   const NAV_GROUPS_RAW = [
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
-      { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"] },
-      { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"] },
-      { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"] },
-      { key: "google-reviews", label: "Google Reviews", icon: Star, roles: ["owner", "hq_staff", "manager"] },
+      { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
+      { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"], hideForCK: true },
+      { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"], hideForCK: true },
+      { key: "google-reviews", label: "Google Reviews", icon: Star, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
-      { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"] },
-      { key: "tactical",    label: "Performance",   icon: TrendingUp },
+      { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"], hideForCK: true },
+      { key: "tactical",    label: "Performance",   icon: TrendingUp, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
     { group: "TODAY", items: [
@@ -27135,7 +27139,7 @@ export default function App() {
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
-      { key: "review-scans", label: "Review Scans",      icon: QrCode, roles: ["owner", "hq_staff", "manager"] },
+      { key: "review-scans", label: "Review Scans",      icon: QrCode, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
