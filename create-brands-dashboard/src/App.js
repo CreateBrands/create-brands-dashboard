@@ -22934,6 +22934,15 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     } catch { resolve(null); }
   });
 
+  // Single source of truth for returning the kiosk to its idle PIN screen.
+  // Used by auto-clear, cancel buttons, and after punches — guarantees no
+  // stuck PIN / submitting state (root cause of "have to reopen the app").
+  const resetKiosk = useCallback(() => {
+    setLastAction(null); setPin(""); setMatched(null); setBreakMsg("");
+    setError(""); setOverlayView(null);
+    submittingRef.current = false; setSubmitting(false);
+  }, []);
+
   // Auto-clear last action message. Skipped while a menu/tasks overlay is open
   // (the employee is mid-interaction). Punch-in gets a longer window so they
   // can tap "View tasks".
@@ -22941,12 +22950,9 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     if (!lastAction) return;
     if (overlayView) return; // don't clear out from under an open overlay
     const delay = lastAction.type === "in" ? 10000 : 5000;
-    const t = setTimeout(() => {
-      setLastAction(null); setPin(""); setMatched(null); setBreakMsg("");
-      submittingRef.current = false; setSubmitting(false);
-    }, delay);
+    const t = setTimeout(() => { resetKiosk(); }, delay);
     return () => clearTimeout(t);
-  }, [lastAction, overlayView]);
+  }, [lastAction, overlayView, resetKiosk]);
 
   const handleDigit = (d) => {
     if (matched) return; // already confirmed — waiting for auto-clear
@@ -23045,7 +23051,13 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       }
       setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs, isUnscheduled });
       onPunchOut(openRecord.id, now, hoursWorked, grossPay)
-        .catch(err => console.error("PunchOut failed:", err));
+        .catch(err => {
+          console.error("PunchOut failed:", err);
+          // CRITICAL: never leave the kiosk stuck. Reset and tell the user.
+          submittingRef.current = false; setSubmitting(false);
+          setLastAction(null); setError("Couldn't save — check connection and try again."); setPin(""); setMatched(null);
+          setShake(true); setTimeout(() => setShake(false), 600);
+        });
     } else {
       // Look up the employee's published schedule for today AT THIS KIOSK'S STORE.
       // A cover shift might be at a different store than usual; we want to
@@ -23075,7 +23087,12 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         // shift at this store today, lock it in for overtime calc.
         scheduledStart: todaysSched?.startTime || null,
         scheduledEnd:   todaysSched?.endTime   || null,
-      }).catch(err => console.error("PunchIn failed:", err));
+      }).catch(err => {
+        console.error("PunchIn failed:", err);
+        submittingRef.current = false; setSubmitting(false);
+        setLastAction(null); setError("Couldn't save — check connection and try again."); setPin(""); setMatched(null);
+        setShake(true); setTimeout(() => setShake(false), 600);
+      });
     }
 
     // Upload photo in the background — doesn't block anything
@@ -23385,7 +23402,11 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 View today's tasks ({todaysTasks.length})
               </button>
             )}
-            <div className="text-slate-600 text-sm">Returning to kiosk in a moment…</div>
+            <button onClick={resetKiosk}
+              className="w-full py-3 rounded-2xl text-base font-bold" style={{ backgroundColor: "rgba(253,242,224,0.12)", color: "#FDF2E0" }}>
+              Done — next person
+            </button>
+            <div className="text-sm" style={{ color: "rgba(253,242,224,0.4)" }}>Returning to kiosk in a moment…</div>
           </div>
         </div>
       )}
@@ -23407,8 +23428,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
               <button onClick={() => { setOverlayView(null); doPunch(); }}
                 className="w-full py-4 rounded-2xl bg-red-600 text-white text-lg font-bold hover:bg-red-500">⏹ Punch out</button>
             </div>
-            <button onClick={() => { setOverlayView(null); setBreakMsg(""); setPin(""); setMatched(null); }}
-              className="text-slate-500 text-sm hover:text-slate-300">Cancel</button>
+            <button onClick={resetKiosk}
+              className="text-slate-500 text-sm hover:text-slate-300" style={{ color: "rgba(253,242,224,0.5)" }}>Cancel</button>
           </div>
         </div>
       )}
@@ -23444,7 +23465,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 <div className="text-[11px] text-slate-600 text-center pt-1">Marking tasks complete from the kiosk is coming soon. For now, complete them in the app.</div>
               </div>
             )}
-            <button onClick={() => { setOverlayView(null); setPin(""); setMatched(null); setBreakMsg(""); }}
+            <button onClick={resetKiosk}
               className="w-full py-4 rounded-2xl text-lg font-bold mt-2" style={{backgroundColor:"#3D2A1E",color:"#FDF2E0"}}>Done</button>
           </div>
         </div>
