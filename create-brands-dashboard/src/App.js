@@ -26098,7 +26098,7 @@ function ApplyField({ label, hint, children }) {
 
 // ── Sidebar Component ─────────────────────────────────────────────────────────
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed,
-                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false }) {
+                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null }) {
   // Only an actual owner gets the view-as picker. Impersonated views never show it
   // (avoid the "view as X → view as Y" rabbit hole).
   const canImpersonate = actualUser?.role === "owner" && onImpersonate;
@@ -26158,7 +26158,14 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
         <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
           <BarChart2 size={16} className="text-white"/>
         </div>
-        {!collapsed && <div><div className="text-sm font-black text-white">Create Brands</div><div className="text-xs text-slate-500">Hospitality Group</div></div>}
+        {!collapsed && (
+          <div>
+            <div className="text-sm font-black text-white">Create Brands</div>
+            {onSwitchEntity
+              ? <button onClick={onSwitchEntity} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">Switch entity <ChevronDown size={11}/></button>
+              : <div className="text-xs text-slate-500">Hospitality Group</div>}
+          </div>
+        )}
         <button onClick={() => setCollapsed(c => !c)} className="ml-auto text-slate-600 hover:text-slate-700 p-1 rounded-lg">
           {collapsed ? <ChevronRight size={14}/> : <ChevronLeft size={14}/>}
         </button>
@@ -26217,6 +26224,84 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
+// Entity landing screen — pick a Brand or an Operations entity (tiles).
+function EntityPicker({ brands, stores, user, onPick, onLogout }) {
+  // Classify each brand by the site types of its stores. A brand whose stores
+  // are production/distribution/franchise facilities is an "Operations" entity.
+  const opsTypes = new Set(["central_kitchen", "distribution", "franchise_ops"]);
+  const brandType = (b) => {
+    const ss = stores.filter(s => s.brandId === b.id && !s.archivedAt);
+    return ss.length > 0 && ss.every(s => opsTypes.has(s.siteType)) ? "operations" : "brand";
+  };
+  const brandGroup = brands.filter(b => brandType(b) === "brand");
+  const opsGroup   = brands.filter(b => brandType(b) === "operations");
+
+  const iconFor = (b) => {
+    const ss = stores.filter(s => s.brandId === b.id);
+    if (ss.some(s => s.siteType === "central_kitchen")) return ChefHat;
+    if (ss.some(s => s.siteType === "distribution")) return Truck;
+    if (ss.some(s => s.siteType === "franchise_ops")) return Globe;
+    return Coffee;
+  };
+
+  const Tile = ({ b }) => {
+    const Icon = iconFor(b);
+    const color = b.color || "#6366f1";
+    return (
+      <button onClick={() => onPick(b.id)}
+        className="group relative flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-600 transition-all p-6 aspect-[4/3] active:scale-[0.98]">
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110"
+          style={{ background: color + "22", color }}>
+          <Icon size={26}/>
+        </div>
+        <div className="text-base font-bold text-white text-center">{b.name}</div>
+      </button>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/60">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center"><BarChart2 size={18} className="text-white"/></div>
+          <div>
+            <div className="text-sm font-bold text-white">Create Brands</div>
+            <div className="text-[11px] text-slate-500">Hospitality Group</div>
+          </div>
+        </div>
+        <button onClick={onLogout} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1.5"><LogOut size={14}/> Sign out</button>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10">
+        <div className="w-full max-w-4xl space-y-10">
+          <div className="text-center">
+            <div className="text-2xl font-black text-white">Welcome{user?.name ? `, ${user.name.split(" ")[0]}` : ""}</div>
+            <div className="text-sm text-slate-500 mt-1">Choose where you'd like to work today</div>
+          </div>
+
+          {brandGroup.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Brands</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {brandGroup.map(b => <Tile key={b.id} b={b}/>)}
+              </div>
+            </div>
+          )}
+
+          {opsGroup.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Operations</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {opsGroup.map(b => <Tile key={b.id} b={b}/>)}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // actualUser = who really logged in (persisted to localStorage).
   // impersonatedUserId = if set, owner is viewing the app AS another user.
@@ -26266,6 +26351,16 @@ export default function App() {
   // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
+  // Entity landing: which brand/entity the user has stepped into. null = show
+  // the entity picker (tiles). Persisted so a refresh keeps you in the entity.
+  const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
+    try { return localStorage.getItem("cb_entity") || null; } catch { return null; }
+  });
+  const chooseEntity = useCallback((brandId) => {
+    setSelectedEntityBrand(brandId);
+    try { brandId ? localStorage.setItem("cb_entity", brandId) : localStorage.removeItem("cb_entity"); } catch {}
+    setActiveView("dashboard");
+  }, []);
   const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
 
   // Slice 6 — employee profile view. When a manager clicks an employee in
@@ -26492,11 +26587,15 @@ export default function App() {
   const visibleStores = useMemo(() => {
     if (!currentUser) return [];
     const active = stores.filter(s => !s.archivedAt);
-    if (isHQ) return active;
-    const ids = currentUser.storeIds || [];
-    if (ids.length === 0) return [];
-    return active.filter(s => ids.includes(s.id));
-  }, [currentUser, stores, isHQ]);
+    let scoped = isHQ ? active : (() => {
+      const ids = currentUser.storeIds || [];
+      if (ids.length === 0) return [];
+      return active.filter(s => ids.includes(s.id));
+    })();
+    // Entity landing: once an entity is chosen, scope everything to its brand.
+    if (selectedEntityBrand) scoped = scoped.filter(s => s.brandId === selectedEntityBrand);
+    return scoped;
+  }, [currentUser, stores, isHQ, selectedEntityBrand]);
 
   const visibleStoreIds = useMemo(() => visibleStores.map(s => s.id), [visibleStores]);
 
@@ -27055,12 +27154,34 @@ export default function App() {
 
   const currentUser_ctx = currentUser;
 
+  // ── Entity landing screen ────────────────────────────────────────────────
+  // Brands the user can step into (those they have at least one visible store in,
+  // ignoring the current entity scope). Owner/HQ see all brands.
+  const entityBrands = useMemo(() => {
+    const active = stores.filter(s => !s.archivedAt);
+    const mine = isHQ ? active : active.filter(s => (currentUser.storeIds || []).includes(s.id));
+    const ids = new Set(mine.map(s => s.brandId));
+    return brands.filter(b => ids.has(b.id));
+  }, [brands, stores, isHQ, currentUser]);
+
+  // Show the picker when no entity chosen yet and there's a real choice to make.
+  if (!selectedEntityBrand && entityBrands.length > 1) {
+    return (
+      <AuthContext.Provider value={{ user: currentUser_ctx }}>
+        <EntityPicker brands={entityBrands} stores={stores} user={currentUser} onPick={chooseEntity} onLogout={handleLogout}/>
+      </AuthContext.Provider>
+    );
+  }
+  // Auto-enter if exactly one entity (no point showing a 1-tile picker).
+  const effectiveEntity = selectedEntityBrand || (entityBrands.length === 1 ? entityBrands[0].id : (entityBrands[0]?.id ?? null));
+
   return (
     <AuthContext.Provider value={{ user: currentUser_ctx }}>
       <div className="flex h-screen bg-slate-950 overflow-hidden">
         {/* Sidebar */}
         <Sidebar
           navGroups={NAV_GROUPS} activeView={effectiveActiveView} setActiveView={setActiveView}
+          onSwitchEntity={entityBrands.length > 1 ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
           actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}
