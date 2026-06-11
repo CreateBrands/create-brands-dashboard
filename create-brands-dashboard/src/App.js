@@ -92,6 +92,7 @@ import {
   fetchReviewScanStats,
   fetchInventory,
   addInventoryItem,
+  bulkAddInventory,
   updateInventoryItem,
   deleteInventoryItem,
   addCategory,
@@ -2840,6 +2841,176 @@ function CogsView({ stores = [] }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Parse a pack size like "(4*2.5kg)" or "1*36pcs" -> {qty in base unit, unit}
+function parsePackFromText(text) {
+  if (!text) return { qty: null, unit: null, desc: null };
+  const m = String(text).match(/\(([^)]*)\)\s*$/);
+  const inside = m ? m[1].trim() : null;
+  if (!inside) return { qty: null, unit: null, desc: null };
+  const U = { kg:["g",1000], g:["g",1], l:["ml",1000], ml:["ml",1], litre:["ml",1000], ltr:["ml",1000] };
+  let cm = inside.match(/^(\d+(?:\.\d+)?)\s*[*x]\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)$/);
+  if (cm) {
+    const count=+cm[1], size=+cm[2], unit=cm[3].toLowerCase();
+    if (U[unit]) return { qty: count*size*U[unit][1], unit: U[unit][0], desc: inside };
+    if (["pcs","pc","pieces","piece"].includes(unit)) return { qty: count*size, unit:"ea", desc: inside };
+    return { qty: null, unit: null, desc: inside };
+  }
+  let sm = inside.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)$/);
+  if (sm) { const v=+sm[1], unit=sm[2].toLowerCase(); if (U[unit]) return { qty: v*U[unit][1], unit: U[unit][0], desc: inside }; }
+  let nm = inside.match(/^(\d+(?:\.\d+)?)\s*[*x]\s*(\d+(?:\.\d+)?)$/);
+  if (nm) return { qty: +nm[1]*+nm[2], unit:"ea", desc: inside };
+  return { qty: null, unit: null, desc: inside };
+}
+function parsePriceCell(v) {
+  if (v == null) return null;
+  const m = String(v).replace(/[, ]/g,"").match(/(\d+\.?\d*)/);
+  return m ? +m[1] : null;
+}
+
+function InventoryImport({ scope, onClose, onDone }) {
+  const XLSX = useXLSX();
+  const [rows, setRows] = useState(null);     // parsed preview rows
+  const [fileName, setFileName] = useState("");
+  const [mode, setMode] = useState("replace"); // 'replace' | 'append'
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [done, setDone] = useState(null);
+
+  const handleFile = async (file) => {
+    if (!file || !XLSX) return;
+    setErr(null); setFileName(file.name);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+      if (!aoa.length) { setErr("That sheet looks empty."); return; }
+      // find header row + column indices (flexible naming)
+      const header = aoa[0].map(h => String(h||"").trim().toLowerCase());
+      const findCol = (...names) => header.findIndex(h => names.some(n => h.includes(n)));
+      const ci = {
+        name: findCol("item name","name","product","ingredient","item"),
+        price: findCol("rate","price","cost","£"),
+        cat: findCol("category","cat","group"),
+        sup: findCol("supplier","vendor"),
+        qty: findCol("pack qty","quantity","qty"),
+        unit: findCol("unit","uom"),
+        pack: findCol("pack desc","pack size","pack"),
+      };
+      if (ci.name < 0) { setErr("Couldn't find an item-name column. Make sure there's a header like 'Item Name' or 'Name'."); return; }
+      const out = [];
+      for (let r = 1; r < aoa.length; r++) {
+        const row = aoa[r]; if (!row) continue;
+        const name = String(row[ci.name] ?? "").trim();
+        if (!name) continue;
+        const price = ci.price >= 0 ? parsePriceCell(row[ci.price]) : null;
+        const cat = ci.cat >= 0 ? String(row[ci.cat] ?? "").trim() : "";
+        const sup = ci.sup >= 0 ? String(row[ci.sup] ?? "").trim() : "";
+        // pack: explicit columns win, else parse from the name
+        let packQty = ci.qty >= 0 ? parsePriceCell(row[ci.qty]) : null;
+        let baseUnit = ci.unit >= 0 ? String(row[ci.unit] ?? "").trim() : "";
+        let packDesc = ci.pack >= 0 ? String(row[ci.pack] ?? "").trim() : "";
+        if (packQty == null || !baseUnit) {
+          const p = parsePackFromText(name);
+          if (packQty == null) packQty = p.qty;
+          if (!baseUnit && p.unit) baseUnit = p.unit;
+          if (!packDesc && p.desc) packDesc = p.desc;
+        }
+        out.push({ name, category: cat || "Uncategorised", supplier: sup, packPrice: price, packQty, baseUnit, packDesc });
+      }
+      if (!out.length) { setErr("No data rows found under the header."); return; }
+      setRows(out);
+    } catch (e) { setErr("Couldn't read that file: " + (e.message || e)); }
+  };
+
+  const doImport = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const n = await bulkAddInventory(scope, rows, mode === "replace");
+      setDone(n);
+      setTimeout(() => onDone(n), 900);
+    } catch (e) { setErr(e.message || String(e)); setBusy(false); }
+  };
+
+  const parsedPacks = rows ? rows.filter(r => r.packQty).length : 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-y-auto p-5 space-y-4" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-white">Import {scope === "ck" ? "CK" : "Store"} inventory from Excel</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20}/></button>
+        </div>
+
+        {!rows && (
+          <>
+            <p className="text-sm text-slate-400">Upload an .xlsx or .csv file. I'll look for columns named <span className="text-slate-200">Item Name</span>, <span className="text-slate-200">Rate/Price</span>, and <span className="text-slate-200">Category</span> (pack size is read from the name if there's no pack column).</p>
+            {!XLSX && <div className="text-xs text-amber-400">Loading spreadsheet reader…</div>}
+            <label className="block border-2 border-dashed border-slate-600 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-500">
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={!XLSX}
+                onChange={e => handleFile(e.target.files?.[0])}/>
+              <FileText size={28} className="mx-auto text-slate-500 mb-2"/>
+              <div className="text-sm text-slate-300 font-semibold">Click to choose a file</div>
+              <div className="text-xs text-slate-500 mt-1">.xlsx, .xls or .csv</div>
+            </label>
+          </>
+        )}
+
+        {err && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{err}</div>}
+
+        {rows && !done && (
+          <>
+            <div className="flex items-center justify-between text-sm">
+              <div className="text-slate-300"><span className="font-semibold text-white">{rows.length}</span> items found in <span className="text-slate-400">{fileName}</span></div>
+              <div className="text-slate-400">{parsedPacks} with pack size · {rows.length - parsedPacks} blank</div>
+            </div>
+            <div className="rounded-lg border border-slate-800 overflow-hidden max-h-64 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-800 text-slate-400 sticky top-0"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5">Category</th><th className="text-right px-2 py-1.5">Price</th><th className="text-right px-2 py-1.5">Pack qty</th><th className="text-left px-2 py-1.5">Unit</th></tr></thead>
+                <tbody>
+                  {rows.slice(0, 100).map((r, i) => (
+                    <tr key={i} className="border-t border-slate-800/60">
+                      <td className="px-2 py-1 text-slate-200">{r.name}</td>
+                      <td className="px-2 py-1 text-slate-400">{r.category}</td>
+                      <td className="px-2 py-1 text-right font-mono text-slate-300">{r.packPrice!=null?"£"+r.packPrice:"—"}</td>
+                      <td className={`px-2 py-1 text-right font-mono ${r.packQty?"text-slate-300":"text-amber-400"}`}>{r.packQty??"—"}</td>
+                      <td className="px-2 py-1 text-slate-400">{r.baseUnit||"—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {rows.length > 100 && <div className="px-2 py-1.5 text-center text-xs text-slate-500">…and {rows.length - 100} more</div>}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-slate-300 font-semibold">On import:</span>
+              <label className="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer">
+                <input type="radio" checked={mode==="replace"} onChange={()=>setMode("replace")}/> Replace all existing
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer">
+                <input type="radio" checked={mode==="append"} onChange={()=>setMode("append")}/> Add to existing
+              </label>
+            </div>
+            {mode==="replace" && <div className="text-xs text-amber-400">⚠️ This deletes all current {scope === "ck" ? "CK" : "Store"} inventory items first, then loads the file.</div>}
+
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => { setRows(null); setFileName(""); }} className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold">Choose another file</button>
+              <button onClick={doImport} disabled={busy} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-semibold">{busy ? "Importing…" : `Import ${rows.length} items`}</button>
+            </div>
+          </>
+        )}
+
+        {done != null && (
+          <div className="text-center py-6">
+            <div className="text-4xl mb-2">✅</div>
+            <div className="text-white font-semibold">Imported {done} items</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function InventoryBuilder() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2869,6 +3040,7 @@ function InventoryBuilder() {
 
   const [adding, setAdding] = useState(false);     // dialog open
   const [addName, setAddName] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const confirmAdd = async (force) => {
     const n = addName.trim();
@@ -2972,9 +3144,15 @@ function InventoryBuilder() {
           className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
         <button onClick={() => setShowCats(v => !v)}
           className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Lists</button>
+        <button onClick={() => setImporting(true)}
+          className="px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1"><FileText size={14}/> Import Excel</button>
         <button onClick={() => { setAdding(true); setAddName(""); }}
           className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={14}/> Add item</button>
       </div>
+
+      {importing && (
+        <InventoryImport scope={scope} onClose={() => setImporting(false)} onDone={async (n) => { setImporting(false); await load(); setErr(null); }}/>
+      )}
 
       {/* categories + suppliers manager */}
       {showCats && (
@@ -3328,51 +3506,60 @@ function ModifierRow({ m, inv, cost, onSave, onDelete }) {
 }
 
 function PrepEditor({ prep, rec, inv, prepCost, reload, onDelete }) {
-  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
   const comps = rec.prepComponents.filter(c => c.prepId === prep.id);
   const [y, setY] = useState({ qty: prep.yieldQty??"", unit: prep.yieldUnit||"" });
+  const [editErr, setEditErr] = useState(null);
   const cost = prepCost(prep);
-  const addComp = async () => { await addPrepComponent(prep.id, { portionQty:null, unit:"" }); await reload(); };
+  const addComp = async () => { try { await addPrepComponent(prep.id, { portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
   return (
-    <div className="rounded-xl border border-slate-800 p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <input defaultValue={prep.name} onBlur={async e=>{ if(e.target.value!==prep.name){await updatePrep(prep.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-base font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none"/>
-        <button onClick={onDelete} className="text-slate-600 hover:text-red-400 text-xs flex items-center gap-1"><Trash2 size={13}/> Delete</button>
+    <div className="rounded-xl border-2 border-indigo-500/40 bg-slate-900/60 p-5 space-y-5 shadow-lg shadow-indigo-900/20">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-indigo-400 bg-indigo-500/15 px-2 py-1 rounded">Editing prep</span>
+          <input defaultValue={prep.name} onBlur={async e=>{ if(e.target.value!==prep.name){await updatePrep(prep.id,{name:e.target.value}); await reload();} }} className="bg-transparent text-xl font-bold text-white border-b border-transparent focus:border-slate-600 focus:outline-none min-w-0 flex-1"/>
+        </div>
+        <button onClick={onDelete} className="text-slate-500 hover:text-red-400 text-sm flex items-center gap-1 shrink-0"><Trash2 size={15}/> Delete</button>
       </div>
-      <div className="flex items-center gap-2 text-xs text-slate-400">
-        Yield:
-        <input value={y.qty} onChange={e=>setY(s=>({...s,qty:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldQty:y.qty}); await reload();}} className={cell+" w-20 text-right"}/>
-        <input value={y.unit} onChange={e=>setY(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldUnit:y.unit}); await reload();}} className={cell+" w-14"} placeholder="g"/>
-        <span className="ml-auto text-slate-300">Cost/unit: <span className="font-mono font-bold text-white">{cost!=null?"£"+cost.toFixed(4):"—"}</span></span>
+
+      <div className="flex items-center gap-3 text-sm flex-wrap bg-slate-800/40 rounded-lg px-3 py-2.5">
+        <span className="text-slate-400 font-semibold">This recipe makes (yield):</span>
+        <input value={y.qty} onChange={e=>setY(s=>({...s,qty:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldQty:y.qty}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-24 text-right" placeholder="0"/>
+        <input value={y.unit} onChange={e=>setY(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldUnit:y.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-20" placeholder="g / ml / ea"/>
+        <span className="ml-auto text-slate-300 text-base">Cost per unit: <span className="font-mono font-bold text-white text-lg">{cost!=null?"£"+cost.toFixed(4):"—"}</span></span>
       </div>
-      <div className="rounded-lg border border-slate-800 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-2 py-1.5">Ingredient</th><th className="text-right px-2 py-1.5">Portion</th><th className="text-left px-2 py-1.5">Unit</th><th className="text-right px-2 py-1.5">Cost</th><th></th></tr></thead>
-          <tbody>
-            {comps.length===0 && <tr><td colSpan={5} className="px-2 py-4 text-center text-slate-500 text-xs">No ingredients. Add one.</td></tr>}
-            {comps.map(c => <PrepCompRow key={c.id} c={c} inv={inv} reload={reload}/>)}
-          </tbody>
-        </table>
+
+      <div>
+        <div className="text-sm font-semibold text-slate-300 mb-2">Ingredients</div>
+        <div className="rounded-lg border border-slate-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2">Ingredient (from inventory)</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
+            <tbody>
+              {comps.length===0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-500 text-sm">No ingredients yet. Click "Add ingredient" below.</td></tr>}
+              {comps.map(c => <PrepCompRow key={c.id} c={c} inv={inv} reload={reload}/>)}
+            </tbody>
+          </table>
+        </div>
+        <button onClick={addComp} className="mt-3 px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>
+        {editErr && <div className="mt-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">Couldn't add: {editErr}</div>}
       </div>
-      <button onClick={addComp} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add ingredient</button>
     </div>
   );
 }
 
 function PrepCompRow({ c, inv, reload }) {
-  const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
   const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
   const it = c.itemScope ? m.get(c.itemScope+":"+c.itemId) : null;
   const unit = it && it.costPerBaseUnit!=null ? Number(it.costPerBaseUnit) : null;
   const cost = (unit!=null && c.portionQty!=null) ? unit*Number(c.portionQty) : null;
   const [f, setF] = useState({ portionQty:c.portionQty??"", unit:c.unit||"" });
+  const incomplete = !c.itemId;
   return (
-    <tr className="border-t border-slate-800/60">
-      <td className="px-2 py-1.5"><ItemPicker inv={inv} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null}); await reload();}}/></td>
-      <td className="px-2 py-1.5 text-right"><input value={f.portionQty} onChange={e=>setF(s=>({...s,portionQty:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{portionQty:f.portionQty}); await reload();}} className={cell+" w-16 text-right"}/></td>
-      <td className="px-2 py-1.5"><input value={f.unit} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className={cell+" w-12"} placeholder="g"/></td>
-      <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
-      <td className="px-2 py-1.5 text-right"><button onClick={async()=>{await deletePrepComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={13}/></button></td>
+    <tr className={`border-t border-slate-800/60 ${incomplete?"bg-amber-500/5":""}`}>
+      <td className="px-3 py-2"><ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null}); await reload();}}/></td>
+      <td className="px-3 py-2 text-right"><input value={f.portionQty} onChange={e=>setF(s=>({...s,portionQty:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{portionQty:f.portionQty}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right" placeholder="0"/></td>
+      <td className="px-3 py-2"><input value={f.unit} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/></td>
+      <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
+      <td className="px-3 py-2 text-right"><button onClick={async()=>{await deletePrepComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
     </tr>
   );
 }

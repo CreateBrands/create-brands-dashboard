@@ -4699,6 +4699,35 @@ export async function deleteInventoryItem(scope, id) {
   const { error } = await supabase.from(table).delete().eq("id", id);
   if (error) throw error;
 }
+
+// Bulk import from Excel. rows = array of {name,category,supplier,packDesc,packQty,baseUnit,packPrice,notes}.
+// If wipe=true, clears the target table first (replace-all import).
+export async function bulkAddInventory(scope, rows, wipe = false) {
+  const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
+  if (wipe) {
+    const { error: delErr } = await supabase.from(table).delete().neq("id", 0);
+    if (delErr) throw delErr;
+  }
+  const bodies = rows.map(r => {
+    const b = _invBody(r);
+    if (!b.name) b.name = "Unnamed item";
+    return b;
+  });
+  // insert in chunks of 500 to stay within limits
+  let inserted = 0;
+  for (let i = 0; i < bodies.length; i += 500) {
+    const chunk = bodies.slice(i, i + 500);
+    const { error } = await supabase.from(table).insert(chunk);
+    if (error) throw error;
+    inserted += chunk.length;
+  }
+  // ensure any new categories exist in the category list
+  const cats = [...new Set(rows.map(r => r.category).filter(Boolean))];
+  for (const name of cats) {
+    await supabase.from("cogs_categories").insert({ scope, name }).then(() => {}, () => {});
+  }
+  return inserted;
+}
 export async function addCategory(scope, name) {
   const { error } = await supabase.from("cogs_categories").insert({ scope, name });
   if (error && error.code !== "23505") throw error; // ignore duplicates
