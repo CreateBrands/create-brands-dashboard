@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, createContext, useContext, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect, createContext, useContext, useRef, Fragment } from "react";
 import {
   supabase,
   fetchBrands, insertBrand, upsertBrand, removeBrand,
@@ -24058,99 +24058,102 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           (r.status === "closed" && !recNeedsApproval(r))
         );
         return (
-        <div className="space-y-3">
+        <div className="rounded-2xl border border-slate-800 overflow-hidden">
           {displayed.length === 0 && (
             <EmptyState icon={Clock} title={approvalFilter === "needs" ? "Nothing needs approval" : approvalFilter === "approved" ? "No approved records here" : (viewMode === "day" ? "No clock-in records this day" : "No clock-in records this week")}
               message="Once your team starts clocking in at the kiosk, records will appear here. You can also add hours manually using the button above."/>
           )}
-          {displayed.map(r => {
+          {displayed.length > 0 && (
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-900/80 text-slate-400 text-[11px] uppercase tracking-wide">
+                <th className="text-left font-semibold px-3 py-2.5 w-8"></th>
+                <th className="text-left font-semibold px-3 py-2.5">Date</th>
+                <th className="text-left font-semibold px-3 py-2.5">Employee</th>
+                <th className="text-left font-semibold px-3 py-2.5 hidden md:table-cell">Location</th>
+                <th className="text-left font-semibold px-3 py-2.5">In&nbsp;–&nbsp;Out</th>
+                <th className="text-right font-semibold px-3 py-2.5">Hours</th>
+                <th className="text-left font-semibold px-3 py-2.5">Status</th>
+                <th className="text-right font-semibold px-3 py-2.5">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+          {displayed.map((r, idx) => {
             const brand  = brands.find(b => b.id === r.brandId);
             const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
             const member = opsTeam.find(m => m.id === r.employeeId);
             const hasOT  = r.overtimeHrs > 0;
-            // Approval required for overtime OR unscheduled shifts; clean punches auto-fine.
             const needsApproval = r.status === "closed" && !r.approved && (hasOT || r.isUnscheduled);
             const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
             const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
-            // Settled when nothing's left to action: no OT (or OT resolved) AND
-            // not an unapproved unscheduled shift.
             const otResolved = !hasOT || r.overtimeApproved || isRejected;
             const unschedResolved = !r.isUnscheduled || r.approved;
             const isSettled = otResolved && unschedResolved && r.status !== "open";
             const isExpanded = expanded.has(r.id);
+            const attention = needsApproval || needsOTApproval || r.status === "open";
 
-            // ── Collapsed view for settled records ──
-            if (isSettled && !isExpanded) {
-              return (
-                <div key={r.id}
-                  onClick={()=>toggleExpanded(r.id)}
-                  className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900/40 border border-slate-800/60 hover:bg-slate-900 cursor-pointer transition-colors">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-600/20 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">
-                    {(member?.firstName?.[0]||"?")}{member?.lastName?.[0]||""}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-bold text-white truncate">{r.employeeName}</div>
-                    <div className="text-xs text-slate-500">
-                      {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
-                      {brand && <> · <span style={{color:brand.color}}>{brand.name}</span></>}
-                      {store && <span className="text-slate-600"> · {store.shortName || store.name}</span>}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
-                    {r.grossPay && <div className="text-xs text-emerald-400 tabular-nums">£{r.grossPay.toFixed(2)}</div>}
-                  </div>
-                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">OT ✓</span>}
-                  {isRejected && <span className="text-xs text-red-400 font-semibold flex-shrink-0">OT ✗</span>}
-                  {!hasOT && r.approved && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">✓</span>}
-                  <ChevronDown size={14} className="text-slate-600 flex-shrink-0"/>
-                </div>
-              );
-            }
+            // Status pill
+            let statusPill = null;
+            if (r.status === "open") statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Clocked in</span>;
+            else if (needsApproval || needsOTApproval) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Needs approval</span>;
+            else if (isRejected) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">OT rejected</span>;
+            else if (r.approved || isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">✓ Approved</span>;
+
             return (
-              <div key={r.id} className={`rounded-2xl border p-4 space-y-3 ${
-                needsApproval || needsOTApproval ? "bg-amber-950/20 border-amber-500/30" :
-                r.status === "open" ? "bg-slate-900/40 border-slate-800/60" :
-                "bg-slate-900 border-slate-700"
-              }`}>
-                {/* Top row */}
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0"
+              <Fragment key={r.id}>
+              <tr onClick={()=>toggleExpanded(r.id)}
+                className={`cursor-pointer border-t border-slate-800/60 transition-colors ${
+                  attention ? "bg-amber-950/10 hover:bg-amber-950/20" : idx % 2 ? "bg-slate-900/30 hover:bg-slate-800/50" : "hover:bg-slate-800/50"
+                }`}>
+                <td className="px-3 py-2 text-slate-600">{isExpanded ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-slate-300">
+                  {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0"
                       style={{background:(member?.color||"#6366f1")+"30",color:member?.color||"#6366f1"}}>
-                      {r.employeeName.split(" ").map(w=>w[0]).join("").slice(0,2)}
+                      {(member?.firstName?.[0]||r.employeeName?.[0]||"?")}{member?.lastName?.[0]||""}
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <div className="text-sm font-bold text-white">{r.employeeName}</div>
-                        {r.approved && <Badge label="✓ Approved" color="emerald"/>}
-                        {needsApproval && <Badge label="Needs approval" color="amber"/>}
-                        {r.status === "open" && <Badge label="Still clocked in" color="amber"/>}
-                        {r.isUnscheduled && <Badge label="Unscheduled" color="red"/>}
-                      </div>
-                      <div className="text-xs text-slate-600 mt-0.5">
-                        {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
-                        {brand && <span className="ml-2"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle" style={{background:brand.color}}/>{brand.name}</span>}
-                        {store && <span className="ml-2 text-slate-700">· {store.shortName || store.name}</span>}
-                      </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-white truncate leading-tight">{r.employeeName}</div>
+                      {member?.role && <div className="text-[10px] text-slate-500 leading-tight">{member.role}</div>}
                     </div>
                   </div>
-
-                  {/* Action buttons */}
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                </td>
+                <td className="px-3 py-2 hidden md:table-cell text-slate-400 whitespace-nowrap">
+                  {store ? (store.shortName || store.name) : brand ? brand.name : "—"}
+                  {r.isUnscheduled && <span className="ml-1 text-[10px] text-red-400">· unsched</span>}
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">
+                  <span className="text-emerald-400">{fmtTime(r.gracedIn ?? r.punchIn)}</span>
+                  <span className="text-slate-600 mx-1">–</span>
+                  <span className={r.punchOut ? "text-red-400" : "text-amber-400"}>{r.punchOut ? fmtTime(r.gracedOut ?? r.punchOut) : "in"}</span>
+                </td>
+                <td className="px-3 py-2 text-right font-bold text-white tabular-nums whitespace-nowrap">
+                  {r.status === "open" ? `${fmtDur(liveHours(r))}` : fmtDur(r.gracedHours ?? r.hoursWorked)}
+                </td>
+                <td className="px-3 py-2">{statusPill}</td>
+                <td className="px-3 py-2" onClick={e=>e.stopPropagation()}>
+                  <div className="flex items-center gap-1.5 justify-end">
                     {r.status === "open" && (
-                      <button onClick={()=>setAmendModal(r)} className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors">⏹ Clock Out</button>
+                      <button onClick={()=>setAmendModal(r)} className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold transition-colors whitespace-nowrap">⏹ Out</button>
                     )}
                     {needsApproval && (
-                      <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Approve</button>
+                      <button onClick={()=>handleApprove(r)} className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors whitespace-nowrap">✓ Approve</button>
                     )}
-                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={13}/></button>
-                    {isSettled && (
-                      <button onClick={()=>toggleExpanded(r.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Collapse"><ChevronUp size={13}/></button>
+                    {needsOTApproval && (
+                      <button onClick={()=>handleApproveOT(r)} className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors whitespace-nowrap">✓ OT</button>
                     )}
+                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Amend"><Edit size={12}/></button>
                   </div>
-                </div>
-
+                </td>
+              </tr>
+              {isExpanded && (
+                <tr className="border-t border-slate-800/60">
+                  <td colSpan={8} className={`px-4 py-4 ${attention ? "bg-amber-950/10" : "bg-slate-950/40"}`}>
+              <div className="space-y-3">
                 {/* Schedule vs Actual comparison */}
                 <div className="grid grid-cols-2 gap-3">
                   {/* Scheduled */}
@@ -24269,8 +24272,16 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   </div>
                 )}
               </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             );
           })}
+            </tbody>
+          </table>
+          </div>
+          )}
         </div>
         );
       })()}
