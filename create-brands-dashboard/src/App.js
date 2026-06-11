@@ -26319,13 +26319,8 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
             <div className="text-sm text-slate-500 mt-1">Choose where you'd like to work today</div>
           </div>
 
-          {brandGroup.length > 0 && (
-            <Slider title="Brands">
-              {brandGroup.map(b => <LiveTile key={b.id} b={b}/>)}
-            </Slider>
-          )}
-
-          <Slider title="Operations">
+          <Slider title="Choose an entity">
+            {brandGroup.map(b => <LiveTile key={b.id} b={b}/>)}
             {opsGroup.map(b => <LiveTile key={b.id} b={b}/>)}
             {comingSoon.map(t => <SoonTile key={t.id} t={t}/>)}
           </Slider>
