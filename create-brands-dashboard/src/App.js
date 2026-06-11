@@ -232,14 +232,17 @@ function fmtDate(d) { return d.toISOString().split("T")[0]; }
 function isOwnerRole(role) { return role === "owner"; }
 function isHqOrAbove(role) { return role === "owner" || role === "hq_staff"; }
 
-// MANAGERS_IN_TEAM_V1: managers live in `users`; map them into ops-member shape
-// so they appear in the team directory and can be scheduled — WITHOUT creating
-// duplicate ops_team rows (single source of truth, no drift). A manager spanning
-// brands (storeIds across brands) naturally appears under each store's rota since
-// the schedule keys on storeIds. Read-only in the directory (edited in Managers & Access).
-function managersAsRoster(users) {
+// MANAGERS_IN_TEAM_V1 (updated): managers now have REAL ops_team rows (see the
+// managers Stage-1 migration). This mirror is kept only as a transitional
+// fallback for any manager who hasn't been migrated yet — it returns a roster
+// entry ONLY when there is no matching ops_team row, so migrated managers are
+// never duplicated. Once every manager is migrated, this returns nothing.
+function managersAsRoster(users, opsTeam = []) {
+  const opsIds = new Set((opsTeam || []).map(m => m.id));
+  const opsEmails = new Set((opsTeam || []).map(m => (m.email || "").trim().toLowerCase()).filter(Boolean));
   return (users || [])
     .filter(u => u.role === "manager")
+    .filter(u => !opsIds.has(u.opsTeamMemberId || u.id) && !opsEmails.has((u.email || "").trim().toLowerCase()))
     .map(u => {
       const parts = (u.name || "").trim().split(/\s+/);
       return {
@@ -18686,7 +18689,7 @@ function OpsTeamView({
   };
 
   // Active employees (not archived), with optional pending filter.
-  const base = useMemo(() => [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users)], [opsTeam, users]);
+  const base = useMemo(() => [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
 
   const pendingCount = useMemo(() => base.filter(m => {
     if (m.status !== "pending_setup") return false;
@@ -21895,7 +21898,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // via ops_team.store_ids text[]). Falls back to brandId match for any legacy
   // ops_team row that doesn't yet have storeIds populated.
   // MANAGERS_IN_TEAM_V1: roster = ops staff + managers (schedulable, multi-brand via storeIds)
-  const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users)], [opsTeam, users]);
+  const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
   const brandMembers = roster.filter(m => {
     const ids = m.storeIds || [];
     if (ids.length > 0) return ids.includes(storeId);
