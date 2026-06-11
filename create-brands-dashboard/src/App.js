@@ -23182,7 +23182,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 select-none relative">
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 select-none relative" style={{ background: "radial-gradient(ellipse at 50% 25%, #3a241a 0%, #2B1A12 55%, #1f120c 100%)" }}>
       {/* Q10: corner store badge — small, unobtrusive. Long-press 1.5s to
           trigger the logout flow (so casual taps don't accidentally
           unregister the tablet). */}
@@ -23190,7 +23190,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         <button
           onMouseDown={startLogoutHold} onMouseUp={cancelLogoutHold} onMouseLeave={cancelLogoutHold}
           onTouchStart={startLogoutHold} onTouchEnd={cancelLogoutHold} onTouchCancel={cancelLogoutHold}
-          className="absolute top-3 right-3 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-700/60 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          className="absolute top-3 right-3 px-3 py-1.5 rounded-full text-xs transition-colors"
+          style={{ backgroundColor: "rgba(0,0,0,0.25)", border: "1px solid rgba(253,242,224,0.15)", color: "rgba(253,242,224,0.6)" }}
           title="Long-press to switch store"
         >
           📍 {currentStore.shortName || currentStore.name}
@@ -23229,13 +23230,13 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       {/* Header */}
       <div className={isLandscape ? "mb-4 text-center" : "mb-6 text-center"}>
         <div className="flex items-center justify-center gap-3 mb-2">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
-            <span className="text-white font-black text-lg">CB</span>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: "#844429" }}>
+            <span className="font-black text-lg" style={{ color: "#FDF2E0" }}>CB</span>
           </div>
-          <span className="text-white font-bold text-xl">Create Brands</span>
+          <span className="font-bold text-xl" style={{ color: "#FDF2E0" }}>Chocoberry</span>
         </div>
-        <div className="text-3xl font-black text-white tabular-nums">{fmtTime(clock)}</div>
-        <div className="text-slate-600 text-sm mt-0.5">{fmtDate(clock)}</div>
+        <div className="text-3xl font-black tabular-nums" style={{ color: "#FDF2E0" }}>{fmtTime(clock)}</div>
+        <div className="text-sm mt-0.5" style={{ color: "rgba(253,242,224,0.5)" }}>{fmtDate(clock)}</div>
       </div>
 
       {/* Camera preview */}
@@ -23249,9 +23250,9 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           style={{ transform: "scaleX(-1)" }}
         />
         {/* Status dot */}
-        <div className={`absolute bottom-1 right-1 w-3 h-3 rounded-full border-2 border-slate-950 ${
-          cameraReady ? "bg-emerald-9500" : cameraError ? "bg-red-9500" : "bg-amber-9500"
-        }`}/>
+        <div className={`absolute bottom-1 right-1 w-3 h-3 rounded-full border-2 ${
+          cameraReady ? "bg-emerald-500" : cameraError ? "bg-red-500" : "bg-amber-500"
+        }`} style={{ borderColor: "#2B1A12" }}/>
       </div>
       {/* Privacy notice */}
       <div className="text-xs text-slate-500 text-center mb-4 max-w-xs">
@@ -23264,16 +23265,15 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       {/* PIN display */}
       <div className={isLandscape ? "w-full max-w-sm space-y-3" : "w-full max-w-sm space-y-6"}>
         <div className="text-center">
-          <div className="text-slate-600 text-sm mb-3 uppercase tracking-widest font-semibold">Enter PIN</div>
+          <div className="text-sm mb-3 uppercase tracking-widest font-semibold" style={{ color: "rgba(253,242,224,0.5)" }}>Enter PIN</div>
 
           {/* PIN dots */}
           <div className={`flex justify-center gap-4 mb-3 ${shake ? "animate-bounce" : ""}`}>
             {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
-              <div key={i} className={`w-5 h-5 rounded-full border-2 transition-all ${
-                i < pin.length
-                  ? matched ? "bg-emerald-9500 border-emerald-400" : "bg-indigo-9500 border-indigo-400"
-                  : "bg-transparent border-slate-600"
-              }`}/>
+              <div key={i} className="w-5 h-5 rounded-full border-2 transition-all"
+                style={i < pin.length
+                  ? (matched ? { backgroundColor: "#34d399", borderColor: "#34d399" } : { backgroundColor: "#E8B864", borderColor: "#E8B864" })
+                  : { backgroundColor: "transparent", borderColor: "rgba(253,242,224,0.3)" }}/>
             ))}
           </div>
 
@@ -23308,11 +23308,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
             return (
               <button key={key}
                 onClick={() => key === "⌫" ? handleBackspace() : handleDigit(key)}
-                className={`${isLandscape ? "h-14" : "h-20"} rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation ${
-                  key === "⌫"
-                    ? "bg-slate-800 text-slate-600 hover:bg-slate-700"
-                    : "bg-slate-800 text-white hover:bg-slate-700"
-                }`}>
+                className={`${isLandscape ? "h-14" : "h-20"} rounded-2xl text-2xl font-bold transition-all active:scale-95 touch-manipulation`}
+                style={{ backgroundColor: "#3D2A1E", color: key === "⌫" ? "rgba(253,242,224,0.55)" : "#FDF2E0" }}>
                 {key}
               </button>
             );
@@ -23324,12 +23321,12 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           <button onClick={handleConfirm}
             disabled={!matched}
             className={`w-full ${isLandscape ? "py-3" : "py-5"} rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
-              submitting ? "bg-slate-700 text-slate-500 cursor-not-allowed" :
+              submitting ? "bg-[#3D2A1E] text-[rgba(253,242,224,0.4)] cursor-not-allowed" :
               matched
                 ? isClockedIn
-                  ? "bg-amber-9500 hover:bg-amber-400 text-white"
-                  : "bg-emerald-600 hover:bg-emerald-9500 text-white"
-                : "bg-slate-800 text-slate-600 cursor-not-allowed"
+                  ? "bg-amber-500 hover:bg-amber-400 text-white"
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                : "bg-[#3D2A1E] text-[rgba(253,242,224,0.4)] cursor-not-allowed"
             }`}>
             {submitting ? "Processing…" : matched
               ? isClockedIn ? "→ Continue" : "▶ Clock In"
@@ -23337,7 +23334,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           </button>
           {pin.length > 0 && (
             <button onClick={handleClear}
-              className="w-full py-3 rounded-2xl bg-slate-900 text-slate-500 text-sm font-semibold hover:bg-slate-800 transition-colors touch-manipulation">
+              className="w-full py-3 rounded-2xl text-sm font-semibold transition-colors touch-manipulation"
+              style={{ backgroundColor: "rgba(0,0,0,0.2)", color: "rgba(253,242,224,0.5)" }}>
               Clear
             </button>
           )}
@@ -23348,8 +23346,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       {/* Success overlay — kept on top so video element underneath stays mounted */}
       {showSuccessOverlay && (
         <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 z-50 ${
-          successIsIn ? "bg-emerald-950" : successHasOT || successUnsched ? "bg-red-950" : "bg-slate-950"
-        }`}>
+          successIsIn ? "bg-emerald-950" : successHasOT || successUnsched ? "bg-red-950" : ""
+        }`} style={!successIsIn && !(successHasOT||successUnsched) ? {backgroundColor:"#2B1A12"} : {}}>
           <div className="text-center space-y-6 max-w-sm w-full">
             <div className={`text-5xl font-black mb-2 ${successIsIn ? "text-emerald-300" : "text-white"}`}>
               {successIsIn ? "Clocked In ✓" : "Clocked Out ✓"}
@@ -23394,7 +23392,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 
       {/* Stage 1 — clocked-in menu: break / tasks / punch out */}
       {overlayView === "menu" && matched && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center p-8 z-50 bg-slate-950">
+        <div className="absolute inset-0 flex flex-col items-center justify-center p-8 z-50" style={{backgroundColor:"#2B1A12"}}>
           <div className="text-center space-y-6 max-w-sm w-full">
             <div>
               <div className="text-2xl font-black text-white">{matched.firstName} {matched.lastName}</div>
@@ -23403,7 +23401,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
             {breakMsg && <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-4 py-2 text-amber-300 text-sm">{breakMsg}</div>}
             <div className="space-y-3">
               <button onClick={() => { setBreakMsg("Break feature is coming soon."); }}
-                className="w-full py-4 rounded-2xl bg-slate-800 text-white text-lg font-bold hover:bg-slate-700">☕ Go on a break</button>
+                className="w-full py-4 rounded-2xl text-lg font-bold" style={{backgroundColor:"#3D2A1E",color:"#FDF2E0"}}>☕ Go on a break</button>
               <button onClick={() => setOverlayView("tasks")}
                 className="w-full py-4 rounded-2xl bg-indigo-600 text-white text-lg font-bold hover:bg-indigo-500">✓ View today's tasks{todaysTasks.length ? ` (${todaysTasks.length})` : ""}</button>
               <button onClick={() => { setOverlayView(null); doPunch(); }}
@@ -23417,7 +23415,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 
       {/* Stage 1 — task list (read-only for now; marking is Stage 2) */}
       {overlayView === "tasks" && matched && (
-        <div className="absolute inset-0 flex flex-col p-6 z-50 bg-slate-950 overflow-y-auto">
+        <div className="absolute inset-0 flex flex-col p-6 z-50 overflow-y-auto" style={{backgroundColor:"#2B1A12"}}>
           <div className="max-w-md w-full mx-auto space-y-4">
             <div className="text-center">
               <div className="text-2xl font-black text-white">Today's tasks</div>
@@ -23447,7 +23445,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
               </div>
             )}
             <button onClick={() => { setOverlayView(null); setPin(""); setMatched(null); setBreakMsg(""); }}
-              className="w-full py-4 rounded-2xl bg-slate-800 text-white text-lg font-bold hover:bg-slate-700 mt-2">Done</button>
+              className="w-full py-4 rounded-2xl text-lg font-bold mt-2" style={{backgroundColor:"#3D2A1E",color:"#FDF2E0"}}>Done</button>
           </div>
         </div>
       )}
