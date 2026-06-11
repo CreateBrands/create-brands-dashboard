@@ -26244,18 +26244,58 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
     return Coffee;
   };
 
-  const Tile = ({ b }) => {
+  // Upcoming entities — shown as "Coming soon" tiles (not yet built).
+  const comingSoon = [
+    { id: "soon-franchise",    name: "Franchise",    icon: Globe,        color: "#a855f7" },
+    { id: "soon-distribution", name: "Distribution", icon: Truck,        color: "#f59e0b" },
+    { id: "soon-finance",      name: "Finance",      icon: PoundSterling, color: "#10b981" },
+  ].filter(cs => !opsGroup.some(b => b.name.toLowerCase() === cs.name.toLowerCase()));
+
+  const LiveTile = ({ b }) => {
     const Icon = iconFor(b);
     const color = b.color || "#6366f1";
     return (
       <button onClick={() => onPick(b.id)}
-        className="group relative flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-600 transition-all p-6 aspect-[4/3] active:scale-[0.98]">
+        className="group relative flex-shrink-0 w-44 snap-start flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-600 transition-all p-6 h-40 active:scale-[0.98]">
         <div className="w-14 h-14 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110"
           style={{ background: color + "22", color }}>
           <Icon size={26}/>
         </div>
         <div className="text-base font-bold text-white text-center">{b.name}</div>
       </button>
+    );
+  };
+
+  const SoonTile = ({ t }) => {
+    const Icon = t.icon;
+    return (
+      <div className="relative flex-shrink-0 w-44 snap-start flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-800 bg-slate-900/30 p-6 h-40 opacity-60 cursor-not-allowed">
+        <span className="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400">Coming soon</span>
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: t.color + "15", color: t.color + "99" }}>
+          <Icon size={26}/>
+        </div>
+        <div className="text-base font-bold text-slate-400 text-center">{t.name}</div>
+      </div>
+    );
+  };
+
+  // Horizontal slider row with left/right scroll arrows.
+  const Slider = ({ title, children }) => {
+    const ref = useRef(null);
+    const scroll = (dir) => { ref.current?.scrollBy({ left: dir * 360, behavior: "smooth" }); };
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">{title}</div>
+          <div className="flex gap-1.5">
+            <button onClick={() => scroll(-1)} className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center"><ChevronLeft size={16}/></button>
+            <button onClick={() => scroll(1)} className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center"><ChevronRight size={16}/></button>
+          </div>
+        </div>
+        <div ref={ref} className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scrollbar-hide" style={{ scrollbarWidth: "none" }}>
+          {children}
+        </div>
+      </div>
     );
   };
 
@@ -26280,22 +26320,15 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
           </div>
 
           {brandGroup.length > 0 && (
-            <div>
-              <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Brands</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                {brandGroup.map(b => <Tile key={b.id} b={b}/>)}
-              </div>
-            </div>
+            <Slider title="Brands">
+              {brandGroup.map(b => <LiveTile key={b.id} b={b}/>)}
+            </Slider>
           )}
 
-          {opsGroup.length > 0 && (
-            <div>
-              <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Operations</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                {opsGroup.map(b => <Tile key={b.id} b={b}/>)}
-              </div>
-            </div>
-          )}
+          <Slider title="Operations">
+            {opsGroup.map(b => <LiveTile key={b.id} b={b}/>)}
+            {comingSoon.map(t => <SoonTile key={t.id} t={t}/>)}
+          </Slider>
         </div>
       </div>
     </div>
