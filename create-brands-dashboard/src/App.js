@@ -26599,6 +26599,16 @@ export default function App() {
 
   const visibleStoreIds = useMemo(() => visibleStores.map(s => s.id), [visibleStores]);
 
+  // Brands the user can step into (those they have at least one store in).
+  // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
+  const entityBrands = useMemo(() => {
+    if (!currentUser) return [];
+    const active = stores.filter(s => !s.archivedAt);
+    const mine = isHQ ? active : active.filter(s => (currentUser.storeIds || []).includes(s.id));
+    const ids = new Set(mine.map(s => s.brandId));
+    return brands.filter(b => ids.has(b.id));
+  }, [brands, stores, isHQ, currentUser]);
+
   const addAudit = useCallback(async (action, detail, who, brandId, storeId) => {
     try {
       const now = new Date();
@@ -27155,15 +27165,6 @@ export default function App() {
   const currentUser_ctx = currentUser;
 
   // ── Entity landing screen ────────────────────────────────────────────────
-  // Brands the user can step into (those they have at least one visible store in,
-  // ignoring the current entity scope). Owner/HQ see all brands.
-  const entityBrands = useMemo(() => {
-    const active = stores.filter(s => !s.archivedAt);
-    const mine = isHQ ? active : active.filter(s => (currentUser.storeIds || []).includes(s.id));
-    const ids = new Set(mine.map(s => s.brandId));
-    return brands.filter(b => ids.has(b.id));
-  }, [brands, stores, isHQ, currentUser]);
-
   // Show the picker when no entity chosen yet and there's a real choice to make.
   if (!selectedEntityBrand && entityBrands.length > 1) {
     return (
