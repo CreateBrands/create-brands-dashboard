@@ -4106,6 +4106,118 @@ function EmployeeReviewQR({ currentUser, stores = [], visibleStoreIds = [] }) {
 }
 
 // ── EMP_HOME_GREETING_V1: Home greeting card (date/weather, greeting, today's shift, task count) ──
+// Employee-facing review impact: their QR scans + best-effort name-mention
+// matches in Google reviews. Honest about Google's limitation (reviews aren't
+// linked to staff; we can only match when a customer writes the name).
+function MyReviewImpact({ currentUser, opsTeam, stores = [] }) {
+  const [period, setPeriod] = useState("30");
+  const [scans, setScans] = useState(null);
+  const [reviews, setReviews] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const me = useMemo(() => {
+    const id = currentUser?.opsTeamMemberId || currentUser?.id;
+    return (opsTeam || []).find(m => m.id === id) || null;
+  }, [currentUser, opsTeam]);
+
+  const myStoreIds = useMemo(() => new Set(me?.storeIds || currentUser?.storeIds || []), [me, currentUser]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const sinceDays = period === "all" ? null : Number(period);
+        const sinceIso = sinceDays ? new Date(Date.now() - sinceDays*864e5).toISOString() : null;
+        const fromStr = sinceDays ? new Date(Date.now() - sinceDays*864e5).toISOString().slice(0,10) : "2000-01-01";
+        const toStr = new Date().toISOString().slice(0,10);
+        const [sc, rv] = await Promise.all([
+          fetchReviewScanStats({ since: sinceIso }),
+          fetchReviewsForDashboard({ from: fromStr, to: toStr }),
+        ]);
+        if (!alive) return;
+        setScans(sc); setReviews(rv); setErr(null);
+      } catch (e) { if (alive) setErr(e.message || String(e)); }
+    })();
+    return () => { alive = false; };
+  }, [period]);
+
+  const myId = currentUser?.opsTeamMemberId || currentUser?.id;
+  const myScans = (scans || []).filter(s => s.staffId === myId).length;
+
+  // name tokens to match (first, last, nickname) — min 3 chars to avoid noise
+  const tokens = useMemo(() => {
+    const t = [me?.firstName, me?.lastName, me?.nickname]
+      .filter(Boolean).map(x => String(x).toLowerCase().trim()).filter(x => x.length >= 3);
+    return [...new Set(t)];
+  }, [me]);
+
+  const myReviewsInStore = (reviews || []).filter(r => myStoreIds.has(r.storeId));
+  const mentions = tokens.length === 0 ? [] : myReviewsInStore.filter(r => {
+    const c = (r.comment || "").toLowerCase();
+    return tokens.some(t => new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b`).test(c));
+  });
+  const storeNewReviews = myReviewsInStore.length;
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Star size={18} className="text-amber-400"/>
+          <span className="text-sm font-bold text-white">My Review Impact</span>
+        </div>
+        <select value={period} onChange={e=>setPeriod(e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+          <option value="7">7 days</option>
+          <option value="30">30 days</option>
+          <option value="90">90 days</option>
+          <option value="all">All time</option>
+        </select>
+      </div>
+
+      {err && <div className="text-xs text-slate-500">Couldn't load right now.</div>}
+      {!err && (scans === null || reviews === null) && <div className="text-xs text-slate-500">Loading…</div>}
+
+      {!err && scans !== null && reviews !== null && (
+        <>
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="rounded-xl bg-slate-800/50 p-3 text-center">
+              <div className="text-2xl font-black text-white tabular-nums">{myScans}</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">QR scans you got</div>
+            </div>
+            <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3 text-center">
+              <div className="text-2xl font-black text-amber-400 tabular-nums">{mentions.length}</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">reviews mention you</div>
+            </div>
+            <div className="rounded-xl bg-slate-800/50 p-3 text-center">
+              <div className="text-2xl font-black text-white tabular-nums">{storeNewReviews}</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">new reviews at your store</div>
+            </div>
+          </div>
+
+          {mentions.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              <div className="text-[11px] font-semibold text-slate-400">Reviews that mention you ⭐</div>
+              {mentions.slice(0, 3).map((r, i) => (
+                <div key={i} className="rounded-lg bg-slate-800/40 px-3 py-2">
+                  <div className="flex items-center gap-1 mb-0.5">
+                    {Array.from({length: r.stars}).map((_, j) => <Star key={j} size={11} className="text-amber-400 fill-amber-400"/>)}
+                    <span className="text-[10px] text-slate-500 ml-1">{r.reviewer}</span>
+                  </div>
+                  <div className="text-xs text-slate-300 line-clamp-2">{r.comment}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="text-[10px] text-slate-600 mt-3 leading-relaxed">
+            Scans = customers who scanned your review QR. Mentions = recent Google reviews at your store that include your name. Google doesn't link reviews to staff, so mentions only count when a customer writes your name — it's a guide, not an exact total.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myMember = (opsTeam || []).find(m => m.id === myId);
@@ -4552,6 +4664,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 schedules={schedules || []} assignments={assignments} stores={stores}
                 visibleStoreIds={myVisibleStoreIds}
               />
+              <MyReviewImpact currentUser={currentUser} opsTeam={opsTeam} stores={stores}/>
               <TodaysTasks
                 brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
                 assignments={assignments} checklists={checklists}
