@@ -2885,27 +2885,44 @@ function InventoryImport({ scope, onClose, onDone }) {
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
+
+      // Pick the best sheet: skip README/notes/summary tabs, prefer one named
+      // like inventory/items/store; otherwise the first non-skip sheet.
+      const names = wb.SheetNames;
+      const skip = /read\s*me|readme|notes?|instructions?|by category|summary/i;
+      const prefer = /inventory|items?|store|stock|products?/i;
+      let chosen = names.find(n => prefer.test(n) && !skip.test(n))
+                || names.find(n => !skip.test(n))
+                || names[0];
+      const ws = wb.Sheets[chosen];
       const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
       if (!aoa.length) { setErr("That sheet looks empty."); return; }
-      // find header row + column indices (flexible naming)
-      const header = aoa[0].map(h => String(h||"").trim().toLowerCase());
-      const findCol = (...names) => header.findIndex(h => names.some(n => h.includes(n)));
+
+      // Find the header row: the first row that contains a name/item column.
+      const isHeaderRow = (row) => (row || []).some(c => {
+        const v = String(c || "").trim().toLowerCase();
+        return v === "name" || v === "item name" || v === "item" || v === "product" || v === "ingredient";
+      });
+      let hdrIdx = aoa.findIndex(isHeaderRow);
+      if (hdrIdx < 0) hdrIdx = 0; // fall back to first row
+      const header = (aoa[hdrIdx] || []).map(h => String(h||"").trim().toLowerCase());
+      const findCol = (...nms) => header.findIndex(h => nms.some(n => h === n || h.includes(n)));
       const ci = {
         name: findCol("item name","name","product","ingredient","item"),
-        price: findCol("rate","price","cost","£"),
+        price: findCol("pack £","price","rate","cost","£"),
         cat: findCol("category","cat","group"),
         sup: findCol("supplier","vendor"),
         qty: findCol("pack qty","quantity","qty"),
         unit: findCol("unit","uom"),
         pack: findCol("pack desc","pack size","pack"),
       };
-      if (ci.name < 0) { setErr("Couldn't find an item-name column. Make sure there's a header like 'Item Name' or 'Name'."); return; }
+      if (ci.name < 0) { setErr(`Couldn't find an item-name column on the "${chosen}" sheet. Make sure there's a header like 'Item Name' or 'Name'.`); return; }
       const out = [];
-      for (let r = 1; r < aoa.length; r++) {
+      for (let r = hdrIdx + 1; r < aoa.length; r++) {
         const row = aoa[r]; if (!row) continue;
         const name = String(row[ci.name] ?? "").trim();
         if (!name) continue;
+        // skip stray note rows that aren't real items (no price AND no pack info AND looks like a sentence)
         const price = ci.price >= 0 ? parsePriceCell(row[ci.price]) : null;
         const cat = ci.cat >= 0 ? String(row[ci.cat] ?? "").trim() : "";
         const sup = ci.sup >= 0 ? String(row[ci.sup] ?? "").trim() : "";
