@@ -15242,7 +15242,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
           <input
             value={form.pin}
             onChange={e => set("pin", e.target.value.replace(/\D/g, "").slice(0, 6))}
-            placeholder="4–6 digits"
+            placeholder="4 digits"
             inputMode="numeric"
             className={inputCls}
           />
@@ -17435,8 +17435,8 @@ function OpsTeamMemberFormModal({
     // PIN doesn't trip the check).
     if (form.pin && form.pin.trim()) {
       const trimmed = form.pin.trim();
-      if (!/^\d{4,6}$/.test(trimmed)) {
-        alert("PIN must be 4 to 6 digits.");
+      if (!/^\d{4}$/.test(trimmed)) {
+        alert("PIN must be exactly 4 digits.");
         return;
       }
       const collision = opsTeam.find(m =>
@@ -17698,7 +17698,7 @@ function OpsTeamMemberFormModal({
 
         {/* PIN + pay type + rate */}
         <div className="grid grid-cols-2 gap-4">
-          <div><label className={labelCls}>PIN (4–6 digits)</label><input value={form.pin} onChange={e => set("pin", e.target.value)} maxLength={6} placeholder="e.g. 1234" className={inputCls}/></div>
+          <div><label className={labelCls}>PIN (4 digits)</label><input value={form.pin} onChange={e => set("pin", e.target.value.replace(/\D/g,"").slice(0,4))} inputMode="numeric" maxLength={4} placeholder="e.g. 1234" className={inputCls}/></div>
           <div>
             <label className={labelCls}>Pay type</label>
             <select
@@ -22875,6 +22875,33 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     return () => clearInterval(t);
   }, []);
 
+  // KEEP-AWAKE: hold a screen wake lock so the kiosk tablet never sleeps.
+  // Re-acquires automatically if the OS drops it (e.g. after the screen was
+  // briefly hidden) so the kiosk stays live all shift without intervention.
+  useEffect(() => {
+    let wakeLock = null;
+    let cancelled = false;
+    const acquire = async () => {
+      try {
+        if ("wakeLock" in navigator && document.visibilityState === "visible") {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLock.addEventListener?.("release", () => { wakeLock = null; });
+        }
+      } catch (_) { /* not supported / denied — harmless */ }
+    };
+    acquire();
+    const onVis = () => { if (document.visibilityState === "visible" && !wakeLock && !cancelled) acquire(); };
+    document.addEventListener("visibilitychange", onVis);
+    // safety re-acquire every 30s in case the lock was silently dropped
+    const reacq = setInterval(() => { if (!wakeLock && !cancelled) acquire(); }, 30000);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      clearInterval(reacq);
+      try { wakeLock?.release?.(); } catch (_) {}
+    };
+  }, []);
+
   // Camera startup — request front camera once on mount
   useEffect(() => {
     let cancelled = false;
@@ -22956,17 +22983,23 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 
   const handleDigit = (d) => {
     if (matched) return; // already confirmed — waiting for auto-clear
-    if (pin.length >= 6) return;
+    if (submittingRef.current) return;
+    if (pin.length >= 4) return; // PINs are exactly 4 digits
     setError("");
     const next = pin + d;
     setPin(next);
 
-    // Auto-match when 4+ digits entered
-    if (next.length >= 4) {
+    // On the 4th digit: match and show the name, but require explicit confirm.
+    if (next.length === 4) {
       const found = opsTeam.find(m => m.pin && m.pin === next);
       if (found) {
-        setMatched(found);
+        setMatched(found);   // shows name + Confirm button; employee verifies it's them
         setError("");
+      } else {
+        // Wrong PIN — clear notification + retry
+        setError("Wrong PIN — please try again");
+        setShake(true);
+        setTimeout(() => { setShake(false); setPin(""); setMatched(null); }, 900);
       }
     }
   };
@@ -22996,9 +23029,11 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     await doPunch();
   };
 
-  const doPunch = async () => {
+  const doPunch = async (member) => {
+    const emp = member || matched;
     if (submittingRef.current) return;
-    if (!matched) return;
+    if (!emp) return;
+    if (!matched && emp) setMatched(emp); // ensure UI shows the name during submit
     submittingRef.current = true;
     setSubmitting(true);
 
@@ -23011,7 +23046,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     };
     const todayStr = toLocalDate();
     const openRecord = punchRecords.find(r =>
-      r.employeeId === matched.id && r.date === todayStr && r.status === "open"
+      r.employeeId === emp.id && r.date === todayStr && r.status === "open"
     );
     const now = new Date().toISOString();
     const recordId = openRecord?.id || `pr-${Date.now()}`;
@@ -23038,7 +23073,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         if (lateMs > 0 && lateMs <= GRACE_OUT_MS) effOutMs = seMs;
       }
       const hoursWorked = Math.round(((effOutMs - effInMs) / 3600000) * 100) / 100;
-      const grossPay    = matched.hourlyRate ? Math.round(hoursWorked * matched.hourlyRate * 100) / 100 : null;
+      const grossPay    = emp.hourlyRate ? Math.round(hoursWorked * emp.hourlyRate * 100) / 100 : null;
       let overtimeHrs = 0;
       if (!isUnscheduled) {
         const schedHours = (seMs - ssMs) / 3600000;
@@ -23049,7 +23084,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         const outOfWindow  = Math.max(0, (effOutMs - effInMs - overlapMs) / 3600000);
         overtimeHrs = Math.round(Math.max(overByTotal, outOfWindow) * 100) / 100;
       }
-      setLastAction({ type: "out", name: matched.nickname || matched.firstName, time: new Date(), hours: hoursWorked, overtimeHrs, isUnscheduled });
+      setLastAction({ type: "out", name: emp.nickname || emp.firstName, time: new Date(), hours: hoursWorked, overtimeHrs, isUnscheduled });
       onPunchOut(openRecord.id, now, hoursWorked, grossPay)
         .catch(err => {
           console.error("PunchOut failed:", err);
@@ -23064,10 +23099,10 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       // match the schedule that's relevant for *this* punch location, falling
       // back to a brand-keyed match for legacy schedules without storeId.
       const todaysSched = schedules.find(s =>
-        s.employeeId === matched.id && s.date === todayStr && s.published &&
-        (s.storeId ? s.storeId === currentStore?.id : s.brandId === (currentStore?.brandId || matched.brandId))
+        s.employeeId === emp.id && s.date === todayStr && s.published &&
+        (s.storeId ? s.storeId === currentStore?.id : s.brandId === (currentStore?.brandId || emp.brandId))
       );
-      setLastAction({ type: "in", name: matched.nickname || matched.firstName, time: new Date() });
+      setLastAction({ type: "in", name: emp.nickname || emp.firstName, time: new Date() });
       onPunchIn({
         id: recordId,
         // brandId + storeId come from the kiosk's registered store — this is
@@ -23075,13 +23110,13 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         // covering at another store records their punch against the kiosk's
         // store. (storeId is NOT NULL on punch_records per Stage 6, so this
         // is required — missing it was the root cause of Issue 2.)
-        brandId: currentStore?.brandId || matched.brandId,
+        brandId: currentStore?.brandId || emp.brandId,
         storeId: currentStore?.id || null,
-        employeeId: matched.id,
-        employeeName: `${matched.firstName} ${matched.lastName}`.trim(),
+        employeeId: emp.id,
+        employeeName: `${emp.firstName} ${emp.lastName}`.trim(),
         date: todayStr,
         punchIn: now, punchOut: null, hoursWorked: null,
-        hourlyRate: matched.hourlyRate || 0, grossPay: null,
+        hourlyRate: emp.hourlyRate || 0, grossPay: null,
         notes: "", status: "open", amendedBy: "",
         // Schedule lookup uses the kiosk's store — if employee has a published
         // shift at this store today, lock it in for overtime calc.
@@ -23099,7 +23134,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     photoBlobPromise.then(async blob => {
       if (!blob) return; // camera failed → record flagged as "no photo" automatically
       try {
-        const url = await uploadPunchPhoto(blob, matched.id);
+        const url = await uploadPunchPhoto(blob, emp.id);
         // Small delay to ensure the punch record exists in DB before we update it
         await new Promise(r => setTimeout(r, 800));
         await attachPunchPhoto(recordId, url, isOut ? "out" : "in");
@@ -23286,7 +23321,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 
           {/* PIN dots */}
           <div className={`flex justify-center gap-4 mb-3 ${shake ? "animate-bounce" : ""}`}>
-            {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
+            {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="w-5 h-5 rounded-full border-2 transition-all"
                 style={i < pin.length
                   ? (matched ? { backgroundColor: "#34d399", borderColor: "#34d399" } : { backgroundColor: "#E8B864", borderColor: "#E8B864" })
@@ -23312,9 +23347,13 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
             </div>
           )}
 
-          {/* Error */}
+          {/* Error — prominent notification */}
           {error && (
-            <div className="text-red-400 text-sm font-semibold mt-2">{error}</div>
+            <div className={`mt-3 mx-2 rounded-xl px-4 py-3 flex items-center justify-center gap-2 ${shake ? "animate-bounce" : ""}`}
+              style={{ backgroundColor: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)" }}>
+              <span className="text-xl">⚠️</span>
+              <span className="text-red-300 text-base font-bold">{error}</span>
+            </div>
           )}
         </div>
 
@@ -23333,27 +23372,26 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
           })}
         </div>
 
-        {/* Confirm / Clear */}
+        {/* Confirm + Clear */}
         <div className="space-y-3">
-          <button onClick={handleConfirm}
-            disabled={!matched}
-            className={`w-full ${isLandscape ? "py-3" : "py-5"} rounded-2xl text-xl font-black transition-all active:scale-98 touch-manipulation ${
-              submitting ? "bg-[#3D2A1E] text-[rgba(253,242,224,0.4)] cursor-not-allowed" :
-              matched
-                ? isClockedIn
-                  ? "bg-amber-500 hover:bg-amber-400 text-white"
-                  : "bg-emerald-600 hover:bg-emerald-500 text-white"
-                : "bg-[#3D2A1E] text-[rgba(253,242,224,0.4)] cursor-not-allowed"
-            }`}>
-            {submitting ? "Processing…" : matched
-              ? isClockedIn ? "→ Continue" : "▶ Clock In"
-              : "Enter PIN"}
-          </button>
-          {pin.length > 0 && (
+          {submitting && (
+            <div className="w-full py-4 rounded-2xl text-xl font-black text-center" style={{ backgroundColor: "#3D2A1E", color: "rgba(253,242,224,0.7)" }}>
+              Processing…
+            </div>
+          )}
+          {matched && !submitting && (
+            <button onClick={handleConfirm}
+              className={`w-full py-5 rounded-2xl text-xl font-black transition-all active:scale-95 touch-manipulation ${
+                isClockedIn ? "bg-amber-500 hover:bg-amber-400 text-white" : "bg-emerald-600 hover:bg-emerald-500 text-white"
+              }`}>
+              {isClockedIn ? `→ Yes, I'm ${matched.firstName} — Continue` : `▶ Yes, I'm ${matched.firstName} — Clock In`}
+            </button>
+          )}
+          {pin.length > 0 && !submitting && (
             <button onClick={handleClear}
-              className="w-full py-3 rounded-2xl text-sm font-semibold transition-colors touch-manipulation"
-              style={{ backgroundColor: "rgba(0,0,0,0.2)", color: "rgba(253,242,224,0.5)" }}>
-              Clear
+              className="w-full py-4 rounded-2xl text-lg font-black transition-all active:scale-95 touch-manipulation"
+              style={{ backgroundColor: "#C0563A", color: "#FFFFFF" }}>
+              ✕ Clear
             </button>
           )}
         </div>
@@ -25612,7 +25650,7 @@ function SelfFillShell() {
   const submit = async () => {
     setErr("");
     if (!form.firstName?.trim() || !form.lastName?.trim()) { setErr("Please enter your first and last name."); return; }
-    if (form.pin && !/^\d{4,6}$/.test(form.pin)) { setErr("Your PIN must be 4 to 6 digits."); return; }
+    if (form.pin && !/^\d{4}$/.test(form.pin)) { setErr("Your PIN must be exactly 4 digits."); return; }
     setSaving(true);
     try {
       await submitSelfFill(token, form);
@@ -25687,7 +25725,7 @@ function SelfFillShell() {
           <div style={{ borderTop: "1px solid #1e293b", paddingTop: 14 }}>
             <div style={{ color: "#cbd5e1", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Choose your clock-in PIN</div>
             <div style={{ color: "#64748b", fontSize: 12, marginBottom: 8 }}>You'll use this 4–6 digit PIN to clock in and out at the kiosk. Pick something memorable but not obvious.</div>
-            <ApplyField label="PIN (4–6 digits)">
+            <ApplyField label="PIN (4 digits)">
               <input
                 style={applyInputStyle}
                 inputMode="numeric"
@@ -25696,8 +25734,8 @@ function SelfFillShell() {
                 placeholder="e.g. 4821"
               />
             </ApplyField>
-            {form.pin && !/^\d{4,6}$/.test(form.pin) && (
-              <div style={{ color: "#fbbf24", fontSize: 12, marginTop: 4 }}>PIN must be 4 to 6 digits.</div>
+            {form.pin && !/^\d{4}$/.test(form.pin) && (
+              <div style={{ color: "#fbbf24", fontSize: 12, marginTop: 4 }}>PIN must be exactly 4 digits.</div>
             )}
           </div>
           {err && <div style={{ color: "#f87171", fontSize: 13 }}>{err}</div>}
