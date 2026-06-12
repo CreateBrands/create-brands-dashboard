@@ -5806,7 +5806,36 @@ function OnboardingBoard({ stores, opsTeam }) {
 // all stores; managers are locked to their assigned store(s). One unified
 // report structure {title, columns, rows, totals} drives BOTH the on-screen
 // table and the styled ExcelJS export, so they can never drift apart.
+// Reports hub — tabs for the timesheet/sales report generator plus the
+// Google Reviews, Weekly Reports and Review Scans views (moved here from nav).
 function ReportsView({ stores, brands, opsTeam, currentUser }) {
+  const role = currentUser?.role;
+  const TABS = [
+    { key: "timesheets", label: "Timesheets & Sales", roles: ["owner","hq_staff","manager"] },
+    { key: "weekly",     label: "Weekly Reports",     roles: ["owner","hq_staff"] },
+    { key: "reviews",    label: "Google Reviews",     roles: ["owner","hq_staff","manager"] },
+    { key: "scans",      label: "Review Scans",       roles: ["owner","hq_staff","manager"] },
+  ].filter(t => t.roles.includes(role));
+  const [tab, setTab] = useState(TABS[0]?.key || "timesheets");
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-1.5 flex-wrap bg-slate-900/60 border border-slate-800 rounded-xl p-1 w-fit">
+        {TABS.map(t => (
+          <button key={t.key} onClick={()=>setTab(t.key)}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "timesheets" && <TimesheetReportsView stores={stores} brands={brands} opsTeam={opsTeam} currentUser={currentUser}/>}
+      {tab === "weekly"  && ["owner","hq_staff"].includes(role) && <WeeklyReportsView/>}
+      {tab === "reviews" && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
+      {tab === "scans"   && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
+    </div>
+  );
+}
+
+function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
   const isMgr = currentUser.role === "manager";
   const myStores = useMemo(
     () => (stores || []).filter(s => !s.archivedAt && (!isMgr || (currentUser.storeIds || []).includes(s.id))),
@@ -8205,6 +8234,7 @@ function DashboardView({ brands, stores, entries, issues }) {
   const [customTo, setCustomTo] = useState("");
   const [storeId, setStoreId] = useState("all");
   const [drill, setDrill] = useState(null);  // {title, columns, rows, footer} | null
+  const [askOpen, setAskOpen] = useState(false);  // Ask the Data panel
 
   const period = useMemo(() => resolvePeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
   const prevPeriod = useMemo(() => resolvePrevPeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
@@ -8509,6 +8539,15 @@ function DashboardView({ brands, stores, entries, issues }) {
 
   return (
     <div className="space-y-6">
+      {isHqOrAbove(user.role) && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <button onClick={()=>setAskOpen(o=>!o)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors">
+            <span className="flex items-center gap-2 text-sm font-semibold text-white"><MessageSquare size={16} className="text-indigo-400"/> Ask the Data</span>
+            <ChevronDown size={16} className={`text-slate-500 transition-transform ${askOpen?"rotate-180":""}`}/>
+          </button>
+          {askOpen && <div className="border-t border-slate-800 p-4"><AskDataView/></div>}
+        </div>
+      )}
       {drill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
@@ -9193,6 +9232,26 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
 }
 // ===== end EOD_AMEND_RECON_V1 =====
 
+// EOD hub — the EOD Report form plus the Reconciliation view as a second tab.
+function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddEntry }) {
+  const canRecon = ["owner","hq_staff","manager"].includes(currentUser?.role);
+  const [tab, setTab] = useState("report");
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-1.5 flex-wrap bg-slate-900/60 border border-slate-800 rounded-xl p-1 w-fit">
+        <button onClick={()=>setTab("report")}
+          className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab==="report"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>EOD Report</button>
+        {canRecon && (
+          <button onClick={()=>setTab("recon")}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab==="recon"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Reconciliation</button>
+        )}
+      </div>
+      {tab === "report" && <EODFormView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={onAddEntry}/>}
+      {tab === "recon" && canRecon && <EodReconView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={onAddEntry}/>}
+    </div>
+  );
+}
+
 function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const { user } = useAuth();
 
@@ -9223,6 +9282,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     netSales: "", cardRevenue: "", cashExpected: "", physicalCash: "", varianceJustification: "",
     openingFloat: 200, closingFloat: 200,
     totalOrders: "", atv: "",
+    unreportedExpense: "", unreportedExpenseNote: "",
     fiveStarReviews: "", midStarReviews: "", oneStarReviews: "",
     laborCost: "", cogsCost: "", totalHours: "", notes: ""
   });
@@ -9261,10 +9321,10 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const primeCostPct = ns > 0 ? ((lc + cc) / ns) * 100 : 0;
   const splh = th > 0 ? ns / th : 0;
 
-  const zones = ["Identity", "Revenue", "Quality", "People & Risk"];
+  const zones = ["Identity", "Revenue"];
 
   const handleSubmit = () => {
-    if (zone < 3) { setZone(z => z + 1); return; }
+    if (zone < 1) { setZone(z => z + 1); return; }
     if (!selectedStore) { alert("Please pick a store first."); return; }
     if (hasVariance && !form.varianceJustification.trim()) { alert("Please provide a variance justification."); return; }
     const entry = {
@@ -9281,6 +9341,8 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
       laborCost: lc, cogsCost: cc, totalHours: th,
       totalOrders: parseInt(form.totalOrders)||0,
       atv: parseFloat(form.atv)||0,
+      unreportedExpense: parseFloat(form.unreportedExpense)||0,
+      unreportedExpenseNote: form.unreportedExpenseNote||"",
       fiveStarReviews: parseInt(form.fiveStarReviews)||0,
       midStarReviews: parseInt(form.midStarReviews)||0,
       oneStarReviews: parseInt(form.oneStarReviews)||0,
@@ -9290,7 +9352,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false); setZone(0);
-      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
+      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", unreportedExpense:"", unreportedExpenseNote:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
     }, 2500);
   };
 
@@ -9374,12 +9436,10 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
               <div><label className={labelCls}>Card Revenue (£)</label><input type="number" value={form.cardRevenue} onChange={e=>set("cardRevenue",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Cash Expected (£)</label><input type="number" value={form.cashExpected} onChange={e=>set("cashExpected",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Physical Cash (£)</label><input type="number" value={form.physicalCash} onChange={e=>set("physicalCash",e.target.value)} className={inputCls} placeholder="0.00"/></div>
-              <div><label className={labelCls}>Total Orders</label><input type="number" value={form.totalOrders} onChange={e=>set("totalOrders",e.target.value)} className={inputCls} placeholder="0"/></div>
-              <div>
-                <label className={labelCls}>ATV (£) <span className="text-slate-600 font-normal">— auto-calculated</span></label>
-                <input type="number" value={form.atv} onChange={e=>set("atv",e.target.value)} className={`${inputCls} bg-slate-800/40`} placeholder="0.00"/>
-              </div>
+              <div><label className={labelCls}>Unreported Expense (£)</label><input type="number" value={form.unreportedExpense} onChange={e=>set("unreportedExpense",e.target.value)} className={inputCls} placeholder="0.00"/></div>
+              <div><label className={labelCls}>Expense Note / Description</label><input value={form.unreportedExpenseNote} onChange={e=>set("unreportedExpenseNote",e.target.value)} className={inputCls} placeholder="What was it for?"/></div>
             </div>
+            <div><label className={labelCls}>Shift Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} className={`${inputCls} h-24 resize-none`} placeholder="Any notable events, incidents or handover notes…"/></div>
             {hasVariance && (
               <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-4">
                 <div className="flex items-center gap-2 text-amber-400 text-sm font-semibold mb-2">
@@ -9392,73 +9452,6 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
           </>
         )}
 
-        {/* Zone 3 */}
-        {zone === 2 && (
-          <>
-            <h2 className="text-base font-bold text-white mb-2">Zone 3 — Quality</h2>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-emerald-400"/>5-Star Reviews</span></label>
-                <input type="number" value={form.fiveStarReviews} onChange={e=>set("fiveStarReviews",e.target.value)} className={inputCls} placeholder="0"/>
-              </div>
-              <div>
-                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-amber-400"/>2–4 Star Reviews</span></label>
-                <input type="number" value={form.midStarReviews} onChange={e=>set("midStarReviews",e.target.value)} className={inputCls} placeholder="0"/>
-              </div>
-              <div>
-                <label className={labelCls}><span className="flex items-center gap-1"><Star size={11} className="text-red-400"/>1-Star Reviews</span></label>
-                <input type="number" value={form.oneStarReviews} onChange={e=>set("oneStarReviews",e.target.value)} className={inputCls} placeholder="0"/>
-              </div>
-            </div>
-            {/* Review summary */}
-            {(parseInt(form.fiveStarReviews)||0) + (parseInt(form.midStarReviews)||0) + (parseInt(form.oneStarReviews)||0) > 0 && (() => {
-              const total = (parseInt(form.fiveStarReviews)||0)+(parseInt(form.midStarReviews)||0)+(parseInt(form.oneStarReviews)||0);
-              const fivePct = total > 0 ? ((parseInt(form.fiveStarReviews)||0)/total*100).toFixed(0) : 0;
-              const onePct = total > 0 ? ((parseInt(form.oneStarReviews)||0)/total*100).toFixed(0) : 0;
-              return (
-                <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-4">
-                  <div className="flex items-center justify-between text-xs mb-2">
-                    <span className="text-slate-600">{total} total reviews</span>
-                    <span className="text-emerald-400 font-semibold">{fivePct}% five-star</span>
-                  </div>
-                  <div className="flex gap-1 h-2">
-                    <div className="rounded-full bg-emerald-500 transition-all" style={{width:`${fivePct}%`}}/>
-                    <div className="rounded-full bg-amber-500 transition-all" style={{width:`${100-parseInt(fivePct)-parseInt(onePct)}%`}}/>
-                    <div className="rounded-full bg-red-500 transition-all" style={{width:`${onePct}%`}}/>
-                  </div>
-                  {parseInt(form.oneStarReviews) > 0 && (
-                    <div className="flex items-center gap-2 mt-2 text-red-400 text-xs"><AlertTriangle size={12}/>{form.oneStarReviews} 1-star review(s) — follow up recommended</div>
-                  )}
-                </div>
-              );
-            })()}
-          </>
-        )}
-
-        {/* Zone 4 */}
-        {zone === 3 && (
-          <>
-            <h2 className="text-base font-bold text-white mb-2">Zone 4 — People & Risk</h2>
-            <div className="grid grid-cols-3 gap-4">
-              <div><label className={labelCls}>Labour Cost (£)</label><input type="number" value={form.laborCost} onChange={e=>set("laborCost",e.target.value)} className={inputCls} placeholder="0.00"/></div>
-              <div><label className={labelCls}>COGS (£)</label><input type="number" value={form.cogsCost} onChange={e=>set("cogsCost",e.target.value)} className={inputCls} placeholder="0.00"/></div>
-              <div><label className={labelCls}>Total Hours</label><input type="number" value={form.totalHours} onChange={e=>set("totalHours",e.target.value)} className={inputCls} placeholder="0"/></div>
-            </div>
-            {ns > 0 && lc > 0 && cc > 0 && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className={`rounded-xl border p-3 ${primeCostPct>(selectedBrand?.kpiTargets?.primeCostMax||60)?"bg-red-950/20 border-red-500/30":"bg-emerald-950/20 border-emerald-500/30"}`}>
-                  <div className="text-xs text-slate-600 mb-1">Prime Cost %</div>
-                  <div className={`text-lg font-bold ${primeCostPct>(selectedBrand?.kpiTargets?.primeCostMax||60)?"text-red-400":"text-emerald-400"}`}>{primeCostPct.toFixed(1)}%</div>
-                </div>
-                <div className="bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-3">
-                  <div className="text-xs text-slate-600 mb-1">SPLH</div>
-                  <div className="text-lg font-bold text-indigo-400">{fmtSPLH(splh)}</div>
-                </div>
-              </div>
-            )}
-            <div><label className={labelCls}>Shift Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} className={`${inputCls} h-24 resize-none`} placeholder="Any notable events, incidents or handover notes…"/></div>
-          </>
-        )}
       </div>
 
       <div className="flex gap-3">
@@ -27319,13 +27312,9 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
-      { key: "weekly-reports", label: "Weekly Reports", icon: ScrollText, roles: ["owner", "hq_staff"], hideForCK: true },
-      { key: "ask-data", label: "Ask the Data", icon: MessageSquare, roles: ["owner", "hq_staff"], hideForCK: true },
-      { key: "google-reviews", label: "Google Reviews", icon: Star, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"], hideForCK: true },
-      { key: "tactical",    label: "Performance",   icon: TrendingUp, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
     { group: "TODAY", items: [
@@ -27333,13 +27322,11 @@ export default function App() {
       { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
       { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
-      { key: "eod-recon",      label: "EOD Reconciliation", icon: ClipboardList, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
-      { key: "review-scans", label: "Review Scans",      icon: QrCode, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
@@ -27466,12 +27453,10 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
-            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues}/>}
+            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && currentUser.role === "manager" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
-            {effectiveActiveView === "tactical"       && <TacticalOpsView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} issues={issues} users={users} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "eod"            && <EODFormView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={addEntry}/>}
-            {effectiveActiveView === "eod-recon"      && ["owner","hq_staff","manager"].includes(currentUser.role) && <EodReconView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={addEntry}/>}
+            {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
@@ -27550,13 +27535,9 @@ export default function App() {
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "weekly-reports" && ["owner","hq_staff"].includes(currentUser.role) && <WeeklyReportsView/>}
-            {effectiveActiveView === "ask-data" && ["owner","hq_staff"].includes(currentUser.role) && <AskDataView/>}
-            {effectiveActiveView === "google-reviews" && ["owner","hq_staff","manager"].includes(currentUser.role) && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
-            {effectiveActiveView === "review-scans" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
