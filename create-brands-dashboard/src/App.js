@@ -5315,7 +5315,7 @@ function InvoicesView({ currentUser }) {
 // ===== end INVOICES_VIEW_V1 =====
 
 // ===== GOOGLE_REVIEWS_VIEW_V1 =====
-function GoogleReviewsView({ stores = [], currentUser }) {
+function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [reviews, setReviews] = useState([]);
   const [filter, setFilter] = useState("all");   // all | low (<=2)
   const [loading, setLoading] = useState(true);
@@ -5408,7 +5408,7 @@ function GoogleReviewsView({ stores = [], currentUser }) {
       )}
 
       <div className="space-y-2">
-        {reviews.map(r => (
+        {reviews.filter(r => !storeId || r.storeId === storeId).map(r => (
           <div key={r.reviewId} className={`rounded-xl border p-3 ${r.stars <= 2 ? "border-rose-800/50 bg-rose-950/20" : "border-slate-800 bg-slate-900"}`}>
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
@@ -6793,12 +6793,14 @@ function ForecastPanel({ storeId, stores }) {
 // Resolves the manager's assigned store(s), offers a picker if they manage more
 // than one, a period selector, then renders the comprehensive StoreAnalytics.
 function ManagerStoreDashboard({ stores, brands, currentUser }) {
+  const isHQ = isHqOrAbove(currentUser?.role);
   const myStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && (currentUser?.storeIds || []).includes(s.id)),
-    [stores, currentUser]
+    () => (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && (isHQ || (currentUser?.storeIds || []).includes(s.id))),
+    [stores, currentUser, isHQ]
   );
   const [storeId, setStoreId] = useState(myStores[0]?.id || null);
   const [period, setPeriod] = useState("week");
+  const [reviewsOpen, setReviewsOpen] = useState(false);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
 
@@ -6872,6 +6874,20 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
           prevFromDate={prevFromDate} prevToDate={prevToDate}
           periodLabel={periodLabel}
         />
+      )}
+
+      {store && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <button onClick={()=>setReviewsOpen(o=>!o)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors">
+            <span className="flex items-center gap-2 text-sm font-semibold text-white"><Star size={16} className="text-amber-400"/> Google Reviews — {store.shortName || store.name}</span>
+            <ChevronDown size={16} className={`text-slate-500 transition-transform ${reviewsOpen?"rotate-180":""}`}/>
+          </button>
+          {reviewsOpen && (
+            <div className="border-t border-slate-800 p-4">
+              <GoogleReviewsView stores={stores} currentUser={currentUser} storeId={store.id} compact/>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -27326,7 +27342,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
-      { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["manager"], hideForCK: true },
+      { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
     { group: "TODAY", items: [
@@ -27467,7 +27483,7 @@ export default function App() {
           <main className="flex-1 overflow-y-auto p-6">
             {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
-            {effectiveActiveView === "store-analytics" && currentUser.role === "manager" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
+            {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
