@@ -22324,8 +22324,22 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       </div>
 
       {/* ── Header / actions ──────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* filters inline with actions to use the width */}
+        {sortedStores.length > 1 && (
+          <SelectDropdown value={storeId} onChange={setStoreId} className="w-44">
+            {sortedStores.map(s => {
+              const b = brands.find(br => br.id === s.brandId);
+              const showBrand = new Set(sortedStores.map(x => x.brandId)).size > 1;
+              return <option key={s.id} value={s.id}>{showBrand && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
+            })}
+          </SelectDropdown>
+        )}
+        {allDepts.length > 0 && <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-32"><option value="all">All Depts</option>{allDepts.map(d=><option key={d}>{d}</option>)}</SelectDropdown>}
+        {allRoles.length > 0 && <SelectDropdown value={filterRole} onChange={setFilterRole} className="w-32"><option value="all">All Roles</option>{allRoles.map(r=><option key={r}>{r}</option>)}</SelectDropdown>}
+        {allShiftNames.length > 0 && <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-32"><option value="all">All Shifts</option>{allShiftNames.map(n=><option key={n}>{n}</option>)}</SelectDropdown>}
+
+        <div className="flex items-center gap-2 flex-wrap ml-auto">
           {allWeekSlots.length > 0 && (
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-500/25 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
               {isWeekPublished ? "✓ Published" : "Draft"}
@@ -22390,22 +22404,6 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           </button>
         </div>
       )}
-
-      {/* ── Filters ──────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-2 items-center">
-        {sortedStores.length > 1 && (
-          <SelectDropdown value={storeId} onChange={setStoreId} className="w-56">
-            {sortedStores.map(s => {
-              const b = brands.find(br => br.id === s.brandId);
-              const showBrand = new Set(sortedStores.map(x => x.brandId)).size > 1;
-              return <option key={s.id} value={s.id}>{showBrand && b ? `${b.name} · ` : ""}{s.shortName || s.name}</option>;
-            })}
-          </SelectDropdown>
-        )}
-        {allDepts.length > 0 && <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-36"><option value="all">All Depts</option>{allDepts.map(d=><option key={d}>{d}</option>)}</SelectDropdown>}
-        {allRoles.length > 0 && <SelectDropdown value={filterRole} onChange={setFilterRole} className="w-36"><option value="all">All Roles</option>{allRoles.map(r=><option key={r}>{r}</option>)}</SelectDropdown>}
-        {allShiftNames.length > 0 && <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-36"><option value="all">All Shifts</option>{allShiftNames.map(n=><option key={n}>{n}</option>)}</SelectDropdown>}
-      </div>
 
       {/* ── Draft banner ────────────────────────────────────────────────── */}
       {isDraft && (
@@ -22511,7 +22509,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       {!isMobile && viewMode==="week" && (
         <div className="overflow-x-auto">
           <div className="min-w-[920px]">
-            <div className="grid gap-1 mb-2" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
+            <div className="grid gap-1 mb-2 sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm pt-1 pb-1" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
               <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
               {weekDays.map((day,idx)=>{
                 const isToday = toLocalDateStr(day)===toLocalDateStr(today);
@@ -22534,14 +22532,14 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             {filteredMembers.map((member, mIdx)=>{
               const empTotal = employeeTotals[mIdx];
               return (
-                <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
+                <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
                   <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900 rounded-xl">
                     <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs font-semibold text-white truncate">{member.nickname||member.firstName} {!member.nickname&&member.lastName}</div>
+                      <div className="text-xs font-semibold text-white truncate">{member.firstName} {member.lastName}</div>
                       <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
                     </div>
                   </div>
@@ -22610,7 +22608,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
               );
             })}
 
-            <div className="grid gap-1 mt-3 pt-3 border-t border-slate-800/60" style={{gridTemplateColumns:"180px repeat(7, 1fr) 110px"}}>
+            <div className="grid gap-1 mt-3 pt-3 border-t border-slate-800/60" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
               <div className="flex flex-col justify-center px-2">
                 <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Daily</div>
                 <div className="text-xs text-slate-600">hours / wages / sales</div>
