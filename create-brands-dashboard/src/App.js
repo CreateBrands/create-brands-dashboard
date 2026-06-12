@@ -21994,6 +21994,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   );
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [selectedDayIdx, setSelectedDayIdx] = useState(() => { const d = new Date().getDay(); return d === 0 ? 6 : d - 1; });
   const [filterDept, setFilterDept] = useState("all");
   const [filterRole, setFilterRole] = useState("all");
   const [filterShift,setFilterShift]= useState("all");
@@ -22370,6 +22371,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           </button>
           {!isMobile && (
             <div className="flex bg-slate-900 border border-slate-700 rounded-xl p-0.5 gap-0.5">
+              <button onClick={()=>setViewMode("day")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="day"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Day</button>
               <button onClick={()=>setViewMode("week")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="week"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Week</button>
               <button onClick={()=>setViewMode("list")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>List</button>
               <button onClick={()=>setViewMode("coverage")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="coverage"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Coverage</button>
@@ -22506,10 +22508,87 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       )}
 
       {/* ── Desktop week grid ─────────────────────────────────────────────── */}
+      {!isMobile && viewMode==="day" && (() => {
+        const day = weekDays[selectedDayIdx];
+        const dateStr = toLocalDateStr(day);
+        const dayMembers = filteredMembers.map(member => ({ member, slots: getSlotsFor(member.id, dateStr) }));
+        const withShifts = dayMembers.filter(d => d.slots.length > 0);
+        const without = dayMembers.filter(d => d.slots.length === 0);
+        const dayHours = withShifts.reduce((a,d)=>a + d.slots.reduce((x,s)=>x+calcShiftHours(s.startTime,s.endTime),0), 0);
+        return (
+          <div>
+            {/* Day strip picker */}
+            <div className="grid grid-cols-7 gap-1.5 mb-4 sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm py-1">
+              {weekDays.map((d, idx) => {
+                const isSel = idx === selectedDayIdx;
+                const isToday = toLocalDateStr(d)===toLocalDateStr(today);
+                return (
+                  <button key={idx} onClick={()=>setSelectedDayIdx(idx)}
+                    className={`rounded-xl py-2 text-center transition-all ${isSel?"bg-indigo-600 text-white":isToday?"bg-indigo-600/20 border border-indigo-500/30 text-indigo-300":"bg-slate-900/60 text-slate-400 hover:bg-slate-800"}`}>
+                    <div className="text-[10px] font-semibold uppercase">{DAYS_OF_WEEK[idx].slice(0,3)}</div>
+                    <div className="text-lg font-black">{d.getDate()}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-bold text-white">{day.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div>
+              <div className="text-xs text-slate-400">{withShifts.length} on shift · {fmtHrs(dayHours)}</div>
+            </div>
+
+            {withShifts.length === 0 && <div className="text-center py-10 text-slate-500 text-sm">No shifts scheduled this day. Switch to Week view to add shifts.</div>}
+
+            <div className="space-y-1.5">
+              {withShifts.map(({member, slots}) => (
+                <div key={member.id} className="flex items-center gap-3 bg-slate-900/60 border border-slate-800/60 rounded-xl px-3 py-2.5">
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
+                    {member.firstName[0]}{member.lastName?.[0]||""}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-white truncate">{member.firstName} {member.lastName}</div>
+                    <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 justify-end">
+                    {slots.map(s => {
+                      const hrs = calcShiftHours(s.startTime, s.endTime);
+                      return (
+                        <button key={s.id}
+                          onClick={()=>!editLocked && setShiftModal({date:dateStr,slot:s,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}
+                          className="text-xs rounded-lg px-2.5 py-1.5 font-bold transition-all hover:opacity-80"
+                          style={{background:getPresetColor(s.shift)+"30",color:getPresetColor(s.shift)}}>
+                          {s.startTime}–{s.endTime} <span className="opacity-70">· {hrs.toFixed(1)}h</span>{!s.published&&" ✎"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {without.length > 0 && (
+              <div className="mt-4">
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Not scheduled ({without.length})</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {without.map(({member}) => (
+                    <button key={member.id}
+                      onClick={()=>!editLocked && setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}
+                      className="text-xs rounded-lg px-2.5 py-1.5 bg-slate-900/60 border border-slate-800/60 text-slate-400 hover:text-white hover:border-slate-600 transition-colors">
+                      {member.firstName} {member.lastName} <Plus size={10} className="inline"/>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {!isMobile && viewMode==="week" && (
         <div className="overflow-x-auto">
-          <div className="min-w-[920px]">
-            <div className="grid gap-1 mb-2 sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm pt-1 pb-1" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
+          <div className="min-w-[920px] max-h-[calc(100vh-340px)] overflow-y-auto">
+            <div className="grid gap-1 mb-2 sticky top-0 z-20 bg-slate-950 pt-1 pb-1" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
               <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
               {weekDays.map((day,idx)=>{
                 const isToday = toLocalDateStr(day)===toLocalDateStr(today);
