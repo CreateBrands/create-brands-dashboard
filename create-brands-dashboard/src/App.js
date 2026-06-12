@@ -9068,7 +9068,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
       });
       // recompute derived values
       const ns = Number(updated.netSales) || 0, ord = Number(updated.totalOrders) || 0;
-      updated.cashVariance = (Number(updated.physicalCash) || 0) - (Number(updated.cashExpected) || 0);
+      updated.cashVariance = (Number(updated.physicalCash) || 0) - ((Number(updated.cashExpected) || 0) - (Number(updated.lopay) || 0));
       updated.atv = ord > 0 ? Math.round((ns / ord) * 100) / 100 : 0;
       updated.amendments = [...(selected.amendments || []), ...amendmentRecords];
       await onUpdateEntry(updated);
@@ -9279,7 +9279,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const [form, setForm] = useState({
     storeId: sortedStores[0]?.id || "",
     date: today, manager: user.name, submittedBy: user.name,
-    netSales: "", cardRevenue: "", cashExpected: "", physicalCash: "", varianceJustification: "",
+    netSales: "", cardRevenue: "", lopay: "", cashExpected: "", physicalCash: "", varianceJustification: "",
     openingFloat: 200, closingFloat: 200,
     totalOrders: "", atv: "",
     unreportedExpense: "", unreportedExpenseNote: "",
@@ -9316,7 +9316,11 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const th = parseFloat(form.totalHours) || 0;
   const pc = parseFloat(form.physicalCash) || 0;
   const ce = parseFloat(form.cashExpected) || 0;
-  const variance = pc - ce;
+  const lopay = parseFloat(form.lopay) || 0;
+  // Lopay is taken on a card terminal but rung into the POS as cash, so it
+  // inflates Cash Expected. The drawer should only hold (Cash Expected − Lopay).
+  const adjustedCashExpected = ce - lopay;
+  const variance = pc - adjustedCashExpected;
   const hasVariance = Math.abs(variance) > 0;
   const primeCostPct = ns > 0 ? ((lc + cc) / ns) * 100 : 0;
   const splh = th > 0 ? ns / th : 0;
@@ -9335,6 +9339,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
       date: form.date,
       manager: form.manager, submittedBy: form.submittedBy,
       netSales: ns, cardRevenue: parseFloat(form.cardRevenue)||0,
+      lopay: lopay, adjustedCashExpected: adjustedCashExpected,
       cashExpected: ce, physicalCash: pc, cashVariance: variance,
       varianceJustification: form.varianceJustification,
       openingFloat: form.openingFloat, closingFloat: form.closingFloat,
@@ -9352,7 +9357,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false); setZone(0);
-      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", unreportedExpense:"", unreportedExpenseNote:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
+      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", lopay:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", unreportedExpense:"", unreportedExpenseNote:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
     }, 2500);
   };
 
@@ -9433,17 +9438,24 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
             <h2 className="text-base font-bold text-white mb-2">Zone 2 — Revenue</h2>
             <div className="grid grid-cols-2 gap-4">
               <div><label className={labelCls}>Net Sales (£)</label><input type="number" value={form.netSales} onChange={e=>set("netSales",e.target.value)} className={inputCls} placeholder="0.00"/></div>
-              <div><label className={labelCls}>Card Revenue (£)</label><input type="number" value={form.cardRevenue} onChange={e=>set("cardRevenue",e.target.value)} className={inputCls} placeholder="0.00"/></div>
+              <div><label className={labelCls}>Flipdish (card) (£)</label><input type="number" value={form.cardRevenue} onChange={e=>set("cardRevenue",e.target.value)} className={inputCls} placeholder="0.00"/></div>
+              <div><label className={labelCls}>Lopay (card → rung as cash) (£)</label><input type="number" value={form.lopay} onChange={e=>set("lopay",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Cash Expected (£)</label><input type="number" value={form.cashExpected} onChange={e=>set("cashExpected",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Physical Cash (£)</label><input type="number" value={form.physicalCash} onChange={e=>set("physicalCash",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Unreported Expense (£)</label><input type="number" value={form.unreportedExpense} onChange={e=>set("unreportedExpense",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Expense Note / Description</label><input value={form.unreportedExpenseNote} onChange={e=>set("unreportedExpenseNote",e.target.value)} className={inputCls} placeholder="What was it for?"/></div>
             </div>
             <div><label className={labelCls}>Shift Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} className={`${inputCls} h-24 resize-none`} placeholder="Any notable events, incidents or handover notes…"/></div>
+            {lopay > 0 && (
+              <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-3 text-xs text-slate-400">
+                Lopay £{lopay.toFixed(2)} was rung as cash → expected cash adjusted from £{ce.toFixed(2)} to <span className="text-white font-semibold">£{adjustedCashExpected.toFixed(2)}</span> for reconciliation.
+              </div>
+            )}
             {hasVariance && (
               <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-4">
                 <div className="flex items-center gap-2 text-amber-400 text-sm font-semibold mb-2">
                   <AlertTriangle size={14}/> Cash Variance: {variance>=0?"+":""}£{variance.toFixed(2)}
+                  <span className="text-slate-500 font-normal">(physical £{pc.toFixed(2)} vs expected £{adjustedCashExpected.toFixed(2)})</span>
                 </div>
                 <label className={labelCls}>Justification (required)</label>
                 <textarea value={form.varianceJustification} onChange={e=>set("varianceJustification",e.target.value)} className={`${inputCls} h-20 resize-none`} placeholder="Explain the variance…"/>
