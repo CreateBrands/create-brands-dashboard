@@ -123,7 +123,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap
+  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -21994,6 +21994,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   );
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e) => { if (e.key === "Escape") setFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
   const [selectedDayIdx, setSelectedDayIdx] = useState(() => { const d = new Date().getDay(); return d === 0 ? 6 : d - 1; });
   const [filterDept, setFilterDept] = useState("all");
   const [filterRole, setFilterRole] = useState("all");
@@ -22283,7 +22290,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-5">
+    <div className={fullscreen ? "fixed inset-0 z-[60] bg-slate-950 overflow-y-auto p-4 lg:p-6 space-y-5" : "space-y-5"}>
       {/* ── Top stats / totals strip ──────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
@@ -22362,6 +22369,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           {pendingAvail > 0 && <span className="text-xs text-amber-400">· {pendingAvail} availability pending</span>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={()=>setFullscreen(f=>!f)} className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5" title={fullscreen?"Exit full screen":"Full screen"}>
+            {fullscreen ? <Minimize2 size={13}/> : <Maximize2 size={13}/>} {fullscreen ? "Exit" : "Full screen"}
+          </button>
           <button onClick={()=>setShowCosts(s=>!s)} className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5">
             {showCosts ? <Eye size={13}/> : <EyeOff size={13}/>} Costs
           </button>
@@ -22587,7 +22597,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
 
       {!isMobile && viewMode==="week" && (
         <div className="overflow-x-auto">
-          <div className="min-w-[920px] max-h-[calc(100vh-340px)] overflow-y-auto">
+          <div className={`min-w-[920px] ${fullscreen ? "max-h-[calc(100vh-240px)]" : "max-h-[calc(100vh-340px)]"} overflow-y-auto`}>
             <div className="grid gap-1 mb-2 sticky top-0 z-20 bg-slate-950 pt-1 pb-1" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
               <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
               {weekDays.map((day,idx)=>{
