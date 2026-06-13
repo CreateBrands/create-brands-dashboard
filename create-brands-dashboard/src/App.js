@@ -28331,7 +28331,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user: currentUser_ctx }}>
-      <div className="flex h-screen bg-slate-950 overflow-hidden">
+      <div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
         {/* Sidebar */}
         <Sidebar
           navGroups={NAV_GROUPS} activeView={effectiveActiveView} setActiveView={setActiveView}
