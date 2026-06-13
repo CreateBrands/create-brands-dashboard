@@ -26781,20 +26781,22 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     : [];
 
   return (
-    <div className={`flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
-      {/* Logo */}
+    <div className={`hidden md:flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
+      {/* Logo — click to go to Dashboard */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/60">
-        <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
-          <BarChart2 size={16} className="text-white"/>
-        </div>
-        {!collapsed && (
-          <div>
-            <div className="text-sm font-black text-white">Create Brands</div>
-            {onSwitchEntity
-              ? <button onClick={onSwitchEntity} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">Switch entity <ChevronDown size={11}/></button>
-              : <div className="text-xs text-slate-500">Hospitality Group</div>}
+        <div onClick={() => setActiveView("dashboard")} className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" title="Go to Dashboard">
+          <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
+            <BarChart2 size={16} className="text-white"/>
           </div>
-        )}
+          {!collapsed && (
+            <div>
+              <div className="text-sm font-black text-white">Create Brands</div>
+              {onSwitchEntity
+                ? <span onClick={(e) => { e.stopPropagation(); onSwitchEntity(); }} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer">Switch entity <ChevronDown size={11}/></span>
+                : <div className="text-xs text-slate-500">Hospitality Group</div>}
+            </div>
+          )}
+        </div>
         <button onClick={() => setCollapsed(c => !c)} className="ml-auto text-slate-600 hover:text-slate-700 p-1 rounded-lg">
           {collapsed ? <ChevronRight size={14}/> : <ChevronLeft size={14}/>}
         </button>
@@ -27217,6 +27219,108 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   );
 }
 
+// Mobile bottom tab bar (md:hidden). Desktop keeps the sidebar untouched.
+// "More" opens a full-screen grouped sheet. All routing via setActiveView.
+function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen }) {
+  const tabs = [
+    { key: "store-analytics", label: "Home",     icon: LayoutDashboard },
+    { key: "schedule",        label: "Schedule", icon: CalendarDays },
+    { key: "availability",    label: "Availability", icon: Calendar },
+    { key: "ops-tasks",       label: "Tasks",    icon: CheckSquare },
+    { key: "__more__",        label: "More",     icon: Menu },
+  ];
+  return (
+    <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex items-stretch">
+      {tabs.map(t => {
+        const Icon = t.icon;
+        const isMore = t.key === "__more__";
+        const activeTab = isMore ? moreOpen : (activeView === t.key && !moreOpen);
+        return (
+          <button key={t.key}
+            onClick={() => isMore ? onOpenMore() : setActiveView(t.key)}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 ${activeTab ? "text-indigo-400" : "text-slate-500"}`}>
+            <Icon size={20}/>
+            <span className="text-[10px] font-semibold">{t.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function MoreSheet({ open, onClose, setActiveView, allowedKeys = [] }) {
+  if (!open) return null;
+  const GROUPS = [
+    { title: "Operations", items: [
+      { key:"ops-tasks", label:"Today's Tasks", icon:CheckSquare },
+      { key:"ops-temps", label:"Temperature", icon:Thermometer },
+      { key:"ops-assigns", label:"Assignment", icon:Clipboard },
+      { key:"ops-deliveries", label:"Deliveries", icon:Truck },
+      { key:"invoices", label:"Invoices", icon:FileText },
+      { key:"issues", label:"Issues", icon:Wrench },
+      { key:"ops-network", label:"Ops Overview", icon:Activity },
+    ]},
+    { title: "Communication", items: [
+      { key:"comms", label:"Helpdesk & Chat", icon:MessageSquare },
+    ]},
+    { title: "Human Resources", items: [
+      { key:"team", label:"Team", icon:Users },
+      { key:"hiring", label:"Hiring", icon:UserPlus },
+      { key:"onboarding-board", label:"Onboarding", icon:UserCheck },
+      { key:"training", label:"Training", icon:GraduationCap },
+      { key:"contracts", label:"Contracts", icon:FileText },
+    ]},
+    { title: "Reporting", items: [
+      { key:"reports", label:"Reports", icon:FileText },
+      { key:"eod", label:"EOD", icon:FileText },
+      { key:"notifications", label:"Notifications", icon:Bell },
+      { key:"cogs", label:"COGS / Inventory", icon:ClipboardList },
+    ]},
+    { title: "Settings", items: [
+      { key:"ops-settings", label:"Ops Setup", icon:Settings },
+      { key:"ops-audit", label:"Audit Trail", icon:ScrollText },
+      { key:"ops-compliance", label:"Compliance", icon:Shield },
+      { key:"chain", label:"Chain Performance", icon:Globe },
+      { key:"whos-working", label:"Who's Working", icon:UserCheck },
+      { key:"time-attend", label:"Time & Attendance", icon:Clock },
+      { key:"admin", label:"Admin", icon:Users },
+    ]},
+  ];
+  const go = (key) => { setActiveView(key); onClose(); };
+  return (
+    <div className="md:hidden fixed inset-0 z-50 bg-slate-950 flex flex-col">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 flex-shrink-0">
+        <h2 className="text-lg font-black text-white">More</h2>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={22}/></button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 pb-24">
+        {GROUPS.map(g => {
+          const items = g.items.filter(it => allowedKeys.includes(it.key));
+          if (!items.length) return null;
+          return (
+            <div key={g.title}>
+              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-bold px-1 mb-2">{g.title}</div>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
+                {items.map(it => {
+                  const Icon = it.icon;
+                  return (
+                    <button key={it.key} onClick={() => go(it.key)}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800/50 text-left">
+                      <Icon size={18} className="text-slate-400 flex-shrink-0"/>
+                      <span className="text-sm font-semibold text-white flex-1">{it.label}</span>
+                      <ChevronRight size={16} className="text-slate-600"/>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function WhosWorkingModal({ open, onClose, punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser, onUpdatePunch, onDeletePunch }) {
   if (!open) return null;
   return (
@@ -27394,6 +27498,7 @@ export default function App() {
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
   const [whosWorkingOpen, setWhosWorkingOpen] = useState(false);   // "Who's working" popup
+  const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
   // Entity landing: which brand/entity the user has stepped into. null = show
   // the entity picker (tiles). Persisted so a refresh keeps you in the entity.
   const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
@@ -28191,6 +28296,8 @@ export default function App() {
     // nav. Allow it through if the user landed on it from Ops Team or a deep
     // link, even though no sidebar nav matches it.
     if (activeView === "employee-profile") return activeView;
+    // Bottom-tab destinations that aren't sidebar nav items.
+    if (["schedule", "availability"].includes(activeView)) return activeView;
     return allowedKeys[0];
   })();
 
@@ -28273,12 +28380,14 @@ export default function App() {
             </div>
           </div>
           {/* Content */}
-          <main className="flex-1 overflow-y-auto p-6">
+          <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
             {effectiveActiveView === "dashboard" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
             {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
+            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek}/>}
+            {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
@@ -28373,6 +28482,8 @@ export default function App() {
             />}
           </main>
         </div>
+        <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}/>
+        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={NAV_GROUPS.flatMap(g => g.items.map(i => i.key))}/>
         <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
