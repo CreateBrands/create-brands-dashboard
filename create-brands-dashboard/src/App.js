@@ -11130,6 +11130,9 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
     // Setting false hides the store from the public dropdown immediately —
     // useful for pausing applications when fully staffed.
     isHiring:        store?.isHiring !== undefined ? store.isHiring : true,
+    // Per-store auto clock-out time (HH:MM). Any shift still open past this
+    // time is auto-closed by the nightly job. Blank uses the global default.
+    autoClockoutTime: store?.autoClockoutTime ? String(store.autoClockoutTime).slice(0,5) : "",
   });
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -11261,6 +11264,17 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
             Tablets at this store enter this PIN once to register as the store's kiosk.
             Changing it invalidates any tablets currently registered — they'll need to re-enter the new PIN.
             Leave blank to disable kiosk login for this store.
+          </div>
+        </Field>
+        <Field label="Auto clock-out time" full>
+          <input
+            value={form.autoClockoutTime}
+            onChange={set("autoClockoutTime")}
+            type="time"
+            className={fieldCls}
+          />
+          <div className="text-[10px] text-slate-500 mt-1">
+            Any shift still clocked in past this time is automatically clocked out overnight (set it to closing time + a small buffer, e.g. close 02:00 → 02:30). Leave blank to use the global default.
           </div>
         </Field>
         <Field label="Accepting applications" full>

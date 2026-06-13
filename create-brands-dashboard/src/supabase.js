@@ -1177,6 +1177,7 @@ function dbStoreToApp(s) {
     // defensively in case PostgREST returns null during the brief window
     // between ALTER TABLE and schema-cache reload.
     isHiring:         s.is_hiring ?? true,
+    autoClockoutTime: s.auto_clockout_time || "",
   };
 }
 
@@ -1261,6 +1262,7 @@ function appStoreToDb(s) {
   if (s.kpiTargets      !== undefined) row.kpi_targets      = s.kpiTargets || {};
   if (s.kioskPin        !== undefined) row.kiosk_pin        = s.kioskPin || null;
   if (s.isHiring        !== undefined) row.is_hiring        = !!s.isHiring;
+  if (s.autoClockoutTime !== undefined) row.auto_clockout_time = s.autoClockoutTime || null;
   return row;
 }
 
