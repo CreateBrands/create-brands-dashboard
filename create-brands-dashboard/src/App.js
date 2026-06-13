@@ -102,7 +102,7 @@ import {
   addPrepComponent, updatePrepComponent, deletePrepComponent,
   addModifier, updateModifier, deleteModifier,
   addProduct, updateProduct, deleteProduct,
-  addProductVariant, updateProductVariant, deleteProductVariant, enableProductVariations,
+  addProductVariant, updateProductVariant, deleteProductVariant, enableProductVariations, deleteVariantKeepRecipe,
   addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
   attachProductModifier, detachProductModifier,
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
@@ -3654,16 +3654,29 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
   const enableVariations = async () => {
     try {
       const firstId = await enableProductVariations(product.id, "Variation 1");
-      await addProductVariant(product.id, { name:"Variation 2", sortOrder: 1 });
+      // Variation 2 copies Variation 1 so the team edits rather than rebuilds.
+      await addProductVariant(product.id, { name:"Variation 2", sortOrder: 1, copyFromVariantId: firstId });
       await reload(); setActiveVariantId(firstId);
     } catch(e){ setEditErr(e.message||String(e)); }
   };
-  const addVariant = async () => { try { const id = await addProductVariant(product.id, { name:"New variation", sortOrder: variants.length }); await reload(); setActiveVariantId(id); } catch(e){ setEditErr(e.message||String(e)); } };
+  const addVariant = async () => {
+    try {
+      // Copy the currently active variant's recipe into the new one.
+      const id = await addProductVariant(product.id, { name:"New variation", sortOrder: variants.length, copyFromVariantId: activeVariant?.id ?? null });
+      await reload(); setActiveVariantId(id);
+    } catch(e){ setEditErr(e.message||String(e)); }
+  };
   const renameVariant = async (name) => { if (!activeVariant) return; await updateProductVariant(activeVariant.id, { name }); await reload(); };
   const removeVariant = async () => {
     if (!activeVariant) return;
-    if (!window.confirm(`Delete the "${activeVariant.name}" variation and its recipe?${variants.length===1?" This product will return to a single base recipe.":""}`)) return;
-    await deleteProductVariant(activeVariant.id); await reload();
+    const isLast = variants.length === 1;
+    if (!window.confirm(`Delete the "${activeVariant.name}" variation${isLast ? "? Its recipe will be kept as the product's single base recipe." : " and its recipe?"}`)) return;
+    if (isLast) {
+      await deleteVariantKeepRecipe(product.id, activeVariant.id);
+    } else {
+      await deleteProductVariant(activeVariant.id);
+    }
+    await reload();
     setActiveVariantId(variants.find(v=>v.id!==activeVariant.id)?.id || null);
   };
   const compCost = (c) => {

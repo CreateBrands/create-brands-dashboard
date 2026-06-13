@@ -4775,7 +4775,27 @@ export async function addProductVariant(productId, patch = {}) {
   const { data, error } = await supabase.from("cogs_product_variants")
     .insert({ product_id: productId, name: patch.name || "New variation", sort_order: patch.sortOrder ?? 0 })
     .select().single();
-  if (error) throw error; return data.id;
+  if (error) throw error;
+  const newId = data.id;
+  // Optionally copy the recipe from an existing variant (so the team edits
+  // rather than rebuilds). copyFromVariantId may be a variant id, or null to
+  // copy the base recipe (components with variant_id null).
+  if ("copyFromVariantId" in patch) {
+    let q = supabase.from("cogs_product_components").select("*").eq("product_id", productId);
+    q = patch.copyFromVariantId == null ? q.is("variant_id", null) : q.eq("variant_id", patch.copyFromVariantId);
+    const { data: src, error: sErr } = await q;
+    if (sErr) throw sErr;
+    if (src && src.length) {
+      const rows = src.map(c => ({
+        product_id: productId, variant_id: newId, kind: c.kind,
+        item_scope: c.item_scope, item_id: c.item_id, prep_id: c.prep_id,
+        label: c.label, portion_qty: c.portion_qty, unit: c.unit,
+      }));
+      const { error: iErr } = await supabase.from("cogs_product_components").insert(rows);
+      if (iErr) throw iErr;
+    }
+  }
+  return newId;
 }
 export async function updateProductVariant(id, patch) {
   const b = {}; if ("name" in patch) b.name = patch.name; if ("sortOrder" in patch) b.sort_order = Number(patch.sortOrder)||0;
@@ -4783,6 +4803,16 @@ export async function updateProductVariant(id, patch) {
 }
 export async function deleteProductVariant(id) {
   const { error } = await supabase.from("cogs_product_variants").delete().eq("id", id); if (error) throw error;
+}
+// Delete a variation but KEEP its recipe by moving its components back to the
+// base (variant_id null). Used when removing the last variation so the product
+// cleanly returns to a simple single-recipe product instead of losing the work.
+export async function deleteVariantKeepRecipe(productId, variantId) {
+  const { error: upErr } = await supabase.from("cogs_product_components")
+    .update({ variant_id: null }).eq("product_id", productId).eq("variant_id", variantId);
+  if (upErr) throw upErr;
+  const { error } = await supabase.from("cogs_product_variants").delete().eq("id", variantId);
+  if (error) throw error;
 }
 // Enable variations on a simple product: turn the current base recipe (components
 // with variant_id null) into the first named variant, then return its id so the
