@@ -9129,16 +9129,14 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
 // ─── EOD Form ─────────────────────────────────────────────────────────────────
 // ===== EOD_AMEND_RECON_V1: amend EOD entries (logged trail) + manager<>HQ reconciliation thread =====
 const EOD_AMEND_FIELDS = [
-  { key: "netSales",     label: "Net sales",      money: true },
-  { key: "cardRevenue",  label: "Card revenue",   money: true },
-  { key: "cashExpected", label: "Cash expected",  money: true },
-  { key: "physicalCash", label: "Physical cash",  money: true },
-  { key: "openingFloat", label: "Opening float",  money: true },
-  { key: "closingFloat", label: "Closing float",  money: true },
-  { key: "laborCost",    label: "Labour cost",    money: true },
-  { key: "cogsCost",     label: "COGS cost",      money: true },
-  { key: "totalOrders",  label: "Total orders",   money: false },
-  { key: "totalHours",   label: "Total hours",    money: false },
+  { key: "netSales",          label: "Net sales",         money: true },
+  { key: "cardRevenue",       label: "Flipdish (card)",   money: true },
+  { key: "lopay",             label: "Lopay",             money: true },
+  { key: "cashExpected",      label: "Cash expected",     money: true },
+  { key: "physicalCash",      label: "Physical cash",     money: true },
+  { key: "unreportedExpense", label: "Unreported expense",money: true },
+  { key: "openingFloat",      label: "Opening float",     money: true },
+  { key: "closingFloat",      label: "Closing float",     money: true },
 ];
 
 function EodReconBadge({ status }) {
@@ -9275,7 +9273,13 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
               className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs ${selId === e.id ? "border-indigo-500 bg-slate-800/60" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-200 font-semibold">{e.date}</span>
-                <EodReconBadge status={e.reconStatus || "open"} />
+                <div className="flex items-center gap-1.5">
+                  {(() => {
+                    const v = (Number(e.physicalCash)||0) - ((Number(e.cashExpected)||0) - (Number(e.lopay)||0) - (Number(e.unreportedExpense)||0));
+                    return Math.abs(v) >= 0.005 ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">{v>=0?"+":""}{fmtMoney(v)}</span> : null;
+                  })()}
+                  <EodReconBadge status={e.reconStatus || "open"} />
+                </div>
               </div>
               <div className="text-slate-500 mt-0.5">
                 {(e.storeId && storeName(e.storeId)) || brandName(e.brandId)} · {e.manager || "—"} · {fmtMoney(e.netSales)}
@@ -9315,6 +9319,30 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                     onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
                     className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50" />
                 </div>
+
+                {/* Live cash variance — flags any discrepancy */}
+                {(() => {
+                  const ce = Number(draft.cashExpected) || 0;
+                  const pc = Number(draft.physicalCash) || 0;
+                  const lp = Number(draft.lopay) || 0;
+                  const ue = Number(draft.unreportedExpense) || 0;
+                  const expectToCount = ce - lp - ue;
+                  const variance = pc - expectToCount;
+                  const off = Math.abs(variance) >= 0.005;
+                  return (
+                    <div className={`rounded-xl p-3 border ${off ? "bg-amber-950/20 border-amber-500/40" : "bg-emerald-950/20 border-emerald-500/30"}`}>
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className={`text-sm font-bold flex items-center gap-2 ${off ? "text-amber-400" : "text-emerald-400"}`}>
+                          {off ? <><AlertTriangle size={15}/> Cash discrepancy: {variance>=0?"+":""}{fmtMoney(variance)}</> : <>✓ Cash balances</>}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          expect to count {fmtMoney(expectToCount)}{(lp>0||ue>0) && <> (expected {fmtMoney(ce)}{lp>0&&<> − Lopay {fmtMoney(lp)}</>}{ue>0&&<> − expense {fmtMoney(ue)}</>})</>} · counted {fmtMoney(pc)}
+                        </div>
+                      </div>
+                      {off && <div className="text-[11px] text-slate-400 mt-1">{variance < 0 ? "Drawer is short — money missing or an expense/Lopay not recorded." : "Drawer is over — more cash than expected."}</div>}
+                    </div>
+                  );
+                })()}
 
                 {canAmend && changedFields.length > 0 && (
                   <div className="space-y-2 bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
