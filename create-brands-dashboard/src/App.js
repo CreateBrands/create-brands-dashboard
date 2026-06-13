@@ -569,11 +569,17 @@ function LocationDropdown({ brands, value, onChange, allLabel = null, className 
 //   brands  — for showing "Chocoberry · Cardiff" style labels when multi-brand
 // Returns null if there are 0 stores (caller renders an empty state).
 // Hidden entirely for single-store managers (no choice to make).
+// Facility entities (central kitchen, distribution, franchise ops) are NOT
+// shops — they're reached via the entity picker, never listed as a "store" to
+// pick or filter by. Use these helpers wherever a store list/dropdown is built.
+const FACILITY_SITE_TYPES = new Set(["central_kitchen", "distribution", "franchise_ops"]);
+const isShopSite = (s) => !FACILITY_SITE_TYPES.has(s?.siteType);
+const shopStoresOnly = (list) => (list || []).filter(isShopSite);
+
 function StoreScopeDropdown({ stores, brands, value, onChange, className = "" }) {
   // Never list production/distribution/franchise facilities as selectable
   // "stores" inside a shop brand's scope — they're operational entities, not shops.
-  const opsSite = new Set(["central_kitchen", "distribution", "franchise_ops"]);
-  stores = (stores || []).filter(s => !opsSite.has(s.siteType));
+  stores = shopStoresOnly(stores);
   if (!stores || stores.length === 0) return null;
   if (stores.length === 1) return null; // one store = nothing to pick
   // For multi-brand contexts (owner/HQ seeing Chocoberry + Tove), prefix the
@@ -3797,7 +3803,7 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
 // POS MAPPER — per-store till name -> master product
 // ═══════════════════════════════════════════════════════════════════════════
 function PosMapper({ stores = [] }) {
-  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
   const [tillNames, setTillNames] = useState(null);   // [{name,qty,revenue}]
   const [mappings, setMappings] = useState([]);        // existing
@@ -5402,7 +5408,7 @@ function InvoicesView({ currentUser }) {
 // ===== GOOGLE_REVIEWS_VIEW_V1 =====
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [reviews, setReviews] = useState([]);
-  const [filter, setFilter] = useState("all");   // all | low (<=2)
+  const [filter, setFilter] = useState(compact ? "low" : "all");   // all | low (<=2)
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -5811,7 +5817,7 @@ function OnboardingBoard({ stores, opsTeam }) {
   }, [opsTeam, contracts, rtwDocs, training, policyAcks, storeSel, scopeSel, stores]);
 
   const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
-  const activeStores = (stores || []).filter(s => !s.archivedAt);
+  const activeStores = (stores || []).filter(s => !s.archivedAt && isShopSite(s));
 
   return (
     <div className="space-y-4">
@@ -6880,12 +6886,12 @@ function ForecastPanel({ storeId, stores }) {
 function ManagerStoreDashboard({ stores, brands, currentUser }) {
   const isHQ = isHqOrAbove(currentUser?.role);
   const myStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && (isHQ || (currentUser?.storeIds || []).includes(s.id))),
+    () => (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s) && (isHQ || (currentUser?.storeIds || []).includes(s.id))),
     [stores, currentUser, isHQ]
   );
   const [storeId, setStoreId] = useState(myStores[0]?.id || null);
   const [period, setPeriod] = useState("week");
-  const [reviewsOpen, setReviewsOpen] = useState(false);
+  const [reviewsOpen, setReviewsOpen] = useState(true);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
 
@@ -8318,6 +8324,52 @@ function StoreDetailModal({ store, flipdishStores, fromDate, toDate, periodLabel
 }
 
 
+// Central Kitchen dashboard — production facility, no sales/customer tiles.
+// Shows people on shift, headcount, open maintenance issues, and a prompt
+// toward the operational tools. (Production batch metrics come in CK Stage 2.)
+function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], punchRecords = [], currentUser }) {
+  const ckStore = (stores || []).find(s => s.siteType === "central_kitchen" && !s.archivedAt);
+  const ckStoreIds = new Set((stores || []).filter(s => s.siteType === "central_kitchen").map(s => s.id));
+  const team = (opsTeam || []).filter(m => !m.archivedAt && (m.storeIds || []).some(id => ckStoreIds.has(id)));
+  const todayStr = new Date().toISOString().slice(0,10);
+  const onShift = (punchRecords || []).filter(p => p.status === "open" && ckStoreIds.has(p.storeId)).length;
+  const openIssues = (issues || []).filter(i => ckStoreIds.has(i.storeId) && i.status !== "resolved" && i.status !== "closed").length;
+
+  const Tile = ({ label, value, sub, accent }) => (
+    <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-4">
+      <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">{label}</div>
+      <div className={`text-2xl font-black mt-1 tabular-nums ${accent||"text-white"}`}>{value}</div>
+      {sub && <div className="text-[10px] text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-sky-500/15 flex items-center justify-center"><ChefHat size={20} className="text-sky-400"/></div>
+        <div>
+          <div className="text-lg font-black text-white">{ckStore?.name || "Central Kitchen"}</div>
+          <div className="text-xs text-slate-500">Production facility · operations overview</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Tile label="On shift now" value={onShift} sub="clocked in" accent="text-emerald-400"/>
+        <Tile label="Team" value={team.length} sub="assigned to CK"/>
+        <Tile label="Open issues" value={openIssues} sub="maintenance / reports" accent={openIssues>0?"text-amber-400":"text-white"}/>
+        <Tile label="Production" value="—" sub="batches (coming soon)"/>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+        <div className="text-sm font-semibold text-white mb-1">Production tracking is coming soon</div>
+        <div className="text-sm text-slate-400 leading-relaxed">
+          Central Kitchen runs on the operational tools in the sidebar — checklists, temperatures, deliveries, maintenance, cleaning, team and schedules all work here. Batch production, yields and stock transfers to Distribution will be added next.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashboardView({ brands, stores, entries, issues }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
@@ -9169,7 +9221,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
       });
       // recompute derived values
       const ns = Number(updated.netSales) || 0, ord = Number(updated.totalOrders) || 0;
-      updated.cashVariance = (Number(updated.physicalCash) || 0) - ((Number(updated.cashExpected) || 0) - (Number(updated.lopay) || 0));
+      updated.cashVariance = (Number(updated.physicalCash) || 0) - ((Number(updated.cashExpected) || 0) - (Number(updated.lopay) || 0) - (Number(updated.unreportedExpense) || 0));
       updated.atv = ord > 0 ? Math.round((ns / ord) * 100) / 100 : 0;
       updated.amendments = [...(selected.amendments || []), ...amendmentRecords];
       await onUpdateEntry(updated);
@@ -9420,7 +9472,10 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const lopay = parseFloat(form.lopay) || 0;
   // Lopay is taken on a card terminal but rung into the POS as cash, so it
   // inflates Cash Expected. The drawer should only hold (Cash Expected − Lopay).
-  const adjustedCashExpected = ce - lopay;
+  const unrepExp = parseFloat(form.unreportedExpense) || 0;
+  // Lopay (rung as cash) inflates expected cash; unreported expense is cash that
+  // legitimately left the drawer. Both reduce the cash you expect to physically count.
+  const adjustedCashExpected = ce - lopay - unrepExp;
   const variance = pc - adjustedCashExpected;
   const hasVariance = Math.abs(variance) > 0;
   const primeCostPct = ns > 0 ? ((lc + cc) / ns) * 100 : 0;
@@ -9547,9 +9602,9 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
               <div><label className={labelCls}>Expense Note / Description</label><input value={form.unreportedExpenseNote} onChange={e=>set("unreportedExpenseNote",e.target.value)} className={inputCls} placeholder="What was it for?"/></div>
             </div>
             <div><label className={labelCls}>Shift Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} className={`${inputCls} h-24 resize-none`} placeholder="Any notable events, incidents or handover notes…"/></div>
-            {lopay > 0 && (
+            {(lopay > 0 || unrepExp > 0) && (
               <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-3 text-xs text-slate-400">
-                Lopay £{lopay.toFixed(2)} was rung as cash → expected cash adjusted from £{ce.toFixed(2)} to <span className="text-white font-semibold">£{adjustedCashExpected.toFixed(2)}</span> for reconciliation.
+                Expected cash £{ce.toFixed(2)}{lopay>0 && <> − Lopay £{lopay.toFixed(2)}</>}{unrepExp>0 && <> − expense £{unrepExp.toFixed(2)}</>} = <span className="text-white font-semibold">£{adjustedCashExpected.toFixed(2)}</span> to count.
               </div>
             )}
             {hasVariance && (
@@ -9686,7 +9741,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
   // Active stores grouped by brand for the picker. Archived stores excluded
   // so managers can't be assigned to a store that's been retired.
   const activeStores = useMemo(
-    () => stores.filter(s => !s.archivedAt),
+    () => stores.filter(s => !s.archivedAt && isShopSite(s)),
     [stores]
   );
   const storesByBrand = useMemo(() => {
@@ -10189,14 +10244,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           <select value={r.payrollLocation} onChange={e => updateRow(r.employeeId, { payrollLocation: e.target.value })}
                             className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
                             <option value="">—</option>
-                            {stores.filter(s => !s.archivedAt).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
+                            {stores.filter(s => !s.archivedAt && isShopSite(s)).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
                           </select>
                         </td>
                         <td className="py-2 pr-3">
                           <select value={r.accountingLocation} onChange={e => updateRow(r.employeeId, { accountingLocation: e.target.value })}
                             className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
                             <option value="">—</option>
-                            {stores.filter(s => !s.archivedAt).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
+                            {stores.filter(s => !s.archivedAt && isShopSite(s)).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
                           </select>
                         </td>
                         <td className="py-2 pr-3 text-[10px] text-slate-500">
@@ -11865,7 +11920,7 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
 // ─── Assignments View ─────────────────────────────────────────────────────────
 function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, opsTeam = [], storeRoles = [], storeDepartments = [], item, onSave, onClose }) {
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
   );
 
@@ -13658,7 +13713,7 @@ function HiringView({
   }, [onUpdate]);
 
   const allowedStores = useMemo(
-    () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt && isShopSite(s)),
     [stores, visibleStoreIds]
   );
   const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
@@ -14258,7 +14313,7 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   // Store options (with brand prefix for clarity across the chain)
   const brandName = (id) => brands?.find(b => b.id === id)?.name || "";
   const storeOpts = (stores || [])
-    .filter(s => !s.archivedAt)
+    .filter(s => !s.archivedAt && isShopSite(s))
     .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || ""));
   const storeLabel = (s) => `${brandName(s.brandId) ? brandName(s.brandId) + " · " : ""}${s.shortName || s.name}`;
 
@@ -15373,7 +15428,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
   // Franchise / JV stores excluded; if you ever need staff there, separate
   // workflow.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
   );
 
@@ -17584,7 +17639,7 @@ function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
   // Same logic as OpsTeamMemberFormModal: temp units are physical equipment
   // installed at company-owned stores. Franchise/JV stores manage their own.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
   );
 
@@ -17648,7 +17703,7 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose
   // Per-store cleaning tasks. brand_id is derived from the chosen store
   // so legacy code that filters by brand still works.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
   );
   const [form, setFormState] = useState({
@@ -17733,7 +17788,7 @@ function OpsTeamMemberFormModal({
   // their own teams, not company HQ. If you ever need to add staff at a JV
   // or franchise store, that's a separate workflow.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
   );
 
@@ -18170,7 +18225,7 @@ function OpsTeamMemberFormModal({
 
 function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, onClose }) {
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
   );
   const [name, setName] = useState(item?.name || "");
@@ -27566,7 +27621,8 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
-            {effectiveActiveView === "dashboard"      && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} currentUser={currentUser}/>}
+            {effectiveActiveView === "dashboard" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
+            {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry}/>}
