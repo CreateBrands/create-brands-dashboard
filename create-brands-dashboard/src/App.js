@@ -4597,18 +4597,18 @@ function EmpThemeStyle() {
 .emp-theme [class*="bg-amber-950"], .emp-theme [class*="bg-sky-950"],
 .emp-theme [class*="bg-indigo-950"] { background-color: var(--cream-deep) !important; }
 
-/* ── Dark-chocolate chrome (header / sidebar / nav) on cream content ─────── */
+/* ── Brand-brown chrome (header / sidebar / nav) on cream content ────────── */
 .emp-theme .cb-chrome,
 .emp-theme .cb-chrome.bg-slate-950,
 .emp-theme .cb-chrome[class*="bg-slate-950"],
-.emp-theme .cb-chrome[class*="bg-slate-900"] { background-color: #2B1A12 !important; }
-/* nested surfaces within chrome (e.g. nav group hovers) -> slightly lighter choc */
+.emp-theme .cb-chrome[class*="bg-slate-900"] { background-color: #844429 !important; }
+/* nested surfaces within chrome (e.g. nav group hovers) -> slightly lighter brown */
 .emp-theme .cb-chrome .bg-slate-900,
 .emp-theme .cb-chrome .bg-slate-800,
 .emp-theme .cb-chrome .bg-slate-800\\/40,
 .emp-theme .cb-chrome .bg-slate-800\\/60,
 .emp-theme .cb-chrome .hover\\:bg-slate-800\\/60:hover,
-.emp-theme .cb-chrome .hover\\:bg-slate-900\\/40:hover { background-color: #3D2A1E !important; }
+.emp-theme .cb-chrome .hover\\:bg-slate-900\\/40:hover { background-color: #9A5436 !important; }
 /* text inside chrome -> cream / muted cream */
 .emp-theme .cb-chrome .text-white,
 .emp-theme .cb-chrome .text-slate-100,
@@ -4617,13 +4617,13 @@ function EmpThemeStyle() {
 .emp-theme .cb-chrome .text-slate-400,
 .emp-theme .cb-chrome .text-slate-500,
 .emp-theme .cb-chrome .text-slate-600 { color: #C9A98F !important; }
-/* active accents in chrome -> warm brown highlight */
+/* active accents in chrome -> light caramel highlight that stands out on brown */
 .emp-theme .cb-chrome .text-indigo-300,
-.emp-theme .cb-chrome .text-indigo-400 { color: #E8B98F !important; }
+.emp-theme .cb-chrome .text-indigo-400 { color: #FDF2E0 !important; }
 .emp-theme .cb-chrome .bg-indigo-600,
-.emp-theme .cb-chrome .bg-indigo-500 { background-color: #844429 !important; }
+.emp-theme .cb-chrome .bg-indigo-500 { background-color: #C9854F !important; }
 .emp-theme .cb-chrome [class*="bg-indigo-600\\/"],
-.emp-theme .cb-chrome [class*="bg-indigo-950"] { background-color: #3D2A1E !important; }
+.emp-theme .cb-chrome [class*="bg-indigo-950"] { background-color: #9A5436 !important; }
 /* borders in chrome -> deep choc */
 .emp-theme .cb-chrome [class*="border-slate-700"],
 .emp-theme .cb-chrome [class*="border-slate-800"] { border-color: rgba(255,248,224,0.10) !important; }
