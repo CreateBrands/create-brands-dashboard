@@ -8715,11 +8715,14 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     if (mode === "cost") {
       const rows = punches.map(p => {
         const open = (p.status === "open" || !p.punchOut);
-        return [
-          p.employeeName || "—", nameOfStore(p.storeId), p.date || "—",
-          open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`,
-          open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0),
-        ];
+        const member = (opsTeam || []).find(m => m.id === p.employeeId);
+        const salaried = isSalaried(member);
+        const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`;
+        // Salaried: cost is the fixed daily slice, not hours×rate.
+        const costCell = salaried
+          ? `${fmtCurrency(salariedDailyCost(member))} /day (salaried)`
+          : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
+        return [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ];
       });
       setDrill({
         title: `Labour cost breakdown · ${period.label}`,
@@ -24450,6 +24453,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       const m = opsTeam.find(x => x.id === r.employeeId);
       summary[r.employeeId] = { name: r.employeeName, role: m?.role || "",
         hourlyRate: m?.hourlyRate || r.hourlyRate || 0,
+        member: m || null, payType: m?.payType || "hourly",
         totalHours: 0, regularHours: 0, overtimeHours: 0, approvedOT: 0,
         totalPay: 0, days: 0, pendingApproval: 0, pendingOT: 0 };
     }
@@ -24464,7 +24468,14 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   Object.values(summary).forEach(s => {
     s.regularHours  = s.totalHours;
     s.overtimeHours = s.approvedOT; // only count manager-approved OT
-    s.totalPay      = Math.round((s.totalHours * s.hourlyRate) * 100) / 100;
+    // Salaried staff: pay is the fixed daily slice × days worked in this view,
+    // NOT hours × rate (their "rate" column holds the annual/monthly amount).
+    if (isSalaried(s.member)) {
+      s.totalPay = Math.round(salariedDailyCost(s.member) * s.days * 100) / 100;
+      s.isSalaried = true;
+    } else {
+      s.totalPay = Math.round((s.totalHours * s.hourlyRate) * 100) / 100;
+    }
   });
 
   const totalPay        = Object.values(summary).reduce((a, s) => a + s.totalPay, 0);
@@ -24784,8 +24795,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {(r.overtimeReason || (r.overtimeComments?.length || 0) > 0) && onAddComment && (
                       <OvertimeConversation record={r} currentUser={currentUser} isEmployee={false} onAddComment={onAddComment} compact/>
                     )}
-                    {/* Gross pay with/without OT */}
-                    {r.hourlyRate > 0 && r.punchOut && (
+                    {/* Gross pay with/without OT — hourly staff only; salaried
+                        cost is a fixed daily slice shown in the summary. */}
+                    {r.hourlyRate > 0 && r.punchOut && !isSalaried(opsTeam.find(m => m.id === r.employeeId)) && (
                       <div className="mt-2 pt-2 border-t border-white/10 flex gap-4 text-xs">
                         <span className="text-slate-600">Scheduled pay: <span className="text-white font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*r.hourlyRate) : 0).toFixed(2)}</span></span>
                         {r.overtimeApproved && <span className="text-emerald-400">+OT: <span className="font-bold">£{(r.overtimeHrs * r.hourlyRate).toFixed(2)}</span></span>}
@@ -24850,7 +24862,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   <td className="px-3 py-2 text-right text-white tabular-nums">{fmtDur(s.regularHours)}</td>
                   <td className="px-3 py-2 text-right tabular-nums hidden md:table-cell">{s.overtimeHours > 0 ? <span className="text-amber-400">{fmtDur(s.overtimeHours)}</span> : <span className="text-slate-600">—</span>}</td>
                   <td className="px-3 py-2 text-right font-bold text-white tabular-nums">{fmtDur(s.totalHours)}</td>
-                  <td className="px-3 py-2 text-right text-slate-400 tabular-nums hidden md:table-cell">£{(s.hourlyRate||0).toFixed(2)}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 tabular-nums hidden md:table-cell">{s.isSalaried ? <span className="text-[10px] text-indigo-300">Salaried</span> : `£${(s.hourlyRate||0).toFixed(2)}`}</td>
                   <td className="px-3 py-2 text-right font-bold text-emerald-400 tabular-nums">£{(s.totalPay||0).toFixed(2)}</td>
                 </tr>
               ))}
