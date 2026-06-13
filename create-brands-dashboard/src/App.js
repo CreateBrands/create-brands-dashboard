@@ -23696,10 +23696,10 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       setTimeout(() => { setShake(false); setPin(""); }, 600);
       return;
     }
-    // If already clocked in, show the menu (break / tasks / punch out) instead
-    // of punching out immediately. Stage 1.
-    const todayStrNow = toLocalDate();
-    const alreadyOpen = punchRecords.find(r => r.employeeId === matched.id && r.date === todayStrNow && r.status === "open");
+    // If already clocked in (ANY open punch, even from a previous day that was
+    // never closed), show the menu instead of opening a second shift. Scoping
+    // this to today's date let forgotten overnight punches stack new clock-ins.
+    const alreadyOpen = punchRecords.find(r => r.employeeId === matched.id && r.status === "open");
     if (alreadyOpen) { setOverlayView("menu"); return; }
     await doPunch();
   };
@@ -23720,8 +23720,10 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     };
     const todayStr = toLocalDate();
+    // Any open punch (incl. a forgotten one from a previous day) means this
+    // action is a clock-OUT, not a new clock-in — matches the clock-in guard.
     const openRecord = punchRecords.find(r =>
-      r.employeeId === emp.id && r.date === todayStr && r.status === "open"
+      r.employeeId === emp.id && r.status === "open"
     );
     const now = new Date().toISOString();
     const recordId = openRecord?.id || `pr-${Date.now()}`;
@@ -23800,7 +23802,12 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       }).catch(err => {
         console.error("PunchIn failed:", err);
         submittingRef.current = false; setSubmitting(false);
-        setLastAction(null); setError("Couldn't save — check connection and try again."); setPin(""); setMatched(null);
+        setLastAction(null); setPin(""); setMatched(null);
+        if (err?.code === "ALREADY_CLOCKED_IN") {
+          setError("You're already clocked in from an earlier shift — please clock out first.");
+        } else {
+          setError("Couldn't save — check connection and try again.");
+        }
         setShake(true); setTimeout(() => setShake(false), 600);
       });
     }
@@ -23835,7 +23842,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
   };
   const todayStr = toLocalDate();
   const openRecord = matched ? punchRecords.find(r =>
-    r.employeeId === matched.id && r.date === todayStr && r.status === "open"
+    r.employeeId === matched.id && r.status === "open"
   ) : null;
   const isClockedIn = !!openRecord;
 

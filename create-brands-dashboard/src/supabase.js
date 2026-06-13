@@ -985,6 +985,24 @@ export async function fetchPunchRecords({ brandId, from, to } = {}) {
 }
 
 export async function insertPunchIn(record) {
+  // Guard: an employee can only have ONE open shift at a time. If they already
+  // have an open punch (e.g. a forgotten clock-out from a previous day), refuse
+  // to open a second one — this is enforced server-side so it can't be bypassed
+  // by stale UI state. The caller should clock them out (or close the old shift)
+  // first. employeeId is the app-side field on the record.
+  const empId = record.employeeId;
+  if (empId) {
+    const { data: existing, error: chkErr } = await supabase
+      .from("punch_records").select("id, date, punch_in")
+      .eq("employee_id", empId).is("punch_out", null).limit(1);
+    if (chkErr) throw chkErr;
+    if (existing && existing.length) {
+      const e = new Error("ALREADY_CLOCKED_IN");
+      e.code = "ALREADY_CLOCKED_IN";
+      e.openPunch = existing[0];
+      throw e;
+    }
+  }
   const { data, error } = await supabase
     .from("punch_records").insert(appPunchToDb(record)).select().single();
   if (error) throw error;
