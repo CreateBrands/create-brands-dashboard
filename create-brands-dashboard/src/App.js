@@ -27085,9 +27085,17 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-white truncate">{name}</div>
         </div>
-        <div className="text-right flex-shrink-0 text-xs tabular-nums">
-          <div className="text-slate-300">In: <span className="text-emerald-400 font-semibold">{item.punchIn ? fmtT(item.punchIn) : "—"}</span></div>
-          <div className="text-slate-300">Out: <span className={item.punchOut ? "text-slate-200 font-semibold" : "text-amber-400 font-semibold"}>{item.punchOut ? fmtT(item.punchOut) : "on shift"}</span></div>
+        <div className="flex items-center gap-4 flex-shrink-0 text-xs tabular-nums">
+          <div className="text-right">
+            <div className="text-[9px] uppercase tracking-wide text-slate-600">Scheduled</div>
+            <div className="text-slate-400">In: <span className="font-semibold">{item.scheduledStart || "—"}</span></div>
+            <div className="text-slate-400">Out: <span className="font-semibold">{item.scheduledEnd || "—"}</span></div>
+          </div>
+          <div className="text-right">
+            <div className="text-[9px] uppercase tracking-wide text-slate-600">Actual</div>
+            <div className="text-slate-300">In: <span className="text-emerald-400 font-semibold">{item.punchIn ? fmtT(item.punchIn) : "—"}</span></div>
+            <div className="text-slate-300">Out: <span className={item.punchOut ? "text-slate-200 font-semibold" : "text-amber-400 font-semibold"}>{item.punchOut ? fmtT(item.punchOut) : "on shift"}</span></div>
+          </div>
         </div>
       </div>
     );
