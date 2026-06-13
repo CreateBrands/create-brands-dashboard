@@ -4271,7 +4271,7 @@ function MyReviewImpact({ currentUser, opsTeam, stores = [] }) {
 
       {!err && scans !== null && reviews !== null && (
         <>
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
             <div className="rounded-xl bg-slate-800/50 p-3 text-center">
               <div className="text-2xl font-black text-white tabular-nums">{myScans}</div>
               <div className="text-[10px] text-slate-400 mt-0.5">QR scans you got</div>
@@ -4602,6 +4602,11 @@ function EmpThemeStyle() {
 .emp-theme .cb-chrome.bg-slate-950,
 .emp-theme .cb-chrome[class*="bg-slate-950"],
 .emp-theme .cb-chrome[class*="bg-slate-900"] { background-color: #844429 !important; }
+/* kill dark gradients on chrome banners so the brown shows through */
+.emp-theme .cb-chrome[class*="bg-gradient"] { background-image: none !important; background-color: #844429 !important; }
+/* the name/heading on chrome banners (often text-indigo/brand) -> cream */
+.emp-theme .cb-chrome [class*="text-indigo"],
+.emp-theme .cb-chrome h1, .emp-theme .cb-chrome h2, .emp-theme .cb-chrome h3 { color: #FDF2E0 !important; }
 /* nested surfaces within chrome (e.g. nav group hovers) -> slightly lighter brown */
 .emp-theme .cb-chrome .bg-slate-900,
 .emp-theme .cb-chrome .bg-slate-800,
@@ -7469,7 +7474,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
           <h3 className="text-sm font-bold text-white mb-3">Refunds &amp; cancellations</h3>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <div className="text-2xl font-bold text-amber-300">{refunds.cancelledCount}</div>
               <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-0.5">Cancelled</div>
@@ -8387,7 +8392,7 @@ function StoreDetailModal({ store, flipdishStores, fromDate, toDate, periodLabel
         <div className="text-xs text-slate-400">{periodLabel} · {store.status} · {store.ownershipModel}</div>
 
         {/* Top metrics */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="bg-slate-800/60 rounded-xl p-3">
             <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Revenue</div>
             <div className="text-xl font-black text-white tabular-nums mt-1">{fmtMoney(revenue)}</div>
@@ -10066,7 +10071,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
           </div>
           <div>
             <label className="text-xs text-slate-600 font-semibold mb-1.5 block">Role</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {[
                 {key:"manager",  label:"Manager"},
                 {key:"hq_staff", label:"HQ Staff"},
@@ -11063,7 +11068,7 @@ function StoreKPIModal({ store, brand, onSave, onClose }) {
 
         <div>
           <div className="text-xs text-slate-500 mb-2">Efficiency ratios. These apply across the whole week.</div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Prime Cost Max (%)</label>
               <input type="number" min="0" max="100" step="1" value={form.ratios.primeCostMax}
@@ -14998,7 +15003,7 @@ function EmployeeProfileView({
       </button>
 
       {/* Header card */}
-      <div className="bg-gradient-to-br from-slate-900 to-slate-900/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg shadow-black/20">
+      <div className="cb-chrome bg-gradient-to-br from-slate-900 to-slate-900/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg shadow-black/20">
         <div className="flex items-start gap-4">
           {/* Photo or initials */}
           {employee.photoUrl ? (
@@ -19890,7 +19895,7 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
         {type === "weekly" && (
           <div>
             <label className={labelCls}>Day of week</label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {DAYS_OF_WEEK.map(d => (
                 <button key={d} onClick={() => set("dayOfWeek", d)}
                   className={`py-2.5 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-600 hover:bg-slate-700"}`}>
@@ -20293,7 +20298,7 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
         )}
         {item.type === "weekly" && (
           <div><label className={labelCls}>Amended Day</label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {DAYS_OF_WEEK.map(d => (
                 <button key={d} onClick={() => set("amendedDayOfWeek", d)}
                   className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.amendedDayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-600 hover:bg-slate-700"}`}>
@@ -20387,7 +20392,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
           </div>
         </div>
         {form.type === "one_off"   && <AvailDateField label="Date" value={form.date} onChange={v => set("date", v)} placeholder="Select date"/>}
-        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><div className="grid grid-cols-4 gap-2">{DAYS_OF_WEEK.map(d => <button key={d} onClick={() => set("dayOfWeek", d)} className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-600 hover:bg-slate-700"}`}>{d.slice(0,3)}</button>)}</div></div>}
+        {form.type === "weekly"    && <div><label className={labelCls}>Day</label><div className="grid grid-cols-2 sm:grid-cols-4 gap-2">{DAYS_OF_WEEK.map(d => <button key={d} onClick={() => set("dayOfWeek", d)} className={`py-2 rounded-xl text-xs font-semibold border transition-all ${form.dayOfWeek === d ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-600 hover:bg-slate-700"}`}>{d.slice(0,3)}</button>)}</div></div>}
         {form.type === "recurring" && <div className="grid grid-cols-2 gap-3"><AvailDateField label="From" value={form.startDate} onChange={v => set("startDate", v)} placeholder="Start date"/><AvailDateField label="To" value={form.endDate} onChange={v => set("endDate", v)} minDate={form.startDate} placeholder="End date"/></div>}
         <div className="grid grid-cols-2 gap-3">
           <AvailTimeField label="Start Time" value={form.startTime} onChange={v => set("startTime", v)}/>
@@ -22941,7 +22946,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             return (
               <div className="space-y-3">
                 {/* Day totals */}
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="bg-slate-900 rounded-xl p-3 text-center">
                     <div className="text-xs text-slate-500">Hours</div>
                     <div className="text-base font-bold text-white">{fmtHrs(dt.hours)}</div>
@@ -27218,7 +27223,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       </div>
 
       {/* Status tiles — clickable to filter the list below */}
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
         {TILES.map(t => (
           <button key={t.key} onClick={()=>setTab(t.key)}
             className={`rounded-xl border px-2 py-3 text-center transition-all ${t.cls} ${tab===t.key?"ring-2 ring-white/30":""}`}>
