@@ -6891,7 +6891,7 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
   );
   const [storeId, setStoreId] = useState(myStores[0]?.id || null);
   const [period, setPeriod] = useState("week");
-  const [reviewsOpen, setReviewsOpen] = useState(true);
+  const [tab, setTab] = useState("analytics");   // analytics | forecast | reviews
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
 
@@ -6958,7 +6958,24 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
         </div>
       </div>
 
-      {store && (
+      {/* Tabs */}
+      <div className="flex items-center gap-1 border-b border-slate-800">
+        {[
+          { key: "analytics", label: "Analytics", icon: BarChart2 },
+          { key: "forecast",  label: "Forecast",  icon: TrendingUp },
+          { key: "reviews",   label: "Google Reviews", icon: Star },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${tab === t.key ? "border-indigo-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}
+          >
+            <t.icon size={15} className={tab === t.key && t.key === "reviews" ? "text-amber-400" : ""}/> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {store && tab === "analytics" && (
         <StoreAnalytics
           store={store} brand={brand}
           fromDate={fromDate} toDate={toDate}
@@ -6967,17 +6984,13 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
         />
       )}
 
-      {store && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
-          <button onClick={()=>setReviewsOpen(o=>!o)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors">
-            <span className="flex items-center gap-2 text-sm font-semibold text-white"><Star size={16} className="text-amber-400"/> Google Reviews — {store.shortName || store.name}</span>
-            <ChevronDown size={16} className={`text-slate-500 transition-transform ${reviewsOpen?"rotate-180":""}`}/>
-          </button>
-          {reviewsOpen && (
-            <div className="border-t border-slate-800 p-4">
-              <GoogleReviewsView stores={stores} currentUser={currentUser} storeId={store.id} compact/>
-            </div>
-          )}
+      {store && tab === "forecast" && (
+        <ForecastPanel storeId={store.id} stores={[store]}/>
+      )}
+
+      {store && tab === "reviews" && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+          <GoogleReviewsView stores={stores} currentUser={currentUser} storeId={store.id} compact/>
         </div>
       )}
     </div>
@@ -7363,8 +7376,6 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
           <div className="text-[10px] text-slate-600 mt-3">Out of {sales.length} total transactions in {periodLabel}.</div>
         </div>
       </div>
-
-      <ForecastPanel storeId={store.id} stores={[store]}/>
     </div>
   );
 }
