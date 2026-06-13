@@ -4594,6 +4594,39 @@ function EmpThemeStyle() {
 .emp-theme [class*="bg-amber-950"], .emp-theme [class*="bg-sky-950"],
 .emp-theme [class*="bg-indigo-950"] { background-color: var(--cream-deep) !important; }
 
+/* ── Dark-chocolate chrome (header / sidebar / nav) on cream content ─────── */
+.emp-theme .cb-chrome,
+.emp-theme .cb-chrome.bg-slate-950,
+.emp-theme .cb-chrome[class*="bg-slate-950"],
+.emp-theme .cb-chrome[class*="bg-slate-900"] { background-color: #2B1A12 !important; }
+/* nested surfaces within chrome (e.g. nav group hovers) -> slightly lighter choc */
+.emp-theme .cb-chrome .bg-slate-900,
+.emp-theme .cb-chrome .bg-slate-800,
+.emp-theme .cb-chrome .bg-slate-800\\/40,
+.emp-theme .cb-chrome .bg-slate-800\\/60,
+.emp-theme .cb-chrome .hover\\:bg-slate-800\\/60:hover,
+.emp-theme .cb-chrome .hover\\:bg-slate-900\\/40:hover { background-color: #3D2A1E !important; }
+/* text inside chrome -> cream / muted cream */
+.emp-theme .cb-chrome .text-white,
+.emp-theme .cb-chrome .text-slate-100,
+.emp-theme .cb-chrome .text-slate-200,
+.emp-theme .cb-chrome .text-slate-300 { color: #FDF2E0 !important; }
+.emp-theme .cb-chrome .text-slate-400,
+.emp-theme .cb-chrome .text-slate-500,
+.emp-theme .cb-chrome .text-slate-600 { color: #C9A98F !important; }
+/* active accents in chrome -> warm brown highlight */
+.emp-theme .cb-chrome .text-indigo-300,
+.emp-theme .cb-chrome .text-indigo-400 { color: #E8B98F !important; }
+.emp-theme .cb-chrome .bg-indigo-600,
+.emp-theme .cb-chrome .bg-indigo-500 { background-color: #844429 !important; }
+.emp-theme .cb-chrome [class*="bg-indigo-600\\/"],
+.emp-theme .cb-chrome [class*="bg-indigo-950"] { background-color: #3D2A1E !important; }
+/* borders in chrome -> deep choc */
+.emp-theme .cb-chrome [class*="border-slate-700"],
+.emp-theme .cb-chrome [class*="border-slate-800"] { border-color: rgba(255,248,224,0.10) !important; }
+/* keep the on-shift pill readable on choc */
+.emp-theme .cb-chrome .text-emerald-400 { color: #6FCF97 !important; }
+
 `}</style>
   );
 }
@@ -26826,7 +26859,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     : [];
 
   return (
-    <div className={`hidden md:flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
+    <div className={`cb-chrome hidden md:flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
       {/* Logo — click to go to Dashboard */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/60">
         <div onClick={() => setActiveView("dashboard")} className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" title="Go to Dashboard">
@@ -27275,7 +27308,7 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen }) {
     { key: "__more__",        label: "More",     icon: Menu },
   ];
   return (
-    <nav className="emp-theme md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex items-stretch">
+    <nav className="cb-chrome emp-theme md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex items-stretch">
       {tabs.map(t => {
         const Icon = t.icon;
         const isMore = t.key === "__more__";
@@ -27334,7 +27367,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout })
   const go = (key) => { setActiveView(key); onClose(); };
   return (
     <div className="emp-theme md:hidden fixed inset-0 z-50 bg-slate-950 flex flex-col">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 flex-shrink-0">
+      <div className="cb-chrome flex items-center justify-between px-5 py-4 border-b border-slate-800 flex-shrink-0">
         <h2 className="text-lg font-black text-white">More</h2>
         <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={22}/></button>
       </div>
@@ -28406,7 +28439,7 @@ export default function App() {
             </div>
           )}
           {/* Topbar */}
-          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
+          <div className="cb-chrome flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
             <div>
               <h1 className="text-sm font-bold text-white">{titles[effectiveActiveView] || effectiveActiveView}</h1>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
