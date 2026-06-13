@@ -26985,62 +26985,20 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   );
 }
 
-function WhosWorkingModal({ open, onClose, onOpenFull, punchRecords = [], opsTeam = [], stores = [], brands = [] }) {
+function WhosWorkingModal({ open, onClose, punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser }) {
   if (!open) return null;
-  const onShift = (punchRecords || [])
-    .filter(p => p.status === "open" && p.punchIn)
-    .sort((a, b) => new Date(a.punchIn) - new Date(b.punchIn));
-  const memberOf = (id) => opsTeam.find(m => m.id === id) || null;
-  const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "—";
-  const fmtClockIn = (ts) => { try { return new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } };
-  const elapsed = (ts) => {
-    const mins = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 60000));
-    const h = Math.floor(mins / 60), m = mins % 60;
-    return h > 0 ? `${h}h ${m}m` : `${m}m`;
-  };
   return (
     <div className="fixed inset-0 z-[80] flex items-start justify-center bg-black/60 p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md mt-12 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <UserCheck size={18} className="text-emerald-400"/>
-            <h3 className="font-bold text-white">Who's working</h3>
-            <span className="text-xs text-slate-400 bg-slate-800 rounded-full px-2 py-0.5">{onShift.length} on shift</span>
-          </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg mt-10 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-end px-4 pt-3">
           <button onClick={onClose} className="text-slate-500 hover:text-slate-300"><X size={18}/></button>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto p-3">
-          {onShift.length === 0 ? (
-            <div className="text-center py-10 text-sm text-slate-500">No one is currently clocked in.</div>
-          ) : onShift.map(p => {
-            const m = memberOf(p.employeeId);
-            const role = m?.role || "";
-            const color = m?.color || "#6366f1";
-            const name = p.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
-            return (
-              <div key={p.id} className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: color }}>
-                  {(name[0] || "?").toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-white truncate">{name}</div>
-                  <div className="text-xs text-slate-500 truncate">{role || "—"} · {storeName(p.storeId)}</div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <div className="text-xs text-emerald-400 font-semibold tabular-nums">{elapsed(p.punchIn)}</div>
-                  <div className="text-[10px] text-slate-500 tabular-nums">since {fmtClockIn(p.punchIn)}</div>
-                </div>
-              </div>
-            );
-          })}
+        <div className="px-5 pb-5 pt-1 max-h-[80vh] overflow-y-auto">
+          <WhosWorkingScreen
+            punchRecords={punchRecords} schedules={schedules} opsTeam={opsTeam}
+            stores={stores} brands={brands} visibleStoreIds={visibleStoreIds} currentUser={currentUser}
+          />
         </div>
-        {onOpenFull && (
-          <div className="border-t border-slate-800 p-3">
-            <button onClick={onOpenFull} className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-slate-200">
-              View full roster (Break · Overdue · Upcoming · Out)
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -28180,7 +28138,7 @@ export default function App() {
             />}
           </main>
         </div>
-        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} onOpenFull={() => { setWhosWorkingOpen(false); setActiveView("whos-working"); }} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} opsTeam={opsTeam} stores={stores} brands={visibleBrands}/>
+        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>
         {/* Toast */}
         {toast && (
           <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl flex items-center gap-3 ${toast.type==="error"?"bg-red-600 text-white":"bg-emerald-600 text-white"}`}>
