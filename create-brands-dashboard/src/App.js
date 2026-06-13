@@ -187,7 +187,7 @@ const ICON_MAP = { Utensils, Moon, Coffee, Building2 };
 
 // ─── Seed Data ────────────────────────────────────────────────────────────────
 const SEED_BRANDS = [
-  { id: "cb-kitchen", name: "CB Kitchen", iconKey: "Utensils", color: "#6366f1", address: "12 Soho Square, London", kpiTargets: { dailyRevenue: 4800, primeCostMax: 60, laborPctMax: 30, cogsPctMax: 32, netMarginMin: 35, splhMin: 45, avgStarMin: 4.0, cashVarianceMax: 25 } },
+  { id: "cb-kitchen", name: "CB Kitchen", iconKey: "Utensils", color: "#844429", address: "12 Soho Square, London", kpiTargets: { dailyRevenue: 4800, primeCostMax: 60, laborPctMax: 30, cogsPctMax: 32, netMarginMin: 35, splhMin: 45, avgStarMin: 4.0, cashVarianceMax: 25 } },
   { id: "noir-bar", name: "Noir Bar", iconKey: "Moon", color: "#10b981", address: "88 Brick Lane, London", kpiTargets: { dailyRevenue: 3200, primeCostMax: 60, laborPctMax: 30, cogsPctMax: 32, netMarginMin: 35, splhMin: 45, avgStarMin: 4.0, cashVarianceMax: 25 } },
   { id: "the-deli", name: "The Deli", iconKey: "Coffee", color: "#f59e0b", address: "5 Columbia Road, London", kpiTargets: { dailyRevenue: 2100, primeCostMax: 60, laborPctMax: 30, cogsPctMax: 32, netMarginMin: 35, splhMin: 45, avgStarMin: 4.0, cashVarianceMax: 25 } }
 ];
@@ -1178,7 +1178,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
                 return (
                   <button key={s} onClick={() => handleStatusChange(s)}
                     className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${status === s ? `bg-${cfg.color}-600 border-${cfg.color}-500 text-white` : "bg-slate-800 border-slate-700 text-slate-600 hover:bg-slate-700"}`}
-                    style={status === s ? { background: { red:"#dc2626", amber:"#d97706", indigo:"#4f46e5", emerald:"#059669", slate:"#475569" }[cfg.color], borderColor: "transparent" } : {}}>
+                    style={status === s ? { background: { red:"#dc2626", amber:"#d97706", indigo:"#9A5436", emerald:"#059669", slate:"#475569" }[cfg.color], borderColor: "transparent" } : {}}>
                     <SIcon size={11}/>{s}
                   </button>
                 );
@@ -1380,7 +1380,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
           const sc = STATUS_CONFIG[issue.status];
           const pc = PRIORITY_CONFIG[issue.priority];
           const SIcon = sc?.icon || AlertCircle;
-          const statusColors = { red: "#dc2626", amber: "#d97706", indigo: "#4f46e5", emerald: "#059669", slate: "#475569" };
+          const statusColors = { red: "#dc2626", amber: "#d97706", indigo: "#9A5436", emerald: "#059669", slate: "#475569" };
 
           return (
             <div key={issue.id} className="bg-slate-900 border border-slate-700 rounded-2xl p-4 hover:border-slate-600 transition-all">
@@ -2024,7 +2024,7 @@ function EmployeeContractsSection({ employeeId, currentUser, managerView = false
                     <style>{`
                       .contract-preview-box, .contract-preview-box * { color: #1e293b !important; }
                       .contract-preview-box .text-white, .contract-preview-box [class*="text-slate-200"], .contract-preview-box [class*="text-slate-300"] { color: #0f172a !important; }
-                      .contract-preview-box a { color: #4f46e5 !important; text-decoration: underline; }
+                      .contract-preview-box a { color: #9A5436 !important; text-decoration: underline; }
                       .contract-preview-box h1, .contract-preview-box h2, .contract-preview-box h3, .contract-preview-box div[class*="font-bold"] { color: #0f172a !important; }
                     `}</style>
                     <SafeMarkdown text={c.filledBody}/>
@@ -2541,7 +2541,7 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
           <div className="flex items-center gap-3 min-w-0">
             <div
               className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
-              style={{ background: currentUser.color || "#6366f1" }}
+              style={{ background: currentUser.color || "#844429" }}
             >
               {currentUser.avatar || "?"}
             </div>
@@ -4425,7 +4425,7 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
                 <span>{fmtTime(s.endTime)}</span>
               </div>
               <div className="flex items-center gap-2 text-sm text-slate-600 mt-1">
-                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: myMember?.color || "#6366f1" }}/>
+                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: myMember?.color || "#844429" }}/>
                 {s.shift || s.role || "Shift"}{storeName(s) ? ` · ${storeName(s)}` : ""}
               </div>
             </div>
@@ -4534,7 +4534,7 @@ function EmpThemeStyle() {
 .emp-theme .emp-greeting,
 .emp-theme .emp-greeting .text-white { color: #fff !important; }
 .emp-theme .emp-greeting,
-.emp-theme .emp-greeting.bg-indigo-600 { background-color: var(--tan) !important; }
+.emp-theme .emp-greeting.bg-indigo-600 { background-color: var(--brown) !important; }
 
 /* Cards/white surfaces inside greeting stay readable */
 .emp-theme .emp-greeting .text-slate-900 { color: var(--ink) !important; }
@@ -4546,7 +4546,7 @@ function EmpThemeStyle() {
 
 /* Bottom nav: dark brown bar, light text */
 .emp-theme .emp-bottomnav,
-.emp-theme .emp-bottomnav.bg-slate-900 { background-color: var(--tan) !important; border-top-color: #a06f4f !important; }
+.emp-theme .emp-bottomnav.bg-slate-900 { background-color: var(--brown) !important; border-top-color: #6e3621 !important; }
 .emp-theme .emp-bottomnav button { color: rgba(255,255,255,0.65) !important; }
 .emp-theme .emp-bottomnav button.text-indigo-400 { color: #fff !important; }
 .emp-theme .emp-bottomnav .text-indigo-400 { color: #fff !important; }
@@ -7045,7 +7045,6 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2"><BarChart2 size={18}/> Store Analytics</h2>
-          <p className="text-xs text-slate-500 mt-0.5">{brand?.name ? `${brand.name} · ` : ""}{store?.shortName || store?.name} · {periodLabel}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {myStores.length > 1 && (
@@ -7261,7 +7260,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
     };
   }, [sales]);
 
-  const CH_COLORS = ["#6366f1", "#06b6d4", "#f59e0b", "#ec4899", "#10b981", "#8b5cf6", "#ef4444", "#64748b"];
+  const CH_COLORS = ["#844429", "#06b6d4", "#f59e0b", "#ec4899", "#10b981", "#8b5cf6", "#ef4444", "#64748b"];
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   const Delta = ({ v }) => {
@@ -7334,7 +7333,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 11 }}/>
             <YAxis tick={{ fill: "#64748b", fontSize: 11 }}/>
             <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmtMoneyDec(v), n === "prevRevenue" ? "Previous" : "This period"]}/>
-            <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]}/>
+            <Bar dataKey="revenue" fill="#844429" radius={[4, 4, 0, 0]}/>
             <Line type="monotone" dataKey="prevRevenue" stroke="#64748b" strokeWidth={2} strokeDasharray="4 3" dot={false}/>
           </ComposedChart>
         </ResponsiveContainer>
@@ -9014,7 +9013,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
               {!isSingleDay && <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />}
               <Tooltip content={<ChartTooltip/>} />
               <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-              <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]} />
+              <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#844429" opacity={0.85} radius={[3,3,0,0]} />
               {!isSingleDay && <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />}
             </ComposedChart>
           </ResponsiveContainer>
@@ -9265,7 +9264,7 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
             {["curSales","prevSales"].map((k,i) => {
               const total = k==="curSales" ? cur?.netSales : prev?.netSales;
               const pct = totalTarget>0&&total ? Math.min(100,(total/totalTarget)*100) : 0;
-              const col = pct>=100?"#10b981":pct>=80?"#6366f1":"#ef4444";
+              const col = pct>=100?"#10b981":pct>=80?"#844429":"#ef4444";
               return (
                 <div key={k} className="flex-1">
                   <div className="text-xs text-slate-600 mb-1">{i===0?period.label:prevPeriod?.label||"Prior"}: {fmtCurrency(total)}</div>
@@ -9282,7 +9281,7 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
               <YAxis yAxisId="right" orientation="right" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`£${v.toFixed(0)}`}/>
               <Tooltip content={<ChartTooltip/>}/>
               <Legend wrapperStyle={{fontSize:11,color:"#94a3b8"}}/>
-              <Bar yAxisId="left" dataKey="curSales" name="£ Current" fill="#6366f1" opacity={0.85} radius={[3,3,0,0]}/>
+              <Bar yAxisId="left" dataKey="curSales" name="£ Current" fill="#844429" opacity={0.85} radius={[3,3,0,0]}/>
               <Bar yAxisId="left" dataKey="prevSales" name="£ Prior" fill="#475569" opacity={0.6} radius={[3,3,0,0]}/>
               <Line yAxisId="right" type="monotone" dataKey="curSPLH" name="SPLH Current" stroke="#10b981" strokeWidth={2} dot={false}/>
               <Line yAxisId="right" type="monotone" dataKey="prevSPLH" name="SPLH Prior" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 4" dot={false}/>
@@ -9301,7 +9300,7 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
               <Tooltip content={<ChartTooltip/>}/>
               {ratios && <ReferenceLine y={ratios.primeCostMax} stroke="#ef4444" strokeDasharray="4 2" label={{value:`Max ${ratios.primeCostMax}%`,fill:"#ef4444",fontSize:10}}/>}
               <Bar dataKey="primeCost" name="Prime Cost %" radius={[3,3,0,0]}>
-                {primeCostDays.map((d,i) => <Cell key={i} fill={ratios && d.primeCost > ratios.primeCostMax ? "#ef4444" : "#6366f1"}/>)}
+                {primeCostDays.map((d,i) => <Cell key={i} fill={ratios && d.primeCost > ratios.primeCostMax ? "#ef4444" : "#844429"}/>)}
               </Bar>
             </ComposedChart>
           </ResponsiveContainer>
@@ -9829,7 +9828,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
                   return (
                     <button key={s.id} onClick={() => set("storeId", s.id)}
                       className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${form.storeId===s.id?"text-white border-transparent":"bg-slate-800 text-slate-600 border-slate-700 hover:bg-slate-700"}`}
-                      style={form.storeId===s.id?{background: b?.color || "#6366f1"}:{}}>
+                      style={form.storeId===s.id?{background: b?.color || "#844429"}:{}}>
                       {showBrand && b ? `${b.name} · ` : ""}{s.shortName || s.name}
                     </button>
                   );
@@ -9935,9 +9934,9 @@ function LocationEditorModal({ brand, onSave, onClose }) {
   const [name, setName] = useState(brand?.name||"");
   const [address, setAddress] = useState(brand?.address||"");
   const [iconKey, setIconKey] = useState(brand?.iconKey||"Utensils");
-  const [color, setColor] = useState(brand?.color||"#6366f1");
+  const [color, setColor] = useState(brand?.color||"#844429");
   const icons = [{key:"Utensils",label:"Restaurant"},{key:"Moon",label:"Bar"},{key:"Coffee",label:"Café"},{key:"Building2",label:"Other"}];
-  const colors = ["#6366f1","#10b981","#f59e0b","#ef4444","#ec4899","#14b8a6","#f97316","#8b5cf6"];
+  const colors = ["#844429","#10b981","#f59e0b","#ef4444","#ec4899","#14b8a6","#f97316","#8b5cf6"];
   const BIcon = ICON_MAP[iconKey]||Building2;
   const handleSave = () => {
     if (!name.trim()) return;
@@ -11852,7 +11851,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
                   <tr key={store.id} className="border-b border-slate-800/60 hover:bg-slate-800/30">
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: (brand?.color || "#6366f1") + "25", color: brand?.color || "#6366f1" }}>
+                        <div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: (brand?.color || "#844429") + "25", color: brand?.color || "#844429" }}>
                           {(store.shortName || store.name || "?").slice(0, 2)}
                         </div>
                         <span className="font-semibold text-slate-200">{store.shortName || store.name}</span>
@@ -12646,7 +12645,7 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
                       <style>{`
                         .contract-preview-box, .contract-preview-box * { color: #1e293b !important; }
                         .contract-preview-box .text-white, .contract-preview-box [class*="text-slate-200"], .contract-preview-box [class*="text-slate-300"] { color: #0f172a !important; }
-                        .contract-preview-box a { color: #4f46e5 !important; text-decoration: underline; }
+                        .contract-preview-box a { color: #9A5436 !important; text-decoration: underline; }
                         .contract-preview-box h1, .contract-preview-box h2, .contract-preview-box h3, .contract-preview-box div[class*="font-bold"] { color: #0f172a !important; }
                       `}</style>
                       <SafeMarkdown text={filled}/>
@@ -12683,7 +12682,7 @@ function ContractsAdminView({ stores, opsTeam, currentUser }) {
                     .contract-preview-box .text-white,
                     .contract-preview-box [class*="text-slate-200"],
                     .contract-preview-box [class*="text-slate-300"] { color: #0f172a !important; }
-                    .contract-preview-box a { color: #4f46e5 !important; text-decoration: underline; }
+                    .contract-preview-box a { color: #9A5436 !important; text-decoration: underline; }
                     .contract-preview-box h1, .contract-preview-box h2, .contract-preview-box h3,
                     .contract-preview-box div[class*="font-bold"] { color: #0f172a !important; }
                   `}</style>
@@ -15011,7 +15010,7 @@ function EmployeeProfileView({
           ) : (
             <div
               className="w-16 h-16 rounded-xl flex items-center justify-center text-xl font-bold flex-shrink-0"
-              style={{ background: (employee.color || "#6366f1") + "30", color: employee.color || "#6366f1" }}
+              style={{ background: (employee.color || "#844429") + "30", color: employee.color || "#844429" }}
             >
               {employee.firstName[0]}{employee.lastName?.[0] || ""}
             </div>
@@ -15737,7 +15736,7 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
 // Validated here with a soft warning rather than a hard block — the save
 // will fail with a DB-level uniqueness error if the user persists.
 function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsTeam, onUpdateEmployee, currentUser }) {
-  const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
+  const COLORS = ["#844429","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
 
   // Only owned, non-archived stores — same rule as the edit modal.
   // Franchise / JV stores excluded; if you ever need staff there, separate
@@ -18089,7 +18088,7 @@ function OpsTeamMemberFormModal({
   prefillApplication = null,
   onSave, onClose,
 }) {
-  const COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
+  const COLORS = ["#844429","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
 
   // Stores a manager (or owner/HQ) can assign staff to.
   //
@@ -19397,7 +19396,7 @@ function OpsTeamView({
                   return (
                     <div key={m.id} onClick={() => { if (!m.isManager) onOpenEmployeeProfile?.(m.id); }} title={m.isManager ? "Manager — edit in Managers & Access" : "Click to open profile"}
                       className={`flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 transition-colors ${m.isManager ? "" : "hover:border-slate-600 cursor-pointer"}`}>
-                      <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#6366f1") + "30", color: m.color || "#6366f1" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
+                      <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#844429") + "30", color: m.color || "#844429" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}</div>
@@ -20680,7 +20679,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
   const bottomRef               = useRef(null);
   const brand = brands.find(b => b.id === ticket.brandId);
   const ticketStore = ticket.storeId ? stores.find(s => s.id === ticket.storeId) : null;
-  const statusColors = { Open:"#dc2626","In Progress":"#d97706",Pending:"#4f46e5",Resolved:"#059669",Closed:"#475569" };
+  const statusColors = { Open:"#dc2626","In Progress":"#d97706",Pending:"#9A5436",Resolved:"#059669",Closed:"#475569" };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -21449,7 +21448,7 @@ function threadKey(msg, myId, myOpsId) {
 // Build avatar initials + colour from a name
 function avatarFor(name = "", color = "") {
   const initials = name.trim().split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) || "??";
-  const colours  = ["#6366f1","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899","#14b8a6","#f97316"];
+  const colours  = ["#844429","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899","#14b8a6","#f97316"];
   if (color) return { initials, bg: color };
   // deterministic colour from name
   let h = 0;
@@ -21723,10 +21722,10 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
       // Build thread meta
       let name, sub, type, brandId, personId, personName, color;
       if (m.toScope === "all_locations") {
-        name = "All Locations"; sub = "Group broadcast"; type = "broadcast"; color = "#6366f1";
+        name = "All Locations"; sub = "Group broadcast"; type = "broadcast"; color = "#844429";
       } else if (m.toScope === "location") {
         const b = brands.find(x => x.id === m.toBrandId);
-        name = b?.name || "Location"; sub = "Location channel"; type = "location"; brandId = m.toBrandId; color = b?.color || "#6366f1";
+        name = b?.name || "Location"; sub = "Location channel"; type = "location"; brandId = m.toBrandId; color = b?.color || "#844429";
       } else {
         // DM — the "other" person
         const isFromMe = m.fromId === myId || m.fromId === myOpsId;
@@ -21766,7 +21765,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
       key = `loc:${bId}`; name = b?.name || "Location"; sub = "Location channel";
       type = "location"; brandId = bId; color = b?.color;
     } else if (option.type === "broadcast") {
-      key = "broadcast:all"; name = "All Locations"; sub = "Group broadcast"; type = "broadcast"; color = "#6366f1";
+      key = "broadcast:all"; name = "All Locations"; sub = "Group broadcast"; type = "broadcast"; color = "#844429";
     } else {
       const ids = [myId, option.id].sort();
       key = `dm:${ids[0]}:${ids[1]}`; name = option.name; sub = option.sub;
@@ -22070,7 +22069,7 @@ function CommunicationView({
 // SCHEDULING — Custom Presets + Draft/Publish + Employee View
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PRESET_COLORS = ["#f59e0b","#6366f1","#10b981","#8b5cf6","#ef4444","#ec4899","#14b8a6","#f97316","#64748b"];
+const PRESET_COLORS = ["#f59e0b","#844429","#10b981","#8b5cf6","#ef4444","#ec4899","#14b8a6","#f97316","#64748b"];
 
 // ── Shift Preset Manager (lives inside Ops Settings) ──────────────────────────
 function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, currentUser }) {
@@ -22286,7 +22285,7 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
           {selectedMember && (
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                style={{background:(selectedMember.color||"#6366f1")+"30",color:selectedMember.color||"#6366f1"}}>
+                style={{background:(selectedMember.color||"#844429")+"30",color:selectedMember.color||"#844429"}}>
                 {selectedMember.firstName[0]}{selectedMember.lastName?.[0]||""}
               </div>
               <span className="text-sm font-semibold text-slate-200">
@@ -22576,7 +22575,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       return false;
     });
   };
-  const getPresetColor = (shiftName) => brandPresets.find(p=>p.name===shiftName)?.color || "#6366f1";
+  const getPresetColor = (shiftName) => brandPresets.find(p=>p.name===shiftName)?.color || "#844429";
 
   // ── Conflict detection ─────────────────────────────────────────────────────
   const getSlotConflict = (slot, member) => {
@@ -23029,7 +23028,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
               {withShifts.map(({member, slots}) => (
                 <div key={member.id} className="flex items-center gap-3 bg-slate-900/60 border border-slate-800/60 rounded-xl px-3 py-2.5">
                   <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                    style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
+                    style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
                     {member.firstName[0]}{member.lastName?.[0]||""}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -23100,7 +23099,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                 <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
                   <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900 rounded-xl">
                     <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                      style={{background:(member.color||"#6366f1")+"30",color:member.color||"#6366f1"}}>
+                      style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -23307,7 +23306,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                           className="rounded text-center text-xs font-bold py-1.5 transition-all"
                           style={{
                             background: c === 0 ? "rgb(15,23,42)" : `rgba(99,102,241,${0.15 + intensity*0.6})`,
-                            color: c === 0 ? "#475569" : intensity > 0.5 ? "white" : "#a5b4fc",
+                            color: c === 0 ? "#475569" : intensity > 0.5 ? "white" : "#C9854F",
                           }}
                           title={`${c} ${c===1?"person":"people"} working at ${String(h).padStart(2,"0")}:00`}>
                           {c || ""}
@@ -23628,7 +23627,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
     // Coloured badge dot to give visual variety without identity. Use the
     // member's stored color when available so each role has a consistent hue.
     const badgeColor = isMe
-      ? (myMember?.color || "#6366f1")
+      ? (myMember?.color || "#844429")
       : (member?.color || "#64748b");
     return (
       <div className={`rounded-2xl border p-4 ${isMe ? "bg-indigo-950/30 border-indigo-500/30" : "bg-slate-900 border-slate-700"}`}>
@@ -24836,7 +24835,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-                      style={{background:(member?.color||"#6366f1")+"30",color:member?.color||"#6366f1"}}>
+                      style={{background:(member?.color||"#844429")+"30",color:member?.color||"#844429"}}>
                       {(member?.firstName?.[0]||r.employeeName?.[0]||"?")}{member?.lastName?.[0]||""}
                     </div>
                     <div className="min-w-0">
@@ -25832,7 +25831,7 @@ function KioskShell() {
 
   if (!ready) return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f172a",color:"#94a3b8",fontFamily:"sans-serif",gap:16}}>
-      <div style={{width:56,height:56,borderRadius:14,background:"#4f46e5",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:20}}>CB</div>
+      <div style={{width:56,height:56,borderRadius:14,background:"#9A5436",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:20}}>CB</div>
       <span style={{fontSize:15}}>Loading kiosk…</span>
     </div>
   );
@@ -25937,7 +25936,7 @@ function KioskRegister({ onRegister }) {
       height:"100vh", background:"#0f172a", color:"#e2e8f0", fontFamily:"sans-serif",
       padding:24, gap:20,
     }}>
-      <div style={{width:64,height:64,borderRadius:16,background:"#4f46e5",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:22}}>CB</div>
+      <div style={{width:64,height:64,borderRadius:16,background:"#9A5436",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:22}}>CB</div>
       <div style={{textAlign:"center"}}>
         <div style={{fontSize:22, fontWeight:800, color:"white"}}>Register this kiosk</div>
         <div style={{fontSize:13, color:"#94a3b8", marginTop:6, maxWidth:340}}>
@@ -25956,8 +25955,8 @@ function KioskRegister({ onRegister }) {
             {Array.from({length:Math.max(4, pin.length)}).map((_, i) => (
               <div key={i} style={{
                 width:18, height:18, borderRadius:"50%",
-                border:"2px solid", borderColor: i<pin.length ? "#6366f1" : "#475569",
-                background: i<pin.length ? "#6366f1" : "transparent",
+                border:"2px solid", borderColor: i<pin.length ? "#844429" : "#475569",
+                background: i<pin.length ? "#844429" : "transparent",
               }}/>
             ))}
           </div>
@@ -25983,7 +25982,7 @@ function KioskRegister({ onRegister }) {
             disabled={pin.length < 4}
             style={{
               padding:"12px 28px", fontSize:14, fontWeight:700,
-              background: pin.length < 4 ? "#334155" : "#4f46e5",
+              background: pin.length < 4 ? "#334155" : "#9A5436",
               color:"white", border:"none", borderRadius:14,
               cursor: pin.length < 4 ? "not-allowed" : "pointer",
             }}>
@@ -26387,7 +26386,7 @@ function ApplyShell() {
       <ApplyCard wide>
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: "#4f46e5", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 800, fontSize: 14 }}>CB</div>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "#9A5436", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 800, fontSize: 14 }}>CB</div>
             <span style={{ color: "#94a3b8", fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase" }}>Job Application</span>
           </div>
           <h1 style={applyHeadingStyle}>Join the team</h1>
@@ -26585,7 +26584,7 @@ function ApplyShell() {
 
           <button type="submit" disabled={submitting} style={{
             marginTop: 8, padding: "14px 20px", borderRadius: 12,
-            background: submitting ? "#334155" : "#4f46e5", color: "white",
+            background: submitting ? "#334155" : "#9A5436", color: "white",
             border: "none", fontSize: 15, fontWeight: 700,
             cursor: submitting ? "not-allowed" : "pointer",
             transition: "background 0.15s",
@@ -26730,7 +26729,7 @@ function SelfFillShell() {
             )}
           </div>
           {err && <div style={{ color: "#f87171", fontSize: 13 }}>{err}</div>}
-          <button onClick={submit} disabled={saving} style={{ padding: "14px", borderRadius: 12, background: saving ? "#475569" : "#6366f1", color: "white", border: "none", fontSize: 16, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>{saving ? "Saving…" : "Save my details"}</button>
+          <button onClick={submit} disabled={saving} style={{ padding: "14px", borderRadius: 12, background: saving ? "#475569" : "#844429", color: "white", border: "none", fontSize: 16, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>{saving ? "Saving…" : "Save my details"}</button>
           <p style={{ color: "#64748b", fontSize: 11, textAlign: "center", margin: 0 }}>Your bank details aren't collected here — you'll add those securely once your account is set up.</p>
         </div>
       </ApplyCard>
@@ -27158,7 +27157,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   const PunchRow = ({ item, clickable }) => {
     const m = memberOf(item.employeeId);
     const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
-    const accent = m?.color || "#6366f1";
+    const accent = m?.color || "#844429";
     const initial = (name[0] || "?").toUpperCase();
     return (
       <div
@@ -27192,7 +27191,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       const initial = (name[0] || "?").toUpperCase();
       return (
         <div key={item.id} className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: m?.color || "#6366f1" }}>{initial}</div>
+          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: m?.color || "#844429" }}>{initial}</div>
           <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{name}</div></div>
           <div className="text-right flex-shrink-0 text-xs tabular-nums text-slate-400">scheduled {item.startTime}</div>
         </div>
@@ -27256,8 +27255,8 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
               <XAxis dataKey="label" tick={{ fontSize:10, fill:"#64748b" }} interval="preserveStartEnd"/>
               <YAxis tick={{ fontSize:10, fill:"#64748b" }} tickFormatter={v=>`£${v}`}/>
               <Tooltip content={<ChartTooltip/>}/>
-              <Bar dataKey="actual" name="Actual labour" fill="#6366f1" radius={[4,4,0,0]}/>
-              {labourView!=="hourly" && <Line dataKey="scheduled" name="Scheduled labour" stroke="#a5b4fc" strokeWidth={2} dot={false}/>}
+              <Bar dataKey="actual" name="Actual labour" fill="#844429" radius={[4,4,0,0]}/>
+              {labourView!=="hourly" && <Line dataKey="scheduled" name="Scheduled labour" stroke="#C9854F" strokeWidth={2} dot={false}/>}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -27457,7 +27456,7 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
 
   const LiveTile = ({ b }) => {
     const Icon = iconFor(b);
-    const color = b.color || "#6366f1";
+    const color = b.color || "#844429";
     return (
       <button onClick={() => onPick(b.id)}
         className="group relative flex-shrink-0 w-44 snap-start flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-600 transition-all p-6 h-40 active:scale-[0.98]">
@@ -28444,7 +28443,12 @@ export default function App() {
           {/* Topbar */}
           <div className="cb-chrome flex items-center justify-between px-6 py-3 border-b border-slate-800/60 bg-slate-950/80 flex-shrink-0">
             <div>
-              <h1 className="text-sm font-bold text-white">{titles[effectiveActiveView] || effectiveActiveView}</h1>
+              <button onClick={() => setActiveView("dashboard")} className="flex items-center gap-2.5 text-left" title="Go to Dashboard">
+                <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center flex-shrink-0">
+                  <BarChart2 size={15} className="text-white"/>
+                </div>
+                <h1 className="text-sm font-bold text-white">Create Brands</h1>
+              </button>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
                 <span>{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</span>
                 <span className="text-slate-700">·</span>
