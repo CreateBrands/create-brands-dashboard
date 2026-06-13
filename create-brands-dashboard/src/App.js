@@ -4457,7 +4457,7 @@ function EmpThemeStyle() {
   --brown:        #844429;
   --brown-soft:   #A86A4D;
   --brown-faint:  #C9A98F;
-  --tan:          #BC8A6B;
+  --tan:          #CDA07E;
   --ink:          #3A2418;
   --ink-soft:     #6B5443;
   background: var(--cream);
@@ -4533,7 +4533,8 @@ function EmpThemeStyle() {
 /* Greeting card: brown panel, white text stays white */
 .emp-theme .emp-greeting,
 .emp-theme .emp-greeting .text-white { color: #fff !important; }
-.emp-theme .emp-greeting { background-color: var(--tan) !important; }
+.emp-theme .emp-greeting,
+.emp-theme .emp-greeting.bg-indigo-600 { background-color: var(--tan) !important; }
 
 /* Cards/white surfaces inside greeting stay readable */
 .emp-theme .emp-greeting .text-slate-900 { color: var(--ink) !important; }
@@ -4544,7 +4545,8 @@ function EmpThemeStyle() {
 .emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
 
 /* Bottom nav: dark brown bar, light text */
-.emp-theme .emp-bottomnav { background-color: var(--tan) !important; border-top-color: #a06f4f !important; }
+.emp-theme .emp-bottomnav,
+.emp-theme .emp-bottomnav.bg-slate-900 { background-color: var(--tan) !important; border-top-color: #a06f4f !important; }
 .emp-theme .emp-bottomnav button { color: rgba(255,255,255,0.65) !important; }
 .emp-theme .emp-bottomnav button.text-indigo-400 { color: #fff !important; }
 .emp-theme .emp-bottomnav .text-indigo-400 { color: #fff !important; }
