@@ -86,7 +86,7 @@ import {
   getGoogleReviewsSyncState,
   generateReviewReplies,
   postReviewReply,
-  fetchSalesDaily,
+  fetchSalesDaily, fetchSalesToTime,
   fetchReviewsForDashboard,
   fetchReviewStats,
   fetchReviewScanStats,
@@ -8404,6 +8404,12 @@ function DashboardView({ brands, stores, entries, issues }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
 
+  // Is the selected period still in progress (includes today)? If so we compare
+  // running totals: today-so-far vs the comparison day up to the SAME time of day.
+  const todayStrLocal = fmtDateLocal(new Date());
+  const inProgress = period.to >= todayStrLocal;       // period runs up to/through today
+  const nowCutoffMin = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -8413,9 +8419,14 @@ function DashboardView({ brands, stores, entries, issues }) {
         // current
         ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: period.from, to: period.to, brandId: b }))));
         ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: period.from, to: period.to }))));
-        // prior (may be null)
+        // prior (may be null). When the current period is in progress, clip the
+        // comparison period's sales to the same time-of-day for a like-for-like total.
         if (prevPeriod) {
-          ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b }))));
+          if (inProgress) {
+            ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesToTime({ from: prevPeriod.from, to: prevPeriod.to, cutoffMinutes: nowCutoffMin, brandId: b }))));
+          } else {
+            ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b }))));
+          }
           ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: prevPeriod.from, to: prevPeriod.to }))));
         }
         const res = await Promise.all(ranges);
@@ -8429,7 +8440,7 @@ function DashboardView({ brands, stores, entries, issues }) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line
-  }, [JSON.stringify(visibleBrandIds), period.from, period.to, prevPeriod?.from, prevPeriod?.to]);
+  }, [JSON.stringify(visibleBrandIds), period.from, period.to, prevPeriod?.from, prevPeriod?.to, inProgress]);
 
   // Single-day selection -> fetch that day's raw sales for an HOURLY chart.
   const isSingleDay = period.from === period.to;
@@ -8526,33 +8537,48 @@ function DashboardView({ brands, stores, entries, issues }) {
   };
 
   // Live punch hours: closed -> stored hours; open -> elapsed since (graced) clock-in.
-  const punchHours = (r) => {
-    if ((r.status === "open" || !r.punchOut) && r.punchIn) {
-      let pIn = new Date(r.punchIn).getTime();
-      if (r.scheduledStart && r.date) {
-        const ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
-        const earlyMs = ssMs - pIn;
-        if (earlyMs > 0 && earlyMs <= 15 * 60000) pIn = ssMs; // grace early clock-in
-      }
-      return Math.max(0, (Date.now() - pIn) / 3600000);
+  // cutoffMin (minutes since local midnight) clips hours to a time-of-day on the
+  // punch's own date — used so the comparison day matches "today up to now".
+  const punchHours = (r, cutoffMin = null) => {
+    let pIn = r.punchIn ? new Date(r.punchIn).getTime() : null;
+    if (pIn != null && r.scheduledStart && r.date) {
+      const ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
+      const earlyMs = ssMs - pIn;
+      if (earlyMs > 0 && earlyMs <= 15 * 60000) pIn = ssMs; // grace early clock-in
     }
-    return r.hoursWorked || 0;
+    // Determine the "end" moment for this punch's worked time.
+    let end;
+    if ((r.status === "open" || !r.punchOut)) {
+      end = Date.now();
+    } else {
+      // closed: trust stored hours unless we need to clip to a cutoff
+      if (cutoffMin == null) return r.hoursWorked || 0;
+      end = r.punchOut ? new Date(r.punchOut).getTime() : null;
+    }
+    if (pIn == null || end == null) return cutoffMin == null ? (r.hoursWorked || 0) : 0;
+    // Apply the time-of-day cutoff on the punch's date.
+    if (cutoffMin != null && r.date) {
+      const cutoffMs = new Date(r.date + "T00:00:00").getTime() + cutoffMin * 60000;
+      if (end > cutoffMs) end = cutoffMs;
+    }
+    return Math.max(0, (end - pIn) / 3600000);
   };
-  const punchCost = (r) => {
+  const punchCost = (r, cutoffMin = null) => {
     if ((r.status === "open" || !r.punchOut) && r.punchIn) {
-      return punchHours(r) * (r.hourlyRate || 0);
+      return punchHours(r, cutoffMin) * (r.hourlyRate || 0);
     }
+    if (cutoffMin != null) return punchHours(r, cutoffMin) * (r.hourlyRate || 0);
     return r.grossPay || 0;
   };
 
   // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
-  const rollup = (sales, punch) => {
+  const rollup = (sales, punch, cutoffMin = null) => {
     const s = sales.filter(r => scopedStoreIds.has(r.storeId));
     const p = punch.filter(r => scopedStoreIds.has(r.storeId));
     const revenue = s.reduce((a, r) => a + r.revenue, 0);
     const orders = s.reduce((a, r) => a + r.saleCount, 0);
-    const hours = Math.round(p.reduce((a, r) => a + punchHours(r), 0) * 100) / 100;
-    const labourCost = Math.round(p.reduce((a, r) => a + punchCost(r), 0) * 100) / 100;
+    const hours = Math.round(p.reduce((a, r) => a + punchHours(r, cutoffMin), 0) * 100) / 100;
+    const labourCost = Math.round(p.reduce((a, r) => a + punchCost(r, cutoffMin), 0) * 100) / 100;
     return {
       revenue, orders, hours, labourCost,
       wagePct: revenue > 0 ? (labourCost / revenue) * 100 : null,
@@ -8561,7 +8587,8 @@ function DashboardView({ brands, stores, entries, issues }) {
     };
   };
   const cur = useMemo(() => rollup(data.curSales, data.curPunch), [data, scopedStoreIds, dashTick]);
-  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch), [data, scopedStoreIds]);
+  // When in progress, clip the comparison day's punches to the same time-of-day.
+  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null), [data, scopedStoreIds, inProgress, nowCutoffMin]);
 
   // ── Targets for the selected period + stores ──────────────────────────────
   const target = useMemo(() => {
@@ -8621,7 +8648,7 @@ function DashboardView({ brands, stores, entries, issues }) {
 
   const openIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.status === "Open").length;
   const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
-  const prevLabel = prevPeriod?.label || "Prior";
+  const prevLabel = (prevPeriod?.label || "Prior") + (inProgress ? " (to now)" : "");
 
   const nameOfStore = (id) => allStores.find(s => s.id === id)?.shortName || allStores.find(s => s.id === id)?.name || id;
 
@@ -8738,6 +8765,13 @@ function DashboardView({ brands, stores, entries, issues }) {
 
       {err && <div className="text-xs text-rose-400">Couldn't load actuals: {err}</div>}
       {loading && <div className="text-xs text-slate-500">Loading {period.label.toLowerCase()} actuals…</div>}
+
+      {inProgress && prevPeriod && !loading && (
+        <div className="text-[11px] text-slate-400 bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5 w-fit">
+          <Clock size={11} className="text-amber-400"/>
+          Partial {period.label.toLowerCase()} — comparing running total vs {prevPeriod.label.toLowerCase()} up to {String(Math.floor(nowCutoffMin/60)).padStart(2,"0")}:{String(nowCutoffMin%60).padStart(2,"0")}.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
