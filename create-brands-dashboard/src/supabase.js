@@ -4494,6 +4494,14 @@ export async function rejectInvoice(invoiceId, note) {
   if (error) throw error;
 }
 
+export async function deleteInvoice(invoiceId) {
+  // Remove the invoice and its lines. Lines first in case no cascade is set.
+  await supabase.from("invoice_lines").delete().eq("invoice_id", invoiceId);
+  const { error } = await supabase.from("invoices").delete().eq("id", invoiceId);
+  if (error) throw error;
+  return invoiceId;
+}
+
 export async function listStoresLite() {
   const { data, error } = await supabase.from("stores").select("id, name").order("name");
   if (error) throw error;
