@@ -3,7 +3,7 @@ import {
   supabase,
   fetchBrands, insertBrand, upsertBrand, removeBrand,
   fetchUsers,  insertUser,  upsertUser,  removeUser,
-  fetchEntries, upsertEntry, upsertEntries,
+  fetchEntries, upsertEntry, upsertEntries, deleteEntry,
   fetchIssues, insertIssue, upsertIssue, removeIssue,
   fetchMaintenanceTickets, insertMaintenanceTicket, updateMaintenanceTicket, deleteMaintenanceTicket,
   fetchChecklists, upsertChecklist, removeChecklist,
@@ -6886,7 +6886,8 @@ function ForecastPanel({ storeId, stores }) {
 function ManagerStoreDashboard({ stores, brands, currentUser }) {
   const isHQ = isHqOrAbove(currentUser?.role);
   const myStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s) && (isHQ || (currentUser?.storeIds || []).includes(s.id))),
+    () => (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s) && (isHQ || (currentUser?.storeIds || []).includes(s.id)))
+      .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
     [stores, currentUser, isHQ]
   );
   const [storeId, setStoreId] = useState(myStores[0]?.id || null);
@@ -6904,11 +6905,12 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
     const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
     const endOfDay = (d) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
     let from, to, label;
+    const yesterdayEnd = () => { const y = new Date(now); y.setDate(y.getDate()-1); return endOfDay(y); };
     if (period === "today") { from = startOfDay(now); to = endOfDay(now); label = "Today"; }
     else if (period === "yesterday") { const y = new Date(now); y.setDate(y.getDate()-1); from = startOfDay(y); to = endOfDay(y); label = "Yesterday"; }
-    else if (period === "month") { from = startOfDay(now); from.setDate(now.getDate()-29); to = endOfDay(now); label = "Last 30 days"; }
+    else if (period === "month") { from = startOfDay(now); from.setDate(now.getDate()-30); to = yesterdayEnd(); label = "Last 30 days"; }   // 30 days before today, excl. today
     else if (period === "custom" && customFrom && customTo) { from = startOfDay(new Date(customFrom)); to = endOfDay(new Date(customTo)); label = `${customFrom} → ${customTo}`; }
-    else { from = startOfDay(now); from.setDate(now.getDate()-6); to = endOfDay(now); label = "Last 7 days"; }   // default week
+    else { from = startOfDay(now); from.setDate(now.getDate()-7); to = yesterdayEnd(); label = "Last 7 days"; }   // 7 days before today, excl. today
     const span = to.getTime() - from.getTime();
     const prevTo = new Date(from.getTime() - 1);
     const prevFrom = new Date(prevTo.getTime() - span);
@@ -8383,11 +8385,15 @@ function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], pu
 
 function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser }) {
   const { user } = useAuth();
-  const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+  const isHQ = isHqOrAbove(user.role);
+  const visibleBrands = brands.filter(b => isHQ || user.brandIds.includes(b.id));
   const visibleBrandIds = useMemo(() => visibleBrands.map(b => b.id), [visibleBrands]);
   const allStores = useMemo(
-    () => (stores || []).filter(s => visibleBrandIds.includes(s.brandId) && !s.archivedAt && s.id !== "store-system-non-trading"),
-    [stores, visibleBrandIds]
+    () => (stores || [])
+      .filter(s => visibleBrandIds.includes(s.brandId) && !s.archivedAt && s.id !== "store-system-non-trading"
+        && (isHQ || (user.storeIds || []).includes(s.id)))   // managers: assigned stores only
+      .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [stores, visibleBrandIds, isHQ, user.storeIds]
   );
 
   // ── Filters: period + store ───────────────────────────────────────────────
@@ -8396,7 +8402,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   useEffect(() => { const t = setInterval(() => setDashTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [storeId, setStoreId] = useState("all");
+  // Owner/HQ default to "all"; managers default to their first store alphabetically.
+  const [storeId, setStoreId] = useState(isHQ ? "all" : (allStores[0]?.id || "all"));
+  useEffect(() => {
+    if (!isHQ && (storeId === "all" || !allStores.some(s => s.id === storeId)) && allStores.length) {
+      setStoreId(allStores[0].id);
+    }
+  }, [isHQ, allStores, storeId]);
   const [drill, setDrill] = useState(null);  // {title, columns, rows, footer} | null
   const [askOpen, setAskOpen] = useState(false);  // Ask the Data panel
 
@@ -8818,7 +8830,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
         <SelectDropdown value={storeId} onChange={setStoreId} className="w-52">
-          <option value="all">All stores ({allStores.length})</option>
+          {isHQ && <option value="all">All stores ({allStores.length})</option>}
           {allStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
         </SelectDropdown>
       </div>
@@ -9223,7 +9235,7 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
 // ─── EOD Form ─────────────────────────────────────────────────────────────────
 // ===== EOD_AMEND_RECON_V1: amend EOD entries (logged trail) + manager<>HQ reconciliation thread =====
 const EOD_AMEND_FIELDS = [
-  { key: "netSales",          label: "Net sales",         money: true },
+  { key: "netSales",          label: "Gross sales",       money: true },
   { key: "cardRevenue",       label: "Flipdish (card)",   money: true },
   { key: "lopay",             label: "Lopay",             money: true },
   { key: "cashExpected",      label: "Cash expected",     money: true },
@@ -9243,7 +9255,7 @@ function EodReconBadge({ status }) {
   return <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase font-semibold ${map[status] || map.open}`}>{label}</span>;
 }
 
-function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [], currentUser, onUpdateEntry }) {
+function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [], currentUser, onUpdateEntry, onDeleteEntry }) {
   const isHq = isHqOrAbove(currentUser.role);
   const myStoreIds = currentUser.storeIds || [];
   const fmtMoney = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -9393,7 +9405,21 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                   <div className="text-sm font-semibold text-slate-200">
                     {selected.date} · {(selected.storeId && storeName(selected.storeId)) || brandName(selected.brandId)} · {selected.manager}
                   </div>
-                  <EodReconBadge status={selected.reconStatus || "open"} />
+                  <div className="flex items-center gap-2">
+                    <EodReconBadge status={selected.reconStatus || "open"} />
+                    {onDeleteEntry && (
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(`Delete the EOD entry for ${selected.date} · ${(selected.storeId && storeName(selected.storeId)) || brandName(selected.brandId)}? This cannot be undone.`)) return;
+                          try { await onDeleteEntry(selected.id); setSelId(null); }
+                          catch (e) { window.alert("Couldn't delete: " + (e?.message || e)); }
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600/15 text-red-300 border border-red-600/30 hover:bg-red-600/25 text-xs font-semibold"
+                      >
+                        <Trash2 size={13}/> Delete
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Amend grid */}
@@ -9508,7 +9534,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
 // ===== end EOD_AMEND_RECON_V1 =====
 
 // EOD hub — the EOD Report form plus the Reconciliation view as a second tab.
-function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddEntry }) {
+function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddEntry, onDeleteEntry }) {
   const canRecon = ["owner","hq_staff","manager"].includes(currentUser?.role);
   const [tab, setTab] = useState("report");
   return (
@@ -9522,7 +9548,7 @@ function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddE
         )}
       </div>
       {tab === "report" && <EODFormView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={onAddEntry}/>}
-      {tab === "recon" && canRecon && <EodReconView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={onAddEntry}/>}
+      {tab === "recon" && canRecon && <EodReconView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={onAddEntry} onDeleteEntry={onDeleteEntry}/>}
     </div>
   );
 }
@@ -9715,7 +9741,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
           <>
             <h2 className="text-base font-bold text-white mb-2">Zone 2 — Revenue</h2>
             <div className="grid grid-cols-2 gap-4">
-              <div><label className={labelCls}>Net Sales (£)</label><input type="number" value={form.netSales} onChange={e=>set("netSales",e.target.value)} className={inputCls} placeholder="0.00"/></div>
+              <div><label className={labelCls}>Gross Sales (£)</label><input type="number" value={form.netSales} onChange={e=>set("netSales",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Flipdish (card) (£)</label><input type="number" value={form.cardRevenue} onChange={e=>set("cardRevenue",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Lopay (card → rung as cash) (£)</label><input type="number" value={form.lopay} onChange={e=>set("lopay",e.target.value)} className={inputCls} placeholder="0.00"/></div>
               <div><label className={labelCls}>Cash Expected (£)</label><input type="number" value={form.cashExpected} onChange={e=>set("cashExpected",e.target.value)} className={inputCls} placeholder="0.00"/></div>
@@ -11607,6 +11633,23 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
     [visibleStores]
   );
 
+  // Single-store filter. Alphabetical list; defaults to "all" for owner/HQ and
+  // to the first store alphabetically for managers.
+  const storeOptions = useMemo(
+    () => [...visibleStores].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleStores]
+  );
+  const [storeSel, setStoreSel] = useState(isHqOrAbove(user.role) ? "all" : (storeOptions[0]?.id || "all"));
+  useEffect(() => {
+    if (!isHqOrAbove(user.role) && (storeSel === "all" || !storeOptions.some(s => s.id === storeSel)) && storeOptions.length) {
+      setStoreSel(storeOptions[0].id);
+    }
+  }, [user.role, storeOptions, storeSel]);
+  const scopedStores = useMemo(
+    () => storeSel === "all" ? sortedStores : sortedStores.filter(s => s.id === storeSel),
+    [sortedStores, storeSel]
+  );
+
   const todayStr = getTodayStr();
 
   // Per-store metrics with the same legacy-split logic from ComplianceView.
@@ -11637,7 +11680,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   // Aggregate top-line stats from the per-store rows so the cards and the
   // table can't disagree.
   const aggregates = useMemo(() => {
-    const rows = sortedStores.map(rowFor);
+    const rows = scopedStores.map(rowFor);
     return {
       totalScheduled: rows.reduce((a, r) => a + r.la, 0),
       totalOverdue:   rows.reduce((a, r) => a + r.od, 0),
@@ -11658,7 +11701,11 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="text-xs text-slate-600">{sortedStores.length} store{sortedStores.length === 1 ? "" : "s"}</div>
+        <SelectDropdown value={storeSel} onChange={setStoreSel} className="w-52">
+          {isHqOrAbove(user.role) && <option value="all">All stores ({storeOptions.length})</option>}
+          {storeOptions.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </SelectDropdown>
+        <div className="text-xs text-slate-600">{scopedStores.length} store{scopedStores.length === 1 ? "" : "s"}</div>
       </div>
 
       {aggregates.totalOverdue > 0 && (
@@ -11671,7 +11718,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Stores" value={sortedStores.length} sub="In view" icon={MapPin} accent="indigo"/>
+        <StatCard label="Stores" value={scopedStores.length} sub="In view" icon={MapPin} accent="indigo"/>
         <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub="All stores" icon={ClipboardList} accent="indigo"/>
         <StatCard label="Overdue" value={aggregates.totalOverdue} sub={aggregates.totalOverdue ? "Action needed" : "All on time"} icon={Clock} accent={aggregates.totalOverdue ? "red" : "emerald"} alert={aggregates.totalOverdue > 0}/>
         <StatCard label="Completed Today" value={aggregates.totalCompleted} sub="Sign-offs" icon={CheckCircle} accent="emerald"/>
@@ -11688,7 +11735,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
               </tr>
             </thead>
             <tbody>
-              {sortedStores.map(store => {
+              {scopedStores.map(store => {
                 const brand = brands.find(b => b.id === store.brandId);
                 const { la, od, done, rate, rag } = rowFor(store);
                 const ragColors = { red: "red", green: "green", amber: "amber" };
@@ -24311,12 +24358,20 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
   );
-  const [selStore, setSelStore] = useState("all");
+  const sortedVisibleStores = useMemo(
+    () => [...visibleStores].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [visibleStores]
+  );
+  const [selStore, setSelStore] = useState(isHqOrAbove(user.role) ? "all" : (sortedVisibleStores[0]?.id || "all"));
   useEffect(() => {
-    if (selStore !== "all" && !visibleStores.some(s => s.id === selStore)) {
+    if (!isHqOrAbove(user.role)) {
+      if (selStore === "all" || !sortedVisibleStores.some(s => s.id === selStore)) {
+        if (sortedVisibleStores.length) setSelStore(sortedVisibleStores[0].id);
+      }
+    } else if (selStore !== "all" && !sortedVisibleStores.some(s => s.id === selStore)) {
       setSelStore("all");
     }
-  }, [visibleStores, selStore]);
+  }, [sortedVisibleStores, selStore, user.role]);
   const inScopeStoreIds = useMemo(() => new Set(visibleStores.map(s => s.id)), [visibleStores]);
   const visibleBrandIds = useMemo(() => new Set(visibleStores.map(s => s.brandId)), [visibleStores]);
 
@@ -27202,6 +27257,7 @@ export default function App() {
   }, []);
 
   const addEntry     = useCallback(async e=>{const s=await upsertEntry(e);setEntries(es=>{const idx=es.findIndex(x=>x.id===s.id);return idx>=0?es.map((x,i)=>i===idx?s:x):[s,...es];});}, []);
+  const delEntry     = useCallback(async id=>{await deleteEntry(id);setEntries(es=>es.filter(x=>x.id!==id));}, []);
   const addIssue     = useCallback(async i=>{const s=await insertIssue(i);setIssues(is=>[s,...is]);}, []);
   const updateIssue  = useCallback(async i=>{const s=await upsertIssue(i);setIssues(is=>is.map(x=>x.id===s.id?s:x));}, []);
   const deleteIssue  = useCallback(async id=>{await removeIssue(id);setIssues(is=>is.filter(x=>x.id!==id));}, []);
@@ -27661,7 +27717,7 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
-      { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff"] },
+      { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -27680,7 +27736,7 @@ export default function App() {
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, badgeClearOnView: true },
-      { key: "onboarding-board", label: "Onboarding Board", icon: UserCheck, roles: ["owner", "hq_staff"] },
+      { key: "onboarding-board", label: "Onboarding Board", icon: UserCheck, roles: ["owner", "hq_staff", "manager"] },
       { key: "training",     label: "Training",          icon: GraduationCap },
       { key: "contracts",    label: "Contracts",         icon: FileText },
     ]},
@@ -27806,7 +27862,7 @@ export default function App() {
             {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
-            {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry}/>}
+            {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
@@ -27884,8 +27940,8 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "onboarding-board" && ["owner","hq_staff"].includes(currentUser.role) && <OnboardingBoard stores={stores} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

@@ -152,6 +152,11 @@ export async function upsertEntry(entry) {
   if (error) throw error;
   return dbEntryToApp(data);
 }
+export async function deleteEntry(id) {
+  const { error } = await supabase.from("eod_entries").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
 export async function upsertEntries(entries) {
   const { data, error } = await supabase
     .from("eod_entries")
