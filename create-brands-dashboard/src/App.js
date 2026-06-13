@@ -27127,7 +27127,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
         </SelectDropdown>
       </div>
 
-      {/* Status tiles — clickable to switch tab */}
+      {/* Status tiles — clickable to filter the list below */}
       <div className="grid grid-cols-5 gap-2">
         {TILES.map(t => (
           <button key={t.key} onClick={()=>setTab(t.key)}
@@ -27136,6 +27136,15 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
             <div className="text-[10px] uppercase tracking-wide font-semibold mt-0.5">{t.label}</div>
           </button>
         ))}
+      </div>
+
+      {/* Employee list — filtered by the selected tile */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2">
+        {tab === "break" ? (
+          <div className="text-center py-10 text-sm text-slate-500">Break tracking isn't enabled yet — no break data to show.</div>
+        ) : active.list.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-500">No one in this list{isToday?" right now":""}.</div>
+        ) : active.list.map(renderRow)}
       </div>
 
       {/* Labour graph + comparison */}
@@ -27185,24 +27194,6 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
             </div>
           </div>
         )}
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-slate-800 overflow-x-auto">
-        {TABS.map(t => (
-          <button key={t.key} onClick={()=>setTab(t.key)}
-            className={`whitespace-nowrap px-3 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${tab===t.key?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>
-            {t.label} ({t.list.length})
-          </button>
-        ))}
-      </div>
-
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2">
-        {tab === "break" ? (
-          <div className="text-center py-10 text-sm text-slate-500">Break tracking isn't enabled yet — no break data to show.</div>
-        ) : active.list.length === 0 ? (
-          <div className="text-center py-10 text-sm text-slate-500">No one in this list{isToday?" right now":""}.</div>
-        ) : active.list.map(renderRow)}
       </div>
 
       {editPunch && (
