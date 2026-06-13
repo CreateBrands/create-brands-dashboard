@@ -4748,24 +4748,53 @@ export async function deleteCategory(id) {
 
 // ===== RECIPE_BUILDER_V1 — preps, modifiers, products =======================
 export async function fetchRecipes() {
-  const [preps, prepComps, mods, prods, prodComps, prodMods] = await Promise.all([
+  const [preps, prepComps, mods, prods, prodComps, prodMods, variants] = await Promise.all([
     supabase.from("cogs_preps").select("*").order("name"),
     supabase.from("cogs_prep_components").select("*"),
     supabase.from("cogs_modifiers").select("*").order("group_label").order("name"),
     supabase.from("cogs_products").select("*").order("name"),
     supabase.from("cogs_product_components").select("*"),
     supabase.from("cogs_product_modifiers").select("*"),
+    supabase.from("cogs_product_variants").select("*").order("sort_order"),
   ]);
-  const err = preps.error || prepComps.error || mods.error || prods.error || prodComps.error || prodMods.error;
+  const err = preps.error || prepComps.error || mods.error || prods.error || prodComps.error || prodMods.error || variants.error;
   if (err) throw err;
   return {
     preps: (preps.data||[]).map(p => ({ id:p.id, name:p.name, yieldQty:p.yield_qty, yieldUnit:p.yield_unit, notes:p.notes })),
     prepComponents: (prepComps.data||[]).map(c => ({ id:c.id, prepId:c.prep_id, itemScope:c.item_scope, itemId:c.item_id, itemName:c.item_name, portionQty:c.portion_qty, unit:c.unit })),
     modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit })),
     products: (prods.data||[]).map(p => ({ id:p.id, name:p.name, category:p.category, posName:p.pos_name, notes:p.notes })),
-    productComponents: (prodComps.data||[]).map(c => ({ id:c.id, productId:c.product_id, kind:c.kind, itemScope:c.item_scope, itemId:c.item_id, prepId:c.prep_id, label:c.label, portionQty:c.portion_qty, unit:c.unit })),
+    productVariants: (variants.data||[]).map(v => ({ id:v.id, productId:v.product_id, name:v.name, sortOrder:v.sort_order })),
+    productComponents: (prodComps.data||[]).map(c => ({ id:c.id, productId:c.product_id, variantId:c.variant_id, kind:c.kind, itemScope:c.item_scope, itemId:c.item_id, prepId:c.prep_id, label:c.label, portionQty:c.portion_qty, unit:c.unit })),
     productModifiers: (prodMods.data||[]).map(m => ({ id:m.id, productId:m.product_id, modifierId:m.modifier_id })),
   };
+}
+
+// --- product variants ---
+export async function addProductVariant(productId, patch = {}) {
+  const { data, error } = await supabase.from("cogs_product_variants")
+    .insert({ product_id: productId, name: patch.name || "New variation", sort_order: patch.sortOrder ?? 0 })
+    .select().single();
+  if (error) throw error; return data.id;
+}
+export async function updateProductVariant(id, patch) {
+  const b = {}; if ("name" in patch) b.name = patch.name; if ("sortOrder" in patch) b.sort_order = Number(patch.sortOrder)||0;
+  const { error } = await supabase.from("cogs_product_variants").update(b).eq("id", id); if (error) throw error;
+}
+export async function deleteProductVariant(id) {
+  const { error } = await supabase.from("cogs_product_variants").delete().eq("id", id); if (error) throw error;
+}
+// Enable variations on a simple product: turn the current base recipe (components
+// with variant_id null) into the first named variant, then return its id so the
+// caller can add a second empty variant.
+export async function enableProductVariations(productId, firstName = "Variation 1") {
+  const { data: v, error: vErr } = await supabase.from("cogs_product_variants")
+    .insert({ product_id: productId, name: firstName, sort_order: 0 }).select().single();
+  if (vErr) throw vErr;
+  const { error: upErr } = await supabase.from("cogs_product_components")
+    .update({ variant_id: v.id }).eq("product_id", productId).is("variant_id", null);
+  if (upErr) throw upErr;
+  return v.id;
 }
 
 // --- preps ---
@@ -4805,7 +4834,8 @@ export async function deleteModifier(id) { const { error } = await supabase.from
 // --- products ---
 export async function addProduct(patch) {
   const { data, error } = await supabase.from("cogs_products").insert({ name: patch.name || "New product", category: patch.category, pos_name: patch.posName }).select().single();
-  if (error) throw error; return data.id;
+  if (error) throw error;
+  return data.id;
 }
 export async function updateProduct(id, patch) {
   const b = {}; if ("name" in patch) b.name = patch.name; if ("category" in patch) b.category = patch.category; if ("posName" in patch) b.pos_name = patch.posName; if ("notes" in patch) b.notes = patch.notes; b.updated_at = new Date().toISOString();
@@ -4813,7 +4843,7 @@ export async function updateProduct(id, patch) {
 }
 export async function deleteProduct(id) { const { error } = await supabase.from("cogs_products").delete().eq("id", id); if (error) throw error; }
 export async function addProductComponent(productId, c) {
-  const { error } = await supabase.from("cogs_product_components").insert({ product_id: productId, kind: c.kind, item_scope: c.itemScope, item_id: c.itemId, prep_id: c.prepId, label: c.label, portion_qty: c.portionQty ?? null, unit: c.unit });
+  const { error } = await supabase.from("cogs_product_components").insert({ product_id: productId, variant_id: c.variantId ?? null, kind: c.kind, item_scope: c.itemScope, item_id: c.itemId, prep_id: c.prepId, label: c.label, portion_qty: c.portionQty ?? null, unit: c.unit });
   if (error) throw error;
 }
 export async function updateProductComponent(id, c) {

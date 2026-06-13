@@ -102,6 +102,7 @@ import {
   addPrepComponent, updatePrepComponent, deletePrepComponent,
   addModifier, updateModifier, deleteModifier,
   addProduct, updateProduct, deleteProduct,
+  addProductVariant, updateProductVariant, deleteProductVariant, enableProductVariations,
   addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
   attachProductModifier, detachProductModifier,
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
@@ -3298,8 +3299,8 @@ function RecipeBuilder({ mode }) {
   };
   const prepCostPerUnit = (prepId) => { const p = rec?.preps.find(x => x.id === prepId); return p ? prepCost(p) : null; };
   const modifierCost = (m) => { const u = itemCost(m.itemScope, m.itemId); return (u != null && m.portionQty != null) ? u * Number(m.portionQty) : null; };
-  const productBaseCost = (prod) => {
-    const comps = rec.productComponents.filter(c => c.productId === prod.id);
+  const productBaseCost = (prod, variantId = undefined) => {
+    const comps = rec.productComponents.filter(c => c.productId === prod.id && (variantId === undefined || c.variantId === variantId));
     let total = 0, missing = 0;
     comps.forEach(c => {
       let unit = null;
@@ -3403,16 +3404,27 @@ function RecipeBuilder({ mode }) {
                 {open && (
                   <div>
                     {items.map(x => {
-                      const bc = productBaseCost(x);
+                      const xVariants = rec.productVariants.filter(v => v.productId === x.id);
+                      let costLabel, done;
+                      if (xVariants.length > 0) {
+                        const costs = xVariants.map(v => productBaseCost(x, v.id).cost);
+                        const mn = Math.min(...costs), mx = Math.max(...costs);
+                        done = costs.some(c => c > 0);
+                        costLabel = done ? (mn===mx ? "£"+mx.toFixed(2) : `£${mn.toFixed(2)}–${mx.toFixed(2)}`) : "—";
+                      } else {
+                        const bc = productBaseCost(x, null);
+                        done = bc.count > 0;
+                        costLabel = bc.cost>0 ? "£"+bc.cost.toFixed(2) : (done ? "£0.00" : "—");
+                      }
                       const isSel = selId===x.id;
-                      const done = bc.count>0;
                       return (
                         <button key={x.id} onClick={()=>setSelId(isSel?null:x.id)}
                           className={`w-full text-left px-3 py-2 border-t border-slate-800/50 flex items-center justify-between gap-2 ${isSel?"bg-indigo-600 text-white":"text-slate-300 hover:bg-slate-800/60"}`}>
                           <span className="text-sm truncate flex items-center gap-1.5">
                             {done && <Check size={13} className={isSel?"text-indigo-100":"text-emerald-400"}/>}{x.name}
+                            {xVariants.length>0 && <span className={`text-[9px] px-1 py-0.5 rounded ${isSel?"bg-indigo-500":"bg-slate-700 text-slate-400"}`}>{xVariants.length} var</span>}
                           </span>
-                          <span className={`text-[11px] font-mono shrink-0 ${isSel?"text-indigo-100":done?"text-emerald-400":"text-slate-600"}`}>{bc.cost>0?"£"+bc.cost.toFixed(2):done?"£0.00":"—"}</span>
+                          <span className={`text-[11px] font-mono shrink-0 ${isSel?"text-indigo-100":done?"text-emerald-400":"text-slate-600"}`}>{costLabel}</span>
                         </button>
                       );
                     })}
@@ -3615,14 +3627,45 @@ function AddInline({ label, addName, setAddName, list, onAdd, onCancel }) {
 
 function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, modifierCost, reload, onDelete, onClose }) {
   const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
-  const comps = rec.productComponents.filter(c => c.productId === product.id);
   const attached = rec.productModifiers.filter(pm => pm.productId === product.id);
-  const { cost, missing } = productBaseCost(product);
   const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
 
+  // Variations are optional. No variant rows = simple product (base recipe,
+  // components with variantId null). Once variations exist, we show tabs.
+  const variants = rec.productVariants.filter(v => v.productId === product.id).sort((a,b)=>a.sortOrder-b.sortOrder);
+  const hasVariants = variants.length > 0;
+  const [activeVariantId, setActiveVariantId] = useState(variants[0]?.id || null);
+  useEffect(() => {
+    if (hasVariants && !variants.some(v => v.id === activeVariantId)) setActiveVariantId(variants[0].id);
+    if (!hasVariants && activeVariantId !== null) setActiveVariantId(null);
+  }, [variants, hasVariants, activeVariantId]);
+  const activeVariant = hasVariants ? (variants.find(v => v.id === activeVariantId) || variants[0]) : null;
+
+  // Which components show: the active variant's, or (simple) the base (null variant).
+  const scopeVariantId = hasVariants ? (activeVariant?.id ?? null) : null;
+  const comps = rec.productComponents.filter(c => c.productId === product.id && c.variantId === scopeVariantId);
+  const { cost, missing } = productBaseCost(product, scopeVariantId);
+
   const [editErr, setEditErr] = useState(null);
-  const addItemComp = async () => { try { await addProductComponent(product.id, { kind:"item", portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
-  const addPrepComp = async () => { try { await addProductComponent(product.id, { kind:"prep", portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
+  const addItemComp = async () => { try { await addProductComponent(product.id, { kind:"item", variantId: scopeVariantId, portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
+  const addPrepComp = async () => { try { await addProductComponent(product.id, { kind:"prep", variantId: scopeVariantId, portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
+
+  // First "Add variation": convert current base recipe to Variation 1, then add an empty Variation 2.
+  const enableVariations = async () => {
+    try {
+      const firstId = await enableProductVariations(product.id, "Variation 1");
+      await addProductVariant(product.id, { name:"Variation 2", sortOrder: 1 });
+      await reload(); setActiveVariantId(firstId);
+    } catch(e){ setEditErr(e.message||String(e)); }
+  };
+  const addVariant = async () => { try { const id = await addProductVariant(product.id, { name:"New variation", sortOrder: variants.length }); await reload(); setActiveVariantId(id); } catch(e){ setEditErr(e.message||String(e)); } };
+  const renameVariant = async (name) => { if (!activeVariant) return; await updateProductVariant(activeVariant.id, { name }); await reload(); };
+  const removeVariant = async () => {
+    if (!activeVariant) return;
+    if (!window.confirm(`Delete the "${activeVariant.name}" variation and its recipe?${variants.length===1?" This product will return to a single base recipe.":""}`)) return;
+    await deleteProductVariant(activeVariant.id); await reload();
+    setActiveVariantId(variants.find(v=>v.id!==activeVariant.id)?.id || null);
+  };
   const compCost = (c) => {
     let unit = c.kind==="prep" ? prepCostPerUnit(c.prepId) : (c.itemScope ? (m.get(c.itemScope+":"+c.itemId)?.costPerBaseUnit ?? null) : null);
     return (unit!=null && c.portionQty!=null) ? Number(unit)*Number(c.portionQty) : null;
@@ -3643,12 +3686,39 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
       <div className="flex items-center gap-3 text-sm flex-wrap">
         <input defaultValue={product.category||""} onBlur={async e=>{await updateProduct(product.id,{category:e.target.value}); await reload();}} placeholder="Category" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-44"/>
         <input defaultValue={product.posName||""} onBlur={async e=>{await updateProduct(product.id,{posName:e.target.value}); await reload();}} placeholder="POS name (optional)" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-52"/>
-        <span className="ml-auto text-slate-300 text-base">Base cost: <span className="font-mono font-bold text-white text-lg">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-sm"> ({missing} unpriced)</span>}</span>
+        {!hasVariants && <span className="ml-auto text-slate-300 text-base">Cost: <span className="font-mono font-bold text-white text-lg">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-sm"> ({missing} unpriced)</span>}</span>}
       </div>
 
-      {/* base components */}
+      {/* Variation tabs (only when the product has variations) */}
+      {hasVariants && (
+        <div>
+          <div className="text-sm font-semibold text-slate-300 mb-2">Variations <span className="text-slate-500 font-normal">— each has its own recipe & cost</span></div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {variants.map(v => {
+              const vc = productBaseCost(product, v.id);
+              return (
+                <button key={v.id} onClick={()=>setActiveVariantId(v.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${activeVariantId===v.id?"bg-indigo-600 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>
+                  {v.name} <span className={`font-mono ${activeVariantId===v.id?"text-indigo-200":"text-slate-500"}`}>£{vc.cost.toFixed(2)}</span>
+                </button>
+              );
+            })}
+            <button onClick={addVariant} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/60 border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 flex items-center gap-1"><Plus size={13}/> Add variation</button>
+          </div>
+        </div>
+      )}
+
+      {/* Recipe (base, or the active variant's) */}
       <div>
-        <div className="text-sm font-semibold text-slate-300 mb-2">Base recipe (always included)</div>
+        <div className="flex items-center gap-3 mb-2 flex-wrap">
+          {hasVariants
+            ? <>
+                <input key={activeVariant?.id} defaultValue={activeVariant?.name||""} onBlur={e=>{ if(activeVariant && e.target.value!==activeVariant.name) renameVariant(e.target.value); }} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm font-semibold text-white w-48" placeholder="Variation name (e.g. Full)"/>
+                <span className="text-slate-300 text-sm">Cost: <span className="font-mono font-bold text-white text-base">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-xs"> ({missing} unpriced)</span>}</span>
+                <button onClick={removeVariant} className="ml-auto text-slate-500 hover:text-red-400 text-xs flex items-center gap-1"><Trash2 size={13}/> Remove this variation</button>
+              </>
+            : <div className="text-sm font-semibold text-slate-300">Recipe</div>}
+        </div>
         <div className="rounded-lg border border-slate-800 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2 w-20">Type</th><th className="text-left px-3 py-2">Component</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
@@ -3676,15 +3746,17 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
             </tbody>
           </table>
         </div>
-        <div className="flex gap-2 mt-3">
-          <button onClick={addItemComp} className="px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>          <button onClick={addPrepComp} className="px-4 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add prep</button>
+        <div className="flex gap-2 mt-3 flex-wrap">
+          <button onClick={addItemComp} className="px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>
+          <button onClick={addPrepComp} className="px-4 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add prep</button>
+          {!hasVariants && <button onClick={enableVariations} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold flex items-center gap-1.5 ml-auto" title="Add Full/Half or size options — your current recipe becomes Variation 1"><Plus size={15}/> Add variation (Full/Half, sizes…)</button>}
         </div>
-        {editErr && <div className="mt-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">Couldn't add: {editErr}{editErr.toLowerCase().includes("relation")||editErr.includes("does not exist")?" — the recipe tables may be missing; run recipe_builder_schema SQL.":""}</div>}
+        {editErr && <div className="mt-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">Couldn't add: {editErr}{editErr.toLowerCase().includes("relation")||editErr.includes("does not exist")?" — the variants table may be missing; run the cogs_variants SQL.":""}</div>}
       </div>
 
       {/* modifiers */}
       <div>
-        <div className="text-sm font-semibold text-slate-300 mb-2">Modifiers (selected at sale, not in base cost)</div>
+        <div className="text-sm font-semibold text-slate-300 mb-2">Modifiers (add-ons selected at sale, apply on top of any recipe/variation)</div>
         <div className="flex flex-wrap gap-2 mb-2">
           {attached.length===0 && <span className="text-sm text-slate-500">None attached.</span>}
           {attached.map(pm => {
