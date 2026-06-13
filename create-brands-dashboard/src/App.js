@@ -26997,6 +26997,78 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   ];
   const active = TABS.find(t => t.key === tab) || TABS[0];
   const [editPunch, setEditPunch] = useState(null);   // punch being edited
+  const [labourView, setLabourView] = useState("daily");  // hourly | daily | weekly
+
+  // ── Labour maths ──────────────────────────────────────────────────────────
+  const salariedIds = (id) => { const m = memberOf(id); return isSalaried(m); };
+  const rateOf = (empId) => { const m = memberOf(empId); return m && !isSalaried(m) ? (m.hourlyRate || 0) : 0; };
+  const punchCostOf = (p) => {
+    if (salariedIds(p.employeeId)) return 0; // salaried added per-day separately
+    const end = p.punchOut ? new Date(p.punchOut).getTime() : Date.now();
+    const start = p.punchIn ? new Date(p.punchIn).getTime() : null;
+    if (start == null) return Number(p.grossPay) || 0;
+    const hrs = Math.max(0, (end - start) / 3600000);
+    return Math.round(hrs * rateOf(p.employeeId) * 100) / 100;
+  };
+  const schedCostOf = (s) => {
+    const m = memberOf(s.employeeId);
+    if (isSalaried(m)) return salariedDailyCost(m);
+    let st = new Date("2000-01-01T" + s.startTime + ":00").getTime();
+    let en = new Date("2000-01-01T" + s.endTime + ":00").getTime();
+    if (en <= st) en += 86400000;
+    return Math.round(((en - st) / 3600000) * (m?.hourlyRate || 0) * 100) / 100;
+  };
+  const labourForRange = (fromStr, toStr) => {
+    let actual = 0, scheduled = 0;
+    punchRecords.forEach(p => { if (p.date >= fromStr && p.date <= toStr && inStore(p.storeId)) actual += punchCostOf(p); });
+    schedules.forEach(s => { if (s.date >= fromStr && s.date <= toStr && s.published && inStore(s.storeId)) scheduled += schedCostOf(s); });
+    const days = daysInPeriod(fromStr, toStr);
+    const salTeam = opsTeam.filter(m => isSalaried(m) && !m.archivedAt && (m.storeIds||[]).some(id => inStore(id)));
+    const salPerDay = salTeam.reduce((a, m) => a + salariedDailyCost(m), 0);
+    actual += salPerDay * days; scheduled += salPerDay * days;
+    return { actual: Math.round(actual*100)/100, scheduled: Math.round(scheduled*100)/100 };
+  };
+
+  const labour = useMemo(() => {
+    const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+    if (labourView === "hourly") {
+      const buckets = Array.from({length:24}, (_,h)=>({ label:`${String(h).padStart(2,"0")}`, actual:0 }));
+      dayPunches.forEach(p => { if (!p.punchIn) return; const h = new Date(p.punchIn).getHours(); buckets[h].actual += punchCostOf(p); });
+      const cur = labourForRange(dayStr, dayStr);
+      const prev = labourForRange(fmtDateLocal(addDays(dayDate,-1)), fmtDateLocal(addDays(dayDate,-1)));
+      return { series: buckets, cur, prev, prevLabel:"prev day" };
+    }
+    if (labourView === "weekly") {
+      const series = []; let cur=null, prev=null;
+      for (let i=5;i>=0;i--){
+        const wkStart = getMonday(addDays(dayDate, -7*i));
+        const wkEnd = addDays(wkStart, 6);
+        const r = labourForRange(fmtDateLocal(wkStart), fmtDateLocal(wkEnd));
+        series.push({ label: fmtDateLocal(wkStart).slice(5), actual:r.actual, scheduled:r.scheduled });
+        if (i===0) cur=r; if (i===1) prev=r;
+      }
+      return { series, cur, prev, prevLabel:"last week" };
+    }
+    const series=[]; let cur=null, prev=null;
+    for (let i=6;i>=0;i--){
+      const d = addDays(dayDate,-i); const ds = fmtDateLocal(d);
+      const r = labourForRange(ds, ds);
+      series.push({ label: d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}), actual:r.actual, scheduled:r.scheduled });
+      if (i===0) cur=r;
+    }
+    prev = labourForRange(fmtDateLocal(addDays(dayDate,-1)), fmtDateLocal(addDays(dayDate,-1)));
+    return { series, cur, prev, prevLabel:"prev day" };
+  }, [labourView, dayStr, storeSel, punchRecords, schedules, opsTeam]);
+
+  const fmtMoney = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+
+  const TILES = [
+    { key:"on", label:"On", value: onShift.length, cls:"bg-emerald-500/10 text-emerald-300 border-emerald-500/20" },
+    { key:"break", label:"Break", value: 0, cls:"bg-slate-500/10 text-slate-300 border-slate-500/20" },
+    { key:"overdue", label:"Overdue", value: overdue.length, cls: overdue.length? "bg-amber-500/10 text-amber-300 border-amber-500/20":"bg-slate-500/10 text-slate-400 border-slate-500/20" },
+    { key:"upcoming", label:"Upcoming", value: upcoming.length, cls:"bg-slate-500/10 text-slate-300 border-slate-500/20" },
+    { key:"out", label:"Out", value: out.length, cls:"bg-indigo-500/10 text-indigo-300 border-indigo-500/20" },
+  ];
 
   // Row showing just name + clock-in / clock-out. Clicking opens the editor
   // (only for real punch records — not "upcoming" schedule rows).
@@ -27053,6 +27125,66 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
           {isHQ && <option value="all">All stores ({myStores.length})</option>}
           {myStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
         </SelectDropdown>
+      </div>
+
+      {/* Status tiles — clickable to switch tab */}
+      <div className="grid grid-cols-5 gap-2">
+        {TILES.map(t => (
+          <button key={t.key} onClick={()=>setTab(t.key)}
+            className={`rounded-xl border px-2 py-3 text-center transition-all ${t.cls} ${tab===t.key?"ring-2 ring-white/30":""}`}>
+            <div className="text-2xl font-black tabular-nums">{t.value}</div>
+            <div className="text-[10px] uppercase tracking-wide font-semibold mt-0.5">{t.label}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Labour graph + comparison */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <h3 className="text-sm font-bold text-white">Labour</h3>
+          <div className="flex items-center gap-1 bg-slate-950 rounded-lg p-0.5">
+            {["hourly","daily","weekly"].map(v => (
+              <button key={v} onClick={()=>setLabourView(v)}
+                className={`px-3 py-1 rounded-md text-xs font-semibold capitalize ${labourView===v?"bg-indigo-600 text-white":"text-slate-400 hover:text-slate-200"}`}>{v}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ width:"100%", height:200 }}>
+          <ResponsiveContainer>
+            <ComposedChart data={labour.series} margin={{ top:5, right:5, left:-10, bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
+              <XAxis dataKey="label" tick={{ fontSize:10, fill:"#64748b" }} interval="preserveStartEnd"/>
+              <YAxis tick={{ fontSize:10, fill:"#64748b" }} tickFormatter={v=>`£${v}`}/>
+              <Tooltip content={<ChartTooltip/>}/>
+              <Bar dataKey="actual" name="Actual labour" fill="#6366f1" radius={[4,4,0,0]}/>
+              {labourView!=="hourly" && <Line dataKey="scheduled" name="Scheduled labour" stroke="#a5b4fc" strokeWidth={2} dot={false}/>}
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        {/* Actual vs Scheduled comparison card */}
+        {labour.cur && (
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="bg-slate-950/60 rounded-xl p-3">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-400"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500"/> Actual labour</div>
+              <div className="text-xl font-black text-white tabular-nums mt-0.5">{fmtMoney(labour.cur.actual)}</div>
+              {labour.prev && (() => { const d = labour.cur.actual - labour.prev.actual; return (
+                <div className={`text-[11px] font-semibold ${d>=0?"text-rose-400":"text-emerald-400"}`}>{d>=0?"▲":"▼"} {fmtMoney(Math.abs(d))} vs {labour.prevLabel}</div>
+              ); })()}
+            </div>
+            <div className="bg-slate-950/60 rounded-xl p-3">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-400"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-300"/> Scheduled labour</div>
+              <div className="text-xl font-black text-white tabular-nums mt-0.5">{fmtMoney(labour.cur.scheduled)}</div>
+              {labour.prev && (() => { const d = labour.cur.scheduled - labour.prev.scheduled; return (
+                <div className={`text-[11px] font-semibold ${d>=0?"text-rose-400":"text-emerald-400"}`}>{d>=0?"▲":"▼"} {fmtMoney(Math.abs(d))} vs {labour.prevLabel}</div>
+              ); })()}
+            </div>
+            <div className="col-span-2 text-[11px] text-slate-500">
+              {(() => { const diff = labour.cur.actual - labour.cur.scheduled; return (
+                <span className={diff>0?"text-amber-400":"text-emerald-400"}>{fmtMoney(Math.abs(diff))} {diff>0?"above":"below"} scheduled labour</span>
+              ); })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
