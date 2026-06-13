@@ -8563,9 +8563,22 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     }
     return Math.max(0, (end - pIn) / 3600000);
   };
+  // Current hourly rate from the employee's live profile (falls back to the
+  // punch's snapshot if not found). Used for OPEN shifts so that setting a
+  // rate on a profile fixes the running cost immediately, without re-clocking.
+  // Closed punches keep their snapshot (historical — correct as-is).
+  const rateById = useMemo(() => {
+    const m = {};
+    (opsTeam || []).forEach(p => { if (p && p.id != null) m[p.id] = p.hourlyRate || 0; });
+    return m;
+  }, [opsTeam]);
+  const currentRate = (r) => {
+    const live = r.employeeId != null ? rateById[r.employeeId] : undefined;
+    return (live != null ? live : (r.hourlyRate || 0));
+  };
   const punchCost = (r, cutoffMin = null) => {
     if ((r.status === "open" || !r.punchOut) && r.punchIn) {
-      return punchHours(r, cutoffMin) * (r.hourlyRate || 0);
+      return punchHours(r, cutoffMin) * currentRate(r);  // open -> live profile rate
     }
     if (cutoffMin != null) return punchHours(r, cutoffMin) * (r.hourlyRate || 0);
     return r.grossPay || 0;
@@ -24796,13 +24809,19 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                       <OvertimeConversation record={r} currentUser={currentUser} isEmployee={false} onAddComment={onAddComment} compact/>
                     )}
                     {/* Gross pay with/without OT — hourly staff only; salaried
-                        cost is a fixed daily slice shown in the summary. */}
-                    {r.hourlyRate > 0 && r.punchOut && !isSalaried(opsTeam.find(m => m.id === r.employeeId)) && (
+                        cost is a fixed daily slice shown in the summary. Uses the
+                        employee's current profile rate (falls back to snapshot). */}
+                    {(() => {
+                      const member = opsTeam.find(m => m.id === r.employeeId);
+                      const rate = (member?.hourlyRate != null ? member.hourlyRate : r.hourlyRate) || 0;
+                      if (!(rate > 0 && r.punchOut && !isSalaried(member))) return null;
+                      return (
                       <div className="mt-2 pt-2 border-t border-white/10 flex gap-4 text-xs">
-                        <span className="text-slate-600">Scheduled pay: <span className="text-white font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*r.hourlyRate) : 0).toFixed(2)}</span></span>
-                        {r.overtimeApproved && <span className="text-emerald-400">+OT: <span className="font-bold">£{(r.overtimeHrs * r.hourlyRate).toFixed(2)}</span></span>}
+                        <span className="text-slate-600">Scheduled pay: <span className="text-white font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*rate) : 0).toFixed(2)}</span></span>
+                        {r.overtimeApproved && <span className="text-emerald-400">+OT: <span className="font-bold">£{(r.overtimeHrs * rate).toFixed(2)}</span></span>}
                       </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
 
