@@ -27230,7 +27230,7 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen }) {
     { key: "__more__",        label: "More",     icon: Menu },
   ];
   return (
-    <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex items-stretch">
+    <nav className="emp-theme md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex items-stretch">
       {tabs.map(t => {
         const Icon = t.icon;
         const isMore = t.key === "__more__";
@@ -27248,7 +27248,7 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen }) {
   );
 }
 
-function MoreSheet({ open, onClose, setActiveView, allowedKeys = [] }) {
+function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout }) {
   if (!open) return null;
   const GROUPS = [
     { title: "Operations", items: [
@@ -27288,7 +27288,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [] }) {
   ];
   const go = (key) => { setActiveView(key); onClose(); };
   return (
-    <div className="md:hidden fixed inset-0 z-50 bg-slate-950 flex flex-col">
+    <div className="emp-theme md:hidden fixed inset-0 z-50 bg-slate-950 flex flex-col">
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 flex-shrink-0">
         <h2 className="text-lg font-black text-white">More</h2>
         <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={22}/></button>
@@ -27316,6 +27316,13 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [] }) {
             </div>
           );
         })}
+        {onLogout && (
+          <button onClick={() => { onClose(); onLogout(); }}
+            className="w-full flex items-center gap-3 px-4 py-3 bg-slate-900 border border-slate-800 rounded-2xl text-left hover:bg-slate-800/50">
+            <LogOut size={18} className="text-red-400 flex-shrink-0"/>
+            <span className="text-sm font-semibold text-red-400 flex-1">Sign out</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -28377,6 +28384,10 @@ export default function App() {
               })()}
               <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
               {inboxUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{inboxUnread} unread</div>}
+              <button onClick={() => setActiveView("comms")} title="Chat & Helpdesk" className="relative text-slate-400 hover:text-indigo-300 transition-colors">
+                <MessageSquare size={18}/>
+                {inboxUnread > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-slate-950"/>}
+              </button>
             </div>
           </div>
           {/* Content */}
@@ -28483,7 +28494,7 @@ export default function App() {
           </main>
         </div>
         <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}/>
-        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={NAV_GROUPS.flatMap(g => g.items.map(i => i.key))}/>
+        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={NAV_GROUPS.flatMap(g => g.items.map(i => i.key))} onLogout={handleLogout}/>
         <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
