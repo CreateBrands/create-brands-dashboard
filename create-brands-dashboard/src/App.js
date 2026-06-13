@@ -80,6 +80,7 @@ import {
   updateInvoiceHeader,
   approveInvoiceRpc,
   rejectInvoice,
+  deleteInvoice,
   listStoresLite,
   fetchGoogleReviews,
   triggerGoogleReviewsSync,
@@ -5223,8 +5224,16 @@ function InvoicesView({ currentUser }) {
 
   useEffect(() => {
     refreshList();
-    listStoresLite().then(setStores).catch(() => {});
-  }, []);
+    listStoresLite().then(all => {
+      // Managers see only their assigned stores in the entity picker; owner/HQ
+      // (empty storeIds by convention) see all. Always sorted alphabetically.
+      const ids = currentUser?.storeIds || [];
+      const scoped = (isHqOrAbove(currentUser?.role) || ids.length === 0)
+        ? all
+        : all.filter(s => ids.includes(s.id));
+      setStores([...scoped].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
+    }).catch(() => {});
+  }, [currentUser]);
 
   const openInvoice = async (id) => {
     setBusy(true); setError(null); setNotice(null); setOverrideMismatch(false);
@@ -5286,6 +5295,19 @@ function InvoicesView({ currentUser }) {
       setNotice("Invoice rejected.");
       await refreshList();
       await openInvoice(selected.id);
+    } catch (e) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const doDelete = async () => {
+    if (!selected) return;
+    if (!window.confirm(`Delete this invoice${selected.supplier_name ? ` from ${selected.supplier_name}` : ""}? This permanently removes it and its lines and cannot be undone.`)) return;
+    setBusy(true); setError(null);
+    try {
+      await deleteInvoice(selected.id);
+      setSelected(null); setLines([]); setFileUrl(null);
+      setNotice("Invoice deleted.");
+      await refreshList();
     } catch (e) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   };
@@ -5393,6 +5415,12 @@ function InvoicesView({ currentUser }) {
                   </button>
                 </div>
               )}
+              <div className="flex items-center justify-end mt-2">
+                <button onClick={doDelete} disabled={busy}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600/15 text-red-300 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
+                  <Trash2 size={14}/> Delete invoice
+                </button>
+              </div>
               {selected.status === "failed" && (
                 <div className="text-xs text-rose-400">Extraction failed: {selected.error_note || "unknown"} — re-upload or check the function logs.</div>
               )}
@@ -26826,6 +26854,60 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 // Entity landing screen — pick a Brand or an Operations entity (tiles).
+function WhosWorkingModal({ open, onClose, punchRecords = [], opsTeam = [], stores = [], brands = [] }) {
+  if (!open) return null;
+  const onShift = (punchRecords || [])
+    .filter(p => p.status === "open" && p.punchIn)
+    .sort((a, b) => new Date(a.punchIn) - new Date(b.punchIn));
+  const memberOf = (id) => opsTeam.find(m => m.id === id) || null;
+  const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "—";
+  const fmtClockIn = (ts) => { try { return new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } };
+  const elapsed = (ts) => {
+    const mins = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 60000));
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+  return (
+    <div className="fixed inset-0 z-[80] flex items-start justify-center bg-black/60 p-4 overflow-y-auto" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md mt-12 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <UserCheck size={18} className="text-emerald-400"/>
+            <h3 className="font-bold text-white">Who's working</h3>
+            <span className="text-xs text-slate-400 bg-slate-800 rounded-full px-2 py-0.5">{onShift.length} on shift</span>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300"><X size={18}/></button>
+        </div>
+        <div className="max-h-[70vh] overflow-y-auto p-3">
+          {onShift.length === 0 ? (
+            <div className="text-center py-10 text-sm text-slate-500">No one is currently clocked in.</div>
+          ) : onShift.map(p => {
+            const m = memberOf(p.employeeId);
+            const role = m?.role || "";
+            const color = m?.color || "#6366f1";
+            const name = p.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
+            return (
+              <div key={p.id} className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: color }}>
+                  {(name[0] || "?").toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-white truncate">{name}</div>
+                  <div className="text-xs text-slate-500 truncate">{role || "—"} · {storeName(p.storeId)}</div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-xs text-emerald-400 font-semibold tabular-nums">{elapsed(p.punchIn)}</div>
+                  <div className="text-[10px] text-slate-500 tabular-nums">since {fmtClockIn(p.punchIn)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EntityPicker({ brands, stores, user, onPick, onLogout }) {
   // Classify each brand by the site types of its stores. A brand whose stores
   // are production/distribution/franchise facilities is an "Operations" entity.
@@ -26980,6 +27062,7 @@ export default function App() {
   // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
+  const [whosWorkingOpen, setWhosWorkingOpen] = useState(false);   // "Who's working" popup
   // Entity landing: which brand/entity the user has stepped into. null = show
   // the entity picker (tiles). Persisted so a refresh keeps you in the entity.
   const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
@@ -27842,14 +27925,15 @@ export default function App() {
             </div>
             <div className="flex items-center gap-3">
               {(() => {
-                // Show how many staff are currently clocked in across visible brands
-                const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-                const onShift = punchRecords.filter(p => visibleBrands.some(b=>b.id===p.brandId) && p.date === todayStr && p.status === "open").length;
+                // Staff currently clocked in across visible brands (any open punch,
+                // incl. overnight shifts opened on a previous day).
+                const onShift = punchRecords.filter(p => visibleBrands.some(b=>b.id===p.brandId) && p.status === "open").length;
                 return onShift > 0 ? (
-                  <div className="flex items-center gap-1.5 text-xs text-indigo-300 font-semibold bg-indigo-950/30 border border-indigo-500/30 rounded-full px-2.5 py-0.5">
+                  <button onClick={() => setWhosWorkingOpen(true)}
+                    className="flex items-center gap-1.5 text-xs text-indigo-300 font-semibold bg-indigo-950/30 border border-indigo-500/30 rounded-full px-2.5 py-0.5 hover:bg-indigo-900/40 transition-colors cursor-pointer">
                     <UserCheck size={12}/>
                     <span className="tabular-nums">{onShift}</span> on shift
-                  </div>
+                  </button>
                 ) : null;
               })()}
               <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
@@ -27956,6 +28040,7 @@ export default function App() {
             />}
           </main>
         </div>
+        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} opsTeam={opsTeam} stores={stores} brands={visibleBrands}/>
         {/* Toast */}
         {toast && (
           <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl flex items-center gap-3 ${toast.type==="error"?"bg-red-600 text-white":"bg-emerald-600 text-white"}`}>
