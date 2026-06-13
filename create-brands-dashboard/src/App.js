@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -23767,7 +23767,7 @@ function KioskKey({ label, onPress, tall, faint, variant }) {
   );
 }
 
-function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], assignments = [], checklists = [], cleaningTasks = [], storeRoles = [], storeDepartments = [], onPunchIn, onPunchOut, onLogout }) {
+function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, schedules = [], assignments = [], checklists = [], cleaningTasks = [], storeRoles = [], storeDepartments = [], onPunchIn, onPunchOut, onSetBreak, onLogout }) {
   const [pin,         setPin]       = useState("");
   const [matched,     setMatched]   = useState(null); // ops_team member
   const [error,       setError]     = useState("");
@@ -24006,7 +24006,14 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         const lateMs = effOutMs - seMs;
         if (lateMs > 0 && lateMs <= GRACE_OUT_MS) effOutMs = seMs;
       }
-      const hoursWorked = Math.round(((effOutMs - effInMs) / 3600000) * 100) / 100;
+      const rawHours = (effOutMs - effInMs) / 3600000;
+      // Include any break still open at clock-out (auto-end it now).
+      let totalBreakMins = openRecord.breakMinutes || 0;
+      if (openRecord.breakStart && !openRecord.breakEnd) {
+        totalBreakMins += Math.max(0, Math.round((Date.now() - new Date(openRecord.breakStart).getTime()) / 60000));
+      }
+      const breakHrs = totalBreakMins / 60;
+      const hoursWorked = Math.round(Math.max(0, rawHours - breakHrs) * 100) / 100;
       const grossPay    = emp.hourlyRate ? Math.round(hoursWorked * emp.hourlyRate * 100) / 100 : null;
       let overtimeHrs = 0;
       if (!isUnscheduled) {
@@ -24394,8 +24401,21 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
             </div>
             {breakMsg && <div className="bg-amber-950/40 border border-amber-800 rounded-xl px-4 py-2 text-amber-300 text-sm">{breakMsg}</div>}
             <div className="space-y-3">
-              <button onClick={() => { setBreakMsg("Break feature is coming soon."); }}
-                className="w-full py-4 rounded-2xl text-lg font-bold" style={{backgroundColor:"#3D2A1E",color:"#FDF2E0"}}>☕ Go on a break</button>
+              {(() => {
+                const onBreak = openRecord && openRecord.breakStart && !openRecord.breakEnd;
+                return (
+                  <button onClick={async () => {
+                    if (!openRecord) return;
+                    try {
+                      if (onBreak) { await onSetBreak(openRecord.id, "end"); setBreakMsg("Welcome back — break ended."); }
+                      else { await onSetBreak(openRecord.id, "start"); setBreakMsg("On break — tap again to end. Break time is unpaid."); }
+                    } catch (e) { setBreakMsg("Couldn't update break — try again."); }
+                  }}
+                    className="w-full py-4 rounded-2xl text-lg font-bold" style={{backgroundColor: onBreak ? "#6e3621" : "#3D2A1E", color:"#FDF2E0"}}>
+                    {onBreak ? "▶ End break" : "☕ Go on a break"}
+                  </button>
+                );
+              })()}
               <button onClick={() => setOverlayView("tasks")}
                 className="w-full py-4 rounded-2xl bg-indigo-600 text-white text-lg font-bold hover:bg-indigo-500">✓ View today's tasks{todaysTasks.length ? ` (${todaysTasks.length})` : ""}</button>
               <button onClick={() => { setOverlayView(null); doPunch(); }}
@@ -25166,7 +25186,7 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
     const dateBase    = record.date + "T";
     const newPunchIn  = new Date(dateBase + punchInTime  + ":00").toISOString();
     const newPunchOut = punchOutTime ? new Date(dateBase + punchOutTime + ":00").toISOString() : null;
-    const hoursWorked = newPunchOut ? Math.round(((new Date(newPunchOut)-new Date(newPunchIn))/3600000)*100)/100 : null;
+    const hoursWorked = newPunchOut ? Math.round((Math.max(0, (new Date(newPunchOut)-new Date(newPunchIn))/3600000 - (record.breakMinutes||0)/60))*100)/100 : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
     const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
     const _audit = [];
@@ -25864,6 +25884,7 @@ function KioskShell() {
       storeDepartments={storeDepartments}
       onPunchIn={handlePunchIn}
       onPunchOut={handlePunchOut}
+      onSetBreak={handleSetBreak}
       onLogout={handleLogout}
     />
   );
@@ -26967,7 +26988,9 @@ function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
       const rate = Number(punch.hourlyRate) || 0;
       let hours = null, gross = null, status = "open";
       if (outIso) {
-        hours = Math.round(((new Date(outIso) - new Date(inIso)) / 3600000) * 100) / 100;
+        const rawH = (new Date(outIso) - new Date(inIso)) / 3600000;
+        const breakH = (punch.breakMinutes || 0) / 60;
+        hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
         gross = Math.round(hours * rate * 100) / 100;
         status = "closed";
       }
@@ -28178,6 +28201,7 @@ export default function App() {
   const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
   const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
+  const handleSetBreak  = useCallback(async(id,action)=>{const saved=await setPunchBreak(id,action);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));return saved;}, []);
   const handleAmendPunch = useCallback(async record=>{try{const {_audit, ...clean}=record;const saved=await upsertPunchRecord(clean);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));if(_audit&&_audit.length){logPunchAudit(_audit.map(a=>({...a,punchId:saved.id,reason:"manager_amend",changedBy:currentUser?.name||currentUser?.id||"manager"})));}showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, currentUser]);
 
   const handleFlipdishSync = useCallback(async () => {

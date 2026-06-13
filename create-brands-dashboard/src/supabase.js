@@ -1038,6 +1038,27 @@ export async function deletePunchRecord(id) {
   return id;
 }
 
+// Start or end an unpaid break on an open punch. action: "start" | "end".
+// On end, accumulates elapsed minutes into break_minutes.
+export async function setPunchBreak(id, action) {
+  const { data: rows, error: e1 } = await supabase
+    .from("punch_records").select("break_start, break_minutes").eq("id", id).single();
+  if (e1) throw e1;
+  const nowIso = new Date().toISOString();
+  let patch;
+  if (action === "start") {
+    patch = { break_start: nowIso, break_end: null };
+  } else {
+    const start = rows?.break_start ? new Date(rows.break_start).getTime() : null;
+    const addMins = start ? Math.max(0, Math.round((Date.now() - start) / 60000)) : 0;
+    patch = { break_end: nowIso, break_minutes: (rows?.break_minutes || 0) + addMins };
+  }
+  const { data, error } = await supabase
+    .from("punch_records").update(patch).eq("id", id).select().single();
+  if (error) throw error;
+  return dbPunchToApp(data);
+}
+
 // PUNCH_AUDIT_V1 — write change entries (fire-and-forget; never blocks the save).
 export async function logPunchAudit(entries) {
   if (!entries || entries.length === 0) return;
@@ -1072,6 +1093,8 @@ function appPunchToDb(p) {
     status: p.status || "open", amended_by: p.amendedBy || "",
     approved: p.approved ?? false, approved_by: p.approvedBy || "",
     scheduled_start: p.scheduledStart || null, scheduled_end: p.scheduledEnd || null,
+    break_start: p.breakStart || null, break_end: p.breakEnd || null,
+    break_minutes: p.breakMinutes || 0,
     overtime_hours: p.overtimeHours || null,
     overtime_reason: p.overtimeReason || "",
     overtime_approved: p.overtimeApproved ?? false,
@@ -1095,6 +1118,8 @@ function dbPunchToApp(p) {
     approved: p.approved ?? false, approvedBy: p.approved_by || "",
     scheduledStart: p.scheduled_start?.slice(0,5) || null,
     scheduledEnd: p.scheduled_end?.slice(0,5) || null,
+    breakStart: p.break_start || null, breakEnd: p.break_end || null,
+    breakMinutes: p.break_minutes ? parseInt(p.break_minutes, 10) : 0,
     overtimeHours: p.overtime_hours ? parseFloat(p.overtime_hours) : null,
     overtimeReason: p.overtime_reason || "",
     overtimeApproved: p.overtime_approved ?? false,
