@@ -4556,6 +4556,44 @@ function EmpThemeStyle() {
 .emp-theme .emp-slider button.text-white { color: #fff !important; }
 .emp-theme .emp-slider button.text-slate-400 { color: var(--ink-soft) !important; }
 
+/* ── Contrast fixes for full-app theming ─────────────────────────────────── */
+/* Topbar / header dark bars (opacity slate variants the base rules miss) */
+.emp-theme .bg-slate-950\\/80,
+.emp-theme .bg-slate-950\\/90,
+.emp-theme .bg-slate-950\\/95,
+.emp-theme .bg-slate-900\\/80,
+.emp-theme .bg-slate-900\\/90,
+.emp-theme .bg-slate-900\\/95 { background-color: var(--cream) !important; }
+
+/* Pale status text (-300/-400 tints) -> readable saturated versions on cream */
+.emp-theme .text-rose-300,  .emp-theme .text-rose-400,
+.emp-theme .text-red-300,   .emp-theme .text-red-400   { color: #c0392b !important; }
+.emp-theme .text-emerald-300,.emp-theme .text-emerald-400,
+.emp-theme .text-green-300, .emp-theme .text-green-400  { color: #1f7a4d !important; }
+.emp-theme .text-amber-300, .emp-theme .text-amber-400,
+.emp-theme .text-yellow-300,.emp-theme .text-yellow-400 { color: #b06a00 !important; }
+.emp-theme .text-sky-300,   .emp-theme .text-sky-400,
+.emp-theme .text-blue-300,  .emp-theme .text-blue-400   { color: #1f6f8b !important; }
+
+/* StatCard / KPI gradient tints -> soft cream so text stays legible */
+.emp-theme [class*="from-slate-700"],
+.emp-theme [class*="from-indigo-600"],
+.emp-theme [class*="from-emerald-600"],
+.emp-theme [class*="from-amber-600"],
+.emp-theme [class*="from-red-600"],
+.emp-theme [class*="from-sky-600"] {
+  --tw-gradient-from: var(--cream-soft) !important;
+  --tw-gradient-to: var(--cream) !important;
+  background-image: none !important;
+  background-color: var(--cream-soft) !important;
+}
+
+/* Faint status-pill backgrounds (-950/20 etc.) -> cream-deep */
+.emp-theme [class*="bg-rose-950"], .emp-theme [class*="bg-red-950"],
+.emp-theme [class*="bg-emerald-950"], .emp-theme [class*="bg-green-950"],
+.emp-theme [class*="bg-amber-950"], .emp-theme [class*="bg-sky-950"],
+.emp-theme [class*="bg-indigo-950"] { background-color: var(--cream-deep) !important; }
+
 `}</style>
   );
 }
