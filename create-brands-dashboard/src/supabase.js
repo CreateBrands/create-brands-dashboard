@@ -1032,6 +1032,12 @@ export async function upsertPunchRecord(record) {
   return dbPunchToApp(data);
 }
 
+export async function deletePunchRecord(id) {
+  const { error } = await supabase.from("punch_records").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
 // PUNCH_AUDIT_V1 — write change entries (fire-and-forget; never blocks the save).
 export async function logPunchAudit(entries) {
   if (!entries || entries.length === 0) return;

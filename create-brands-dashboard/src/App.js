@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -26854,7 +26854,84 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 // Entity landing screen — pick a Brand or an Operations entity (tiles).
-function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser }) {
+// Edit a single punch: clock-in, clock-out, or delete. Recomputes hours/gross
+// on save. Times use the browser's local timezone via datetime-local inputs.
+function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
+  // Convert an ISO timestamp to a value for <input type="datetime-local"> (local).
+  const toLocalInput = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const [inVal, setInVal] = useState(toLocalInput(punch.punchIn));
+  const [outVal, setOutVal] = useState(toLocalInput(punch.punchOut));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const save = async () => {
+    setErr(null);
+    if (!inVal) { setErr("Clock-in time is required."); return; }
+    const inIso = new Date(inVal).toISOString();
+    const outIso = outVal ? new Date(outVal).toISOString() : null;
+    if (outIso && new Date(outIso) <= new Date(inIso)) { setErr("Clock-out must be after clock-in."); return; }
+    setBusy(true);
+    try {
+      const rate = Number(punch.hourlyRate) || 0;
+      let hours = null, gross = null, status = "open";
+      if (outIso) {
+        hours = Math.round(((new Date(outIso) - new Date(inIso)) / 3600000) * 100) / 100;
+        gross = Math.round(hours * rate * 100) / 100;
+        status = "closed";
+      }
+      await onSave({ ...punch, punchIn: inIso, punchOut: outIso, hoursWorked: hours, grossPay: gross, status });
+      onClose();
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const del = async () => {
+    if (!window.confirm(`Delete this punch for ${memberName}? This cannot be undone.`)) return;
+    setBusy(true); setErr(null);
+    try { await onDelete(punch.id); onClose(); }
+    catch (e) { setErr(e?.message || String(e)); setBusy(false); }
+  };
+
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+          <h3 className="font-bold text-white truncate">{memberName}</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300"><X size={18}/></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs text-slate-500 uppercase tracking-wide">Clock-in</label>
+            <input type="datetime-local" value={inVal} onChange={e=>setInVal(e.target.value)} className={inputCls}/>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 uppercase tracking-wide">Clock-out</label>
+            <input type="datetime-local" value={outVal} onChange={e=>setOutVal(e.target.value)} className={inputCls}/>
+            <div className="text-[10px] text-slate-500 mt-1">Leave blank to keep the shift open (still clocked in).</div>
+          </div>
+          {err && <div className="text-xs text-rose-400">{err}</div>}
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <button onClick={del} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600/15 text-red-300 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
+              <Trash2 size={14}/> Delete
+            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={onClose} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm text-slate-300">Cancel</button>
+              <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser, onUpdatePunch, onDeletePunch }) {
   const isHQ = isHqOrAbove(currentUser?.role);
   const myStores = useMemo(
     () => (stores || [])
@@ -26919,32 +26996,46 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     { key:"out", label:"Out", list: out },
   ];
   const active = TABS.find(t => t.key === tab) || TABS[0];
+  const [editPunch, setEditPunch] = useState(null);   // punch being edited
 
-  const Row = ({ name, role, store, badge, time, accent }) => {
-    const initial = (name?.[0] || "?").toUpperCase();
+  // Row showing just name + clock-in / clock-out. Clicking opens the editor
+  // (only for real punch records — not "upcoming" schedule rows).
+  const PunchRow = ({ item, clickable }) => {
+    const m = memberOf(item.employeeId);
+    const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
+    const accent = m?.color || "#6366f1";
+    const initial = (name[0] || "?").toUpperCase();
     return (
-      <div className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
-        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: accent || "#6366f1" }}>{initial}</div>
+      <div
+        onClick={clickable ? () => setEditPunch(item) : undefined}
+        className={`flex items-center gap-3 px-2 py-2.5 rounded-xl ${clickable ? "hover:bg-slate-800/60 cursor-pointer" : "hover:bg-slate-800/40"}`}>
+        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: accent }}>{initial}</div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-white truncate">{name}</div>
-          <div className="text-xs text-slate-500 truncate">{role || "—"}{store ? ` · ${store}` : ""}{badge ? ` · ${badge}` : ""}</div>
         </div>
-        {time && <div className="text-right flex-shrink-0 text-xs tabular-nums text-slate-400">{time}</div>}
+        <div className="text-right flex-shrink-0 text-xs tabular-nums">
+          <div className="text-slate-300">In: <span className="text-emerald-400 font-semibold">{item.punchIn ? fmtT(item.punchIn) : "—"}</span></div>
+          <div className="text-slate-300">Out: <span className={item.punchOut ? "text-slate-200 font-semibold" : "text-amber-400 font-semibold"}>{item.punchOut ? fmtT(item.punchOut) : "on shift"}</span></div>
+        </div>
       </div>
     );
   };
 
   const renderRow = (item) => {
     if (tab === "upcoming") {
+      // Schedule row, not a punch — show name + scheduled start, not clickable.
       const m = memberOf(item.employeeId);
-      return <Row key={item.id} name={item.employeeName || (m?`${m.firstName} ${m.lastName}`:"—")} role={item.role || m?.role} store={storeName(item.storeId)} badge={`scheduled ${item.startTime}`} accent={m?.color}/>;
+      const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}` : "—");
+      const initial = (name[0] || "?").toUpperCase();
+      return (
+        <div key={item.id} className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: m?.color || "#6366f1" }}>{initial}</div>
+          <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{name}</div></div>
+          <div className="text-right flex-shrink-0 text-xs tabular-nums text-slate-400">scheduled {item.startTime}</div>
+        </div>
+      );
     }
-    const m = memberOf(item.employeeId);
-    const name = item.employeeName || (m?`${m.firstName} ${m.lastName}`.trim():"Unknown");
-    if (tab === "out") return <Row key={item.id} name={name} role={m?.role} store={storeName(item.storeId)} time={`out ${fmtT(item.punchOut)}`} accent={m?.color}/>;
-    if (tab === "overdue") return <Row key={item.id} name={name} role={m?.role} store={storeName(item.storeId)} badge="past scheduled end" time={elapsed(item.punchIn)} accent="#f59e0b"/>;
-    // on
-    return <Row key={item.id} name={name} role={m?.role} store={storeName(item.storeId)} badge={item.scheduledStart?`scheduled ${item.scheduledStart}`:"unscheduled"} time={`${elapsed(item.punchIn)} · since ${fmtT(item.punchIn)}`} accent={m?.color}/>;
+    return <PunchRow key={item.id} item={item} clickable={true} />;
   };
 
   return (
@@ -26981,11 +27072,21 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
           <div className="text-center py-10 text-sm text-slate-500">No one in this list{isToday?" right now":""}.</div>
         ) : active.list.map(renderRow)}
       </div>
+
+      {editPunch && (
+        <PunchEditModal
+          punch={editPunch}
+          memberName={(() => { const m = memberOf(editPunch.employeeId); return editPunch.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown"); })()}
+          onClose={() => setEditPunch(null)}
+          onSave={onUpdatePunch}
+          onDelete={onDeletePunch}
+        />
+      )}
     </div>
   );
 }
 
-function WhosWorkingModal({ open, onClose, punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser }) {
+function WhosWorkingModal({ open, onClose, punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser, onUpdatePunch, onDeletePunch }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[80] flex items-start justify-center bg-black/60 p-4 overflow-y-auto" onClick={onClose}>
@@ -26997,6 +27098,7 @@ function WhosWorkingModal({ open, onClose, punchRecords = [], schedules = [], op
           <WhosWorkingScreen
             punchRecords={punchRecords} schedules={schedules} opsTeam={opsTeam}
             stores={stores} brands={brands} visibleStoreIds={visibleStoreIds} currentUser={currentUser}
+            onUpdatePunch={onUpdatePunch} onDeletePunch={onDeletePunch}
           />
         </div>
       </div>
@@ -27146,6 +27248,8 @@ export default function App() {
   const [schedules,       setSchedules]      = useState([]);
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
+  const updatePunchRec = useCallback(async rec => { const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p)); }, []);
+  const delPunchRec    = useCallback(async id => { await deletePunchRecord(id); setPunchRecords(ps => ps.filter(p => p.id !== id)); }, []);
   // Hiring / Onboarding (slice 1)
   const [applications,    setApplications]   = useState([]);
   const [advertisedRoles, setAdvertisedRoles] = useState([]);
@@ -28043,7 +28147,7 @@ export default function App() {
             {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
-            {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>}
+            {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
@@ -28138,7 +28242,7 @@ export default function App() {
             />}
           </main>
         </div>
-        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>
+        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
           <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl flex items-center gap-3 ${toast.type==="error"?"bg-red-600 text-white":"bg-emerald-600 text-white"}`}>
