@@ -4532,7 +4532,7 @@ function EmpThemeStyle() {
 /* Greeting card: brown panel, white text stays white */
 .emp-theme .emp-greeting,
 .emp-theme .emp-greeting .text-white { color: #fff !important; }
-.emp-theme .emp-greeting { background-color: var(--brown) !important; }
+.emp-theme .emp-greeting { background-color: var(--brown-soft) !important; }
 
 /* Cards/white surfaces inside greeting stay readable */
 .emp-theme .emp-greeting .text-slate-900 { color: var(--ink) !important; }
@@ -4543,7 +4543,7 @@ function EmpThemeStyle() {
 .emp-theme .emp-greeting .bg-white { background-color: var(--cream-card) !important; }
 
 /* Bottom nav: dark brown bar, light text */
-.emp-theme .emp-bottomnav { background-color: var(--brown) !important; border-top-color: #6e3621 !important; }
+.emp-theme .emp-bottomnav { background-color: var(--brown-soft) !important; border-top-color: #8a5238 !important; }
 .emp-theme .emp-bottomnav button { color: rgba(255,255,255,0.65) !important; }
 .emp-theme .emp-bottomnav button.text-indigo-400 { color: #fff !important; }
 .emp-theme .emp-bottomnav .text-indigo-400 { color: #fff !important; }
