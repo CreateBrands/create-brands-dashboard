@@ -4534,7 +4534,7 @@ function EmpThemeStyle() {
 .emp-theme .emp-greeting,
 .emp-theme .emp-greeting .text-white { color: #fff !important; }
 .emp-theme .emp-greeting,
-.emp-theme .emp-greeting.bg-indigo-600 { background-color: #FF0000 !important; }
+.emp-theme .emp-greeting.bg-indigo-600 { background-color: var(--tan) !important; }
 
 /* Cards/white surfaces inside greeting stay readable */
 .emp-theme .emp-greeting .text-slate-900 { color: var(--ink) !important; }
