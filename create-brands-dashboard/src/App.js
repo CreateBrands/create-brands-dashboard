@@ -8370,7 +8370,7 @@ function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], pu
   );
 }
 
-function DashboardView({ brands, stores, entries, issues }) {
+function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser }) {
   const { user } = useAuth();
   const visibleBrands = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const visibleBrandIds = useMemo(() => visibleBrands.map(b => b.id), [visibleBrands]);
@@ -8571,14 +8571,40 @@ function DashboardView({ brands, stores, entries, issues }) {
     return r.grossPay || 0;
   };
 
+  // Salaried staff scoped to the selected stores. Their cost is a FIXED daily
+  // slice (7shifts model: annual/52/7), applied per day in the period — NOT
+  // derived from punches. We also build a Set of their employee IDs so the
+  // punch-cost path can exclude them (avoids double-counting).
+  const scopedSalaried = useMemo(
+    () => (opsTeam || []).filter(m => !m.archivedAt && isSalaried(m) && (m.storeIds || []).some(id => scopedStoreIds.has(id))),
+    [opsTeam, scopedStoreIds]
+  );
+  const salariedIds = useMemo(() => new Set(scopedSalaried.map(m => m.id)), [scopedSalaried]);
+  // Fixed salaried cost for the whole selected period = sum(dailySlice) * days.
+  const salariedPeriodCost = useMemo(() => {
+    const perDay = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m), 0);
+    return Math.round(perDay * daysInPeriod(period.from, period.to) * 100) / 100;
+  }, [scopedSalaried, period.from, period.to]);
+  // Same for the comparison period (prev), using its own day count.
+  const salariedPrevCost = useMemo(() => {
+    if (!prevPeriod) return 0;
+    const perDay = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m), 0);
+    return Math.round(perDay * daysInPeriod(prevPeriod.from, prevPeriod.to) * 100) / 100;
+  }, [scopedSalaried, prevPeriod?.from, prevPeriod?.to]);
+
   // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
-  const rollup = (sales, punch, cutoffMin = null) => {
+  // salariedCost is the fixed salaried labour for the period (added on top of
+  // hourly punch cost). Salaried staff's PUNCHES still count toward hours (so
+  // SPLH/coverage reflect presence) but NOT toward cost.
+  const rollup = (sales, punch, cutoffMin = null, salariedCost = 0) => {
     const s = sales.filter(r => scopedStoreIds.has(r.storeId));
     const p = punch.filter(r => scopedStoreIds.has(r.storeId));
     const revenue = s.reduce((a, r) => a + r.revenue, 0);
     const orders = s.reduce((a, r) => a + r.saleCount, 0);
     const hours = Math.round(p.reduce((a, r) => a + punchHours(r, cutoffMin), 0) * 100) / 100;
-    const labourCost = Math.round(p.reduce((a, r) => a + punchCost(r, cutoffMin), 0) * 100) / 100;
+    // Hourly cost excludes salaried staff (their cost is the fixed slice).
+    const hourlyCost = p.reduce((a, r) => salariedIds.has(r.employeeId) ? a : a + punchCost(r, cutoffMin), 0);
+    const labourCost = Math.round((hourlyCost + salariedCost) * 100) / 100;
     return {
       revenue, orders, hours, labourCost,
       wagePct: revenue > 0 ? (labourCost / revenue) * 100 : null,
@@ -8586,9 +8612,9 @@ function DashboardView({ brands, stores, entries, issues }) {
       atv: orders > 0 ? revenue / orders : null,
     };
   };
-  const cur = useMemo(() => rollup(data.curSales, data.curPunch), [data, scopedStoreIds, dashTick]);
+  const cur = useMemo(() => rollup(data.curSales, data.curPunch, null, salariedPeriodCost), [data, scopedStoreIds, dashTick, salariedIds, salariedPeriodCost]);
   // When in progress, clip the comparison day's punches to the same time-of-day.
-  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null), [data, scopedStoreIds, inProgress, nowCutoffMin]);
+  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null, salariedPrevCost), [data, scopedStoreIds, inProgress, nowCutoffMin, salariedIds, salariedPrevCost]);
 
   // ── Targets for the selected period + stores ──────────────────────────────
   const target = useMemo(() => {
@@ -8631,14 +8657,21 @@ function DashboardView({ brands, stores, entries, issues }) {
     data.curPunch.filter(r => scopedStoreIds.has(r.storeId)).forEach(r => {
       byDate[r.date] = byDate[r.date] || { revenue: 0, hours: 0, labourCost: 0 };
       byDate[r.date].hours += r.hoursWorked || 0;
-      byDate[r.date].labourCost += r.grossPay || 0;
+      // Salaried staff cost is the fixed daily slice (added below), not grossPay.
+      if (!salariedIds.has(r.employeeId)) byDate[r.date].labourCost += r.grossPay || 0;
     });
+    // Add the fixed salaried daily slice to EVERY day in the period (7shifts
+    // even spread), so reporting reconciles to actual salary.
+    const salariedPerDay = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m), 0);
+    if (salariedPerDay > 0) {
+      Object.keys(byDate).forEach(d => { byDate[d].labourCost += salariedPerDay; });
+    }
     return Object.keys(byDate).sort().map(d => ({
       label: d.slice(5),
       revenue: byDate[d].revenue,
       laborPct: byDate[d].revenue > 0 ? (byDate[d].labourCost / byDate[d].revenue) * 100 : 0,
     }));
-  }, [isSingleDay, hourlyRows, data, scopedStoreIds]);
+  }, [isSingleDay, hourlyRows, data, scopedStoreIds, salariedIds, scopedSalaried]);
 
   const pieData = useMemo(() => visibleBrands.map(b => {
     const value = data.curSales.filter(r => scopedStoreIds.has(r.storeId) && brandOfStore[r.storeId] === b.id)
@@ -13348,6 +13381,29 @@ function fillContractForSend(body, employeeName, manualValues) {
 // employee is fixed regardless of hours; this approximation is what they
 // COST PER HOUR ON AVERAGE so the schedule view's "cost" totals remain
 // useful. UI should be clear that for salaried staff this is an estimate.
+// Fixed DAILY labour cost for a salaried employee, following the 7shifts model:
+// annual salary / 52 weeks / 7 days. Monthly: amount * 12 / 52 / 7. This is a
+// FIXED cost applied to every day in the period regardless of hours worked or
+// whether they were scheduled — so the period total always reconciles to their
+// real salary. Returns 0 for hourly staff (their cost comes from punches).
+function isSalaried(member) {
+  return member && (member.payType === "annual" || member.payType === "monthly");
+}
+function salariedDailyCost(member) {
+  if (!isSalaried(member)) return 0;
+  const amount = member.hourlyRate || 0;   // column reused as the amount-in-unit
+  if (amount <= 0) return 0;
+  const weekly = member.payType === "annual" ? amount / 52 : (amount * 12) / 52;
+  return weekly / 7;
+}
+// Inclusive count of calendar days in a from..to (YYYY-MM-DD) period.
+function daysInPeriod(fromStr, toStr) {
+  if (!fromStr || !toStr) return 1;
+  const f = new Date(fromStr + "T00:00:00").getTime();
+  const t = new Date(toStr + "T00:00:00").getTime();
+  return Math.max(1, Math.round((t - f) / 86400000) + 1);
+}
+
 const HOURS_PER_MONTH_APPROX = 173;  // UK standard FTE
 function effectiveHourlyRate(member) {
   if (!member) return 0;
@@ -27705,7 +27761,7 @@ export default function App() {
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6">
             {effectiveActiveView === "dashboard" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
-            {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} currentUser={currentUser}/>}
+            {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry}/>}
