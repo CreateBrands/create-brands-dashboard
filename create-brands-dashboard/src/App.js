@@ -26854,7 +26854,138 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 // Entity landing screen — pick a Brand or an Operations entity (tiles).
-function WhosWorkingModal({ open, onClose, punchRecords = [], opsTeam = [], stores = [], brands = [] }) {
+function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], stores = [], brands = [], visibleStoreIds = [], currentUser }) {
+  const isHQ = isHqOrAbove(currentUser?.role);
+  const myStores = useMemo(
+    () => (stores || [])
+      .filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s) && (isHQ || (visibleStoreIds || []).includes(s.id)))
+      .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [stores, isHQ, visibleStoreIds]
+  );
+  const [storeSel, setStoreSel] = useState(isHQ ? "all" : (myStores[0]?.id || "all"));
+  const [tab, setTab] = useState("on");      // on | break | overdue | upcoming | out
+  const [dayOffset, setDayOffset] = useState(0);  // 0 = today
+  const [, forceTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => forceTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    if (!isHQ && (storeSel === "all" || !myStores.some(s => s.id === storeSel)) && myStores.length) setStoreSel(myStores[0].id);
+  }, [isHQ, myStores, storeSel]);
+
+  const dayDate = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() + dayOffset); return d; }, [dayOffset]);
+  const dayStr = fmtDateLocal(dayDate);
+  const isToday = dayOffset === 0;
+
+  const inStore = (sid) => storeSel === "all" ? (isHQ || (visibleStoreIds||[]).includes(sid)) : sid === storeSel;
+  const memberOf = (id) => opsTeam.find(m => m.id === id) || null;
+  const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "—";
+  const fmtT = (ts) => { try { return new Date(ts).toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" }); } catch { return "—"; } };
+  const elapsed = (ts) => { const m = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime())/60000)); const h=Math.floor(m/60); return h>0?`${h}h ${m%60}m`:`${m%60}m`; };
+
+  // Punches on the selected day, scoped to store.
+  const dayPunches = useMemo(
+    () => punchRecords.filter(p => p.date === dayStr && inStore(p.storeId)),
+    [punchRecords, dayStr, storeSel]
+  );
+  // Open punches (clocked in) — for "today" any open punch counts; for past days, those dated that day.
+  const onShift = useMemo(
+    () => (isToday ? punchRecords.filter(p => p.status === "open" && inStore(p.storeId)) : dayPunches.filter(p => p.status === "open"))
+      .sort((a,b) => new Date(a.punchIn) - new Date(b.punchIn)),
+    [punchRecords, dayPunches, isToday, storeSel]
+  );
+  // Overdue = open and past scheduled end (forgotten clock-out).
+  const overdue = useMemo(() => onShift.filter(p => {
+    if (!p.scheduledEnd || !p.date) return false;
+    let se = new Date(p.date + "T" + p.scheduledEnd + ":00").getTime();
+    const ss = p.scheduledStart ? new Date(p.date + "T" + p.scheduledStart + ":00").getTime() : null;
+    if (ss != null && se <= ss) se += 86400000; // overnight
+    return Date.now() > se;
+  }), [onShift]);
+  // Scheduled (published) for the day, in scope.
+  const daySchedules = useMemo(
+    () => schedules.filter(s => s.date === dayStr && s.published && inStore(s.storeId)),
+    [schedules, dayStr, storeSel]
+  );
+  const clockedEmpIds = useMemo(() => new Set(dayPunches.map(p => p.employeeId)), [dayPunches]);
+  // Upcoming = scheduled today, not yet clocked in.
+  const upcoming = useMemo(() => daySchedules.filter(s => !clockedEmpIds.has(s.employeeId)), [daySchedules, clockedEmpIds]);
+  // Out = clocked out today (closed punches).
+  const out = useMemo(() => dayPunches.filter(p => p.status !== "open" && p.punchOut), [dayPunches]);
+
+  const TABS = [
+    { key:"on", label:"On", list: onShift },
+    { key:"break", label:"Break", list: [] },
+    { key:"overdue", label:"Overdue punches", list: overdue },
+    { key:"upcoming", label:"Upcoming", list: upcoming },
+    { key:"out", label:"Out", list: out },
+  ];
+  const active = TABS.find(t => t.key === tab) || TABS[0];
+
+  const Row = ({ name, role, store, badge, time, accent }) => {
+    const initial = (name?.[0] || "?").toUpperCase();
+    return (
+      <div className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
+        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: accent || "#6366f1" }}>{initial}</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-white truncate">{name}</div>
+          <div className="text-xs text-slate-500 truncate">{role || "—"}{store ? ` · ${store}` : ""}{badge ? ` · ${badge}` : ""}</div>
+        </div>
+        {time && <div className="text-right flex-shrink-0 text-xs tabular-nums text-slate-400">{time}</div>}
+      </div>
+    );
+  };
+
+  const renderRow = (item) => {
+    if (tab === "upcoming") {
+      const m = memberOf(item.employeeId);
+      return <Row key={item.id} name={item.employeeName || (m?`${m.firstName} ${m.lastName}`:"—")} role={item.role || m?.role} store={storeName(item.storeId)} badge={`scheduled ${item.startTime}`} accent={m?.color}/>;
+    }
+    const m = memberOf(item.employeeId);
+    const name = item.employeeName || (m?`${m.firstName} ${m.lastName}`.trim():"Unknown");
+    if (tab === "out") return <Row key={item.id} name={name} role={m?.role} store={storeName(item.storeId)} time={`out ${fmtT(item.punchOut)}`} accent={m?.color}/>;
+    if (tab === "overdue") return <Row key={item.id} name={name} role={m?.role} store={storeName(item.storeId)} badge="past scheduled end" time={elapsed(item.punchIn)} accent="#f59e0b"/>;
+    // on
+    return <Row key={item.id} name={name} role={m?.role} store={storeName(item.storeId)} badge={item.scheduledStart?`scheduled ${item.scheduledStart}`:"unscheduled"} time={`${elapsed(item.punchIn)} · since ${fmtT(item.punchIn)}`} accent={m?.color}/>;
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><UserCheck size={18} className="text-emerald-400"/> Who's working</h2>
+          <div className="flex items-center gap-3 mt-1">
+            <button onClick={()=>setDayOffset(o=>o-1)} className="text-slate-500 hover:text-slate-300"><ChevronLeft size={16}/></button>
+            <span className="text-xs text-slate-400 font-semibold">{isToday ? "Today · " : ""}{dayDate.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}</span>
+            <button onClick={()=>setDayOffset(o=>o+1)} disabled={dayOffset>=0} className="text-slate-500 hover:text-slate-300 disabled:opacity-30"><ChevronRight size={16}/></button>
+          </div>
+        </div>
+        <SelectDropdown value={storeSel} onChange={setStoreSel} className="w-52">
+          {isHQ && <option value="all">All stores ({myStores.length})</option>}
+          {myStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </SelectDropdown>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1 border-b border-slate-800 overflow-x-auto">
+        {TABS.map(t => (
+          <button key={t.key} onClick={()=>setTab(t.key)}
+            className={`whitespace-nowrap px-3 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${tab===t.key?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>
+            {t.label} ({t.list.length})
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2">
+        {tab === "break" ? (
+          <div className="text-center py-10 text-sm text-slate-500">Break tracking isn't enabled yet — no break data to show.</div>
+        ) : active.list.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-500">No one in this list{isToday?" right now":""}.</div>
+        ) : active.list.map(renderRow)}
+      </div>
+    </div>
+  );
+}
+
+function WhosWorkingModal({ open, onClose, onOpenFull, punchRecords = [], opsTeam = [], stores = [], brands = [] }) {
   if (!open) return null;
   const onShift = (punchRecords || [])
     .filter(p => p.status === "open" && p.punchIn)
@@ -26903,6 +27034,13 @@ function WhosWorkingModal({ open, onClose, punchRecords = [], opsTeam = [], stor
             );
           })}
         </div>
+        {onOpenFull && (
+          <div className="border-t border-slate-800 p-3">
+            <button onClick={onOpenFull} className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-slate-200">
+              View full roster (Break · Overdue · Upcoming · Out)
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -27803,6 +27941,7 @@ export default function App() {
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
+      { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
     { group: "TODAY", items: [
@@ -27946,6 +28085,7 @@ export default function App() {
             {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
+            {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
@@ -28040,7 +28180,7 @@ export default function App() {
             />}
           </main>
         </div>
-        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} opsTeam={opsTeam} stores={stores} brands={visibleBrands}/>
+        <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} onOpenFull={() => { setWhosWorkingOpen(false); setActiveView("whos-working"); }} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} opsTeam={opsTeam} stores={stores} brands={visibleBrands}/>
         {/* Toast */}
         {toast && (
           <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl flex items-center gap-3 ${toast.type==="error"?"bg-red-600 text-white":"bg-emerald-600 text-white"}`}>
