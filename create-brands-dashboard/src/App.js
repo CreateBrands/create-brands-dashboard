@@ -24096,6 +24096,9 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
   // we render the kiosk normally and place the success screen as an absolute overlay.
   const showSuccessOverlay = !!lastAction;
   const successIsIn   = lastAction?.type === "in";
+  const successIsBreakStart = lastAction?.type === "break_start";
+  const successIsBreakEnd   = lastAction?.type === "break_end";
+  const successIsBreak = successIsBreakStart || successIsBreakEnd;
   const successHasOT  = (lastAction?.overtimeHrs || 0) > 0;
   const successUnsched = !!lastAction?.isUnscheduled;
 
@@ -24343,16 +24346,29 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       {/* Success overlay — kept on top so video element underneath stays mounted */}
       {showSuccessOverlay && (
         <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 z-50 ${
-          successIsIn ? "bg-emerald-950" : successHasOT || successUnsched ? "bg-red-950" : ""
-        }`} style={!successIsIn && !(successHasOT||successUnsched) ? {backgroundColor:"#2B1A12"} : {}}>
+          successIsIn ? "bg-emerald-950" : successIsBreakStart ? "bg-amber-900" : successIsBreakEnd ? "bg-emerald-900" : successHasOT || successUnsched ? "bg-red-950" : ""
+        }`} style={!successIsIn && !successIsBreak && !(successHasOT||successUnsched) ? {backgroundColor:"#2B1A12"} : {}}>
           <div className="text-center space-y-6 max-w-sm w-full">
+            {successIsBreak ? (
+              <>
+                <div className="text-7xl mb-2 animate-bounce">{successIsBreakStart ? "☕" : "🚀"}</div>
+                <div className={`text-5xl font-black mb-1 ${successIsBreakStart ? "text-amber-200" : "text-emerald-200"}`}>
+                  {successIsBreakStart ? "Enjoy your break!" : "Welcome back!"}
+                </div>
+                <div className="text-3xl font-bold text-white">{lastAction.name}</div>
+                <div className="text-xl font-semibold text-white/80">
+                  {successIsBreakStart ? "Put your feet up 🦶 — recharge and come back fresh ✨" : "Let's finish strong 💪🔥 — back to it!"}
+                </div>
+              </>
+            ) : (
+            <>
             <div className={`text-5xl font-black mb-2 ${successIsIn ? "text-emerald-300" : "text-white"}`}>
               {successIsIn ? "Clocked In ✓" : "Clocked Out ✓"}
             </div>
             <div className="text-3xl font-bold text-white">{lastAction.name}</div>
             <div className="text-xl text-slate-600">{fmtTime(lastAction.time)}</div>
 
-            {!successIsIn && (
+            {!successIsIn && !successIsBreak && (
               <div className="bg-black/30 rounded-2xl p-5 space-y-3 text-left">
                 {lastAction.hours != null && (
                   <div className="flex justify-between items-center">
@@ -24382,6 +24398,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                 View today's tasks ({todaysTasks.length})
               </button>
             )}
+            </>
+            )}
             <button onClick={resetKiosk}
               className="w-full py-3 rounded-2xl text-base font-bold" style={{ backgroundColor: "rgba(253,242,224,0.12)", color: "#FDF2E0" }}>
               Done — next person
@@ -24407,12 +24425,14 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                   <button onClick={async () => {
                     if (!openRecord) return;
                     try {
-                      if (onBreak) { await onSetBreak(openRecord.id, "end"); setBreakMsg("Welcome back — break ended."); }
-                      else { await onSetBreak(openRecord.id, "start"); setBreakMsg("On break — tap again to end. Break time is unpaid."); }
+                      const action = onBreak ? "end" : "start";
+                      await onSetBreak(openRecord.id, action);
+                      setOverlayView(null);
+                      setLastAction({ type: onBreak ? "break_end" : "break_start", name: matched.nickname || matched.firstName, time: new Date() });
                     } catch (e) { setBreakMsg("Couldn't update break — try again."); }
                   }}
                     className="w-full py-4 rounded-2xl text-lg font-bold" style={{backgroundColor: onBreak ? "#6e3621" : "#3D2A1E", color:"#FDF2E0"}}>
-                    {onBreak ? "▶ End break" : "☕ Go on a break"}
+                    {onBreak ? "🙌 End my break" : "☕ Take a break"}
                   </button>
                 );
               })()}
