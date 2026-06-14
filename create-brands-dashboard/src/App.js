@@ -24758,6 +24758,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     return hrs < 0 ? hrs + 24 : hrs;
   };
   const getSlotsFor = (memberId, dateStr) => weekSchedules.filter(s=>s.employeeId===memberId && s.date===dateStr && s.status!=="cancelled");
+  // Shifts this employee has the SAME day but at a DIFFERENT store — shown greyed
+  // so you can see they're already working elsewhere before double-booking.
+  const storeShortName = (sid) => { const st = (stores||[]).find(x=>x.id===sid); return st ? (st.shortName || st.name) : "Another store"; };
+  const getOtherStoreSlotsFor = (memberId, dateStr) => schedules.filter(s =>
+    s.employeeId===memberId && s.date===dateStr && s.status!=="cancelled" &&
+    s.storeId && s.storeId !== storeId
+  );
   const getAvailFor = (memberId, dateStr) => {
     const dayName = DAYS_OF_WEEK[new Date(dateStr+"T00:00:00").getDay()===0?6:new Date(dateStr+"T00:00:00").getDay()-1];
     return availability.filter(a=>{
@@ -24972,64 +24979,6 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className={fullscreen ? "fixed inset-0 z-[60] bg-slate-950 overflow-y-auto p-4 lg:p-6 space-y-5" : "space-y-5"}>
-      {/* ── Top stats / totals strip ──────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled hours</div>
-          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.hours)}</div>
-          <div className="text-xs text-slate-500 mt-0.5">{weekTotals.totalShifts} shifts</div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled wages</div>
-          <div className="text-xl font-black text-white mt-1">{fmtMoney(weekTotals.cost)}</div>
-          <div className="text-xs text-slate-500 mt-0.5">Forecast</div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Actual hours</div>
-          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.actualHours)}</div>
-          <div className={`text-xs mt-0.5 font-semibold ${
-            weekTotals.actualHours > weekTotals.hours * 1.05 ? "text-red-400" :
-            weekTotals.actualHours < weekTotals.hours * 0.95 ? "text-amber-400" : "text-emerald-400"
-          }`}>
-            {weekTotals.hours ? `${((weekTotals.actualHours/weekTotals.hours - 1)*100).toFixed(0)}%` : "—"} vs plan
-          </div>
-        </div>
-        <button onClick={()=>setSalesModal(true)} className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/30 transition-colors">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">SPLH forecast</div>
-          {weekSalesForecast > 0 ? (
-            <>
-              <div className={`text-xl font-black mt-1 ${
-                splhRating === "green" ? "text-emerald-400" : splhRating === "amber" ? "text-amber-400" : "text-red-400"
-              }`}>£{splh.toFixed(1)}</div>
-              <div className="text-xs text-slate-500 mt-0.5">sales / £1 labour</div>
-            </>
-          ) : (
-            <>
-              <div className="text-base font-bold text-slate-600 mt-1">Set forecast →</div>
-              <div className="text-xs text-slate-500 mt-0.5">tap to enter daily sales</div>
-            </>
-          )}
-        </button>
-        <button onClick={()=>setSalesModal(true)} className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/30 transition-colors">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Labour %</div>
-          {weekLabourPct != null ? (
-            <>
-              <div className={`text-xl font-black mt-1 ${
-                labourPctRating(weekLabourPct) === "green" ? "text-emerald-400" : labourPctRating(weekLabourPct) === "amber" ? "text-amber-400" : "text-red-400"
-              }`}>{weekLabourPct.toFixed(1)}%</div>
-              <div className="text-xs text-slate-500 mt-0.5">
-                target {labourPctTarget}%{weekLabourPct > labourPctTarget ? <span className="text-red-400 font-semibold"> · {(weekLabourPct - labourPctTarget).toFixed(1)}pts over</span> : <span className="text-emerald-400 font-semibold"> · on budget</span>}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="text-base font-bold text-slate-600 mt-1">Set forecast →</div>
-              <div className="text-xs text-slate-500 mt-0.5">needs sales forecast</div>
-            </>
-          )}
-        </button>
-      </div>
-
       {/* ── Header / actions ──────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 flex-wrap">
         {/* filters inline with actions to use the width */}
@@ -25302,7 +25251,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
         <div className="overflow-x-auto rounded-2xl border border-slate-800/70 bg-slate-950">
           <div className={`min-w-[980px] ${fullscreen ? "max-h-[calc(100vh-240px)]" : "max-h-[calc(100vh-340px)]"} overflow-y-auto`}>
             {/* ── Day header row ─────────────────────────────────────────── */}
-            <div className="grid sticky top-0 z-20 bg-slate-950 border-b border-slate-800" style={{gridTemplateColumns:"minmax(190px,210px) repeat(7, minmax(0,1fr)) minmax(84px,104px)"}}>
+            <div className="grid sticky top-0 z-20 bg-slate-950 border-b border-slate-800" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 flex items-end">Employee</div>
               {weekDays.map((day,idx)=>{
                 const isToday = toLocalDateStr(day)===toLocalDateStr(today);
@@ -25322,9 +25271,6 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                   </div>
                 );
               })}
-              <div className="text-center px-1 py-3 border-l border-slate-800/60 flex items-end justify-center">
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Total</span>
-              </div>
             </div>
 
             {filteredMembers.length===0 && <div className="text-center py-12 text-slate-500 text-sm">No team members match filters</div>}
@@ -25334,7 +25280,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
               const empTotal = employeeTotals[mIdx];
               const roleLabel = member.role || member.department || "";
               return (
-                <div key={member.id} className="grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors" style={{gridTemplateColumns:"minmax(190px,210px) repeat(7, minmax(0,1fr)) minmax(84px,104px)"}}>
+                <div key={member.id} className="grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
                   {/* Left: avatar + name + role + running total */}
                   <div className="flex items-center gap-2.5 px-3 py-2.5">
                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
@@ -25355,6 +25301,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                   {weekDays.map((day,dIdx)=>{
                     const dateStr = toLocalDateStr(day);
                     const slots   = getSlotsFor(member.id, dateStr);
+                    const otherSlots = getOtherStoreSlotsFor(member.id, dateStr);
                     const avails  = getAvailFor(member.id, dateStr);
                     const unavail = avails.find(a=>!a.available);
                     const availWin = avails.find(a=>a.available);
@@ -25418,10 +25365,26 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                               </div>
                             );
                           })}
+                          {/* Other-store shifts — greyed, non-editable, informational */}
+                          {otherSlots.map(os => (
+                            <div key={os.id}
+                              className="rounded-lg px-2 py-1.5 bg-slate-800/40 border border-dashed border-slate-700 cursor-default"
+                              title={`Already scheduled at ${storeShortName(os.storeId)}: ${os.startTime}–${os.endTime}`}
+                              onClick={e=>e.stopPropagation()}>
+                              <div className="text-[11px] font-semibold text-slate-500 leading-tight">{os.startTime}–{os.endTime}</div>
+                              <div className="text-[9px] text-slate-600 truncate leading-tight">@ {storeShortName(os.storeId)}</div>
+                            </div>
+                          ))}
                           {/* Empty-cell add affordance */}
-                          {!hasShift && !editLocked && (
+                          {!hasShift && otherSlots.length===0 && !editLocked && (
                             <div className="hidden group-hover:flex items-center justify-center h-9 rounded-lg border border-dashed border-slate-700 text-slate-600">
                               <Plus size={14}/>
+                            </div>
+                          )}
+                          {/* When working elsewhere but free here, still allow adding */}
+                          {!hasShift && otherSlots.length>0 && !editLocked && (
+                            <div className="hidden group-hover:flex items-center justify-center h-7 rounded-lg border border-dashed border-slate-700 text-slate-600 mt-1">
+                              <Plus size={12}/>
                             </div>
                           )}
                         </div>
@@ -25429,19 +25392,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                     );
                   })}
 
-                  {/* Right: week total for this person */}
-                  <div className="flex flex-col items-center justify-center px-2 border-l border-slate-800/40">
-                    <div className="text-sm font-black text-white">{fmtHrs(empTotal.hours)}</div>
-                    {showCosts && member.hourlyRate > 0 && (
-                      <div className="text-[11px] text-emerald-400 font-semibold">{fmtMoney(empTotal.cost)}</div>
-                    )}
-                  </div>
+                  {/* (right-hand per-person total removed — shown under the name instead) */}
                 </div>
               );
             })}
 
             {/* ── Daily totals footer ────────────────────────────────────── */}
-            <div className="grid border-t-2 border-slate-800 bg-slate-900/40" style={{gridTemplateColumns:"minmax(190px,210px) repeat(7, minmax(0,1fr)) minmax(84px,104px)"}}>
+            <div className="grid border-t-2 border-slate-800 bg-slate-900/40" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
               <div className="flex flex-col justify-center px-4 py-2.5">
                 <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Daily total</div>
                 <div className="text-[10px] text-slate-600">hours · wages · sales</div>
@@ -25454,10 +25411,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                   {dt.actualHours > 0 && <div className="text-[10px] text-slate-500 mt-0.5">act {fmtHrs(dt.actualHours)}</div>}
                 </div>
               ))}
-              <div className="py-2.5 px-1 border-l border-slate-800/40 text-center bg-indigo-950/20">
-                <div className="text-[13px] font-black text-white">{fmtHrs(weekTotals.hours)}</div>
-                {showCosts && <div className="text-[11px] text-emerald-300 font-bold">{fmtMoney(weekTotals.cost)}</div>}
-              </div>
+              {/* (week grand-total cell removed with the right column) */}
             </div>
           </div>
 
@@ -25589,6 +25543,65 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           </div>
         </div>
       )}
+
+      {/* ── Week summary (bottom) ─────────────────────────────────────── */}
+      {/* ── Week summary totals (moved to bottom for more grid space) ──────────────────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled hours</div>
+          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.hours)}</div>
+          <div className="text-xs text-slate-500 mt-0.5">{weekTotals.totalShifts} shifts</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Scheduled wages</div>
+          <div className="text-xl font-black text-white mt-1">{fmtMoney(weekTotals.cost)}</div>
+          <div className="text-xs text-slate-500 mt-0.5">Forecast</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Actual hours</div>
+          <div className="text-xl font-black text-white mt-1">{fmtHrs(weekTotals.actualHours)}</div>
+          <div className={`text-xs mt-0.5 font-semibold ${
+            weekTotals.actualHours > weekTotals.hours * 1.05 ? "text-red-400" :
+            weekTotals.actualHours < weekTotals.hours * 0.95 ? "text-amber-400" : "text-emerald-400"
+          }`}>
+            {weekTotals.hours ? `${((weekTotals.actualHours/weekTotals.hours - 1)*100).toFixed(0)}%` : "—"} vs plan
+          </div>
+        </div>
+        <button onClick={()=>setSalesModal(true)} className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/30 transition-colors">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">SPLH forecast</div>
+          {weekSalesForecast > 0 ? (
+            <>
+              <div className={`text-xl font-black mt-1 ${
+                splhRating === "green" ? "text-emerald-400" : splhRating === "amber" ? "text-amber-400" : "text-red-400"
+              }`}>£{splh.toFixed(1)}</div>
+              <div className="text-xs text-slate-500 mt-0.5">sales / £1 labour</div>
+            </>
+          ) : (
+            <>
+              <div className="text-base font-bold text-slate-600 mt-1">Set forecast →</div>
+              <div className="text-xs text-slate-500 mt-0.5">tap to enter daily sales</div>
+            </>
+          )}
+        </button>
+        <button onClick={()=>setSalesModal(true)} className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/30 transition-colors">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Labour %</div>
+          {weekLabourPct != null ? (
+            <>
+              <div className={`text-xl font-black mt-1 ${
+                labourPctRating(weekLabourPct) === "green" ? "text-emerald-400" : labourPctRating(weekLabourPct) === "amber" ? "text-amber-400" : "text-red-400"
+              }`}>{weekLabourPct.toFixed(1)}%</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                target {labourPctTarget}%{weekLabourPct > labourPctTarget ? <span className="text-red-400 font-semibold"> · {(weekLabourPct - labourPctTarget).toFixed(1)}pts over</span> : <span className="text-emerald-400 font-semibold"> · on budget</span>}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-base font-bold text-slate-600 mt-1">Set forecast →</div>
+              <div className="text-xs text-slate-500 mt-0.5">needs sales forecast</div>
+            </>
+          )}
+        </button>
+      </div>
 
       {/* ── Modals ────────────────────────────────────────────────────────── */}
       {shiftModal && !editLocked && (
