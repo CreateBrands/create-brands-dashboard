@@ -872,7 +872,7 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
           <div className="flex items-center gap-2">
@@ -1030,7 +1030,7 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
           <h3 className="font-bold text-white">{isEdit ? `Edit ${form.type}` : `Report New ${form.type}`}</h3>
@@ -1151,7 +1151,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
   const pc = PRIORITY_CONFIG[issue.priority];
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: "85vh" }}>
         <div className="flex items-start justify-between px-5 py-4 border-b border-slate-700 flex-shrink-0">
           <div className="flex-1 min-w-0 pr-4">
@@ -1439,7 +1439,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
       {editIssue && <IssueFormModal issue={editIssue} brands={brands} users={users} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
       {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} users={users} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
       {deleteId && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
           <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-red-500/25 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
@@ -10126,7 +10126,7 @@ function KPITargetModal({ brand, onSave, onClose }) {
     { key:"cashVarianceMax", label:"Cash Variance Max", unit:"£", step:5 },
   ];
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
           <h3 className="font-bold text-white">KPI Targets — {brand.name}</h3>
@@ -10172,7 +10172,7 @@ function LocationEditorModal({ brand, onSave, onClose }) {
     onClose();
   };
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
           <h3 className="font-bold text-white">{isCreate?"Add Brand":`Edit — ${brand.name}`}</h3>
@@ -10268,7 +10268,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
           <h3 className="font-bold text-white">{isCreate?"Add User":`Edit — ${editUser.name}`}</h3>
@@ -11027,7 +11027,7 @@ function AdminPanelView({
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
       {userModal&&<UserEditorModal user={userModal==="new"?null:userModal} brands={brands} stores={stores} onSave={userModal==="new"?onAddUser:onUpdateUser} onClose={()=>setUserModal(null)}/>}
       {deleteModal&&(
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
           <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
             <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-red-500/25 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div><div className="text-sm text-slate-700">{deleteModal.msg}</div></div>
             <div className="flex gap-3"><button onClick={()=>setDeleteModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button><button onClick={()=>{deleteModal.fn();setDeleteModal(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500 transition-colors">Delete</button></div>
@@ -11928,11 +11928,12 @@ const labelCls = "text-xs text-slate-600 font-semibold mb-1.5 block";
 
 function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${maxW} flex flex-col`} style={{ maxHeight: "85vh" }}>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4">
+      <div className={`bg-slate-900 border border-slate-700 w-full ${maxW} flex flex-col rounded-t-3xl sm:rounded-2xl`}
+        style={{ maxHeight: "92vh", paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700 flex-shrink-0">
           <h3 className="font-bold text-white">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18}/></button>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20}/></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">{children}</div>
         {footer && <div className="flex gap-3 px-5 py-4 border-t border-slate-700 flex-shrink-0">{footer}</div>}
@@ -11943,8 +11944,8 @@ function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
 
 function OpsConfirmModal({ message, onConfirm, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-red-500/30 rounded-2xl w-full max-w-sm p-6 space-y-4">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4">
+      <div className="bg-slate-900 border border-red-500/30 w-full max-w-sm p-6 space-y-4 rounded-t-3xl sm:rounded-2xl" style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-red-500/25 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
           <div className="text-sm text-slate-700">{message}</div>
