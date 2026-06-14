@@ -25550,7 +25550,52 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           {Object.entries(summary).length === 0 ? (
             <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>
           ) : (
-          <div className="overflow-x-auto">
+          <>
+          {/* Mobile: stacked cards */}
+          <div className="md:hidden divide-y divide-slate-800/60">
+            {Object.entries(summary).map(([empId, s]) => (
+              <div key={empId} className="p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-semibold text-white text-sm">{s.name}</span>
+                      {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold">{s.pendingApproval} pending</span>}
+                      {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold">{s.pendingOT} OT</span>}
+                      {s.wtdBreached && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-300 font-bold">⚠ 48h+</span>}
+                    </div>
+                    <div className="text-[10px] text-slate-500">{s.role}{s.isSalaried ? " · Salaried" : ""}</div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-base font-black text-emerald-400 tabular-nums">£{(s.totalPay||0).toFixed(2)}</div>
+                    <div className="text-[10px] text-slate-500">{s.days} day{s.days===1?"":"s"}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2.5 text-center">
+                  <div className="bg-slate-950/50 rounded-lg py-1.5">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Regular</div>
+                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(s.regularHours)}</div>
+                  </div>
+                  <div className="bg-slate-950/50 rounded-lg py-1.5">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">OT</div>
+                    <div className={`text-sm font-bold tabular-nums ${s.overtimeHours>0?"text-amber-400":"text-slate-600"}`}>{s.overtimeHours>0?fmtDur(s.overtimeHours):"—"}</div>
+                  </div>
+                  <div className="bg-slate-950/50 rounded-lg py-1.5">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Total</div>
+                    <div className="text-sm font-bold text-white tabular-nums">{fmtDur(s.totalHours)}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between p-3 bg-indigo-950/30 font-bold">
+              <span className="text-white text-sm">Week total</span>
+              <div className="flex items-center gap-3">
+                <span className="text-white tabular-nums text-sm">{fmtDur(totalHours)}</span>
+                <span className="text-emerald-400 tabular-nums">£{totalPay.toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+          {/* Desktop: table */}
+          <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-900/80 text-slate-400 text-[11px] uppercase tracking-wide">
@@ -25597,6 +25642,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             </tfoot>
           </table>
           </div>
+          </>
           )}
         </div>
         </div>
