@@ -4693,6 +4693,39 @@ export async function deleteBankAccount(id) {
   return id;
 }
 
+// ── ACCOUNTS / P&L data ─────────────────────────────────────────────────────
+// EOD entries within a date range (net_sales, labor_cost, cogs_cost per store/day).
+export async function fetchEodForAccounts({ from, to } = {}) {
+  let q = supabase.from("eod_entries")
+    .select("id, brand_id, store_id, date, net_sales, labor_cost, cogs_cost, total_hours, total_orders")
+    .order("date", { ascending: false });
+  if (from) q = q.gte("date", from);
+  if (to)   q = q.lte("date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(e => ({
+    id: e.id, brandId: e.brand_id || "", storeId: e.store_id || "", date: e.date,
+    netSales: Number(e.net_sales) || 0, laborCost: Number(e.labor_cost) || 0,
+    cogsCost: Number(e.cogs_cost) || 0, totalHours: Number(e.total_hours) || 0,
+    totalOrders: Number(e.total_orders) || 0,
+  }));
+}
+// Invoices within a date range (supplier costs).
+export async function fetchInvoicesForAccounts({ from, to } = {}) {
+  let q = supabase.from("invoices")
+    .select("id, entity, supplier_name, invoice_number, invoice_date, total_ex_vat, status")
+    .order("invoice_date", { ascending: false });
+  if (from) q = q.gte("invoice_date", from);
+  if (to)   q = q.lte("invoice_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(i => ({
+    id: i.id, entity: i.entity || "", supplier: i.supplier_name || "",
+    number: i.invoice_number || "", date: i.invoice_date,
+    totalExVat: Number(i.total_ex_vat) || 0, status: i.status || "",
+  }));
+}
+
 export async function listStoresLite() {
   const { data, error } = await supabase.from("stores").select("id, name").order("name");
   if (error) throw error;

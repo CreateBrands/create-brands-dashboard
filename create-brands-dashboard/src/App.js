@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -19881,6 +19881,222 @@ function OpsTeamView({
   );
 }
 
+function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [] }) {
+  const [period, setPeriod] = useState("month");   // month | week
+  const [vatMode, setVatMode] = useState("ex");     // ex | inc
+  const [anchor, setAnchor] = useState(() => new Date());
+  const [eod, setEod] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [storeFilter, setStoreFilter] = useState("all");
+
+  // Period bounds.
+  const bounds = useMemo(() => {
+    const d = new Date(anchor);
+    if (period === "month") {
+      const from = new Date(d.getFullYear(), d.getMonth(), 1);
+      const to = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      return { from, to, label: from.toLocaleDateString("en-GB", { month: "long", year: "numeric" }) };
+    } else {
+      const day = (d.getDay() + 6) % 7;              // Monday-start
+      const from = new Date(d); from.setDate(d.getDate() - day);
+      const to = new Date(from); to.setDate(from.getDate() + 6);
+      const f = (x) => x.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+      return { from, to, label: `${f(from)} – ${f(to)}` };
+    }
+  }, [anchor, period]);
+
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const from = iso(bounds.from), to = iso(bounds.to);
+    Promise.all([
+      fetchEodForAccounts({ from, to }).catch(() => []),
+      fetchInvoicesForAccounts({ from, to }).catch(() => []),
+    ]).then(([e, inv]) => {
+      if (cancelled) return;
+      setEod(e || []); setInvoices(inv || []); setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [bounds.from, bounds.to]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // VAT helper — figures from sources are treated as their natural basis:
+  // EOD net_sales is gross (inc VAT, as taken); invoices are ex-VAT; bank is gross.
+  // We present a consistent view per the toggle. UK standard rate 20%.
+  const VAT = 0.20;
+  const exVat = (gross) => gross / (1 + VAT);
+  const incVat = (ex) => ex * (1 + VAT);
+
+  const inRange = (dateStr) => dateStr >= iso(bounds.from) && dateStr <= iso(bounds.to);
+  const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+  // Build per-store P&L.
+  const rows = useMemo(() => {
+    const byStore = {};
+    const ensure = (sid) => { if (!byStore[sid]) byStore[sid] = { storeId: sid, revenue: 0, labour: 0, cogs: 0, otherSpend: 0 }; return byStore[sid]; };
+    // Revenue + labour + cogs from EOD.
+    eod.forEach(e => {
+      const r = ensure(e.storeId || "unassigned");
+      r.revenue += e.netSales;
+      r.labour  += e.laborCost;
+      r.cogs    += e.cogsCost;
+    });
+    // Supplier invoices add to cost (ex-VAT basis). Map by entity≈store if it matches a store id/name.
+    invoices.forEach(inv => {
+      const match = stores.find(s => s.id === inv.entity || s.name === inv.entity || s.shortName === inv.entity);
+      const r = ensure(match ? match.id : "unassigned");
+      r.cogs += inv.totalExVat;   // treat supplier invoices as cost of goods/supplies
+    });
+    // Bank "other spend" (money out) per store, from categorised bank transactions.
+    bankTransactions.forEach(t => {
+      if (!inRange(t.txnDate)) return;
+      if (t.amount >= 0) return;            // only outflows count as spend here
+      const r = ensure(t.storeId || "unassigned");
+      r.otherSpend += Math.abs(t.amount);
+    });
+    return Object.values(byStore);
+  }, [eod, invoices, bankTransactions, stores]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply VAT presentation. Revenue (gross) & otherSpend (gross) convert if ex.
+  const present = (r) => {
+    const rev = vatMode === "ex" ? exVat(r.revenue) : r.revenue;
+    const labour = r.labour;                       // wages have no VAT
+    const cogs = vatMode === "inc" ? incVat(r.cogs) : r.cogs;  // invoices stored ex-VAT
+    const other = vatMode === "ex" ? exVat(r.otherSpend) : r.otherSpend;
+    const grossProfit = rev - cogs;
+    const net = rev - labour - cogs - other;
+    const labourPct = rev > 0 ? (labour / rev) * 100 : 0;
+    return { ...r, rev, labour, cogs, other, grossProfit, net, labourPct };
+  };
+
+  const visibleRows = (storeFilter === "all" ? rows : rows.filter(r => r.storeId === storeFilter)).map(present);
+  const totals = visibleRows.reduce((a, r) => ({
+    rev: a.rev + r.rev, labour: a.labour + r.labour, cogs: a.cogs + r.cogs,
+    other: a.other + r.other, grossProfit: a.grossProfit + r.grossProfit, net: a.net + r.net,
+  }), { rev:0, labour:0, cogs:0, other:0, grossProfit:0, net:0 });
+  const totalLabourPct = totals.rev > 0 ? (totals.labour / totals.rev) * 100 : 0;
+
+  // Cashflow from bank (in vs out) over period.
+  const cash = useMemo(() => {
+    let inflow = 0, outflow = 0;
+    bankTransactions.forEach(t => {
+      if (!inRange(t.txnDate)) return;
+      if (storeFilter !== "all" && t.storeId !== storeFilter) return;
+      if (t.amount >= 0) inflow += t.amount; else outflow += Math.abs(t.amount);
+    });
+    return { inflow, outflow, net: inflow - outflow };
+  }, [bankTransactions, bounds.from, bounds.to, storeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const storeName = (id) => { if (id === "unassigned") return "Unassigned"; const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : id; };
+  const shiftPeriod = (dir) => { const d = new Date(anchor); if (period === "month") d.setMonth(d.getMonth() + dir); else d.setDate(d.getDate() + dir*7); setAnchor(d); };
+
+  const Stat = ({ label, value, tone }) => (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+      <div className="text-[10px] text-slate-500 uppercase tracking-widest">{label}</div>
+      <div className={`text-xl font-black tabular-nums mt-1 ${tone || "text-white"}`}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><BarChart2 size={18}/> Accounts — P&amp;L</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Management view from your sales, wages, invoices and bank data. Sits alongside your accountant — not for VAT/statutory filing.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="inline-flex rounded-lg border border-slate-800 overflow-hidden">
+            <button onClick={()=>setPeriod("week")} className={`px-3 py-1.5 text-xs font-semibold ${period==="week"?"bg-indigo-600 text-white":"bg-slate-900 text-slate-400"}`}>Week</button>
+            <button onClick={()=>setPeriod("month")} className={`px-3 py-1.5 text-xs font-semibold ${period==="month"?"bg-indigo-600 text-white":"bg-slate-900 text-slate-400"}`}>Month</button>
+          </div>
+          <div className="inline-flex rounded-lg border border-slate-800 overflow-hidden">
+            <button onClick={()=>setVatMode("ex")} className={`px-3 py-1.5 text-xs font-semibold ${vatMode==="ex"?"bg-indigo-600 text-white":"bg-slate-900 text-slate-400"}`}>ex VAT</button>
+            <button onClick={()=>setVatMode("inc")} className={`px-3 py-1.5 text-xs font-semibold ${vatMode==="inc"?"bg-indigo-600 text-white":"bg-slate-900 text-slate-400"}`}>inc VAT</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Period navigator */}
+      <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+        <button onClick={()=>shiftPeriod(-1)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-sm font-semibold">←</button>
+        <div className="text-sm font-bold text-white">{bounds.label}</div>
+        <button onClick={()=>shiftPeriod(1)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-sm font-semibold">→</button>
+      </div>
+
+      <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+        <option value="all">All stores (group)</option>
+        {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+      </select>
+
+      {loading ? (
+        <div className="text-center py-12 text-sm text-slate-500">Loading accounts…</div>
+      ) : (
+        <>
+          {/* Headline P&L */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Revenue" value={fmt(totals.rev)} tone="text-emerald-400" />
+            <Stat label="Gross profit" value={fmt(totals.grossProfit)} />
+            <Stat label="Labour" value={`${fmt(totals.labour)} · ${totalLabourPct.toFixed(0)}%`} tone={totalLabourPct>30?"text-amber-400":"text-white"} />
+            <Stat label="Net (rough)" value={fmt(totals.net)} tone={totals.net>=0?"text-emerald-400":"text-red-400"} />
+          </div>
+
+          {/* P&L breakdown */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-1.5">
+            <div className="text-sm font-bold text-white mb-2">Profit &amp; loss <span className="text-slate-500 font-normal">· {vatMode === "ex" ? "excluding" : "including"} VAT</span></div>
+            {[
+              ["Revenue", totals.rev, "text-emerald-300"],
+              ["less Cost of goods / supplies", -totals.cogs, "text-slate-300"],
+              ["= Gross profit", totals.grossProfit, "text-white font-bold"],
+              ["less Labour", -totals.labour, "text-slate-300"],
+              ["less Other spend (bank)", -totals.other, "text-slate-300"],
+              ["= Net profit (rough)", totals.net, totals.net>=0?"text-emerald-400 font-bold":"text-red-400 font-bold"],
+            ].map(([label, val, cls], i) => (
+              <div key={i} className="flex items-center justify-between py-1 border-b border-slate-800/40 last:border-0">
+                <span className={`text-sm ${String(label).startsWith("=")?"text-white font-semibold":"text-slate-400"}`}>{label}</span>
+                <span className={`text-sm tabular-nums ${cls}`}>{fmt(val)}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Cashflow */}
+          <div className="grid grid-cols-3 gap-3">
+            <Stat label="Cash in" value={fmt(cash.inflow)} tone="text-emerald-400" />
+            <Stat label="Cash out" value={fmt(cash.outflow)} tone="text-red-400" />
+            <Stat label="Net cash" value={fmt(cash.net)} tone={cash.net>=0?"text-emerald-400":"text-red-400"} />
+          </div>
+
+          {/* Per-store table (group view) */}
+          {storeFilter === "all" && visibleRows.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">By store</div>
+              <div className="divide-y divide-slate-800/50">
+                {visibleRows.sort((a,b)=>b.rev-a.rev).map(r => (
+                  <div key={r.storeId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <div className="min-w-0">
+                      <div className="text-sm text-white truncate">{storeName(r.storeId)}</div>
+                      <div className="text-[11px] text-slate-500">Labour {r.labourPct.toFixed(0)}% · GP {fmt(r.grossProfit)}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-sm font-semibold text-emerald-400 tabular-nums">{fmt(r.rev)}</div>
+                      <div className={`text-[11px] tabular-nums ${r.net>=0?"text-emerald-500":"text-red-400"}`}>net {fmt(r.net)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <p className="text-[11px] text-slate-600 leading-snug">
+            Rough management figures only. Revenue from EOD net sales; labour from EOD; cost of goods from supplier invoices; other spend from categorised bank outflows. VAT is estimated at the 20% standard rate for presentation — your accountant's figures are the source of truth for VAT and statutory accounts.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
@@ -28509,6 +28725,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout })
       { key:"notifications", label:"Notifications", icon:Bell },
       { key:"cogs", label:"COGS / Inventory", icon:ClipboardList },
       { key:"bank", label:"Bank", icon:Building2 },
+      { key:"accounts", label:"Accounts", icon:BarChart2 },
     ]},
     { title: "Settings", items: [
       { key:"ops-settings", label:"Ops Setup", icon:Settings },
@@ -29608,6 +29825,7 @@ export default function App() {
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "bank", label: "Bank", icon: Building2, roles: ["owner", "hq_staff"] },
+      { key: "accounts", label: "Accounts", icon: BarChart2, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -29847,6 +30065,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "accounts" && ["owner","hq_staff"].includes(currentUser.role) && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts}/>}
             {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
