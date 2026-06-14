@@ -24326,7 +24326,13 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
 }
 
 // ── Shift Form Modal (uses custom presets) ────────────────────────────────────
-function StaffPickerModal({ roster, alreadyOn, storeId, storeName, onAdd, onClose }) {
+function StaffPickerModal({ roster, alreadyOn, storeId, storeName, stores = [], onAdd, onClose }) {
+  const storeLabel = (m) => {
+    const ids = m.storeIds || [];
+    if (!ids.length) return "";
+    const names = ids.map(id => { const s = stores.find(x=>x.id===id); return s ? (s.shortName || s.name) : null; }).filter(Boolean);
+    return names.join(", ");
+  };
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState(() => new Set());
   // Candidates = everyone schedulable not already on the rota.
@@ -24374,7 +24380,11 @@ function StaffPickerModal({ roster, alreadyOn, storeId, storeName, onAdd, onClos
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm text-slate-200 truncate">{m.firstName} {m.lastName}</span>
-                  <span className="block text-[11px] text-slate-500 truncate">{m.role||m.department||""}{!member && <span className="text-amber-500/80"> · other store</span>}</span>
+                  <span className="block text-[11px] text-slate-500 truncate">
+                    {m.role||m.department||""}
+                    {storeLabel(m) && <span className="text-slate-600"> · {storeLabel(m)}</span>}
+                    {!member && <span className="text-amber-500/80"> · other store</span>}
+                  </span>
                 </span>
               </button>
             );
@@ -24794,6 +24804,31 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     return true;
   });
 
+  // Group rows for rendering: this store's own staff grouped by department,
+  // then a separate "Other stores staff" section (the added/extra people).
+  const memberSections = useMemo(() => {
+    const storeStaff = filteredMembers.filter(m => isStoreMember(m));
+    const otherStaff = filteredMembers.filter(m => !isStoreMember(m));
+    // Department buckets for store staff.
+    const byDept = {};
+    storeStaff.forEach(m => {
+      const d = m.department || "Unassigned";
+      (byDept[d] = byDept[d] || []).push(m);
+    });
+    const deptNames = Object.keys(byDept).sort((a,b)=>a.localeCompare(b));
+    const sections = deptNames.map(d => ({
+      key: `dept-${d}`, title: d, removable: false,
+      members: byDept[d].sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)),
+    }));
+    if (otherStaff.length) {
+      sections.push({
+        key: "other-stores", title: "Other stores staff", removable: true,
+        members: otherStaff.sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)),
+      });
+    }
+    return sections;
+  }, [filteredMembers, storeId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── This week's schedules ──────────────────────────────────────────────────
   // Match by storeId when the row has one (new), else by brandId (legacy).
   // During the transition some schedules may still have brand_id only — they
@@ -24866,6 +24901,12 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     });
     return { member, hours, cost };
   });
+  // Lookup by member id (grouped rendering can't rely on array index).
+  const empTotalById = useMemo(() => {
+    const map = {};
+    employeeTotals.forEach(t => { map[t.member.id] = t; });
+    return map;
+  }, [employeeTotals]);
 
   const dailyTotals = weekDayStrs.map(d => {
     let hours = 0, cost = 0, headcount = 0;
@@ -25340,9 +25381,20 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             {filteredMembers.length===0 && <div className="text-center py-12 text-slate-500 text-sm">No team members match filters</div>}
 
             {/* ── Employee rows ──────────────────────────────────────────── */}
-            {filteredMembers.map((member, mIdx)=>{
-              const empTotal = employeeTotals[mIdx];
+            {memberSections.map((section) => (
+              <Fragment key={section.key}>
+                {/* Section header — department or "Other stores staff" */}
+                <div className="grid bg-slate-900/70 border-b border-slate-800" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                  <div className="px-4 py-1.5 col-span-full flex items-center gap-2">
+                    <span className={`text-[11px] font-bold uppercase tracking-widest ${section.removable?"text-amber-400/90":"text-slate-400"}`}>{section.title}</span>
+                    <span className="text-[10px] text-slate-600">· {section.members.length}</span>
+                    {section.removable && <span className="text-[10px] text-slate-600">(can be removed from this rota)</span>}
+                  </div>
+                </div>
+                {section.members.map((member)=>{
+              const empTotal = empTotalById[member.id] || { hours:0, cost:0 };
               const roleLabel = member.role || member.department || "";
+              const canRemove = section.removable;
               return (
                 <div key={member.id} className="grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
                   {/* Left: avatar + name + role + running total */}
@@ -25359,8 +25411,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                         {showCosts && member.hourlyRate > 0 && <span className="text-emerald-500/80">· {fmtMoney(empTotal.cost)}</span>}
                       </div>
                     </div>
-                    {/* Remove from this rota view (hidden until row hover). Doesn't
-                        change the employee's store assignment. */}
+                    {/* Remove — only for "Other stores staff"; the store's own
+                        employees cannot be removed from their rota. */}
+                    {canRemove && (
                     <button
                       onClick={(e)=>{ e.stopPropagation();
                         if (extraMemberIds.has(member.id)) setExtraMemberIds(prev=>{ const n=new Set(prev); n.delete(member.id); return n; });
@@ -25370,6 +25423,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                       className="opacity-0 group-hover/row:opacity-100 transition-opacity text-slate-600 hover:text-red-400 flex-shrink-0">
                       <X size={14}/>
                     </button>
+                    )}
                   </div>
 
                   {/* Day cells */}
@@ -25470,7 +25524,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                   {/* (right-hand per-person total removed — shown under the name instead) */}
                 </div>
               );
-            })}
+                })}
+              </Fragment>
+            ))}
 
             {/* ── Daily totals footer ────────────────────────────────────── */}
             <div className="grid border-t-2 border-slate-800 bg-slate-900/40" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
@@ -25684,6 +25740,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           roster={roster}
           alreadyOn={new Set(brandMembers.map(m=>m.id))}
           storeId={storeId}
+          stores={stores}
           storeName={selectedStore ? (selectedStore.shortName || selectedStore.name) : "this store"}
           onAdd={(ids)=>{ setExtraMemberIds(prev=>{ const n=new Set(prev); ids.forEach(id=>n.add(id)); return n; }); setHiddenMemberIds(prev=>{ const n=new Set(prev); ids.forEach(id=>n.delete(id)); return n; }); setStaffPicker(false); }}
           onClose={()=>setStaffPicker(false)}
