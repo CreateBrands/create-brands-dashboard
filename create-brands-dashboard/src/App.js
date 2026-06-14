@@ -29961,8 +29961,13 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
   const comingSoon = [
     { id: "soon-franchise",    name: "Franchise",    icon: Globe,        color: "#a855f7" },
     { id: "soon-distribution", name: "Distribution", icon: Truck,        color: "#f59e0b" },
-    { id: "soon-finance",      name: "Finance",      icon: PoundSterling, color: "#10b981" },
   ].filter(cs => !opsGroup.some(b => b.name.toLowerCase() === cs.name.toLowerCase()));
+
+  // Live special (non-brand) entities — Finance opens the accounts hub.
+  const financeAllowed = ["owner", "hq_staff"].includes(user?.role);
+  const specialLive = financeAllowed
+    ? [{ id: "finance", name: "Finance", icon: PoundSterling, color: "#10b981" }]
+    : [];
 
   const LiveTile = ({ b }) => {
     const Icon = iconFor(b);
@@ -30035,6 +30040,15 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
           <Slider title="Choose an entity">
             {brandGroup.map(b => <LiveTile key={b.id} b={b}/>)}
             {opsGroup.map(b => <LiveTile key={b.id} b={b}/>)}
+            {specialLive.map(t => (
+              <button key={t.id} onClick={() => onPick(t.id)}
+                className="group relative flex-shrink-0 w-44 snap-start flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-600 transition-all p-6 h-40 active:scale-[0.98]">
+                <div className="w-14 h-14 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110" style={{ background: t.color + "22", color: t.color }}>
+                  <t.icon size={26}/>
+                </div>
+                <div className="text-base font-bold text-white text-center">{t.name}</div>
+              </button>
+            ))}
             {comingSoon.map(t => <SoonTile key={t.id} t={t}/>)}
           </Slider>
         </div>
@@ -30490,7 +30504,7 @@ export default function App() {
       return active.filter(s => ids.includes(s.id));
     })();
     // Entity landing: once an entity is chosen, scope everything to its brand.
-    if (selectedEntityBrand) scoped = scoped.filter(s => s.brandId === selectedEntityBrand);
+    if (selectedEntityBrand && selectedEntityBrand !== "finance") scoped = scoped.filter(s => s.brandId === selectedEntityBrand);
     return scoped;
   }, [currentUser, stores, isHQ, selectedEntityBrand]);
 
@@ -30988,7 +31002,6 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
-      { key: "accounts", label: "Accounts", icon: BarChart2, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -31034,13 +31047,24 @@ export default function App() {
     ) }))
     .filter(g => g.items.length > 0);
 
+  // Finance entity — a focused accounts-only workspace. When the user has
+  // stepped into the Finance tile, the sidebar shows just the accounts hub.
+  const isFinanceEntity = selectedEntityBrand === "finance";
+  const FINANCE_NAV = [
+    { group: "FINANCE", items: [
+      { key: "accounts", label: "Accounts", icon: BarChart2 },
+    ]},
+  ];
+  const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : NAV_GROUPS;
+
   // If after role-filtering the current activeView is no longer in the menu
   // (e.g. owner impersonated into a manager while sitting on Chain Performance),
   // fall back to the first allowed view at render-time. No state change needed —
   // we just pick a different view to render this pass. The user can click the
   // sidebar to "stick" a different view if they want.
   const effectiveActiveView = (() => {
-    const allowedKeys = NAV_GROUPS.flatMap(g => g.items.map(i => i.key));
+    const allowedKeys = effectiveNavGroups.flatMap(g => g.items.map(i => i.key));
+    if (isFinanceEntity) return allowedKeys.includes(activeView) ? activeView : "accounts";
     if (allowedKeys.length === 0) return activeView;
     if (allowedKeys.includes(activeView)) return activeView;
     // Slice 6 — employee-profile is a "drill-down" view, not in the sidebar
@@ -31063,7 +31087,8 @@ export default function App() {
 
   // ── Entity landing screen ────────────────────────────────────────────────
   // Show the picker when no entity chosen yet and there's a real choice to make.
-  if (!selectedEntityBrand && entityBrands.length > 1) {
+  const financeAvailable = ["owner", "hq_staff"].includes(currentUser?.role);
+  if (!selectedEntityBrand && (entityBrands.length > 1 || financeAvailable)) {
     return (
       <AuthContext.Provider value={{ user: currentUser_ctx }}>
         <EntityPicker brands={entityBrands} stores={stores} user={currentUser} onPick={chooseEntity} onLogout={handleLogout}/>
@@ -31080,8 +31105,8 @@ export default function App() {
         <GlobalMobileStyle/>
         {/* Sidebar */}
         <Sidebar
-          navGroups={NAV_GROUPS} activeView={effectiveActiveView} setActiveView={setActiveView}
-          onSwitchEntity={entityBrands.length > 1 ? (() => chooseEntity(null)) : null}
+          navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
+          onSwitchEntity={(entityBrands.length > 1 || financeAvailable) ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
           actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}
