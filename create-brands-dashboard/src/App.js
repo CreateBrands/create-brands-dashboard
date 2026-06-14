@@ -25316,7 +25316,72 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
               message="Once your team starts clocking in at the kiosk, records will appear here. You can also add hours manually using the button above."/>
           )}
           {displayed.length > 0 && (
-          <div className="overflow-x-auto">
+          <>
+          {/* Mobile: stacked cards */}
+          <div className="md:hidden divide-y divide-slate-800/60">
+            {displayed.map((r) => {
+              const brand  = brands.find(b => b.id === r.brandId);
+              const store  = r.storeId ? stores?.find(s => s.id === r.storeId) : null;
+              const member = opsTeam.find(m => m.id === r.employeeId);
+              const hasOT  = r.overtimeHrs > 0;
+              const needsApproval = r.status === "closed" && !r.approved && (hasOT || r.isUnscheduled);
+              const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
+              const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
+              const locked = isPunchLocked && isPunchLocked(r);
+              let pill = null;
+              if (r.status === "open") pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Clocked in</span>;
+              else if (needsApproval || needsOTApproval) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Needs approval</span>;
+              else if (isRejected) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">OT rejected</span>;
+              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">✓ Approved</span>;
+              const attention = needsApproval || needsOTApproval || r.status === "open";
+              return (
+                <div key={r.id} className={`p-3 ${attention ? "bg-amber-950/10" : ""}`}>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                        style={{background:(member?.color||"#844429")+"30",color:member?.color||"#844429"}}>
+                        {(member?.firstName?.[0]||r.employeeName?.[0]||"?")}{member?.lastName?.[0]||""}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white text-sm truncate leading-tight">{r.employeeName}</div>
+                        <div className="text-[10px] text-slate-500 leading-tight">{new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}{store ? ` · ${store.shortName || store.name}` : ""}</div>
+                      </div>
+                    </div>
+                    {pill}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center mb-2">
+                    <div className="bg-slate-950/50 rounded-lg py-1.5">
+                      <div className="text-[10px] text-slate-500">In – Out</div>
+                      <div className="text-xs font-mono font-semibold"><span className="text-emerald-400">{fmtTime(r.gracedIn ?? r.punchIn)}</span><span className="text-slate-600">–</span><span className={r.punchOut?"text-red-400":"text-amber-400"}>{r.punchOut?fmtTime(r.gracedOut ?? r.punchOut):"in"}</span></div>
+                    </div>
+                    <div className="bg-slate-950/50 rounded-lg py-1.5">
+                      <div className="text-[10px] text-slate-500">Hours</div>
+                      <div className="text-xs font-bold text-white tabular-nums">{r.status==="open"?fmtDur(liveHours(r)):fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
+                    </div>
+                    <div className="bg-slate-950/50 rounded-lg py-1.5">
+                      <div className="text-[10px] text-slate-500">Sched</div>
+                      <div className="text-xs font-mono text-slate-300">{r.scheduledStart ? `${r.scheduledStart}` : <span className="text-red-400/70">none</span>}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {r.status === "open" && <button onClick={()=>setAmendModal(r)} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">⏹ Clock out</button>}
+                    {needsApproval && <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">✓ Approve</button>}
+                    {needsOTApproval && <button onClick={()=>handleApproveOT(r)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">✓ OT</button>}
+                    {locked ? (
+                      <span className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-slate-600 text-xs font-semibold flex items-center gap-1"><Lock size={12}/> Locked</span>
+                    ) : (
+                      <>
+                        <button onClick={()=>setAmendModal(r)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1"><Edit size={12}/> Edit</button>
+                        <button onClick={()=>{ if(window.confirm(`Delete ${r.employeeName}'s punch on ${new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}? This cannot be undone.`)) onDelete(r.id); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-red-400 text-xs font-semibold flex items-center gap-1"><Trash2 size={12}/></button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Desktop: table */}
+          <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-900/80 text-slate-400 text-[11px] uppercase tracking-wide">
@@ -25553,6 +25618,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             </tbody>
           </table>
           </div>
+          </>
           )}
         </div>
         );
