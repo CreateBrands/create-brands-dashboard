@@ -4586,6 +4586,55 @@ export async function upsertAppSetting(key, value) {
   return { key, value: String(value) };
 }
 
+// ── Bank transactions (CSV import) ──────────────────────────────────────────
+export async function fetchBankTransactions({ from, to } = {}) {
+  let q = supabase.from("bank_transactions").select("*").order("txn_date", { ascending: false });
+  if (from) q = q.gte("txn_date", from);
+  if (to)   q = q.lte("txn_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(dbBankTxnToApp);
+}
+export async function insertBankTransactions(rows) {
+  if (!rows || !rows.length) return { inserted: 0, total: 0 };
+  const dbRows = rows.map(r => ({
+    id: r.id, account: r.account || null, txn_date: r.txnDate,
+    description: r.description || null, reference: r.reference || null,
+    amount: r.amount, balance: r.balance ?? null, category: r.category || null,
+    reconciled: false, dedupe_key: r.dedupeKey,
+  }));
+  const { data, error } = await supabase
+    .from("bank_transactions")
+    .upsert(dbRows, { onConflict: "dedupe_key", ignoreDuplicates: true })
+    .select();
+  if (error) throw error;
+  return { inserted: (data || []).length, total: rows.length };
+}
+export async function updateBankTransaction(id, patch) {
+  const row = {};
+  if (patch.reconciled !== undefined) row.reconciled = patch.reconciled;
+  if (patch.matchedTo  !== undefined) row.matched_to = patch.matchedTo || null;
+  if (patch.notes      !== undefined) row.notes = patch.notes || null;
+  if (patch.category   !== undefined) row.category = patch.category || null;
+  const { data, error } = await supabase.from("bank_transactions").update(row).eq("id", id).select().single();
+  if (error) throw error;
+  return dbBankTxnToApp(data);
+}
+export async function deleteBankTransaction(id) {
+  const { error } = await supabase.from("bank_transactions").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+function dbBankTxnToApp(t) {
+  return {
+    id: t.id, account: t.account || "", txnDate: t.txn_date,
+    description: t.description || "", reference: t.reference || "",
+    amount: Number(t.amount) || 0, balance: t.balance == null ? null : Number(t.balance),
+    category: t.category || "", reconciled: !!t.reconciled,
+    matchedTo: t.matched_to || "", notes: t.notes || "", importedAt: t.imported_at,
+  };
+}
+
 export async function listStoresLite() {
   const { data, error } = await supabase.from("stores").select("id, name").order("name");
   if (error) throw error;

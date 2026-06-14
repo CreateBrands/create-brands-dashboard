@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -19739,6 +19739,218 @@ function OpsTeamView({
   );
 }
 
+function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn }) {
+  const [step, setStep] = useState("list");
+  const [preview, setPreview] = useState([]);
+  const [errors, setErrors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [account, setAccount] = useState("Tide");
+  const [filter, setFilter] = useState("all");
+  const [XLSX, setXLSX] = useState(typeof window !== "undefined" ? window.XLSX : null);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    if (XLSX || typeof window === "undefined") return;
+    if (window.XLSX) { setXLSX(window.XLSX); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = () => setXLSX(window.XLSX);
+    document.body.appendChild(s);
+  }, [XLSX]);
+
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const pick = (row, names) => {
+    const keys = Object.keys(row);
+    for (const n of names) {
+      const k = keys.find(k => norm(k) === norm(n));
+      if (k != null && row[k] !== "") return row[k];
+    }
+    return "";
+  };
+  const parseUKDate = (v) => {
+    if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,"0")}-${String(v.getDate()).padStart(2,"0")}`;
+    const s = String(v || "").trim();
+    let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+    if (m) { let [_, d, mo, y] = m; if (y.length === 2) y = "20" + y; return `${y}-${mo.padStart(2,"0")}-${d.padStart(2,"0")}`; }
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    return null;
+  };
+  const num = (v) => {
+    if (v === "" || v == null) return null;
+    const n = parseFloat(String(v).replace(/[£$,\s]/g, ""));
+    return isNaN(n) ? null : n;
+  };
+
+  const parseRows = (jsonRows) => {
+    const out = [], errs = [];
+    jsonRows.forEach((row, i) => {
+      const dateRaw = pick(row, ["Date", "Transaction Date", "Date Completed", "Date & Time"]);
+      const txnDate = parseUKDate(dateRaw);
+      if (!txnDate) { if (Object.values(row).some(v => v !== "")) errs.push(`Row ${i+2}: couldn't read date ("${dateRaw}")`); return; }
+      const desc = pick(row, ["Description", "Transaction Description", "Details", "Name", "Counterparty"]);
+      const ref  = pick(row, ["Reference", "Payment Reference", "Notes"]);
+      const cat  = pick(row, ["Category", "Type"]);
+      const bal  = num(pick(row, ["Balance", "Running Balance"]));
+      let amount = num(pick(row, ["Amount", "Value"]));
+      if (amount == null) {
+        const debit  = num(pick(row, ["Debit", "Money Out", "Paid Out", "Out", "Withdrawal"]));
+        const credit = num(pick(row, ["Credit", "Money In", "Paid In", "In", "Deposit"]));
+        if (debit != null && debit !== 0) amount = -Math.abs(debit);
+        else if (credit != null) amount = Math.abs(credit);
+      }
+      if (amount == null) { errs.push(`Row ${i+2}: couldn't read an amount`); return; }
+      const dedupeKey = `${account}|${txnDate}|${amount}|${norm(desc).slice(0,40)}|${bal ?? ""}`;
+      out.push({
+        id: `bt-${Date.now()}-${i}-${Math.random().toString(36).slice(2,7)}`,
+        account, txnDate, description: String(desc).trim(), reference: String(ref).trim(),
+        amount, balance: bal, category: String(cat).trim(), dedupeKey,
+      });
+    });
+    return { out, errs };
+  };
+
+  const handleFile = (f) => {
+    if (!f) return;
+    setLoading(true); setErrors([]);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        if (!XLSX) throw new Error("Spreadsheet library still loading — try again in a moment.");
+        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+        const { out, errs } = parseRows(jsonRows);
+        setPreview(out); setErrors(errs); setStep("preview");
+      } catch (err) {
+        setErrors(["Couldn't parse file: " + err.message]); setStep("preview");
+      }
+      setLoading(false);
+    };
+    reader.readAsArrayBuffer(f);
+  };
+
+  const doImport = async () => {
+    setLoading(true);
+    try {
+      const res = await onImport(preview);
+      const skipped = (res?.total || preview.length) - (res?.inserted ?? preview.length);
+      setErrors([`✓ Imported ${res?.inserted ?? preview.length} transaction${(res?.inserted)===1?"":"s"}${skipped>0?` · ${skipped} already in (skipped)`:""}.`]);
+      setPreview([]); setStep("list");
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (err) { setErrors(["Import failed: " + err.message]); }
+    finally { setLoading(false); }
+  };
+
+  const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toFixed(2)}`;
+  const txns = bankTransactions.filter(t => {
+    if (filter === "in") return t.amount > 0;
+    if (filter === "out") return t.amount < 0;
+    if (filter === "unreconciled") return !t.reconciled;
+    return true;
+  });
+  const totalIn  = txns.filter(t => t.amount > 0).reduce((a,t) => a + t.amount, 0);
+  const totalOut = txns.filter(t => t.amount < 0).reduce((a,t) => a + t.amount, 0);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><Building2 size={18}/> Bank transactions</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Import a statement export (CSV or Excel) from Tide or any bank. Re-importing is safe — duplicates are skipped automatically.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select value={account} onChange={e=>setAccount(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+            <option>Tide</option><option>Revolut</option><option>Monzo</option><option>Metro</option><option>Other</option>
+          </select>
+          <button onClick={()=>fileRef.current?.click()} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">
+            {loading ? "Reading…" : "Import statement"}
+          </button>
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" className="hidden" onChange={e=>handleFile(e.target.files?.[0])}/>
+        </div>
+      </div>
+
+      {errors.length > 0 && (
+        <div className={`rounded-xl px-4 py-3 text-sm space-y-1 ${errors[0]?.startsWith("✓") ? "bg-emerald-950/30 border border-emerald-800/50 text-emerald-300" : "bg-amber-950/30 border border-amber-800/50 text-amber-300"}`}>
+          {errors.slice(0,8).map((er,i) => <div key={i}>{er}</div>)}
+          {errors.length > 8 && <div className="text-slate-500">…and {errors.length-8} more</div>}
+        </div>
+      )}
+
+      {step === "preview" ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+            <div className="text-sm font-bold text-white">{preview.length} transaction{preview.length===1?"":"s"} ready <span className="text-slate-500 font-normal">· {account}</span></div>
+            <div className="flex gap-2">
+              <button onClick={()=>{setStep("list"); setPreview([]); setErrors([]);}} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+              <button onClick={doImport} disabled={loading || preview.length===0} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-semibold">{loading?"Importing…":`Import ${preview.length}`}</button>
+            </div>
+          </div>
+          <div className="max-h-[50vh] overflow-y-auto divide-y divide-slate-800/50">
+            {preview.slice(0,200).map((t,i) => (
+              <div key={i} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
+                <div className="min-w-0">
+                  <div className="text-slate-200 truncate">{t.description || "—"}</div>
+                  <div className="text-[11px] text-slate-500">{t.txnDate}{t.category?` · ${t.category}`:""}</div>
+                </div>
+                <div className={`font-semibold tabular-nums ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{fmt(t.amount)}</div>
+              </div>
+            ))}
+            {preview.length > 200 && <div className="px-4 py-2 text-xs text-slate-500">…and {preview.length-200} more (all will import)</div>}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+              <div className="text-[10px] text-slate-500 uppercase tracking-widest">Money in</div>
+              <div className="text-xl font-black text-emerald-400 tabular-nums mt-1">£{totalIn.toFixed(2)}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+              <div className="text-[10px] text-slate-500 uppercase tracking-widest">Money out</div>
+              <div className="text-xl font-black text-red-400 tabular-nums mt-1">£{Math.abs(totalOut).toFixed(2)}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+              <div className="text-[10px] text-slate-500 uppercase tracking-widest">Net</div>
+              <div className="text-xl font-black text-white tabular-nums mt-1">£{(totalIn+totalOut).toFixed(2)}</div>
+            </div>
+          </div>
+
+          <div className="flex gap-1.5 flex-wrap">
+            {[["all","All"],["in","Money in"],["out","Money out"],["unreconciled","Unreconciled"]].map(([k,l]) => (
+              <button key={k} onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${filter===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
+            ))}
+          </div>
+
+          {txns.length === 0 ? (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl text-center py-12 text-sm text-slate-500">
+              No transactions yet. Export a statement from your Tide app (tap <strong className="text-slate-300">Export → Standard</strong>) and import it above.
+            </div>
+          ) : (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl divide-y divide-slate-800/50">
+              {txns.slice(0,500).map(t => (
+                <div key={t.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <button onClick={()=>onUpdateTxn(t.id,{reconciled:!t.reconciled})} title={t.reconciled?"Reconciled — tap to unmark":"Tap to mark reconciled"}
+                    className={`w-5 h-5 rounded-md flex-shrink-0 flex items-center justify-center border ${t.reconciled?"bg-emerald-600 border-emerald-500":"border-slate-600"}`}>
+                    {t.reconciled && <CheckCircle size={13} className="text-white"/>}
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm text-slate-200 truncate">{t.description || "—"}</div>
+                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.account?` · ${t.account}`:""}{t.category?` · ${t.category}`:""}</div>
+                  </div>
+                  <div className={`text-sm font-semibold tabular-nums flex-shrink-0 ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{fmt(t.amount)}</div>
+                  <button onClick={()=>{ if(window.confirm("Delete this transaction?")) onDeleteTxn(t.id); }} className="text-slate-600 hover:text-red-400 flex-shrink-0"><Trash2 size={13}/></button>
+                </div>
+              ))}
+              {txns.length > 500 && <div className="px-4 py-2 text-xs text-slate-500">Showing first 500 of {txns.length}.</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function OvertimeRulesEditor({ appSettings = {}, onSave }) {
   const init = {
     weeklyThreshold: appSettings.ot_weekly_threshold ?? "40",
@@ -28081,6 +28293,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout })
       { key:"eod", label:"EOD", icon:FileText },
       { key:"notifications", label:"Notifications", icon:Bell },
       { key:"cogs", label:"COGS / Inventory", icon:ClipboardList },
+      { key:"bank", label:"Bank", icon:Building2 },
     ]},
     { title: "Settings", items: [
       { key:"ops-settings", label:"Ops Setup", icon:Settings },
@@ -28311,6 +28524,21 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
   const [appSettings, setAppSettings] = useState({});
   const [payPeriods, setPayPeriods] = useState([]);
+  const [bankTransactions, setBankTransactions] = useState([]);
+  const importBankTxns = useCallback(async (rows) => {
+    const res = await insertBankTransactions(rows);
+    const fresh = await fetchBankTransactions();
+    setBankTransactions(fresh);
+    return res;
+  }, []);
+  const updateBankTxn = useCallback(async (id, patch) => {
+    const saved = await updateBankTransaction(id, patch);
+    setBankTransactions(list => list.map(t => t.id === saved.id ? saved : t));
+  }, []);
+  const deleteBankTxn = useCallback(async (id) => {
+    await deleteBankTransaction(id);
+    setBankTransactions(list => list.filter(t => t.id !== id));
+  }, []);
   // A punch is locked if its (store, date) falls inside an APPROVED pay period.
   // A period with no storeId applies to all stores.
   const isPunchLocked = useCallback((punch) => {
@@ -28419,11 +28647,12 @@ export default function App() {
       fetchAdvertisedRoles().catch(() => []),
       fetchAppSettings().catch(() => ({})),
       fetchPayPeriods().catch(() => []),
+      fetchBankTransactions().catch(() => []),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP, bankTxns]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -28437,6 +28666,7 @@ export default function App() {
       setAppSettings(appSet || {});
       applyOtRulesFromSettings(appSet || {});
       setPayPeriods(payP || []);
+      setBankTransactions(bankTxns || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -29094,6 +29324,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
+      { key: "bank", label: "Bank", icon: Building2, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -29333,6 +29564,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
