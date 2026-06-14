@@ -2352,6 +2352,90 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
   );
 }
 
+function NotificationDiagnostics({ currentUser }) {
+  const [testState, setTestState] = useState(null);
+  const [sw, setSw] = useState({ checked: false });
+
+  const recipientType = "user";
+  const recipientId = currentUser?.id;
+
+  const refreshSw = useCallback(async () => {
+    const info = { checked: true, supported: "serviceWorker" in navigator, registered: false, controlling: false, hasShareHandler: null, perm: (typeof Notification !== "undefined" ? Notification.permission : "unsupported"), scriptURL: "" };
+    try {
+      if (info.supported) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) {
+          info.registered = true;
+          const active = reg.active;
+          info.scriptURL = active ? active.scriptURL : "";
+          info.controlling = !!navigator.serviceWorker.controller;
+          // Fetch the SW script text and check it contains the share handler.
+          if (active && active.scriptURL) {
+            try {
+              const res = await fetch(active.scriptURL, { cache: "no-store" });
+              const txt = await res.text();
+              info.hasShareHandler = txt.includes("share-target") && txt.includes("SHARE_TARGET_V1");
+            } catch { info.hasShareHandler = null; }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+    setSw(info);
+  }, []);
+
+  useEffect(() => { refreshSw(); }, [refreshSw]);
+
+  const handleSendTest = async () => {
+    setTestState("sending");
+    try {
+      const res = await sendTestNotification({ recipientType, recipientId });
+      if (res && res.ok === false) setTestState(res.reason === "denied" ? "denied" : "error");
+      else setTestState("ok");
+    } catch { setTestState("error"); }
+    setTimeout(() => setTestState(null), 6000);
+    refreshSw();
+  };
+
+  const Row = ({ label, ok, value }) => (
+    <div className="flex items-center justify-between gap-3 py-1.5 border-b border-slate-800/50 last:border-0">
+      <span className="text-xs text-slate-400">{label}</span>
+      <span className={`text-xs font-semibold ${ok === true ? "text-emerald-400" : ok === false ? "text-red-400" : "text-slate-300"}`}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-bold text-white">Notification & service-worker check</div>
+        <button onClick={refreshSw} className="text-[11px] text-slate-400 hover:text-white font-semibold">Refresh</button>
+      </div>
+
+      <button onClick={handleSendTest} disabled={testState === "sending"}
+        className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">
+        {testState === "sending" ? "Sending test…"
+          : testState === "ok" ? "✓ Test sent — check your notifications"
+          : testState === "denied" ? "⚠ Allow notifications in your browser first"
+          : testState === "error" ? "⚠ Couldn't send — notifications may be off"
+          : "🔔 Send me a test notification"}
+      </button>
+
+      {sw.checked && (
+        <div className="bg-slate-950/50 rounded-xl px-3 py-1">
+          <Row label="Service worker supported" ok={sw.supported} value={sw.supported ? "Yes" : "No"} />
+          <Row label="Registered" ok={sw.registered} value={sw.registered ? "Yes" : "No"} />
+          <Row label="Controlling this page" ok={sw.controlling} value={sw.controlling ? "Yes" : "No"} />
+          <Row label="Has share-target handler" ok={sw.hasShareHandler} value={sw.hasShareHandler === true ? "Yes ✓" : sw.hasShareHandler === false ? "NO — old SW" : "—"} />
+          <Row label="Notification permission" ok={sw.perm === "granted"} value={sw.perm} />
+          {sw.scriptURL && <Row label="SW file" value={sw.scriptURL.split("/").pop()} />}
+        </div>
+      )}
+      <p className="text-[11px] text-slate-500 leading-snug">
+        If “Has share-target handler” says <span className="text-red-400 font-semibold">NO — old SW</span>, your phone is still running an old service worker — that’s why sharing 405s. Tap Refresh after reopening the app; if it stays NO, the SW needs forcing to update.
+      </p>
+    </div>
+  );
+}
+
 // ─── NotificationsView — full notifications page (history + navigate) ────────
 // All notifications land here (read + unread). Clicking one marks it read and
 // navigates to its linked section. The bell's "View all" footer opens this.
@@ -2408,6 +2492,7 @@ function NotificationsView({ currentUser, onNavigate }) {
 
   return (
     <div className="space-y-4">
+      <NotificationDiagnostics currentUser={currentUser}/>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2"><Bell size={18}/> Notifications</h2>
