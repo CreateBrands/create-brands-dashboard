@@ -24605,6 +24605,87 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 // TIME & ATTENDANCE — Manager view with approval + overtime comparison
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function PayPeriodsPanel({ payPeriods = [], stores = [], isHQ, onApprove, onReopen }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [storeSel, setStoreSel] = useState("all");
+  const [busy, setBusy] = useState(false);
+  const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "All stores";
+
+  const close = async () => {
+    if (!from || !to) { window.alert("Pick a start and end date."); return; }
+    if (to < from) { window.alert("End date must be on or after the start date."); return; }
+    const storeId = storeSel === "all" ? null : storeSel;
+    if (!window.confirm(`Close and lock ${from} → ${to}${storeId ? ` · ${storeName(storeId)}` : " (all stores)"}? Punches in this period become read-only until re-opened.`)) return;
+    setBusy(true);
+    try {
+      await onApprove({ id: `pp-${Date.now()}`, storeId, periodStart: from, periodEnd: to, status: "open" });
+      setFrom(""); setTo("");
+    } catch (e) { window.alert("Couldn't close period: " + (e?.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const sorted = [...payPeriods].sort((a, b) => (b.periodStart || "").localeCompare(a.periodStart || ""));
+  const inputCls = "px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-5">
+      {/* Set & close a period */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <h3 className="text-sm font-bold text-white mb-1">Close a pay period</h3>
+        <p className="text-xs text-slate-500 mb-4">Pick the date range (and store) you're running payroll for, then close it to lock those punches.</p>
+        <div className="flex items-end gap-3 flex-wrap">
+          <div>
+            <label className="text-[11px] text-slate-500 font-semibold block mb-1">Start date</label>
+            <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className={inputCls}/>
+          </div>
+          <div>
+            <label className="text-[11px] text-slate-500 font-semibold block mb-1">End date</label>
+            <input type="date" value={to} onChange={e=>setTo(e.target.value)} className={inputCls}/>
+          </div>
+          <div>
+            <label className="text-[11px] text-slate-500 font-semibold block mb-1">Store</label>
+            <select value={storeSel} onChange={e=>setStoreSel(e.target.value)} className={inputCls}>
+              {isHQ && <option value="all">All stores</option>}
+              {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            </select>
+          </div>
+          <button onClick={close} disabled={busy} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm font-semibold text-white flex items-center gap-1.5">
+            <Lock size={14}/> {busy ? "Closing…" : "Close & lock"}
+          </button>
+        </div>
+      </div>
+
+      {/* Existing periods */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">Pay periods</div>
+        {sorted.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-500">No pay periods yet. Close one above to start.</div>
+        ) : (
+          <div className="divide-y divide-slate-800/60">
+            {sorted.map(pp => (
+              <div key={pp.id} className="flex items-center justify-between gap-3 px-4 py-3 flex-wrap">
+                <div className="flex items-center gap-2.5">
+                  {pp.status === "approved" ? <Lock size={15} className="text-emerald-400"/> : <Unlock size={15} className="text-slate-500"/>}
+                  <div>
+                    <div className="text-sm font-semibold text-white">{pp.periodStart} → {pp.periodEnd}</div>
+                    <div className="text-[11px] text-slate-500">{storeName(pp.storeId)}{pp.status === "approved" && pp.approvedBy ? ` · approved by ${pp.approvedBy}` : ""}</div>
+                  </div>
+                </div>
+                {pp.status === "approved" ? (
+                  <button onClick={()=>{ if(window.confirm("Re-open this period for edits? It will need closing again before payroll.")) onReopen(pp); }} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">Re-open</button>
+                ) : (
+                  <button onClick={()=>{ if(window.confirm(`Close and lock ${pp.periodStart} → ${pp.periodEnd}?`)) onApprove(pp); }} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white">Close & lock</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod }) {
   const { user } = useAuth();
 
@@ -24913,6 +24994,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           <div className="flex bg-slate-900 border border-slate-700 rounded-xl p-0.5 gap-0.5">
             <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Records</button>
             <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Summary</button>
+            <button onClick={()=>setTab("periods")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="periods"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Pay Periods</button>
           </div>
         </div>
       </div>
@@ -25061,8 +25143,14 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {needsOTApproval && (
                       <button onClick={()=>handleApproveOT(r)} className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors whitespace-nowrap">✓ OT</button>
                     )}
-                    <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Edit / amend"><Edit size={12}/></button>
-                    <button onClick={()=>{ if(window.confirm(`Delete ${r.employeeName}'s punch on ${new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}? This cannot be undone.`)) onDelete(r.id); }} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-slate-700 transition-colors" title="Delete"><Trash2 size={12}/></button>
+                    {isPunchLocked && isPunchLocked(r) ? (
+                      <span className="p-1.5 rounded-lg bg-slate-800/50 text-slate-600 cursor-not-allowed" title="Locked — in an approved pay period. Re-open the period to edit."><Lock size={12}/></span>
+                    ) : (
+                      <>
+                        <button onClick={()=>setAmendModal(r)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors" title="Edit / amend"><Edit size={12}/></button>
+                        <button onClick={()=>{ if(window.confirm(`Delete ${r.employeeName}'s punch on ${new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})}? This cannot be undone.`)) onDelete(r.id); }} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 hover:bg-slate-700 transition-colors" title="Delete"><Trash2 size={12}/></button>
+                      </>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -25283,6 +25371,16 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           )}
         </div>
         </div>
+      )}
+
+      {tab === "periods" && (
+        <PayPeriodsPanel
+          payPeriods={payPeriods}
+          stores={sortedVisibleStores}
+          isHQ={isHqOrAbove(user.role)}
+          onApprove={onApprovePeriod}
+          onReopen={onReopenPeriod}
+        />
       )}
 
       {amendModal && (
@@ -28433,7 +28531,7 @@ export default function App() {
   const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
   const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
-  const handleAmendPunch = useCallback(async record=>{try{const {_audit, ...clean}=record;const saved=await upsertPunchRecord(clean);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));if(_audit&&_audit.length){logPunchAudit(_audit.map(a=>({...a,punchId:saved.id,reason:"manager_amend",changedBy:currentUser?.name||currentUser?.id||"manager"})));}showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, currentUser]);
+  const handleAmendPunch = useCallback(async record=>{try{if(isPunchLocked(record)){showToast("This punch is in an approved (locked) pay period. Re-open the period to edit it.","error");return;}const {_audit, ...clean}=record;const saved=await upsertPunchRecord(clean);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));if(_audit&&_audit.length){logPunchAudit(_audit.map(a=>({...a,punchId:saved.id,reason:"manager_amend",changedBy:currentUser?.name||currentUser?.id||"manager"})));}showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, currentUser, isPunchLocked]);
 
   const handleFlipdishSync = useCallback(async () => {
     try {
@@ -28456,7 +28554,7 @@ export default function App() {
       setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
     } catch (err) { showToast("Couldn't post comment: " + err.message, "error"); }
   }, [showToast]);
-  const removeSchedulePunchRecord = useCallback(async(id)=>{try{const{error}=await supabase.from("punch_records").delete().eq("id",id);if(error)throw error;setPunchRecords(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast]);
+  const removeSchedulePunchRecord = useCallback(async(id)=>{try{const rec=punchRecords.find(p=>p.id===id);if(rec&&isPunchLocked(rec)){showToast("This punch is in an approved (locked) pay period. Re-open the period to delete it.","error");return;}const{error}=await supabase.from("punch_records").delete().eq("id",id);if(error)throw error;setPunchRecords(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, punchRecords, isPunchLocked]);
   const addHdTicket    = useCallback(async t=>{const s=await insertHelpdeskTicket(t);setHdTickets(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[s,...ts]);}, []);
   const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
   const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
