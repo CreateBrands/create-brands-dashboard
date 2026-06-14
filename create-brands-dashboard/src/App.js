@@ -24326,6 +24326,65 @@ function ShiftPresetManager({ brands, shiftPresets, onAdd, onUpdate, onDelete, c
 }
 
 // ── Shift Form Modal (uses custom presets) ────────────────────────────────────
+function StaffPickerModal({ roster, alreadyOn, storeId, storeName, onAdd, onClose }) {
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState(() => new Set());
+  // Candidates = everyone schedulable not already on the rota.
+  const candidates = useMemo(() => {
+    const list = roster.filter(m => !alreadyOn.has(m.id));
+    const isMember = (m) => (m.storeIds || []).includes(storeId);
+    return [...list].sort((a,b) => {
+      // Store members first, then alphabetical.
+      const am = isMember(a) ? 0 : 1, bm = isMember(b) ? 0 : 1;
+      if (am !== bm) return am - bm;
+      return `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
+    });
+  }, [roster, alreadyOn, storeId]);
+  const filtered = candidates.filter(m => {
+    if (!q.trim()) return true;
+    const hay = `${m.firstName} ${m.lastName} ${m.role||""} ${m.department||""}`.toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  });
+  const toggle = (id) => setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  return (
+    <Modal title="Add staff to rota" onClose={onClose} maxW="max-w-md"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <button onClick={()=>onAdd([...picked])} disabled={picked.size===0} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">
+          Add {picked.size>0?`(${picked.size})`:""}
+        </button>
+      </>}>
+      <div className="space-y-3">
+        <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, role, department…"
+          className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"/>
+        <div className="text-[11px] text-slate-500">Showing staff not already on {storeName}'s rota. Store members appear first.</div>
+        <div className="max-h-[50vh] overflow-y-auto divide-y divide-slate-800/50 -mx-1">
+          {filtered.length===0 && <div className="px-2 py-8 text-center text-xs text-slate-500">No matching staff.</div>}
+          {filtered.map(m => {
+            const on = picked.has(m.id);
+            const member = (m.storeIds||[]).includes(storeId);
+            return (
+              <button key={m.id} onClick={()=>toggle(m.id)} className={`w-full flex items-center gap-3 px-2 py-2 text-left hover:bg-slate-800/40 ${on?"bg-indigo-950/30":""}`}>
+                <span className={`w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center ${on?"bg-indigo-600 border-indigo-500":"border-slate-600"}`}>
+                  {on && <Check size={11} className="text-white"/>}
+                </span>
+                <span className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0" style={{background:(m.color||"#844429")+"30",color:m.color||"#844429"}}>
+                  {m.firstName[0]}{m.lastName?.[0]||""}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-slate-200 truncate">{m.firstName} {m.lastName}</span>
+                  <span className="block text-[11px] text-slate-500 truncate">{m.role||m.department||""}{!member && <span className="text-amber-500/80"> · other store</span>}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, schedules = [], currentUser, onSave, onDelete, onClose }) {
   const isEdit = !!slot;
   const brandPresets = shiftPresets.filter(p => p.brandId === brandId);
@@ -24705,16 +24764,21 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // via ops_team.store_ids text[]). Falls back to brandId match for any legacy
   // ops_team row that doesn't yet have storeIds populated.
   // MANAGERS_IN_TEAM_V1: roster = ops staff + managers (schedulable, multi-brand via storeIds)
-  const [showAllStaff, setShowAllStaff] = useState(false);
+  // Staff added to THIS rota via the picker (ids), plus any hidden via the row
+  // remove control. Both are view-state for the current session — they don't
+  // change the employee's store assignment.
+  const [extraMemberIds, setExtraMemberIds] = useState(() => new Set());
+  const [hiddenMemberIds, setHiddenMemberIds] = useState(() => new Set());
+  const [staffPicker, setStaffPicker] = useState(false);
   const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
-  const brandMembers = roster.filter(m => {
-    if (showAllStaff) {
-      // Show every schedulable person in a visible brand, regardless of store.
-      return vb.some(b => b.id === m.brandId) || (m.storeIds || []).length === 0 || (m.storeIds||[]).some(id => visibleStores.some(s=>s.id===id));
-    }
+  const isStoreMember = (m) => {
     const ids = m.storeIds || [];
     if (ids.length > 0) return ids.includes(storeId);
-    return m.brandId === brandId;  // legacy fallback
+    return m.brandId === brandId; // legacy fallback
+  };
+  const brandMembers = roster.filter(m => {
+    if (hiddenMemberIds.has(m.id)) return false;
+    return isStoreMember(m) || extraMemberIds.has(m.id);
   });
   const allDepts = [...new Set(brandMembers.map(m=>m.department).filter(Boolean))];
   const allRoles = [...new Set(brandMembers.map(m=>m.role).filter(Boolean))];
@@ -24994,9 +25058,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
         {allDepts.length > 0 && <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-32"><option value="all">All Depts</option>{allDepts.map(d=><option key={d}>{d}</option>)}</SelectDropdown>}
         {allRoles.length > 0 && <SelectDropdown value={filterRole} onChange={setFilterRole} className="w-32"><option value="all">All Roles</option>{allRoles.map(r=><option key={r}>{r}</option>)}</SelectDropdown>}
         {allShiftNames.length > 0 && <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-32"><option value="all">All Shifts</option>{allShiftNames.map(n=><option key={n}>{n}</option>)}</SelectDropdown>}
-        <button onClick={()=>setShowAllStaff(v=>!v)} title="Show staff from other stores so you can add them to this rota"
-          className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${showAllStaff?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 border-slate-700 text-slate-400 hover:text-white"}`}>
-          {showAllStaff ? "✓ All staff" : "+ Add staff"}
+        <button onClick={()=>setStaffPicker(true)} title="Add specific staff to this rota"
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg border bg-slate-800 border-slate-700 text-slate-400 hover:text-white flex items-center gap-1">
+          <Plus size={13}/> Add staff
         </button>
 
         <div className="flex items-center gap-2 flex-wrap ml-auto">
@@ -25282,7 +25346,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
               return (
                 <div key={member.id} className="grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
                   {/* Left: avatar + name + role + running total */}
-                  <div className="flex items-center gap-2.5 px-3 py-2.5">
+                  <div className="group/row flex items-center gap-2.5 px-3 py-2.5">
                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
@@ -25295,6 +25359,17 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                         {showCosts && member.hourlyRate > 0 && <span className="text-emerald-500/80">· {fmtMoney(empTotal.cost)}</span>}
                       </div>
                     </div>
+                    {/* Remove from this rota view (hidden until row hover). Doesn't
+                        change the employee's store assignment. */}
+                    <button
+                      onClick={(e)=>{ e.stopPropagation();
+                        if (extraMemberIds.has(member.id)) setExtraMemberIds(prev=>{ const n=new Set(prev); n.delete(member.id); return n; });
+                        else setHiddenMemberIds(prev=>new Set(prev).add(member.id));
+                      }}
+                      title="Remove from this rota view"
+                      className="opacity-0 group-hover/row:opacity-100 transition-opacity text-slate-600 hover:text-red-400 flex-shrink-0">
+                      <X size={14}/>
+                    </button>
                   </div>
 
                   {/* Day cells */}
@@ -25604,6 +25679,16 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       </div>
 
       {/* ── Modals ────────────────────────────────────────────────────────── */}
+      {staffPicker && (
+        <StaffPickerModal
+          roster={roster}
+          alreadyOn={new Set(brandMembers.map(m=>m.id))}
+          storeId={storeId}
+          storeName={selectedStore ? (selectedStore.shortName || selectedStore.name) : "this store"}
+          onAdd={(ids)=>{ setExtraMemberIds(prev=>{ const n=new Set(prev); ids.forEach(id=>n.add(id)); return n; }); setHiddenMemberIds(prev=>{ const n=new Set(prev); ids.forEach(id=>n.delete(id)); return n; }); setStaffPicker(false); }}
+          onClose={()=>setStaffPicker(false)}
+        />
+      )}
       {shiftModal && !editLocked && (
         <ShiftFormModal
           date={shiftModal.date} slot={shiftModal.slot||null} brandId={brandId} storeId={storeId}
