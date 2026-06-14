@@ -28608,6 +28608,17 @@ export default function App() {
     return () => window.removeEventListener("hashchange", applyHash);
   }, []);
 
+  // SHARE_TARGET_V1 — make sure the service worker is registered on EVERY load,
+  // independent of push/notification permission. The share-target file handoff
+  // lives in the SW, so it must be active even if the user declined
+  // notifications. (Push subscription separately registers the same /sw.js.)
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" })
+      .then((reg) => { try { reg.update(); } catch {} })
+      .catch(() => {});
+  }, []);
+
   // SHARE_TARGET_V1 — if the app was opened by sharing a file to it (Android
   // PWA share sheet → "/?share-target=1"), ask the service worker for the
   // stashed file, jump to the Bank view, and hand the file to the importer.
