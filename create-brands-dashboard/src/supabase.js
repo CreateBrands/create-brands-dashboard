@@ -1698,7 +1698,7 @@ export async function sendTestNotification({ recipientType, recipientId } = {}) 
   // fragile — exact-match failures gave total:0 — so we push to the recipient,
   // which reliably reaches this device. Acceptable: only the user's own devices.)
   try {
-    const { error } = await supabase.functions.invoke("send-push", {
+    const { data, error } = await supabase.functions.invoke("send-push", {
       body: {
         recipientType, recipientId,
         title: "Test notification ✓",
@@ -1706,8 +1706,39 @@ export async function sendTestNotification({ recipientType, recipientId } = {}) 
       },
     });
     if (error) return { ok: false, reason: String(error?.message || error) };
-    return { ok: true };
+    // Surface the function's result so the UI can say e.g. "sent 0 — no device subscribed".
+    return { ok: true, sent: data?.sent, total: data?.total, removed: data?.removed };
   } catch (e) { return { ok: false, reason: String(e?.message || e) }; }
+}
+
+// Force a clean re-subscription: drop this device's old (possibly stale)
+// subscription, unsubscribe from the browser push manager, then subscribe
+// fresh against the CURRENT service worker. Fixes "sent OK but nothing arrives"
+// after the SW changed (old endpoint became dead).
+export async function resubscribeToPush({ recipientType, recipientId } = {}) {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return { ok: false, reason: "unsupported" };
+    if (Notification.permission !== "granted") {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return { ok: false, reason: "denied" };
+    }
+    const reg = await navigator.serviceWorker.ready;
+    // Remove the browser-side subscription if present.
+    try {
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        // Delete the matching DB row(s) for this endpoint first.
+        try { await supabase.from("push_subscriptions").delete().eq("endpoint", existing.endpoint); } catch {}
+        await existing.unsubscribe();
+      }
+    } catch {}
+    // Also clear any other stored subs for this recipient (stale endpoints).
+    try { await supabase.from("push_subscriptions").delete().eq("recipient_type", recipientType).eq("recipient_id", recipientId); } catch {}
+    // Fresh subscribe.
+    return await subscribeToPush({ recipientType, recipientId });
+  } catch (e) {
+    return { ok: false, reason: String(e?.message || e) };
+  }
 }
 
 export async function subscribeToPush({ recipientType, recipientId } = {}) {

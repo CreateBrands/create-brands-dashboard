@@ -20,7 +20,7 @@ import {
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
-  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
+  fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -2405,10 +2405,21 @@ function NotificationDiagnostics({ currentUser }) {
     try {
       const res = await sendTestNotification({ recipientType, recipientId });
       if (res && res.ok === false) setTestState(res.reason === "denied" ? "denied" : "error");
+      else if (res && res.sent === 0) setTestState("nosubs");   // ran fine but no device subscribed
       else setTestState("ok");
     } catch { setTestState("error"); }
-    setTimeout(() => setTestState(null), 6000);
+    setTimeout(() => setTestState(null), 8000);
     refreshSw();
+  };
+
+  const [resubState, setResubState] = useState(null);
+  const handleResubscribe = async () => {
+    setResubState("working");
+    try {
+      const res = await resubscribeToPush({ recipientType, recipientId });
+      setResubState(res && res.ok ? "done" : "error");
+    } catch { setResubState("error"); }
+    setTimeout(() => setResubState(null), 6000);
   };
 
   const Row = ({ label, ok, value }) => (
@@ -2429,9 +2440,18 @@ function NotificationDiagnostics({ currentUser }) {
         className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">
         {testState === "sending" ? "Sending test…"
           : testState === "ok" ? "✓ Test sent — check your notifications"
+          : testState === "nosubs" ? "⚠ No device subscribed — tap ‘Re-subscribe’ below"
           : testState === "denied" ? "⚠ Allow notifications in your browser first"
           : testState === "error" ? "⚠ Couldn't send — notifications may be off"
           : "🔔 Send me a test notification"}
+      </button>
+
+      <button onClick={handleResubscribe} disabled={resubState === "working"}
+        className="w-full px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold">
+        {resubState === "working" ? "Re-subscribing…"
+          : resubState === "done" ? "✓ Re-subscribed — now tap ‘Send test’"
+          : resubState === "error" ? "⚠ Couldn't re-subscribe"
+          : "🔄 Re-subscribe this device to notifications"}
       </button>
 
       <button onClick={async () => {
