@@ -4554,6 +4554,11 @@ function GlobalMobileStyle() {
   [data-kiosk] button { min-height: 0; }
   /* Form controls easier to tap. */
   input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 38px; }
+
+  /* Backstop against horizontal page-scroll: stop the document sliding sideways
+     if any single element is wider than the viewport. Individual scroll areas
+     (tables, charts) keep their own overflow-x-auto and still scroll. */
+  html, body { overflow-x: hidden; max-width: 100%; }
 }
     `}</style>
   );
@@ -7645,6 +7650,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
               className={`px-2.5 py-1 text-[11px] font-semibold ${heatMetric === "revenue" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Revenue</button>
           </div>
         </div>
+        <div className="overflow-x-auto">
         <div className="min-w-[640px]">
           <div className="flex">
             <div className="w-10 flex-shrink-0"/>
@@ -7663,6 +7669,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
               })}
             </div>
           ))}
+        </div>
         </div>
         <div className="text-[10px] text-slate-600 mt-2">Darker = busier ({heatMetric}). Hover a cell for detail.</div>
       </div>
