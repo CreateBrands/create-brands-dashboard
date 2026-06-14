@@ -20981,6 +20981,11 @@ const PNL_TINT = {
   revenue:   { dot: "bg-emerald-400", chip: "bg-emerald-950/40 border-emerald-700/50 text-emerald-200" },
   cogs:      { dot: "bg-orange-400",  chip: "bg-orange-950/40 border-orange-700/50 text-orange-200" },
   labour:    { dot: "bg-sky-400",     chip: "bg-sky-950/40 border-sky-700/50 text-sky-200" },
+  occupancy: { dot: "bg-amber-400",   chip: "bg-amber-950/40 border-amber-700/50 text-amber-200" },
+  operating: { dot: "bg-violet-400",  chip: "bg-violet-950/40 border-violet-700/50 text-violet-200" },
+  marketing: { dot: "bg-pink-400",    chip: "bg-pink-950/40 border-pink-700/50 text-pink-200" },
+  admin:     { dot: "bg-teal-400",    chip: "bg-teal-950/40 border-teal-700/50 text-teal-200" },
+  finance:   { dot: "bg-rose-400",    chip: "bg-rose-950/40 border-rose-700/50 text-rose-200" },
   overheads: { dot: "bg-violet-400",  chip: "bg-violet-950/40 border-violet-700/50 text-violet-200" },
   other:     { dot: "bg-slate-400",   chip: "bg-slate-800 border-slate-600 text-slate-200" },
   transfer:  { dot: "bg-cyan-400",    chip: "bg-cyan-950/40 border-cyan-700/50 text-cyan-200" },
@@ -21043,6 +21048,76 @@ function CategoryPicker({ value, categories = [], onPick }) {
   );
 }
 
+// Richer P&L groupings suited to F&B / hospitality.
+const PNL_LINES = [
+  ["revenue",   "Revenue"],
+  ["cogs",      "Cost of sales (COGS)"],
+  ["labour",    "Labour"],
+  ["occupancy", "Occupancy (rent, rates, utilities)"],
+  ["operating", "Operating expenses"],
+  ["marketing", "Marketing & delivery"],
+  ["admin",     "Admin & professional"],
+  ["finance",   "Finance & fees"],
+  ["other",     "Other / non-operating"],
+  ["transfer",  "Transfers (not P&L)"],
+];
+// A practical F&B starter pack. type, pnlLine.
+const FNB_CATEGORY_PACK = [
+  // Revenue
+  ["Card settlement",        "income",  "revenue"],
+  ["Cash banking",           "income",  "revenue"],
+  ["Delivery platform payout","income", "revenue"],
+  ["Catering / events",      "income",  "revenue"],
+  ["Other income",           "income",  "other"],
+  // COGS
+  ["Food purchases",         "expense", "cogs"],
+  ["Drinks / beverages",     "expense", "cogs"],
+  ["Packaging & disposables","expense", "cogs"],
+  ["Dairy & bakery",         "expense", "cogs"],
+  ["Produce / fresh",        "expense", "cogs"],
+  // Labour
+  ["Wages & salaries",       "expense", "labour"],
+  ["Agency / temp staff",    "expense", "labour"],
+  ["PAYE / NI",              "expense", "labour"],
+  ["Pension",                "expense", "labour"],
+  ["Staff food / welfare",   "expense", "labour"],
+  // Occupancy
+  ["Rent",                   "expense", "occupancy"],
+  ["Business rates",         "expense", "occupancy"],
+  ["Electricity",            "expense", "occupancy"],
+  ["Gas",                    "expense", "occupancy"],
+  ["Water",                  "expense", "occupancy"],
+  ["Service charge",         "expense", "occupancy"],
+  // Operating
+  ["Repairs & maintenance",  "expense", "operating"],
+  ["Equipment & smallwares", "expense", "operating"],
+  ["Cleaning & hygiene",     "expense", "operating"],
+  ["Waste collection",       "expense", "operating"],
+  ["Pest control",           "expense", "operating"],
+  ["Uniforms",               "expense", "operating"],
+  // Marketing & delivery
+  ["Delivery commission",    "expense", "marketing"],
+  ["Marketing & advertising","expense", "marketing"],
+  ["Social media / content", "expense", "marketing"],
+  ["Loyalty / promotions",   "expense", "marketing"],
+  // Admin & professional
+  ["Software / subscriptions","expense","admin"],
+  ["Telephone / internet",   "expense", "admin"],
+  ["Accountancy / legal",    "expense", "admin"],
+  ["Insurance",              "expense", "admin"],
+  ["Licenses & permits",     "expense", "admin"],
+  ["Stationery / office",    "expense", "admin"],
+  // Finance & fees
+  ["Card processing fees",   "expense", "finance"],
+  ["Bank charges",           "expense", "finance"],
+  ["Loan repayment",         "expense", "finance"],
+  ["Interest",               "expense", "finance"],
+  // Other / transfer
+  ["VAT / tax",              "expense", "other"],
+  ["Drawings / dividends",   "expense", "other"],
+  ["Transfer between accounts","expense","transfer"],
+];
+
 function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categories = [], categoryRules = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
@@ -21052,6 +21127,8 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
   const [accountFilter, setAccountFilter] = useState("all");   // list filter: all | accountId
   const [manageCats, setManageCats] = useState(false);
   const [newCat, setNewCat] = useState(null);   // {name, type, pnlLine}
+  const [editCat, setEditCat] = useState(null); // {id,name,type,pnlLine}
+  const [seeding, setSeeding] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState(""); // chosen at import
   const [newAcct, setNewAcct] = useState(null);   // {name, bank, storeId} when adding inline
   const [XLSX, setXLSX] = useState(typeof window !== "undefined" ? window.XLSX : null);
@@ -21227,10 +21304,27 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
 
       {manageCats && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-sm font-bold text-white">Categories</div>
-            <button onClick={()=>setNewCat({ name:"", type:"expense", pnlLine:"overheads" })} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">+ Add</button>
+            <div className="flex gap-2">
+              <button onClick={async()=>{
+                setSeeding(true);
+                try {
+                  const existing = new Set(categories.filter(c=>!c.archived).map(c=>c.name.toLowerCase()));
+                  let added = 0;
+                  for (const [name,type,pnlLine] of FNB_CATEGORY_PACK) {
+                    if (existing.has(name.toLowerCase())) continue;
+                    await onSaveCategory({ id:`cat-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name, type, pnlLine });
+                    added++;
+                  }
+                  if (added===0) alert("All F&B pack categories are already present.");
+                } catch(e){ alert("Couldn't load pack: "+e.message); }
+                setSeeding(false);
+              }} disabled={seeding} className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-xs font-semibold">{seeding?"Loading…":"⚡ Load F&B pack"}</button>
+              <button onClick={()=>setNewCat({ name:"", type:"expense", pnlLine:"operating" })} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">+ Add</button>
+            </div>
           </div>
+
           {newCat && (
             <div className="bg-slate-950/50 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-4 gap-2 items-center">
               <input value={newCat.name} onChange={e=>setNewCat({...newCat,name:e.target.value})} placeholder="Category name" className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
@@ -21238,7 +21332,7 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
                 <option value="expense">Expense</option><option value="income">Income</option>
               </select>
               <select value={newCat.pnlLine} onChange={e=>setNewCat({...newCat,pnlLine:e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                <option value="revenue">Revenue</option><option value="cogs">COGS</option><option value="labour">Labour</option><option value="overheads">Overheads</option><option value="other">Other</option><option value="transfer">Transfer</option>
+                {PNL_LINES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
               </select>
               <div className="flex gap-2">
                 <button onClick={async()=>{ if(!newCat.name.trim())return; await onSaveCategory({ id:`cat-${Date.now()}`, ...newCat, name:newCat.name.trim() }); setNewCat(null); }} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold">Save</button>
@@ -21246,14 +21340,48 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
               </div>
             </div>
           )}
-          <div className="divide-y divide-slate-800/50">
-            {categories.filter(c=>!c.archived).map(c => (
-              <div key={c.id} className="flex items-center justify-between py-2 text-sm">
-                <span className="text-slate-200">{c.name} <span className="text-[10px] text-slate-500">· {c.type} · {c.pnlLine}</span></span>
-                <button onClick={async()=>{ if(window.confirm(`Archive "${c.name}"?`)) await onDeleteCategory(c.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>
-              </div>
-            ))}
+
+          {/* Grouped, inline-editable list */}
+          <div className="space-y-3">
+            {PNL_LINES.map(([line, lineLabel]) => {
+              const inLine = categories.filter(c=>!c.archived && (c.pnlLine||"operating")===line);
+              if (inLine.length === 0) return null;
+              return (
+                <div key={line}>
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">{lineLabel}</div>
+                  <div className="divide-y divide-slate-800/40 rounded-lg overflow-hidden border border-slate-800/60">
+                    {inLine.map(c => editCat && editCat.id===c.id ? (
+                      <div key={c.id} className="bg-slate-950/60 p-2 grid grid-cols-1 sm:grid-cols-4 gap-2 items-center">
+                        <input value={editCat.name} onChange={e=>setEditCat({...editCat,name:e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                        <select value={editCat.type} onChange={e=>setEditCat({...editCat,type:e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                          <option value="expense">Expense</option><option value="income">Income</option>
+                        </select>
+                        <select value={editCat.pnlLine} onChange={e=>setEditCat({...editCat,pnlLine:e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                          {PNL_LINES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                        </select>
+                        <div className="flex gap-2">
+                          <button onClick={async()=>{ if(!editCat.name.trim())return; await onSaveCategory({ ...c, name:editCat.name.trim(), type:editCat.type, pnlLine:editCat.pnlLine }); setEditCat(null); }} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold">Save</button>
+                          <button onClick={()=>setEditCat(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={c.id} className="flex items-center justify-between py-2 px-2 text-sm bg-slate-900">
+                        <span className="text-slate-200 flex items-center gap-2">
+                          <span className={`w-1.5 h-1.5 rounded-full ${c.type==="income"?"bg-emerald-400":"bg-slate-500"}`}/>
+                          {c.name}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={()=>setEditCat({ id:c.id, name:c.name, type:c.type, pnlLine:c.pnlLine||"operating" })} className="text-slate-500 hover:text-indigo-300 text-[11px] font-semibold">Edit</button>
+                          <button onClick={async()=>{ if(window.confirm(`Archive "${c.name}"?`)) await onDeleteCategory(c.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+
           {categoryRules.length > 0 && (
             <div className="pt-2 border-t border-slate-800">
               <div className="text-[11px] text-slate-500 mb-1">Auto-tag rules ({categoryRules.length})</div>
