@@ -24420,8 +24420,10 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
       weekStart: wsStr,
       createdBy: currentUser.name,
     };
-    // Save primary
-    onSave({ ...baseSlot, id: slot?.id || `sch-${Date.now()}`, date });
+    // Save primary — id must be globally unique. Date.now() alone can collide
+    // when two shifts are created in the same millisecond, which makes two
+    // shifts share an id (one overwrites the other / React renders only one).
+    onSave({ ...baseSlot, id: slot?.id || `sch-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, date });
     // Save copies for additional days
     [...copyDays].forEach((d, idx) => {
       if (d === date) return;
@@ -25839,6 +25841,15 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules, stores 
   const myBrandId = currentUser.brandIds[0];
   const myMember = opsTeam.find(m => m.id === myId);
   const myDept = myMember?.department || "";
+  // Match shifts against ALL of my identities — handles an employee who exists
+  // as more than one ops_team record (e.g. one per store) or an imperfect login link.
+  const myEmail = (currentUser.email || myMember?.email || "").trim().toLowerCase();
+  const myIds = useMemo(() => {
+    const s = new Set([myId, currentUser.id].filter(Boolean));
+    if (currentUser.opsTeamMemberId) s.add(currentUser.opsTeamMemberId);
+    if (myEmail) (opsTeam || []).forEach(m => { if ((m.email || "").trim().toLowerCase() === myEmail) s.add(m.id); });
+    return s;
+  }, [opsTeam, myId, myEmail]); // eslint-disable-line react-hooks/exhaustive-deps
   const storeNameFor = (s) => { const st = stores.find(x => x.id === s.storeId); return st ? (st.shortName || st.name) : ""; };
 
   // Use local date (not UTC) so BST/timezone doesn't shift the day
@@ -25869,13 +25880,13 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules, stores 
   // brand), and an employee can have several shifts the same day.
   const myShifts = schedules.filter(s =>
     s.date === viewDate && !!s.published && s.status !== "cancelled" &&
-    (s.employeeId === myId || s.employeeId === currentUser.id)
+    myIds.has(s.employeeId)
   ).sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
 
   // Colleague shifts — everyone else at same location, same day
   // Grouped: same dept first, then others
   const colleagueShifts = daySchedules.filter(s =>
-    s.employeeId !== myId && s.employeeId !== currentUser.id
+    !myIds.has(s.employeeId)
   );
   const sameDeptShifts  = myDept ? colleagueShifts.filter(s => s.department === myDept) : [];
   const otherDeptShifts = myDept ? colleagueShifts.filter(s => s.department !== myDept) : colleagueShifts;
