@@ -6810,8 +6810,39 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
           {report.emptyHint || "No records for this selection."}
         </div>
       ) : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl">
           <div className="px-4 pt-3 pb-1 text-sm font-bold text-white">{report.title}</div>
+          {/* Mobile: stacked cards */}
+          <div className="md:hidden divide-y divide-slate-800/60">
+            {report.rows.map((r, i) => (
+              <div key={i} className="p-3">
+                <div className="text-sm font-semibold text-white mb-1.5">{r[report.columns[0].key]}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                  {report.columns.slice(1).map(c => (
+                    <div key={c.key} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-500">{c.label}</span>
+                      <span className={`font-semibold tabular-nums ${r[c.key] === "LATE" || c.key === "issues" ? "text-amber-300" : "text-slate-200"}`}>{r[c.key]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {report.totals && (
+              <div className="p-3 bg-indigo-950/30">
+                <div className="text-sm font-bold text-white mb-1.5">{report.totals[report.columns[0].key] || "Total"}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                  {report.columns.slice(1).map(c => report.totals[c.key] != null && report.totals[c.key] !== "" && (
+                    <div key={c.key} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-500">{c.label}</span>
+                      <span className="font-bold text-white tabular-nums">{report.totals[c.key]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Desktop: table */}
+          <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="text-slate-500 text-left border-b border-slate-800">
@@ -6833,6 +6864,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
