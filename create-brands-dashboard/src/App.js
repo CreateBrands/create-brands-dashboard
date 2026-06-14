@@ -2354,6 +2354,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
 
 function NotificationDiagnostics({ currentUser }) {
   const [testState, setTestState] = useState(null);
+  const [forcing, setForcing] = useState(null);
   const [sw, setSw] = useState({ checked: false });
 
   const recipientType = "user";
@@ -2421,7 +2422,7 @@ function NotificationDiagnostics({ currentUser }) {
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm font-bold text-white">Notification & service-worker check</div>
-        <button onClick={refreshSw} className="text-[11px] text-slate-400 hover:text-white font-semibold">Refresh</button>
+        <button onClick={refreshSw} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 text-xs font-semibold flex-shrink-0">↻ Refresh</button>
       </div>
 
       <button onClick={handleSendTest} disabled={testState === "sending"}
@@ -2431,6 +2432,27 @@ function NotificationDiagnostics({ currentUser }) {
           : testState === "denied" ? "⚠ Allow notifications in your browser first"
           : testState === "error" ? "⚠ Couldn't send — notifications may be off"
           : "🔔 Send me a test notification"}
+      </button>
+
+      <button onClick={async () => {
+        setForcing("working");
+        try {
+          if ("serviceWorker" in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(r => r.unregister()));
+            // Re-register the fresh worker.
+            await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
+          }
+          if ("caches" in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+          }
+          setForcing("done");
+          setTimeout(() => window.location.reload(), 800);
+        } catch { setForcing("error"); }
+      }} disabled={forcing === "working"}
+        className="w-full px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-sm font-semibold">
+        {forcing === "working" ? "Updating…" : forcing === "done" ? "✓ Updated — reloading…" : forcing === "error" ? "⚠ Try fully closing the app" : "⟳ Force service-worker update"}
       </button>
 
       {sw.checked && (
