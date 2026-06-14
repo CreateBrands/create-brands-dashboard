@@ -113,7 +113,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from "recharts";
 import {
-  Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight, Lock, Unlock,
+  Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight, Lock, Unlock, GripVertical,
   Home, MoreHorizontal,
   Cloud, Sun, CloudRain, ArrowRight,
   QrCode,
@@ -19431,10 +19431,14 @@ function StructureSection({
   onAddRole, onUpdateRole, onArchiveRole, onUnarchiveRole,
   onCopyStructure,
 }) {
-  const allVisibleStores = useMemo(
-    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
-    [stores, visibleStoreIds]
-  );
+  // Structure setup is an admin task — owner/HQ manage every store's
+  // departments & roles regardless of which entity they entered through.
+  // Managers stay scoped to their assigned stores.
+  const allVisibleStores = useMemo(() => {
+    const live = (stores || []).filter(s => !s.archivedAt);
+    if (isHqOrAbove(currentUser?.role)) return live;
+    return live.filter(s => visibleStoreIds?.includes(s.id));
+  }, [stores, visibleStoreIds, currentUser]);
   const [storeId, setStoreId] = useState("");
   useEffect(() => {
     if (!storeId && allVisibleStores[0]) setStoreId(allVisibleStores[0].id);
@@ -24780,6 +24784,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   const [extraMemberIds, setExtraMemberIds] = useState(() => new Set());
   const [hiddenMemberIds, setHiddenMemberIds] = useState(() => new Set());
   const [staffPicker, setStaffPicker] = useState(false);
+  // Manual row ordering within a section (memberId -> rank). Drag to reorder.
+  const [memberOrder, setMemberOrder] = useState({});
+  const [dragId, setDragId] = useState(null);
   const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
   const isStoreMember = (m) => {
     const ids = m.storeIds || [];
@@ -24807,9 +24814,12 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // Group rows for rendering: this store's own staff grouped by department,
   // then a separate "Other stores staff" section (the added/extra people).
   const memberSections = useMemo(() => {
+    const orderOf = (m) => (memberOrder[m.id] != null ? memberOrder[m.id] : 9999);
+    const sortRows = (arr) => [...arr].sort((a,b) =>
+      orderOf(a) - orderOf(b) || `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)
+    );
     const storeStaff = filteredMembers.filter(m => isStoreMember(m));
     const otherStaff = filteredMembers.filter(m => !isStoreMember(m));
-    // Department buckets for store staff.
     const byDept = {};
     storeStaff.forEach(m => {
       const d = m.department || "Unassigned";
@@ -24817,17 +24827,28 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     });
     const deptNames = Object.keys(byDept).sort((a,b)=>a.localeCompare(b));
     const sections = deptNames.map(d => ({
-      key: `dept-${d}`, title: d, removable: false,
-      members: byDept[d].sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)),
+      key: `dept-${d}`, title: d, removable: false, members: sortRows(byDept[d]),
     }));
     if (otherStaff.length) {
-      sections.push({
-        key: "other-stores", title: "Other stores staff", removable: true,
-        members: otherStaff.sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)),
-      });
+      sections.push({ key: "other-stores", title: "Other stores staff", removable: true, members: sortRows(otherStaff) });
     }
     return sections;
-  }, [filteredMembers, storeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filteredMembers, storeId, memberOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Drop `dragId` ahead of `targetId` within their section; re-rank that section.
+  const reorderRows = (section, draggedId, targetId) => {
+    if (!draggedId || draggedId === targetId) return;
+    const ids = section.members.map(m => m.id);
+    const from = ids.indexOf(draggedId);
+    const to = ids.indexOf(targetId);
+    if (from === -1 || to === -1) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    setMemberOrder(prev => {
+      const next = { ...prev };
+      ids.forEach((id, i) => { next[id] = i; });
+      return next;
+    });
+  };
 
   // ── This week's schedules ──────────────────────────────────────────────────
   // Match by storeId when the row has one (new), else by brandId (legacy).
@@ -25384,11 +25405,11 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             {memberSections.map((section) => (
               <Fragment key={section.key}>
                 {/* Section header — department or "Other stores staff" */}
-                <div className="grid bg-slate-900/70 border-b border-slate-800" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
-                  <div className="px-4 py-1.5 col-span-full flex items-center gap-2">
-                    <span className={`text-[11px] font-bold uppercase tracking-widest ${section.removable?"text-amber-400/90":"text-slate-400"}`}>{section.title}</span>
-                    <span className="text-[10px] text-slate-600">· {section.members.length}</span>
-                    {section.removable && <span className="text-[10px] text-slate-600">(can be removed from this rota)</span>}
+                <div className="grid bg-slate-800 border-y border-slate-700" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                  <div className="px-4 py-2 col-span-full flex items-center gap-2">
+                    <span className={`text-xs font-bold uppercase tracking-widest ${section.removable?"text-amber-300":"text-white"}`}>{section.title}</span>
+                    <span className="text-[11px] text-slate-300 font-semibold">· {section.members.length}</span>
+                    {section.removable && <span className="text-[11px] text-slate-400">(removable)</span>}
                   </div>
                 </div>
                 {section.members.map((member)=>{
@@ -25396,9 +25417,20 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
               const roleLabel = member.role || member.department || "";
               const canRemove = section.removable;
               return (
-                <div key={member.id} className="grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                <div key={member.id}
+                  draggable={!editLocked}
+                  onDragStart={()=>setDragId(member.id)}
+                  onDragOver={(e)=>{ if(dragId && dragId!==member.id) e.preventDefault(); }}
+                  onDrop={(e)=>{ e.preventDefault(); reorderRows(section, dragId, member.id); setDragId(null); }}
+                  onDragEnd={()=>setDragId(null)}
+                  className={`grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors ${dragId===member.id?"opacity-40":""}`} style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
                   {/* Left: avatar + name + role + running total */}
-                  <div className="group/row flex items-center gap-2.5 px-3 py-2.5">
+                  <div className="group/row flex items-center gap-2 px-2 py-2.5">
+                    {!editLocked && (
+                      <span className="cursor-grab active:cursor-grabbing text-slate-700 hover:text-slate-400 flex-shrink-0" title="Drag to reorder">
+                        <GripVertical size={14}/>
+                      </span>
+                    )}
                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
