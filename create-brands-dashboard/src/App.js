@@ -20244,6 +20244,177 @@ function OpsTeamView({
   );
 }
 
+function SuppliersView({ stores = [] }) {
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(null);
+  useEffect(() => { listInvoices().then(d => { setInvoices(d||[]); setLoading(false); }).catch(()=>setLoading(false)); }, []);
+
+  const today = new Date();
+  const daysOld = (d) => d ? Math.floor((today - new Date(d)) / 86400000) : 0;
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+
+  const suppliers = useMemo(() => {
+    const map = {};
+    invoices.forEach(inv => {
+      const name = (inv.supplier_name || "Unknown supplier").trim();
+      const ex = Number(inv.total_ex_vat) || 0;
+      const outstanding = (inv.payment_status === "paid") ? 0 : (ex - (Number(inv.amount_paid)||0));
+      const s = map[name] = map[name] || { name, total: 0, outstanding: 0, b0:0, b30:0, b60:0, b90:0, count:0, invoices:[] };
+      s.total += ex; s.count++; s.invoices.push(inv);
+      if (outstanding > 0) {
+        s.outstanding += outstanding;
+        const age = daysOld(inv.due_date || inv.invoice_date);
+        if (age <= 30) s.b0 += outstanding; else if (age <= 60) s.b30 += outstanding; else if (age <= 90) s.b60 += outstanding; else s.b90 += outstanding;
+      }
+    });
+    return Object.values(map).sort((a,b)=>b.outstanding-a.outstanding || b.total-a.total);
+  }, [invoices]);
+
+  const totals = suppliers.reduce((a,s)=>({ outstanding:a.outstanding+s.outstanding, b0:a.b0+s.b0, b30:a.b30+s.b30, b60:a.b60+s.b60, b90:a.b90+s.b90 }), {outstanding:0,b0:0,b30:0,b60:0,b90:0});
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><Users size={18}/> Suppliers — aged payables</h2>
+        <p className="text-xs text-slate-500 mt-0.5">What you owe each supplier, aged by how overdue it is. Based on due date (or invoice date if none).</p>
+      </div>
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3"><div className="text-[10px] text-slate-500 uppercase tracking-widest">Owed total</div><div className="text-lg font-black text-amber-400 tabular-nums mt-1">{money(totals.outstanding)}</div></div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3"><div className="text-[10px] text-slate-500 uppercase tracking-widest">0–30 days</div><div className="text-lg font-black text-slate-200 tabular-nums mt-1">{money(totals.b0)}</div></div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3"><div className="text-[10px] text-slate-500 uppercase tracking-widest">31–60</div><div className="text-lg font-black text-slate-200 tabular-nums mt-1">{money(totals.b30)}</div></div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3"><div className="text-[10px] text-slate-500 uppercase tracking-widest">61–90</div><div className="text-lg font-black text-orange-400 tabular-nums mt-1">{money(totals.b60)}</div></div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3"><div className="text-[10px] text-slate-500 uppercase tracking-widest">90+ days</div><div className="text-lg font-black text-red-400 tabular-nums mt-1">{money(totals.b90)}</div></div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-4 py-2 border-b border-slate-800 text-[10px] uppercase tracking-wide text-slate-500 font-semibold">
+              <span>Supplier</span><span className="text-right">Owed</span><span className="text-right">0–30</span><span className="text-right">31–60</span><span className="text-right">61–90</span><span className="text-right">90+</span>
+            </div>
+            <div className="divide-y divide-slate-800/50">
+              {suppliers.length===0 && <div className="px-4 py-8 text-center text-xs text-slate-500">No suppliers yet.</div>}
+              {suppliers.map(s => (
+                <div key={s.name}>
+                  <button onClick={()=>setExpanded(expanded===s.name?null:s.name)} className="w-full grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-4 py-2.5 text-left hover:bg-slate-800/40 items-center">
+                    <span className="text-sm text-slate-200 truncate">{s.name} <span className="text-[10px] text-slate-500">· {s.count}</span></span>
+                    <span className={`text-sm text-right tabular-nums font-semibold ${s.outstanding>0?"text-amber-400":"text-slate-600"}`}>{money(s.outstanding)}</span>
+                    <span className="text-xs text-right tabular-nums text-slate-400">{s.b0?money(s.b0):"—"}</span>
+                    <span className="text-xs text-right tabular-nums text-slate-400">{s.b30?money(s.b30):"—"}</span>
+                    <span className="text-xs text-right tabular-nums text-orange-400">{s.b60?money(s.b60):"—"}</span>
+                    <span className="text-xs text-right tabular-nums text-red-400">{s.b90?money(s.b90):"—"}</span>
+                  </button>
+                  {expanded===s.name && (
+                    <div className="bg-slate-950/40 px-4 py-2 space-y-1">
+                      {s.invoices.map(inv => (
+                        <div key={inv.id} className="flex items-center justify-between text-[11px] py-1">
+                          <span className="text-slate-400">{inv.invoice_number||"(no #)"} · {inv.invoice_date||"—"}</span>
+                          <span className="flex items-center gap-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase ${inv.payment_status==="paid"?"bg-emerald-600/20 text-emerald-300":"bg-slate-700/30 text-slate-400"}`}>{inv.payment_status||"unpaid"}</span>
+                            <span className="text-slate-300 tabular-nums">{money(inv.total_ex_vat)}</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AccountsExportView({ stores = [], bankTransactions = [], categories = [] }) {
+  const [busy, setBusy] = useState("");
+  const [from, setFrom] = useState(() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`; });
+  const [to, setTo] = useState(() => new Date().toISOString().split("T")[0]);
+
+  const downloadCsv = (filename, rows) => {
+    const esc = (v) => { const s = String(v==null?"":v); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+    const csv = rows.map(r => r.map(esc).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportTransactions = () => {
+    setBusy("txn");
+    const rows = [["Date","Description","Reference","Account","Store","Category","Amount","Reconciled"]];
+    bankTransactions.filter(t => t.txnDate>=from && t.txnDate<=to).forEach(t => {
+      const store = stores.find(s=>s.id===t.storeId);
+      rows.push([t.txnDate, t.description, t.reference, t.account, store?(store.shortName||store.name):"", t.category, t.amount, t.reconciled?"yes":"no"]);
+    });
+    downloadCsv(`transactions_${from}_to_${to}.csv`, rows);
+    setBusy("");
+  };
+
+  const exportInvoices = async () => {
+    setBusy("inv");
+    try {
+      const inv = await fetchInvoicesForAccounts({ from, to });
+      const rows = [["Date","Supplier","Number","Category","Ex-VAT","VAT","Status","Payment"]];
+      inv.forEach(i => rows.push([i.date, i.supplier, i.number, i.category, i.totalExVat, i.totalVat, i.status, i.paymentStatus]));
+      downloadCsv(`invoices_${from}_to_${to}.csv`, rows);
+    } catch (e) { alert("Export failed: " + e.message); }
+    setBusy("");
+  };
+
+  const exportVatSummary = async () => {
+    setBusy("vat");
+    try {
+      const inv = await fetchInvoicesForAccounts({ from, to });
+      const purchaseVat = inv.reduce((a,i)=>a+(Number(i.totalVat)||0),0);
+      const purchaseNet = inv.reduce((a,i)=>a+(Number(i.totalExVat)||0),0);
+      const rows = [
+        ["VAT summary (management estimate — not a VAT return)", ""],
+        ["Period", `${from} to ${to}`],
+        ["", ""],
+        ["Purchases net (ex-VAT)", purchaseNet.toFixed(2)],
+        ["Input VAT on purchases (from invoices)", purchaseVat.toFixed(2)],
+        ["", ""],
+        ["Note", "Output VAT on sales is not computed here. Give this to your accountant alongside sales data for the actual VAT return."],
+      ];
+      downloadCsv(`vat_summary_${from}_to_${to}.csv`, rows);
+    } catch (e) { alert("Export failed: " + e.message); }
+    setBusy("");
+  };
+
+  const Btn = ({ id, label, onClick, sub }) => (
+    <button onClick={onClick} disabled={!!busy} className="w-full text-left bg-slate-900 border border-slate-800 rounded-2xl p-4 hover:border-indigo-600 disabled:opacity-40 transition">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-bold text-white">{label}</div>
+        <Download size={16} className="text-indigo-400"/>
+      </div>
+      <div className="text-xs text-slate-500 mt-1">{busy===id?"Preparing…":sub}</div>
+    </button>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><Download size={18}/> Export for accountant</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Download CSVs to hand to your accountant or import into Xero/QuickBooks. Management data — not statutory filings.</p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap bg-slate-900 border border-slate-800 rounded-2xl p-3">
+        <label className="text-xs text-slate-400">From</label>
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-200"/>
+        <label className="text-xs text-slate-400">To</label>
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-200"/>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Btn id="txn" label="Bank transactions" sub="All categorised transactions in range (CSV)" onClick={exportTransactions}/>
+        <Btn id="inv" label="Invoices" sub="Suppliers, amounts, VAT, payment status (CSV)" onClick={exportInvoices}/>
+        <Btn id="vat" label="VAT summary" sub="Input VAT on purchases — management estimate (CSV)" onClick={exportVatSummary}/>
+      </div>
+    </div>
+  );
+}
+
 function AccountsHubView(props) {
   const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser,
     onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
@@ -20257,7 +20428,9 @@ function AccountsHubView(props) {
     ["pnl", "P&L"],
     ["bank", "Bank"],
     ["invoices", "Invoices"],
+    ["suppliers", "Suppliers"],
     ["reconcile", "Reconcile"],
+    ["export", "Export"],
   ];
 
   return (
@@ -20272,12 +20445,14 @@ function AccountsHubView(props) {
       {tab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
       {tab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
-      {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn}/>}
+      {tab === "suppliers" && <SuppliersView stores={stores}/>}
+      {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
+      {tab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories}/>}
     </div>
   );
 }
 
-function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn }) {
+function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn, onInvoicePaid }) {
   const [matches, setMatches] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [payouts, setPayouts] = useState([]);
@@ -20360,6 +20535,11 @@ function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn })
       const saved = await addReconMatches(rows);
       setMatches(m => [...m, ...saved]);
       await onUpdateTxn(selTxn.id, { reconciled: true });
+      // Close the loop: any matched invoice gets marked paid.
+      if (onInvoicePaid) {
+        const paidDate = selTxn.txnDate || new Date().toISOString().split("T")[0];
+        await Promise.all(picked.filter(p=>p.type==="invoice").map(p => onInvoicePaid(p.id, paidDate)));
+      }
       setSelTxnId(null); setPicked([]);
     } catch (e) { alert("Couldn't save match: " + e.message); }
     setBusy(false);
@@ -20398,6 +20578,12 @@ function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn })
         const saved = await addReconMatches(newRows);
         setMatches(m => [...m, ...saved]);
         await Promise.all([...new Set(newRows.map(r=>r.bankTxnId))].map(id => onUpdateTxn(id, { reconciled: true })));
+        if (onInvoicePaid) {
+          await Promise.all(newRows.filter(r=>r.sourceType==="invoice").map(r => {
+            const t = unmatched.find(x=>x.id===r.bankTxnId);
+            return onInvoicePaid(r.sourceId, (t&&t.txnDate) || new Date().toISOString().split("T")[0]);
+          }));
+        }
       }
       setAutoMsg(`Auto-matched ${newRows.length} exact 1:1 transaction${newRows.length===1?"":"s"}.`);
     } catch (e) { setAutoMsg("Auto-match error: " + e.message); }
@@ -20635,10 +20821,19 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
       const bucket = t.amount >= 0 ? inc : exp;
       bucket[name] = (bucket[name] || 0) + Math.abs(t.amount);
     });
+    // Invoices are expenses — bucket by their category (default Stock / COGS).
+    invoices.forEach(inv => {
+      if (storeFilter !== "all") {
+        const match = stores.find(s => s.id === inv.entity || s.name === inv.entity || s.shortName === inv.entity);
+        if (!match || match.id !== storeFilter) return;
+      }
+      const name = inv.category || "Stock / COGS";
+      exp[name] = (exp[name] || 0) + (Number(inv.totalExVat) || 0);
+    });
     const toArr = (o) => Object.entries(o).map(([name, amount]) => ({ name, amount })).sort((a,b)=>b.amount-a.amount);
-    const uncatCount = bankTransactions.filter(t => inRange(t.txnDate) && (storeFilter==="all"||t.storeId===storeFilter) && !t.category).length;
+    const uncatCount = bankTransactions.filter(t => inRange(t.txnDate) && (storeFilter==="all"||t.storeId===storeFilter) && !t.category).length + invoices.filter(i => !i.category).length;
     return { income: toArr(inc), expense: toArr(exp), uncatCount };
-  }, [bankTransactions, bounds.from, bounds.to, storeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bankTransactions, invoices, bounds.from, bounds.to, storeFilter, stores]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const storeName = (id) => { if (id === "unassigned") return "Unassigned"; const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : id; };
   const shiftPeriod = (dir) => { const d = new Date(anchor); if (period === "month") d.setMonth(d.getMonth() + dir); else d.setDate(d.getDate() + dir*7); setAnchor(d); };
@@ -30905,7 +31100,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
