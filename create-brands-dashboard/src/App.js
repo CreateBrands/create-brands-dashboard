@@ -19739,7 +19739,7 @@ function OpsTeamView({
   );
 }
 
-function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn }) {
+function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
   const [errors, setErrors] = useState([]);
@@ -19829,6 +19829,15 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn })
     };
     reader.readAsArrayBuffer(f);
   };
+
+  // Auto-handle a file shared into the app (Android share sheet). Wait until the
+  // spreadsheet library is ready, parse it straight into preview, then clear it
+  // from the parent so it doesn't re-fire.
+  useEffect(() => {
+    if (!sharedFile || !XLSX) return;
+    handleFile(sharedFile);
+    onConsumeSharedFile && onConsumeSharedFile();
+  }, [sharedFile, XLSX]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doImport = async () => {
     setLoading(true);
@@ -28599,6 +28608,35 @@ export default function App() {
     return () => window.removeEventListener("hashchange", applyHash);
   }, []);
 
+  // SHARE_TARGET_V1 — if the app was opened by sharing a file to it (Android
+  // PWA share sheet → "/?share-target=1"), ask the service worker for the
+  // stashed file, jump to the Bank view, and hand the file to the importer.
+  const [sharedBankFile, setSharedBankFile] = useState(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("share-target") !== "1") return;
+    // Clean the URL so a refresh doesn't re-trigger.
+    try { window.history.replaceState({}, "", window.location.pathname); } catch {}
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.ready.then((reg) => {
+      const sw = reg.active || navigator.serviceWorker.controller;
+      if (!sw) return;
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (e) => {
+        const d = e.data;
+        if (d && d.ok && d.buffer) {
+          try {
+            const file = new File([d.buffer], d.name || "statement.csv",
+              { type: d.name && d.name.toLowerCase().endsWith(".csv") ? "text/csv" : "application/octet-stream" });
+            setSharedBankFile(file);
+            setActiveView("bank");
+          } catch {}
+        }
+      };
+      sw.postMessage({ type: "GET_SHARED_FILE" }, [channel.port2]);
+    }).catch(() => {});
+  }, []);
+
   // Open an employee profile from anywhere (typically Ops Team list).
   // Updates state AND hash so the user can use back button.
   const openEmployeeProfile = useCallback(id => {
@@ -29564,7 +29602,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn}/>}
+            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}

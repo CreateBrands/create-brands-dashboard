@@ -1,14 +1,55 @@
 {
   "short_name": "Chocoberry",
-  "name": "Chocoberry Dashboard",
+  "name": "Create Brands Dashboard",
   "icons": [
-    { "src": "favicon.ico", "sizes": "64x64 32x32 24x24 16x16", "type": "image/x-icon" },
-    { "src": "logo192.png", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },
-    { "src": "logo512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
   ],
-  "start_url": "/",
+  "start_url": ".",
   "display": "standalone",
-  "orientation": "portrait",
-  "theme_color": "#020617",
-  "background_color": "#020617"
+  "theme_color": "#844429",
+  "background_color": "#FDF2E0",
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "statement",
+          "accept": [
+            "text/csv",
+            "text/comma-separated-values",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".csv",
+            ".xls",
+            ".xlsx"
+          ]
+        }
+      ]
+    }
+  }
 }
