@@ -25792,6 +25792,12 @@ function KioskShell() {
     }
   };
 
+  const handleSetBreak = async (id, action) => {
+    const saved = await setPunchBreak(id, action);
+    setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+    return saved;
+  };
+
   // Kiosk registration: matches the entered PIN against any store's kioskPin,
   // locks the tablet to that store on success, writes audit entry.
   const handleRegister = async (pin) => {
@@ -28201,7 +28207,6 @@ export default function App() {
   const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);}}, []);
   const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
-  const handleSetBreak  = useCallback(async(id,action)=>{const saved=await setPunchBreak(id,action);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));return saved;}, []);
   const handleAmendPunch = useCallback(async record=>{try{const {_audit, ...clean}=record;const saved=await upsertPunchRecord(clean);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));if(_audit&&_audit.length){logPunchAudit(_audit.map(a=>({...a,punchId:saved.id,reason:"manager_amend",changedBy:currentUser?.name||currentUser?.id||"manager"})));}showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, currentUser]);
 
   const handleFlipdishSync = useCallback(async () => {
