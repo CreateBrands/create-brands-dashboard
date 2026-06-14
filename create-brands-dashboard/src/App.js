@@ -9958,7 +9958,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                   );
                 })()}
 
-                {/* Flipdish ↔ EOD reconciliation — match gross exactly, show breakdown */}
+                {/* Side-by-side EOD ↔ Flipdish reconciliation */}
                 {(() => {
                   if (flipLoading) return <div className="rounded-xl p-3 border border-slate-800 bg-slate-950/40 text-[11px] text-slate-500">Checking Flipdish for {selected.date}…</div>;
                   if (!flipAgg) return (
@@ -9966,86 +9966,91 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                       No Flipdish sales data found for this store &amp; date — can't auto-reconcile. Approve manually if correct.
                     </div>
                   );
-                  const eodGross = Number(selected.netSales) || 0;
-                  const flipGross = flipAgg.revenueGross;
-                  // Exact match to the penny.
-                  const matched = Math.round(eodGross * 100) === Math.round(flipGross * 100);
-                  const diff = eodGross - flipGross;
+                  const eodGross   = Number(selected.netSales) || 0;
+                  const eodFlipCard= Number(selected.cardRevenue) || 0;
+                  const eodLopay   = Number(selected.lopay) || 0;
+                  const eodCash    = Number(selected.physicalCash) || 0;
+                  const eodUnrep   = Number(selected.unreportedExpense) || 0;
+                  const flipGross  = flipAgg.revenueGross;
+                  const isCardLine = (m) => { const s = String(m || "").toLowerCase(); return s && !s.includes("cash"); };
+                  const isCashLine = (m) => String(m || "").toLowerCase().includes("cash");
+                  const hasFlipPayments = (flipPayments || []).length > 0;
+                  const flipCard = (flipPayments || []).filter(p => isCardLine(p.paymentMethod)).reduce((a,p) => a + p.amount, 0);
+                  const flipCash = (flipPayments || []).filter(p => isCashLine(p.paymentMethod)).reduce((a,p) => a + p.amount, 0);
+                  const eq = (a,b) => Math.round((Number(a)||0)*100) === Math.round((Number(b)||0)*100);
+                  const grossMatch = eq(eodGross, flipGross);
+                  const tenderSum = eodFlipCard + eodLopay + eodCash;
+                  const sumMatch = eq(tenderSum, eodGross);
+
+                  // rows: [label, eodValue, flipValue|null, status]
+                  // status: "auto" (Flipdish can verify), "review" (vs bank), "info" (context only)
+                  const rows = [
+                    { label: "Gross sales", eod: eodGross, flip: flipGross, status: "auto" },
+                    { label: "Flipdish (card)", eod: eodFlipCard, flip: hasFlipPayments ? flipCard : null, status: hasFlipPayments ? "auto" : "review" },
+                    { label: "Lopay (card)", eod: eodLopay, flip: null, status: "review" },
+                    { label: "Cash", eod: eodCash, flip: hasFlipPayments ? flipCash : null, status: hasFlipPayments ? "auto" : "review" },
+                  ];
+                  if (eodUnrep > 0) rows.push({ label: "Unreported cash/expense", eod: eodUnrep, flip: null, status: "info" });
+                  rows.push({ label: "Net", eod: null, flip: flipAgg.revenueNet, status: "info" });
+                  rows.push({ label: "Tax", eod: null, flip: flipAgg.tax, status: "info" });
+                  rows.push({ label: "Discounts", eod: null, flip: flipAgg.discounts, status: "info" });
+
+                  const cellMatch = (r) => {
+                    if (r.status !== "auto" || r.eod == null || r.flip == null) return null;
+                    return eq(r.eod, r.flip);
+                  };
+
                   return (
-                    <div className={`rounded-xl p-3 border ${matched ? "bg-emerald-950/20 border-emerald-500/30" : "bg-amber-950/20 border-amber-500/40"}`}>
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <div className={`text-sm font-bold flex items-center gap-2 ${matched ? "text-emerald-400" : "text-amber-400"}`}>
-                          {matched ? <><CheckCircle size={15}/> Flipdish matches EOD gross</> : <><AlertTriangle size={15}/> Mismatch: EOD {fmtMoney(eodGross)} vs Flipdish {fmtMoney(flipGross)} ({diff>=0?"+":""}{fmtMoney(diff)})</>}
+                    <div className={`rounded-xl border overflow-hidden ${grossMatch ? "border-emerald-500/30" : "border-amber-500/40"}`}>
+                      {/* Header / status + approve */}
+                      <div className={`flex items-center justify-between gap-3 flex-wrap px-3 py-2.5 ${grossMatch ? "bg-emerald-950/20" : "bg-amber-950/20"}`}>
+                        <div className={`text-sm font-bold flex items-center gap-2 ${grossMatch ? "text-emerald-400" : "text-amber-400"}`}>
+                          {grossMatch ? <><CheckCircle size={15}/> Gross matches Flipdish</> : <><AlertTriangle size={15}/> Gross mismatch ({(eodGross-flipGross)>=0?"+":""}{fmtMoney(eodGross-flipGross)})</>}
                         </div>
                         {selected.reconStatus !== "resolved" && (
                           <button onClick={() => postComment("resolved")} disabled={busy}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-40 ${matched ? "bg-emerald-600 hover:bg-emerald-500" : "bg-amber-600 hover:bg-amber-500"}`}>
-                            {matched ? "Approve ✓" : "Approve anyway"}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-40 ${grossMatch ? "bg-emerald-600 hover:bg-emerald-500" : "bg-amber-600 hover:bg-amber-500"}`}>
+                            {grossMatch ? "Approve ✓" : "Approve anyway"}
                           </button>
                         )}
+                        {selected.reconStatus === "resolved" && <span className="text-[11px] text-emerald-400 font-semibold">✓ Approved</span>}
                       </div>
-                      {/* Full breakdown for review */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-                        {[
-                          ["Gross", flipAgg.revenueGross],
-                          ["Net", flipAgg.revenueNet],
-                          ["Tax", flipAgg.tax],
-                          ["Discounts", flipAgg.discounts],
-                        ].map(([label, val]) => (
-                          <div key={label} className="bg-slate-950/50 rounded-lg px-2 py-1.5">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wide">Flipdish {label}</div>
-                            <div className="text-xs font-semibold text-slate-200 tabular-nums">{fmtMoney(val)}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-2">
-                        EOD gross sales: {fmtMoney(eodGross)} · Flipdish orders: {flipAgg.orders}
-                        {selected.reconStatus === "resolved" && <span className="text-emerald-400"> · already approved</span>}
-                      </div>
-                    </div>
-                  );
-                })()}
 
-                {/* Tenders breakdown — Flipdish card auto-checked; Lopay/cash for review (reconcile vs bank) */}
-                {flipAgg && (() => {
-                  const eodGross = Number(selected.netSales) || 0;
-                  const eodFlipCard = Number(selected.cardRevenue) || 0;
-                  const eodLopay = Number(selected.lopay) || 0;
-                  const eodCash = Number(selected.physicalCash) || 0;
-                  const eodUnreported = Number(selected.unreportedExpense) || 0;
-                  // Flipdish's own card total from payment-method lines (card / online / non-cash).
-                  const isCardLine = (m) => { const s = String(m || "").toLowerCase(); return s && !s.includes("cash"); };
-                  const flipCardTotal = (flipPayments || []).filter(p => isCardLine(p.paymentMethod)).reduce((a,p) => a + p.amount, 0);
-                  const hasFlipPayments = (flipPayments || []).length > 0;
-                  const cardMatch = hasFlipPayments && Math.round(eodFlipCard*100) === Math.round(flipCardTotal*100);
-                  // Do the entered tenders sum to gross?
-                  const tenderSum = eodFlipCard + eodLopay + eodCash;
-                  const sumMatch = Math.round(tenderSum*100) === Math.round(eodGross*100);
-                  const Line = ({ label, amount, status, note }) => (
-                    <div className="flex items-center justify-between gap-2 py-1.5 border-b border-slate-800/40 last:border-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs text-slate-300">{label}</span>
-                        {status === "ok" && <span className="text-[10px] text-emerald-400 font-semibold">✓ matches Flipdish</span>}
-                        {status === "bad" && <span className="text-[10px] text-amber-400 font-semibold">⚠ differs from Flipdish</span>}
-                        {status === "review" && <span className="text-[10px] text-slate-500">— check vs bank</span>}
+                      {/* Side-by-side table */}
+                      <div className="bg-slate-950/40">
+                        <div className="grid grid-cols-[1.4fr_1fr_1fr_auto] gap-2 px-3 py-1.5 border-b border-slate-800/60 text-[10px] uppercase tracking-wide text-slate-500 font-semibold">
+                          <span>Line</span><span className="text-right">EOD</span><span className="text-right">Flipdish</span><span className="text-right pl-1">±</span>
+                        </div>
+                        {rows.map((r, i) => {
+                          const m = cellMatch(r);
+                          const diff = (r.eod != null && r.flip != null) ? (r.eod - r.flip) : null;
+                          return (
+                            <div key={i} className="grid grid-cols-[1.4fr_1fr_1fr_auto] gap-2 px-3 py-1.5 border-b border-slate-800/30 last:border-0 items-center">
+                              <span className="text-xs text-slate-300">
+                                {r.label}
+                                {r.status === "review" && <span className="text-[9px] text-slate-500 ml-1">vs bank</span>}
+                              </span>
+                              <span className="text-xs text-slate-200 tabular-nums text-right">{r.eod == null ? "—" : fmtMoney(r.eod)}</span>
+                              <span className="text-xs text-slate-200 tabular-nums text-right">{r.flip == null ? "—" : fmtMoney(r.flip)}</span>
+                              <span className="text-right pl-1 w-5">
+                                {m === true && <span className="text-emerald-400 text-xs">✓</span>}
+                                {m === false && <span className="text-amber-400 text-xs" title={fmtMoney(diff)}>⚠</span>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        {/* Tenders sum check */}
+                        <div className={`grid grid-cols-[1.4fr_1fr_1fr_auto] gap-2 px-3 py-2 border-t border-slate-700/50 items-center text-xs font-bold ${sumMatch ? "text-emerald-400" : "text-amber-400"}`}>
+                          <span>{sumMatch ? "✓ Tenders = gross" : "⚠ Tenders ≠ gross"}</span>
+                          <span className="tabular-nums text-right">{fmtMoney(tenderSum)}</span>
+                          <span className="tabular-nums text-right">{fmtMoney(eodGross)}</span>
+                          <span/>
+                        </div>
                       </div>
-                      <span className="text-xs font-semibold text-slate-200 tabular-nums">{fmtMoney(amount)}{note}</span>
-                    </div>
-                  );
-                  return (
-                    <div className="rounded-xl p-3 border border-slate-700/50 bg-slate-950/40">
-                      <div className="text-xs font-bold text-white mb-2">Tenders breakdown</div>
-                      <Line label="Flipdish (card)" amount={eodFlipCard} status={hasFlipPayments ? (cardMatch ? "ok" : "bad") : "review"}
-                        note={hasFlipPayments && !cardMatch ? ` · Flipdish says ${fmtMoney(flipCardTotal)}` : ""} />
-                      <Line label="Lopay (card)" amount={eodLopay} status="review" />
-                      <Line label="Cash (counted)" amount={eodCash} status="review" />
-                      {eodUnreported > 0 && <Line label="Unreported cash/expense" amount={eodUnreported} status="review" />}
-                      <div className={`flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-700/50 text-sm font-bold ${sumMatch ? "text-emerald-400" : "text-amber-400"}`}>
-                        <span>{sumMatch ? "✓ Tenders sum to gross" : "⚠ Tenders don't sum to gross"}</span>
-                        <span className="tabular-nums">{fmtMoney(tenderSum)} / {fmtMoney(eodGross)}</span>
+                      <div className="px-3 py-2 text-[10px] text-slate-600 bg-slate-950/40">
+                        Flipdish orders: {flipAgg.orders}. ✓ = matches exactly. Lopay &amp; cash settle outside Flipdish — reconcile against bank.
+                        {!hasFlipPayments && " No Flipdish payment-method breakdown for this day."}
                       </div>
-                      {!hasFlipPayments && <div className="text-[11px] text-slate-500 mt-2">No Flipdish payment-method breakdown for this day — card line shown for review only.</div>}
-                      <div className="text-[10px] text-slate-600 mt-1">Lopay and cash settle outside Flipdish — these reconcile against the bank (next stage).</div>
                     </div>
                   );
                 })()}
