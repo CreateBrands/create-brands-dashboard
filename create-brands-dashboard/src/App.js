@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -20066,6 +20066,246 @@ function OpsTeamView({
   );
 }
 
+function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn }) {
+  const [matches, setMatches] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [payouts, setPayouts] = useState([]);
+  const [payruns, setPayruns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selTxnId, setSelTxnId] = useState(null);
+  const [picked, setPicked] = useState([]);   // [{type,id,label,amount}]
+  const [tab, setTab] = useState("invoice");   // invoice | payout | payroll
+  const [busy, setBusy] = useState(false);
+  const [autoMsg, setAutoMsg] = useState("");
+
+  const money = (n) => `${n<0?"−":""}£${Math.abs(n).toFixed(2)}`;
+  const eq = (a,b) => Math.round((Number(a)||0)*100) === Math.round((Number(b)||0)*100);
+  const storeName = (id) => { const s = stores.find(x=>x.id===id); return s?(s.shortName||s.name):""; };
+
+  // Load candidates + existing matches over the span of the bank data.
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const dates = bankTransactions.map(t=>t.txnDate).filter(Boolean).sort();
+    const from = dates[0], to = dates[dates.length-1];
+    const [m, inv, po, pr] = await Promise.all([
+      fetchReconMatches().catch(()=>[]),
+      fetchInvoicesForAccounts({ from, to }).catch(()=>[]),
+      fetchPayoutsForRecon({ from, to }).catch(()=>[]),
+      fetchPayrollRunsForRecon({ from, to }).catch(()=>[]),
+    ]);
+    setMatches(m||[]); setInvoices(inv||[]); setPayouts(po||[]); setPayruns(pr||[]);
+    setLoading(false);
+  }, [bankTransactions]);
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const matchedTxnIds = useMemo(() => new Set(matches.map(m=>m.bankTxnId)), [matches]);
+  const usedSourceIds = useMemo(() => new Set(matches.map(m=>m.sourceType+":"+m.sourceId)), [matches]);
+
+  const unmatched = useMemo(
+    () => bankTransactions.filter(t => !matchedTxnIds.has(t.id)).sort((a,b)=>(b.txnDate||"").localeCompare(a.txnDate||"")),
+    [bankTransactions, matchedTxnIds]
+  );
+  const selTxn = bankTransactions.find(t => t.id === selTxnId);
+
+  // Candidate lists for the selected bank line (filter out already-used).
+  const candidates = useMemo(() => {
+    if (!selTxn) return [];
+    const want = Math.abs(selTxn.amount);
+    const isDebit = selTxn.amount < 0;
+    if (tab === "invoice") {
+      return invoices
+        .filter(i => !usedSourceIds.has("invoice:"+i.id))
+        .map(i => ({ type:"invoice", id:i.id, label:`${i.supplier||i.entity||"Invoice"} · ${i.date||""}`, amount:i.totalExVat }))
+        .sort((a,b)=>Math.abs(a.amount-want)-Math.abs(b.amount-want));
+    }
+    if (tab === "payout") {
+      return payouts
+        .filter(p => !usedSourceIds.has("payout:"+p.id))
+        .map(p => ({ type:"payout", id:p.id, label:`Flipdish payout · ${storeName(p.storeId)||""} ${p.date}`, amount:p.amount }))
+        .sort((a,b)=>Math.abs(a.amount-want)-Math.abs(b.amount-want));
+    }
+    return payruns
+      .filter(p => !usedSourceIds.has("payroll:"+p.id))
+      .map(p => ({ type:"payroll", id:p.id, label:`${p.employeeName||"Payroll"} · ${p.periodEnd||""}`, amount:p.amount }))
+      .sort((a,b)=>Math.abs(a.amount-want)-Math.abs(b.amount-want));
+  }, [selTxn, tab, invoices, payouts, payruns, usedSourceIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickedTotal = picked.reduce((a,p)=>a+Math.abs(p.amount),0);
+  const target = selTxn ? Math.abs(selTxn.amount) : 0;
+  const ties = selTxn && eq(pickedTotal, target);
+
+  const togglePick = (c) => {
+    setPicked(prev => prev.some(p=>p.type===c.type&&p.id===c.id)
+      ? prev.filter(p=>!(p.type===c.type&&p.id===c.id))
+      : [...prev, c]);
+  };
+  const selectTxn = (id) => { setSelTxnId(id); setPicked([]); };
+
+  const confirmMatch = async () => {
+    if (!selTxn || picked.length===0) return;
+    setBusy(true);
+    try {
+      const rows = picked.map(p => ({ bankTxnId: selTxn.id, sourceType: p.type, sourceId: p.id, sourceLabel: p.label, amount: Math.abs(p.amount), auto: false }));
+      const saved = await addReconMatches(rows);
+      setMatches(m => [...m, ...saved]);
+      await onUpdateTxn(selTxn.id, { reconciled: true });
+      setSelTxnId(null); setPicked([]);
+    } catch (e) { alert("Couldn't save match: " + e.message); }
+    setBusy(false);
+  };
+
+  const unmatchTxn = async (txnId) => {
+    setBusy(true);
+    try {
+      await deleteReconMatchesForTxn(txnId);
+      setMatches(m => m.filter(x=>x.bankTxnId!==txnId));
+      await onUpdateTxn(txnId, { reconciled: false });
+    } catch (e) { alert("Couldn't unmatch: " + e.message); }
+    setBusy(false);
+  };
+
+  // Auto-match exact 1:1 across all unmatched lines.
+  const runAutoMatch = async () => {
+    setBusy(true); setAutoMsg("");
+    const pools = [
+      ...invoices.map(i=>({type:"invoice",id:i.id,label:`${i.supplier||i.entity||"Invoice"} · ${i.date||""}`,amount:i.totalExVat})),
+      ...payouts.map(p=>({type:"payout",id:p.id,label:`Flipdish payout · ${storeName(p.storeId)||""} ${p.date}`,amount:p.amount})),
+      ...payruns.map(p=>({type:"payroll",id:p.id,label:`${p.employeeName||"Payroll"} · ${p.periodEnd||""}`,amount:p.amount})),
+    ];
+    const used = new Set(usedSourceIds);
+    const newRows = [];
+    for (const t of unmatched) {
+      const want = Math.abs(t.amount);
+      const hit = pools.find(c => !used.has(c.type+":"+c.id) && eq(c.amount, want));
+      if (hit) {
+        used.add(hit.type+":"+hit.id);
+        newRows.push({ bankTxnId: t.id, sourceType: hit.type, sourceId: hit.id, sourceLabel: hit.label, amount: Math.abs(hit.amount), auto: true });
+      }
+    }
+    try {
+      if (newRows.length) {
+        const saved = await addReconMatches(newRows);
+        setMatches(m => [...m, ...saved]);
+        await Promise.all([...new Set(newRows.map(r=>r.bankTxnId))].map(id => onUpdateTxn(id, { reconciled: true })));
+      }
+      setAutoMsg(`Auto-matched ${newRows.length} exact 1:1 transaction${newRows.length===1?"":"s"}.`);
+    } catch (e) { setAutoMsg("Auto-match error: " + e.message); }
+    setBusy(false);
+  };
+
+  const matchedList = useMemo(() => {
+    const byTxn = {};
+    matches.forEach(m => { (byTxn[m.bankTxnId] = byTxn[m.bankTxnId] || []).push(m); });
+    return Object.entries(byTxn).map(([txnId, items]) => {
+      const t = bankTransactions.find(x=>x.id===txnId);
+      return { txnId, txn: t, items, total: items.reduce((a,i)=>a+i.amount,0) };
+    }).filter(x=>x.txn).sort((a,b)=>(b.txn.txnDate||"").localeCompare(a.txn.txnDate||""));
+  }, [matches, bankTransactions]);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><CheckCircle size={18}/> Reconciliation</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Match bank payments to invoices, Flipdish payouts and payroll. Auto-matches exact 1:1; build batches manually.</p>
+        </div>
+        <button onClick={runAutoMatch} disabled={busy||loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">⚡ Auto-match exact</button>
+      </div>
+      {autoMsg && <div className="rounded-xl px-4 py-2.5 text-xs bg-emerald-950/20 border border-emerald-800/40 text-emerald-300">{autoMsg}</div>}
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading reconciliation…</div> : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Unmatched bank lines */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white flex items-center justify-between">
+              <span>Unmatched ({unmatched.length})</span>
+            </div>
+            <div className="max-h-[420px] overflow-y-auto divide-y divide-slate-800/50">
+              {unmatched.length===0 ? <div className="px-4 py-8 text-center text-xs text-slate-500">Everything's matched 🎉</div>
+                : unmatched.map(t => (
+                  <button key={t.id} onClick={()=>selectTxn(t.id)} className={`w-full text-left px-4 py-2.5 hover:bg-slate-800/50 ${selTxnId===t.id?"bg-indigo-950/30 border-l-2 border-indigo-500":""}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm text-slate-200 truncate">{t.description||"—"}</span>
+                      <span className={`text-sm font-semibold tabular-nums flex-shrink-0 ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{money(t.amount)}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.storeId?` · ${storeName(t.storeId)}`:""}</div>
+                  </button>
+                ))}
+            </div>
+          </div>
+
+          {/* Match builder */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            {!selTxn ? (
+              <div className="px-4 py-8 text-center text-xs text-slate-500">Select an unmatched bank line to find matches.</div>
+            ) : (
+              <>
+                <div className="px-4 py-3 border-b border-slate-800">
+                  <div className="text-sm font-bold text-white truncate">{selTxn.description||"—"}</div>
+                  <div className="text-[11px] text-slate-500">{selTxn.txnDate} · target {money(Math.abs(selTxn.amount))}</div>
+                </div>
+                <div className="flex gap-1 px-3 py-2 border-b border-slate-800">
+                  {[["invoice","Invoices"],["payout","Payouts"],["payroll","Payroll"]].map(([k,l])=>(
+                    <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
+                  ))}
+                </div>
+                <div className="max-h-[300px] overflow-y-auto divide-y divide-slate-800/40">
+                  {candidates.length===0 ? <div className="px-4 py-6 text-center text-xs text-slate-500">No {tab} candidates in range.</div>
+                    : candidates.slice(0,60).map(c => {
+                      const on = picked.some(p=>p.type===c.type&&p.id===c.id);
+                      const exact = eq(c.amount, Math.abs(selTxn.amount));
+                      return (
+                        <button key={c.type+c.id} onClick={()=>togglePick(c)} className={`w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-slate-800/50 ${on?"bg-emerald-950/20":""}`}>
+                          <span className={`w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center ${on?"bg-emerald-600 border-emerald-500":"border-slate-600"}`}>{on&&<CheckCircle size={11} className="text-white"/>}</span>
+                          <span className="text-xs text-slate-300 flex-1 truncate">{c.label}{exact&&<span className="text-emerald-500 ml-1">· exact</span>}</span>
+                          <span className="text-xs font-semibold text-slate-200 tabular-nums">{money(c.amount)}</span>
+                        </button>
+                      );
+                    })}
+                </div>
+                {/* Running total */}
+                <div className="px-4 py-3 border-t border-slate-800 space-y-2">
+                  <div className={`flex items-center justify-between text-sm font-bold ${ties?"text-emerald-400":"text-slate-300"}`}>
+                    <span>{ties?"✓ Ties to bank amount":"Picked total"}</span>
+                    <span className="tabular-nums">{money(pickedTotal)} / {money(target)}</span>
+                  </div>
+                  {!ties && picked.length>0 && <div className="text-[11px] text-amber-400">Difference: {money(target-pickedTotal)}</div>}
+                  <button onClick={confirmMatch} disabled={busy||picked.length===0} className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-40 ${ties?"bg-emerald-600 hover:bg-emerald-500":"bg-slate-700 hover:bg-slate-600"}`}>
+                    {ties?"Confirm match ✓":`Confirm partial match (${picked.length})`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Matched list */}
+      {matchedList.length>0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">Matched ({matchedList.length})</div>
+          <div className="divide-y divide-slate-800/50 max-h-[360px] overflow-y-auto">
+            {matchedList.map(({txnId, txn, items, total}) => (
+              <div key={txnId} className="px-4 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200 truncate">{txn.description||"—"} <span className="text-[10px] text-slate-500">{txn.txnDate}</span></div>
+                    <div className="text-[11px] text-slate-500">{items.map(i=>i.sourceLabel).join(" + ")} {items.length>1?`(${items.length} items)`:""}{items.some(i=>i.auto)&&<span className="text-emerald-500 ml-1">· auto</span>}</div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-sm font-semibold tabular-nums text-slate-300">{money(total)}</span>
+                    <button onClick={()=>unmatchTxn(txnId)} disabled={busy} className="text-slate-600 hover:text-red-400 text-xs">unmatch</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [] }) {
   const [period, setPeriod] = useState("month");   // month | week
   const [vatMode, setVatMode] = useState("ex");     // ex | inc
@@ -20325,6 +20565,73 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
             Rough management figures only. Revenue from EOD net sales; labour from EOD; cost of goods from supplier invoices; other spend from categorised bank outflows. VAT is estimated at the 20% standard rate for presentation — your accountant's figures are the source of truth for VAT and statutory accounts.
           </p>
         </>
+      )}
+    </div>
+  );
+}
+
+// Colour-coded category picker — a styled pill that opens a searchable popover.
+const PNL_TINT = {
+  revenue:   { dot: "bg-emerald-400", chip: "bg-emerald-950/40 border-emerald-700/50 text-emerald-200" },
+  cogs:      { dot: "bg-orange-400",  chip: "bg-orange-950/40 border-orange-700/50 text-orange-200" },
+  labour:    { dot: "bg-sky-400",     chip: "bg-sky-950/40 border-sky-700/50 text-sky-200" },
+  overheads: { dot: "bg-violet-400",  chip: "bg-violet-950/40 border-violet-700/50 text-violet-200" },
+  other:     { dot: "bg-slate-400",   chip: "bg-slate-800 border-slate-600 text-slate-200" },
+  transfer:  { dot: "bg-cyan-400",    chip: "bg-cyan-950/40 border-cyan-700/50 text-cyan-200" },
+};
+function CategoryPicker({ value, categories = [], onPick }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const current = categories.find(c => c.name === value);
+  const tint = current ? (PNL_TINT[current.pnlLine] || PNL_TINT.other) : null;
+  const list = categories.filter(c => !c.archived && (!q || c.name.toLowerCase().includes(q.toLowerCase())));
+  const income = list.filter(c => c.type === "income");
+  const expense = list.filter(c => c.type !== "income");
+  const Group = ({ title, items }) => items.length === 0 ? null : (
+    <div className="py-1">
+      <div className="px-3 py-1 text-[9px] uppercase tracking-widest text-slate-500 font-semibold">{title}</div>
+      {items.map(c => {
+        const t = PNL_TINT[c.pnlLine] || PNL_TINT.other;
+        return (
+          <button key={c.id} onClick={() => { onPick(c.name); setOpen(false); setQ(""); }}
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800 ${c.name===value?"bg-slate-800":""}`}>
+            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${t.dot}`}/>
+            <span className="text-xs text-slate-200 flex-1 truncate">{c.name}</span>
+            {c.name===value && <CheckCircle size={12} className="text-emerald-400 flex-shrink-0"/>}
+          </button>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className="relative flex-shrink-0" ref={ref}>
+      <button onClick={() => setOpen(o=>!o)}
+        className={`inline-flex items-center gap-1.5 rounded-full pl-2 pr-2.5 py-1 text-[11px] font-medium border max-w-[140px] transition ${current ? tint.chip : "bg-slate-800/70 border-dashed border-slate-600 text-slate-400 hover:text-slate-200"}`}>
+        {current && <span className={`w-2 h-2 rounded-full flex-shrink-0 ${tint.dot}`}/>}
+        <span className="truncate">{current ? current.name : "+ Categorise"}</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-56 max-h-72 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-30">
+          <div className="p-2 sticky top-0 bg-slate-900 border-b border-slate-800">
+            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…"
+              className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500"/>
+          </div>
+          {value && (
+            <button onClick={()=>{ onPick(""); setOpen(false); setQ(""); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800 text-[11px] text-slate-500">
+              <span className="w-2 h-2 rounded-full border border-slate-600"/> Clear category
+            </button>
+          )}
+          <Group title="Income" items={income} />
+          <Group title="Expense" items={expense} />
+          {list.length === 0 && <div className="px-3 py-3 text-xs text-slate-500">No matches.</div>}
+        </div>
       )}
     </div>
   );
@@ -20668,11 +20975,7 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
                     <div className="text-sm text-slate-200 truncate">{t.description || "—"}</div>
                     <div className="text-[11px] text-slate-500">{t.txnDate}{t.account?` · ${t.account}`:""}{t.storeId?` · ${storeName(t.storeId)}`:""}</div>
                   </div>
-                  <select value={t.category || ""} onChange={e => handleCategorise(t, e.target.value)}
-                    className={`text-[11px] rounded-lg px-2 py-1 flex-shrink-0 border max-w-[130px] ${t.category ? "bg-indigo-950/40 border-indigo-800/50 text-indigo-200" : "bg-slate-800 border-slate-700 text-slate-400"}`}>
-                    <option value="">Uncategorised</option>
-                    {categories.filter(c=>!c.archived).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                  </select>
+                  <CategoryPicker value={t.category || ""} categories={categories} onPick={(name)=>handleCategorise(t, name)} />
                   <div className={`text-sm font-semibold tabular-nums flex-shrink-0 ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{fmt(t.amount)}</div>
                   <button onClick={()=>{ if(window.confirm("Delete this transaction?")) onDeleteTxn(t.id); }} className="text-slate-600 hover:text-red-400 flex-shrink-0"><Trash2 size={13}/></button>
                 </div>
@@ -29030,6 +29333,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout })
       { key:"cogs", label:"COGS / Inventory", icon:ClipboardList },
       { key:"bank", label:"Bank", icon:Building2 },
       { key:"accounts", label:"Accounts", icon:BarChart2 },
+      { key:"reconcile", label:"Reconcile", icon:CheckCircle },
     ]},
     { title: "Settings", items: [
       { key:"ops-settings", label:"Ops Setup", icon:Settings },
@@ -30154,6 +30458,7 @@ export default function App() {
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
       { key: "bank", label: "Bank", icon: Building2, roles: ["owner", "hq_staff"] },
       { key: "accounts", label: "Accounts", icon: BarChart2, roles: ["owner", "hq_staff"] },
+      { key: "reconcile", label: "Reconcile", icon: CheckCircle, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -30393,6 +30698,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "reconcile" && ["owner","hq_staff"].includes(currentUser.role) && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={updateBankTxn}/>}
             {effectiveActiveView === "accounts" && ["owner","hq_staff"].includes(currentUser.role) && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
             {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}

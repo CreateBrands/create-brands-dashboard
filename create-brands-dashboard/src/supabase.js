@@ -4771,6 +4771,61 @@ export function applyTxnCategoryRules(description, rules) {
   return "";
 }
 
+// ── Reconciliation (Stage 3) ────────────────────────────────────────────────
+// Stored matches (bank line ↔ source items; batches share bank_txn_id).
+export async function fetchReconMatches() {
+  const { data, error } = await supabase.from("reconciliation_matches").select("*");
+  if (error) throw error;
+  return (data || []).map(m => ({
+    id: m.id, bankTxnId: m.bank_txn_id, sourceType: m.source_type, sourceId: m.source_id,
+    sourceLabel: m.source_label || "", amount: Number(m.amount) || 0, auto: !!m.auto, matchedAt: m.matched_at,
+  }));
+}
+export async function addReconMatches(rows) {
+  if (!rows || !rows.length) return [];
+  const dbRows = rows.map(r => ({
+    id: r.id || `rm-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+    bank_txn_id: r.bankTxnId, source_type: r.sourceType, source_id: r.sourceId,
+    source_label: r.sourceLabel || null, amount: r.amount || 0, auto: !!r.auto, matched_by: r.matchedBy || null,
+  }));
+  const { data, error } = await supabase.from("reconciliation_matches").insert(dbRows).select();
+  if (error) throw error;
+  return (data || []).map(m => ({ id: m.id, bankTxnId: m.bank_txn_id, sourceType: m.source_type, sourceId: m.source_id, sourceLabel: m.source_label || "", amount: Number(m.amount)||0, auto: !!m.auto }));
+}
+export async function deleteReconMatchesForTxn(bankTxnId) {
+  const { error } = await supabase.from("reconciliation_matches").delete().eq("bank_txn_id", bankTxnId);
+  if (error) throw error;
+  return bankTxnId;
+}
+
+// Candidate sources in a date range.
+export async function fetchPayrollRunsForRecon({ from, to } = {}) {
+  let q = supabase.from("payroll_periods").select("employee_id, employee_name, period_start, period_end, net_pay, gross_pay");
+  if (from) q = q.gte("period_end", from);
+  if (to)   q = q.lte("period_end", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map((p, i) => ({
+    id: `pay-${p.employee_id}-${p.period_start}-${p.period_end}`,
+    employeeId: p.employee_id, employeeName: p.employee_name || "",
+    periodStart: p.period_start, periodEnd: p.period_end,
+    amount: Number(p.net_pay ?? p.gross_pay) || 0,
+  }));
+}
+// Flipdish card settlement totals per store/day (candidate payouts).
+export async function fetchPayoutsForRecon({ from, to } = {}) {
+  const pays = await fetchStoreDayPayments({ from, to }).catch(() => []);
+  const byDay = {};
+  (pays || []).forEach(p => {
+    const m = String(p.paymentMethod || "").toLowerCase();
+    if (m.includes("cash")) return; // card/online only
+    const key = `${p.storeId || p.brandId}|${p.date}`;
+    byDay[key] = byDay[key] || { id: `payout-${key}`, storeId: p.storeId, brandId: p.brandId, date: p.date, amount: 0 };
+    byDay[key].amount += p.amount;
+  });
+  return Object.values(byDay);
+}
+
 export async function listStoresLite() {
   const { data, error } = await supabase.from("stores").select("id, name").order("name");
   if (error) throw error;
