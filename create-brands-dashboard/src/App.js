@@ -2360,21 +2360,35 @@ function NotificationDiagnostics({ currentUser }) {
   const recipientId = currentUser?.id;
 
   const refreshSw = useCallback(async () => {
-    const info = { checked: true, supported: "serviceWorker" in navigator, registered: false, controlling: false, hasShareHandler: null, perm: (typeof Notification !== "undefined" ? Notification.permission : "unsupported"), scriptURL: "" };
+    const info = { checked: true, supported: "serviceWorker" in navigator, registered: false, controlling: false, hasShareHandler: null, version: "", perm: (typeof Notification !== "undefined" ? Notification.permission : "unsupported"), scriptURL: "" };
     try {
       if (info.supported) {
         const reg = await navigator.serviceWorker.getRegistration();
         if (reg) {
           info.registered = true;
+          // Nudge an update check so a fresh sw.js is picked up.
+          try { reg.update(); } catch {}
+          if (reg.waiting) { try { reg.waiting.postMessage({ type: "SKIP_WAITING" }); } catch {} }
           const active = reg.active;
           info.scriptURL = active ? active.scriptURL : "";
           info.controlling = !!navigator.serviceWorker.controller;
-          // Fetch the SW script text and check it contains the share handler.
+          // Ask the active SW its version (proves which code is live).
+          const ctrl = navigator.serviceWorker.controller || active;
+          if (ctrl) {
+            try {
+              info.version = await new Promise((resolve) => {
+                const ch = new MessageChannel();
+                const to = setTimeout(() => resolve(""), 1500);
+                ch.port1.onmessage = (e) => { clearTimeout(to); resolve((e.data && e.data.version) || ""); };
+                ctrl.postMessage({ type: "GET_VERSION" }, [ch.port2]);
+              });
+            } catch { info.version = ""; }
+          }
           if (active && active.scriptURL) {
             try {
               const res = await fetch(active.scriptURL, { cache: "no-store" });
               const txt = await res.text();
-              info.hasShareHandler = txt.includes("share-target") && txt.includes("SHARE_TARGET_V1");
+              info.hasShareHandler = txt.includes("share-target") && txt.includes("SHARE_TARGET");
             } catch { info.hasShareHandler = null; }
           }
         }
@@ -2425,6 +2439,7 @@ function NotificationDiagnostics({ currentUser }) {
           <Row label="Registered" ok={sw.registered} value={sw.registered ? "Yes" : "No"} />
           <Row label="Controlling this page" ok={sw.controlling} value={sw.controlling ? "Yes" : "No"} />
           <Row label="Has share-target handler" ok={sw.hasShareHandler} value={sw.hasShareHandler === true ? "Yes ✓" : sw.hasShareHandler === false ? "NO — old SW" : "—"} />
+          <Row label="Active SW version" ok={sw.version ? (sw.version.includes("v2") ? true : null) : false} value={sw.version || "unknown (old SW)"} />
           <Row label="Notification permission" ok={sw.perm === "granted"} value={sw.perm} />
           {sw.scriptURL && <Row label="SW file" value={sw.scriptURL.split("/").pop()} />}
         </div>
@@ -28700,7 +28715,20 @@ export default function App() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" })
-      .then((reg) => { try { reg.update(); } catch {} })
+      .then((reg) => {
+        try { reg.update(); } catch {}
+        // If a new worker is waiting, tell it to take over now (don't wait for
+        // all tabs to close). This is what makes a fresh sw.js actually go live.
+        const promote = (w) => { if (w) try { w.postMessage({ type: "SKIP_WAITING" }); } catch {} };
+        if (reg.waiting) promote(reg.waiting);
+        reg.addEventListener("updatefound", () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener("statechange", () => {
+            if (nw.state === "installed" && navigator.serviceWorker.controller) promote(reg.waiting || nw);
+          });
+        });
+      })
       .catch(() => {});
   }, []);
 
