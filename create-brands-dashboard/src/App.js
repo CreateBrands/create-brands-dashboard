@@ -24365,22 +24365,36 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
   const isUnavailable = memberAvail.some(a => !a.available);
   const availWindow   = memberAvail.find(a => a.available);
 
-  // ── Conflict detection: existing shifts for this employee on any target day ──
-  const hasShiftOnDate = (empId, dStr) =>
+  // ── Conflict detection ──────────────────────────────────────────────────────
+  // A second shift on the same day is fine (e.g. a morning + evening split).
+  // We only treat it as a hard conflict when the times actually OVERLAP.
+  const timesOverlap = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
+  const overlappingShiftOnDate = (empId, dStr) =>
     schedules.some(s =>
       s.employeeId === empId && s.date === dStr &&
       s.brandId === brandId && s.status !== "cancelled" &&
-      (!slot || s.id !== slot.id) // when editing, ignore the slot itself
+      (!slot || s.id !== slot.id) &&
+      s.startTime && s.endTime && startTime && endTime &&
+      timesOverlap(startTime, endTime, s.startTime, s.endTime)
     );
-  const primaryConflict   = employeeId && hasShiftOnDate(employeeId, date);
+  // Soft note: another (non-overlapping) shift exists that day.
+  const otherShiftSameDay = (empId, dStr) =>
+    schedules.some(s =>
+      s.employeeId === empId && s.date === dStr &&
+      s.brandId === brandId && s.status !== "cancelled" &&
+      (!slot || s.id !== slot.id)
+    );
+  const hasShiftOnDate = overlappingShiftOnDate; // keep name used elsewhere
+  const primaryConflict   = employeeId && overlappingShiftOnDate(employeeId, date);
+  const softSecondShift   = employeeId && !primaryConflict && otherShiftSameDay(employeeId, date);
   const copyDayConflicts  = employeeId
-    ? [...copyDays].filter(d => d !== date && hasShiftOnDate(employeeId, d))
+    ? [...copyDays].filter(d => d !== date && overlappingShiftOnDate(employeeId, d))
     : [];
   const anyConflict       = primaryConflict || copyDayConflicts.length > 0;
   const conflictMsg = primaryConflict
-    ? `${memberName || "This employee"} already has a shift on ${new Date(date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}`
+    ? `${memberName || "This employee"} already has an OVERLAPPING shift on ${new Date(date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}`
     : copyDayConflicts.length > 0
-      ? `${memberName || "This employee"} already has a shift on ${copyDayConflicts.length === 1
+      ? `${memberName || "This employee"} has an overlapping shift on ${copyDayConflicts.length === 1
           ? new Date(copyDayConflicts[0]+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric"})
           : copyDayConflicts.length + " of the selected days"}`
       : "";
@@ -24495,6 +24509,16 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
                 </div>
               )}
               <div className="text-slate-600 mt-1">Edit the existing shift instead, or remove the conflicting day from "Also create on…" below.</div>
+            </div>
+          </div>
+        )}
+
+        {softSecondShift && !anyConflict && (
+          <div className="flex items-start gap-2 bg-amber-950/20 border border-amber-500/30 rounded-xl px-3 py-2.5 text-xs">
+            <span className="text-base flex-shrink-0">ℹ️</span>
+            <div className="flex-1">
+              <div className="text-amber-300 font-semibold">Second shift this day</div>
+              <div className="text-amber-200/80 mt-0.5">{memberName || "This employee"} already has another (non-overlapping) shift on this day. That's fine for a split shift — you can still save.</div>
             </div>
           </div>
         )}
