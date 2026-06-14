@@ -5618,7 +5618,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   );
 }
 
-function InvoicesView({ currentUser }) {
+function InvoicesView({ currentUser, categories = [] }) {
   const [invoices, setInvoices] = useState([]);
   const [stores, setStores] = useState([]);
   const [entity, setEntity] = useState("kitchen");
@@ -5630,6 +5630,12 @@ function InvoicesView({ currentUser }) {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [overrideMismatch, setOverrideMismatch] = useState(false);
+  // Accounts upgrade: list controls + payment editing.
+  const [search, setSearch] = useState("");
+  const [statusF, setStatusF] = useState("all");      // all | pending_review | approved | rejected/failed
+  const [payF, setPayF] = useState("all");             // all | unpaid | partial | paid | overdue
+  const [storeF, setStoreF] = useState("all");
+  const [bulkProgress, setBulkProgress] = useState("");
 
   const refreshList = async () => {
     try { setInvoices(await listInvoices()); } catch (e) { setError(e?.message || String(e)); }
@@ -5661,23 +5667,93 @@ function InvoicesView({ currentUser }) {
   const reloadSelected = async () => { if (selected) await openInvoice(selected.id); };
 
   const onUpload = async (e) => {
-    const file = e.target.files && e.target.files[0];
+    const files = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     setUploading(true); setError(null); setNotice(null);
-    try {
-      const inv = await uploadInvoiceFile(file, entity, currentUser.id);
-      setNotice("Uploaded — extracting with Claude vision…");
+    // Single file → extract + open. Multiple → bulk (upload + extract each, no auto-open).
+    if (files.length === 1) {
+      try {
+        const inv = await uploadInvoiceFile(files[0], entity, currentUser.id);
+        setNotice("Uploaded — extracting with Claude vision…");
+        await refreshList();
+        await extractInvoice(inv.id);
+        setNotice("Extraction complete — opening for review.");
+        await refreshList();
+        await openInvoice(inv.id);
+      } catch (err) { setError(err?.message || String(err)); await refreshList(); }
+      finally { setUploading(false); }
+      return;
+    }
+    let done = 0;
+    for (const f of files) {
+      setBulkProgress(`Processing ${done+1} of ${files.length}…`);
+      try {
+        const inv = await uploadInvoiceFile(f, entity, currentUser.id);
+        await extractInvoice(inv.id);
+      } catch (err) { /* keep going */ }
+      done++;
       await refreshList();
-      await extractInvoice(inv.id);
-      setNotice("Extraction complete — opening for review.");
-      await refreshList();
-      await openInvoice(inv.id);
-    } catch (err) {
-      setError(err?.message || String(err));
-      await refreshList();
-    } finally { setUploading(false); }
+    }
+    setBulkProgress("");
+    setNotice(`Bulk upload done — ${done} invoice${done===1?"":"s"} processed. Review each below.`);
+    setUploading(false);
   };
+
+  // Save category / payment status on the selected invoice.
+  const patchInvoice = async (fields) => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      await updateInvoiceHeader(selected.id, fields);
+      await refreshList();
+      await openInvoice(selected.id);
+    } catch (e) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+  const markPaid = (status) => {
+    const fields = { payment_status: status };
+    if (status === "paid") { fields.paid_date = new Date().toISOString().split("T")[0]; fields.amount_paid = selected?.total_ex_vat ?? null; }
+    if (status === "unpaid") { fields.paid_date = null; fields.amount_paid = 0; }
+    patchInvoice(fields);
+  };
+
+  // Duplicate detection for the selected invoice.
+  const duplicates = selected ? invoices.filter(i =>
+    i.id !== selected.id && i.supplier_name && selected.supplier_name &&
+    i.supplier_name.trim().toLowerCase() === selected.supplier_name.trim().toLowerCase() &&
+    (i.invoice_number || "").trim() && (i.invoice_number || "").trim() === (selected.invoice_number || "").trim()
+  ) : [];
+
+  const today = new Date().toISOString().split("T")[0];
+  const isOverdue = (inv) => inv.payment_status !== "paid" && inv.due_date && inv.due_date < today;
+
+  // Filtered + searched list.
+  const filtered = invoices.filter(inv => {
+    if (statusF !== "all") {
+      if (statusF === "rejected" ? !["rejected","failed"].includes(inv.status) : inv.status !== statusF) return false;
+    }
+    if (payF !== "all") {
+      if (payF === "overdue" ? !isOverdue(inv) : (inv.payment_status || "unpaid") !== payF) return false;
+    }
+    if (storeF !== "all" && inv.entity !== storeF) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const hay = `${inv.supplier_name||""} ${inv.invoice_number||""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Summary rollups (across all invoices, not just filtered).
+  const summary = invoices.reduce((a, inv) => {
+    const ex = Number(inv.total_ex_vat) || 0;
+    a.total += ex;
+    if ((inv.payment_status||"unpaid") !== "paid") a.outstanding += ex - (Number(inv.amount_paid)||0);
+    if (isOverdue(inv)) a.overdue += ex - (Number(inv.amount_paid)||0);
+    a.vat += Number(inv.total_vat) || 0;
+    return a;
+  }, { total: 0, outstanding: 0, overdue: 0, vat: 0 });
 
   const confirmedSum = lines
     .filter((l) => l.status !== "skipped")
@@ -5746,28 +5822,66 @@ function InvoicesView({ currentUser }) {
           </select>
           <label className={`px-4 py-2 rounded-xl text-sm font-semibold text-white cursor-pointer ${uploading ? "bg-slate-700" : "bg-indigo-600 hover:bg-indigo-500"}`}>
             {uploading ? "Working…" : "Photo / PDF"}
-            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={onUpload} disabled={uploading} />
+            <input type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={onUpload} disabled={uploading} />
           </label>
-          <span className="text-[10px] text-slate-500">Original is stored; Claude extracts lines; nothing applies without your approval.</span>
+          <span className="text-[10px] text-slate-500">Pick one or several. Original stored; Claude extracts lines; nothing applies without approval.</span>
         </div>
+        {bulkProgress && <div className="text-xs text-indigo-300">{bulkProgress}</div>}
         {notice && <div className="text-xs text-emerald-400">{notice}</div>}
         {error && <div className="text-xs text-rose-400">{error}</div>}
+      </div>
+
+      {/* Summary rollup */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+          <div className="text-[10px] text-slate-500 uppercase tracking-widest">Total (ex VAT)</div>
+          <div className="text-lg font-black text-white tabular-nums mt-1">£{summary.total.toFixed(0)}</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+          <div className="text-[10px] text-slate-500 uppercase tracking-widest">Outstanding</div>
+          <div className={`text-lg font-black tabular-nums mt-1 ${summary.outstanding>0?"text-amber-400":"text-emerald-400"}`}>£{summary.outstanding.toFixed(0)}</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+          <div className="text-[10px] text-slate-500 uppercase tracking-widest">Overdue</div>
+          <div className={`text-lg font-black tabular-nums mt-1 ${summary.overdue>0?"text-red-400":"text-slate-300"}`}>£{summary.overdue.toFixed(0)}</div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+          <div className="text-[10px] text-slate-500 uppercase tracking-widest">VAT total</div>
+          <div className="text-lg font-black text-slate-300 tabular-nums mt-1">£{summary.vat.toFixed(0)}</div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2 xl:col-span-1">
           <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Invoices</h3>
-          {invoices.length === 0 && <div className="text-xs text-slate-600">None yet — scan the first one above.</div>}
-          {invoices.map((inv) => (
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search supplier / number…"
+            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"/>
+          <div className="flex flex-wrap gap-1.5">
+            <select value={statusF} onChange={e=>setStatusF(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
+              <option value="all">All status</option><option value="pending_review">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected/failed</option>
+            </select>
+            <select value={payF} onChange={e=>setPayF(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
+              <option value="all">All payment</option><option value="unpaid">Unpaid</option><option value="partial">Partial</option><option value="paid">Paid</option><option value="overdue">Overdue</option>
+            </select>
+            <select value={storeF} onChange={e=>setStoreF(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
+              <option value="all">All entities</option><option value="kitchen">Central Kitchen</option>
+              {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          {filtered.length === 0 && <div className="text-xs text-slate-600">No invoices match.</div>}
+          {filtered.map((inv) => (
             <button key={inv.id} onClick={() => openInvoice(inv.id)}
               className={`w-full text-left px-3 py-2 rounded-xl border text-xs ${selected?.id === inv.id ? "border-indigo-500 bg-slate-800/60" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-200 truncate">{inv.supplier_name || "(extracting…)"} {inv.invoice_number ? `· ${inv.invoice_number}` : ""}</span>
                 <span className={`px-1.5 py-0.5 rounded border text-[9px] uppercase ${statusChip(inv.status)}`}>{inv.status}</span>
               </div>
-              <div className="text-slate-500 mt-0.5">
-                {inv.entity === "kitchen" ? "Central Kitchen" : (stores.find((s) => s.id === inv.entity)?.name || inv.entity)}
-                {inv.invoice_date ? ` · ${inv.invoice_date}` : ""}{inv.total_ex_vat != null ? ` · £${inv.total_ex_vat}` : ""}
+              <div className="text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                <span>{inv.entity === "kitchen" ? "Central Kitchen" : (stores.find((s) => s.id === inv.entity)?.name || inv.entity)}</span>
+                {inv.invoice_date ? <span>· {inv.invoice_date}</span> : null}
+                {inv.total_ex_vat != null ? <span>· £{inv.total_ex_vat}</span> : null}
+                {inv.category ? <span className="text-indigo-400">· {inv.category}</span> : null}
+                <span className={`px-1 py-0.5 rounded text-[8px] uppercase ${isOverdue(inv)?"bg-red-600/20 text-red-300":(inv.payment_status==="paid"?"bg-emerald-600/20 text-emerald-300":(inv.payment_status==="partial"?"bg-amber-600/20 text-amber-300":"bg-slate-700/30 text-slate-400"))}`}>{isOverdue(inv)?"overdue":(inv.payment_status||"unpaid")}</span>
               </div>
             </button>
           ))}
@@ -5787,6 +5901,39 @@ function InvoicesView({ currentUser }) {
                 </div>
                 <div className="text-xs text-slate-500">
                   total ex-VAT £{selected.total_ex_vat ?? "—"} · VAT £{selected.total_vat ?? "—"} · lines sum £{confirmedSum.toFixed(2)}
+                </div>
+              </div>
+
+              {duplicates.length > 0 && (
+                <div className="bg-amber-950/40 border border-amber-800/50 rounded-xl p-2.5 text-xs text-amber-300">
+                  ⚠ Possible duplicate — same supplier &amp; invoice number as {duplicates.length} other invoice{duplicates.length===1?"":"s"} already in the system.
+                </div>
+              )}
+
+              {/* Category + payment controls */}
+              <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wide mb-1">Category</div>
+                  <select value={selected.category || ""} onChange={e=>patchInvoice({ category: e.target.value || null })}
+                    className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-200">
+                    <option value="">— Uncategorised —</option>
+                    {categories.filter(c=>!c.archived).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wide mb-1">Payment</div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {["unpaid","partial","paid"].map(s => (
+                      <button key={s} onClick={()=>markPaid(s)} disabled={busy}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold capitalize ${(selected.payment_status||"unpaid")===s?(s==="paid"?"bg-emerald-600 text-white":s==="partial"?"bg-amber-600 text-white":"bg-slate-600 text-white"):"bg-slate-800 text-slate-400 hover:text-white"}`}>{s}</button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <label className="text-[10px] text-slate-500">Due</label>
+                    <input type="date" value={selected.due_date || ""} onChange={e=>patchInvoice({ due_date: e.target.value || null })}
+                      className="px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-slate-200"/>
+                    {selected.paid_date && <span className="text-[10px] text-emerald-400">paid {selected.paid_date}</span>}
+                  </div>
                 </div>
               </div>
 
@@ -20093,7 +20240,7 @@ function AccountsHubView(props) {
 
       {tab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
       {tab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
-      {tab === "invoices" && <InvoicesView currentUser={currentUser}/>}
+      {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
       {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn}/>}
     </div>
   );

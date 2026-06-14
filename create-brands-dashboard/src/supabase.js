@@ -4502,9 +4502,9 @@ export async function extractInvoice(invoiceId) {
 export async function listInvoices() {
   const { data, error } = await supabase
     .from("invoices")
-    .select("id, entity, supplier_name, invoice_number, invoice_date, total_ex_vat, status, created_at")
+    .select("id, entity, supplier_name, invoice_number, invoice_date, due_date, paid_date, total_ex_vat, total_vat, status, payment_status, amount_paid, category, created_at")
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(1000);
   if (error) throw error;
   return data || [];
 }
@@ -4713,7 +4713,7 @@ export async function fetchEodForAccounts({ from, to } = {}) {
 // Invoices within a date range (supplier costs).
 export async function fetchInvoicesForAccounts({ from, to } = {}) {
   let q = supabase.from("invoices")
-    .select("id, entity, supplier_name, invoice_number, invoice_date, total_ex_vat, status")
+    .select("id, entity, supplier_name, invoice_number, invoice_date, total_ex_vat, total_vat, status, payment_status, category")
     .order("invoice_date", { ascending: false });
   if (from) q = q.gte("invoice_date", from);
   if (to)   q = q.lte("invoice_date", to);
@@ -4722,7 +4722,8 @@ export async function fetchInvoicesForAccounts({ from, to } = {}) {
   return (data || []).map(i => ({
     id: i.id, entity: i.entity || "", supplier: i.supplier_name || "",
     number: i.invoice_number || "", date: i.invoice_date,
-    totalExVat: Number(i.total_ex_vat) || 0, status: i.status || "",
+    totalExVat: Number(i.total_ex_vat) || 0, totalVat: Number(i.total_vat) || 0,
+    status: i.status || "", paymentStatus: i.payment_status || "unpaid", category: i.category || "",
   }));
 }
 
