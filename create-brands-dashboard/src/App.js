@@ -4534,6 +4534,31 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
   );
 }
 
+function GlobalMobileStyle() {
+  return (
+    <style>{`
+/* MOBILE_TYPO_TAP_V1 — readability + tap-target floor on phones only.
+   Desktop is untouched (rules live inside a max-width media query). */
+@media (max-width: 767px) {
+  /* Lift the very smallest text up to a comfortable minimum. We only raise
+     the two tiniest steps; text-xs and up are already fine. */
+  .text-\\[10px\\] { font-size: 11px !important; line-height: 1.35 !important; }
+  .text-\\[11px\\] { font-size: 12px !important; line-height: 1.4 !important; }
+
+  /* Tap-target floor: action buttons get enough height to hit comfortably with
+     a thumb. min-height only grows (never shrinks), so layout stays stable. */
+  button:not(.cb-no-tap), a[role="button"] {
+    min-height: 38px;
+  }
+  /* Kiosk keypad keys are already large; opt them out so nothing distorts. */
+  [data-kiosk] button { min-height: 0; }
+  /* Form controls easier to tap. */
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 38px; }
+}
+    `}</style>
+  );
+}
+
 function EmpThemeStyle() {
   return (
         <style>{`
@@ -4963,6 +4988,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     <AuthContext.Provider value={{ user: currentUser }}>
       <div className="emp-theme min-h-screen flex flex-col">
         <EmpThemeStyle/>
+        <GlobalMobileStyle/>
         {/* Header */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
@@ -29148,6 +29174,7 @@ export default function App() {
     <AuthContext.Provider value={{ user: currentUser_ctx }}>
       <div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
         <EmpThemeStyle/>
+        <GlobalMobileStyle/>
         {/* Sidebar */}
         <Sidebar
           navGroups={NAV_GROUPS} activeView={effectiveActiveView} setActiveView={setActiveView}
