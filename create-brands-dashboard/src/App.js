@@ -20066,6 +20066,39 @@ function OpsTeamView({
   );
 }
 
+function AccountsHubView(props) {
+  const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser,
+    onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
+    onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
+    sharedFile, onConsumeSharedFile, initialTab } = props;
+  const [tab, setTab] = useState(initialTab || "pnl");
+  // If a Tide statement was shared in, jump straight to the Bank tab.
+  useEffect(() => { if (sharedFile) setTab("bank"); }, [sharedFile]);
+
+  const TABS = [
+    ["pnl", "P&L"],
+    ["bank", "Bank"],
+    ["invoices", "Invoices"],
+    ["reconcile", "Reconcile"],
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+        {TABS.map(([k,l]) => (
+          <button key={k} onClick={()=>setTab(k)}
+            className={`px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap flex-shrink-0 ${tab===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
+      {tab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
+      {tab === "invoices" && <InvoicesView currentUser={currentUser}/>}
+      {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn}/>}
+    </div>
+  );
+}
+
 function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn }) {
   const [matches, setMatches] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -29331,9 +29364,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout })
       { key:"eod", label:"EOD", icon:FileText },
       { key:"notifications", label:"Notifications", icon:Bell },
       { key:"cogs", label:"COGS / Inventory", icon:ClipboardList },
-      { key:"bank", label:"Bank", icon:Building2 },
       { key:"accounts", label:"Accounts", icon:BarChart2 },
-      { key:"reconcile", label:"Reconcile", icon:CheckCircle },
     ]},
     { title: "Settings", items: [
       { key:"ops-settings", label:"Ops Setup", icon:Settings },
@@ -30454,11 +30485,9 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
-      { key: "invoices", label: "Invoices", icon: FileText, roles: ["owner", "hq_staff", "manager"] },
+      { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
-      { key: "bank", label: "Bank", icon: Building2, roles: ["owner", "hq_staff"] },
       { key: "accounts", label: "Accounts", icon: BarChart2, roles: ["owner", "hq_staff"] },
-      { key: "reconcile", label: "Reconcile", icon: CheckCircle, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -30696,11 +30725,9 @@ export default function App() {
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {effectiveActiveView === "reconcile" && ["owner","hq_staff"].includes(currentUser.role) && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={updateBankTxn}/>}
-            {effectiveActiveView === "accounts" && ["owner","hq_staff"].includes(currentUser.role) && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
-            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
