@@ -22757,6 +22757,19 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   const splh = weekTotals.cost > 0 ? weekSalesForecast / weekTotals.cost : 0; // sales per £1 labour cost
   const splhRating = splh === 0 ? "" : splh >= 8 ? "green" : splh >= 5 ? "amber" : "red";
 
+  // ── Labour % vs target (forecast-driven scheduling) ──────────────────────
+  // Labour % = scheduled labour cost ÷ forecast sales. Compared to a per-store
+  // target (kpiTargets.labourPct, default 30%). Computed per day and for the week.
+  const labourPctTarget = parseFloat(selectedStore?.kpiTargets?.labourPct) || 30;
+  const weekLabourPct = weekSalesForecast > 0 ? (weekTotals.cost / weekSalesForecast) * 100 : null;
+  const dailyLabourPct = weekDayStrs.map((d, i) => {
+    const sales = dailySales[i];
+    const cost = dailyTotals[i]?.cost || 0;
+    return sales > 0 ? (cost / sales) * 100 : null;
+  });
+  // Rating: at/under target = good; up to +5pts over = warning; beyond = over budget.
+  const labourPctRating = (pct) => pct == null ? "" : pct <= labourPctTarget ? "green" : pct <= labourPctTarget + 5 ? "amber" : "red";
+
   const fmtHrs = (h) => h ? `${Math.floor(h)}h${h%1?` ${Math.round((h%1)*60)}m`:""}` : "0h";
   const fmtMoney = (n) => "£" + (n||0).toFixed(2);
 
@@ -22915,6 +22928,24 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             <>
               <div className="text-base font-bold text-slate-600 mt-1">Set forecast →</div>
               <div className="text-xs text-slate-500 mt-0.5">tap to enter daily sales</div>
+            </>
+          )}
+        </button>
+        <button onClick={()=>setSalesModal(true)} className="bg-slate-900 border border-slate-800/60 rounded-2xl p-3 text-left hover:border-indigo-500/30 transition-colors">
+          <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest">Labour %</div>
+          {weekLabourPct != null ? (
+            <>
+              <div className={`text-xl font-black mt-1 ${
+                labourPctRating(weekLabourPct) === "green" ? "text-emerald-400" : labourPctRating(weekLabourPct) === "amber" ? "text-amber-400" : "text-red-400"
+              }`}>{weekLabourPct.toFixed(1)}%</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                target {labourPctTarget}%{weekLabourPct > labourPctTarget ? <span className="text-red-400 font-semibold"> · {(weekLabourPct - labourPctTarget).toFixed(1)}pts over</span> : <span className="text-emerald-400 font-semibold"> · on budget</span>}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-base font-bold text-slate-600 mt-1">Set forecast →</div>
+              <div className="text-xs text-slate-500 mt-0.5">needs sales forecast</div>
             </>
           )}
         </button>
@@ -23197,6 +23228,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                     <div className={`text-xs font-semibold ${isToday?"text-indigo-300":"text-slate-600"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
                     <div className={`text-sm font-bold ${isToday?"text-indigo-300":"text-slate-700"}`}>{day.getDate()}</div>
                     {dt.headcount > 0 && <div className="text-xs text-slate-500 mt-0.5">{dt.headcount} on shift</div>}
+                    {showCosts && dailyLabourPct[idx] != null && (
+                      <div className={`text-[11px] font-bold mt-0.5 ${
+                        labourPctRating(dailyLabourPct[idx]) === "green" ? "text-emerald-400" : labourPctRating(dailyLabourPct[idx]) === "amber" ? "text-amber-400" : "text-red-400"
+                      }`} title={`Labour ${dailyLabourPct[idx].toFixed(1)}% vs ${labourPctTarget}% target`}>
+                        {dailyLabourPct[idx] > labourPctTarget ? "⚠ " : ""}{dailyLabourPct[idx].toFixed(0)}%
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -23464,12 +23502,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       {salesModal && (
         <SalesForecastModal
           brand={brand} store={selectedStore} weekDays={weekDays} weekDayStrs={weekDayStrs}
-          onSave={async (forecasts) => {
+          onSave={async (forecasts, labourPct) => {
             // Sales forecasts now live on the store's kpi_targets, not brand's.
             if (!onUpdateStore || !selectedStore) return;
             const newKpi = {
               ...(selectedStore.kpiTargets || {}),
               salesForecasts: { ...(selectedStore.kpiTargets?.salesForecasts || {}), ...forecasts },
+              labourPct: labourPct,
             };
             await onUpdateStore(selectedStore.id, { kpiTargets: newKpi });
             setSalesModal(false);
@@ -23648,13 +23687,14 @@ function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClo
     weekDayStrs.forEach(d => { out[d] = existing[d] ? String(existing[d]) : ""; });
     return out;
   });
+  const [labourTarget, setLabourTarget] = useState(() => String(store?.kpiTargets?.labourPct || 30));
   const total = Object.values(forecasts).reduce((a,v) => a + (parseFloat(v)||0), 0);
 
   return (
     <Modal title="Sales forecast for this week" onClose={onClose} maxW="max-w-md"
       footer={<>
         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-        <button onClick={()=>onSave(forecasts)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Save Forecast</button>
+        <button onClick={()=>onSave(forecasts, parseFloat(labourTarget) || 30)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Save Forecast</button>
       </>}>
       <div className="space-y-3">
         <div className="text-xs text-slate-600">
@@ -23679,6 +23719,15 @@ function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClo
         <div className="flex items-center justify-between pt-3 border-t border-slate-800/60">
           <span className="text-sm font-semibold text-slate-700">Week total</span>
           <span className="text-lg font-black text-emerald-400">£{total.toFixed(2)}</span>
+        </div>
+        <div className="pt-3 border-t border-slate-800/60">
+          <label className="text-xs font-semibold text-slate-500 block mb-1">Labour cost target (% of sales)</label>
+          <div className="flex items-center gap-2">
+            <input type="number" step="1" min="1" max="100" value={labourTarget}
+              onChange={e=>setLabourTarget(e.target.value)} className={inputCls} style={{maxWidth:"100px"}}/>
+            <span className="text-slate-500 text-sm">%</span>
+            <span className="text-[11px] text-slate-600">Roster warns when scheduled labour exceeds this share of forecast sales. Hospitality norm is 25–30%.</span>
+          </div>
         </div>
       </div>
     </Modal>
