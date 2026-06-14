@@ -13591,6 +13591,38 @@ function daysInPeriod(fromStr, toStr) {
   return Math.max(1, Math.round((t - f) / 86400000) + 1);
 }
 
+// ── UK overtime engine ───────────────────────────────────────────────────────
+// UK has no statutory daily OT and no statutory OT pay premium (unless the
+// contract specifies one). Overtime is conventionally hours worked beyond a
+// weekly threshold. The 48h figure is the Working Time Directive average ceiling
+// (a compliance warning), separate from the OT pay threshold.
+const OT_WEEKLY_THRESHOLD = 40;   // hours/week above which time counts as overtime
+const OT_MULTIPLIER       = 1.0;  // UK: no statutory premium; raise if contractual (e.g. 1.5)
+const WTD_WEEKLY_LIMIT    = 48;   // Working Time Directive average weekly ceiling
+
+// Given a map of ISO-week-start -> total paid hours that week, split into
+// regular (<= threshold) and overtime (> threshold) across all weeks.
+// Returns { regular, overtime, weeks: [{ weekStart, hours, regular, ot }] }.
+function splitWeeklyOvertime(weekHoursMap, threshold = OT_WEEKLY_THRESHOLD) {
+  let regular = 0, overtime = 0;
+  const weeks = [];
+  Object.keys(weekHoursMap).forEach(weekStart => {
+    const h = weekHoursMap[weekStart] || 0;
+    const ot = Math.max(0, h - threshold);
+    const reg = h - ot;
+    regular += reg; overtime += ot;
+    weeks.push({ weekStart, hours: Math.round(h * 100) / 100, regular: Math.round(reg * 100) / 100, ot: Math.round(ot * 100) / 100 });
+  });
+  return { regular: Math.round(regular * 100) / 100, overtime: Math.round(overtime * 100) / 100, weeks };
+}
+
+// ISO week key (Monday) for a YYYY-MM-DD date string.
+function weekKeyOf(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const m = getMonday(d);
+  return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`;
+}
+
 const HOURS_PER_MONTH_APPROX = 173;  // UK standard FTE
 function effectiveHourlyRate(member) {
   if (!member) return 0;
@@ -24687,26 +24719,37 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
         hourlyRate: m?.hourlyRate || r.hourlyRate || 0,
         member: m || null, payType: m?.payType || "hourly",
         totalHours: 0, regularHours: 0, overtimeHours: 0, approvedOT: 0,
+        weekHours: {},   // ISO-week-start -> paid hours, for the weekly OT engine
         totalPay: 0, days: 0, pendingApproval: 0, pendingOT: 0 };
     }
     const s = summary[r.employeeId];
     const lh = liveHours(r);
-    if (lh > 0) { s.totalHours += lh; s.days += 1; }
+    if (lh > 0) {
+      s.totalHours += lh; s.days += 1;
+      const wk = weekKeyOf(r.date);
+      s.weekHours[wk] = (s.weekHours[wk] || 0) + lh;
+    }
     if (!r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)) s.pendingApproval += 1;
     if (r.overtimeHrs > 0 && !r.overtimeApproved) s.pendingOT += 1;
     const approvedOT = (r.overtimeApproved && r.overtimeHrs > 0) ? r.overtimeHrs : 0;
     s.approvedOT += approvedOT;
   });
   Object.values(summary).forEach(s => {
-    s.regularHours  = s.totalHours;
-    s.overtimeHours = s.approvedOT; // only count manager-approved OT
+    // Hours-based overtime: split each week at the 40h threshold (UK model).
+    const split = splitWeeklyOvertime(s.weekHours);
+    s.regularHours  = split.regular;
+    s.overtimeHours = split.overtime;
+    s.weeks = split.weeks;
+    // WTD compliance flag: any week averaging over 48h.
+    s.wtdBreached = split.weeks.some(w => w.hours > WTD_WEEKLY_LIMIT);
     // Salaried staff: pay is the fixed daily slice × days worked in this view,
     // NOT hours × rate (their "rate" column holds the annual/monthly amount).
     if (isSalaried(s.member)) {
       s.totalPay = Math.round(salariedDailyCost(s.member) * s.days * 100) / 100;
       s.isSalaried = true;
     } else {
-      s.totalPay = Math.round((s.totalHours * s.hourlyRate) * 100) / 100;
+      // Regular hours at rate + overtime at rate × multiplier.
+      s.totalPay = Math.round((s.regularHours * s.hourlyRate + s.overtimeHours * s.hourlyRate * OT_MULTIPLIER) * 100) / 100;
     }
   });
 
@@ -25093,6 +25136,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                       <span className="font-semibold text-white">{s.name}</span>
                       {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold">{s.pendingApproval} pending</span>}
                       {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold">{s.pendingOT} OT</span>}
+                      {s.wtdBreached && <span title="A week exceeds the 48h Working Time Directive average limit" className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-300 font-bold">⚠ 48h+</span>}
                     </div>
                     <div className="text-[10px] text-slate-500">{s.role}</div>
                   </td>
