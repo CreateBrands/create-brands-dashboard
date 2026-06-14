@@ -9748,6 +9748,8 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
   const visible = useMemo(() => {
     return (entries || [])
       .filter(inScope)
+      // Once HQ has resolved an entry it's locked away from managers entirely.
+      .filter(e => isHq || (e.reconStatus || "open") !== "resolved")
       .filter(e => statusFilter === "all" ? true : (e.reconStatus || "open") === statusFilter)
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [entries, statusFilter, currentUser]);
@@ -10165,6 +10167,8 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
 
   const [zone, setZone] = useState(0);
   const [success, setSuccess] = useState(false);
+  const [reviewing, setReviewing] = useState(false);   // pre-submit review modal
+  const [confirmed, setConfirmed] = useState(false);   // "I confirm accurate" tick
   const today = new Date().toISOString().split("T")[0];
 
   const [form, setForm] = useState({
@@ -10225,6 +10229,13 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     if (zone < 1) { setZone(z => z + 1); return; }
     if (!selectedStore) { alert("Please pick a store first."); return; }
     if (hasVariance && !form.varianceJustification.trim()) { alert("Please provide a variance justification."); return; }
+    // Open the review screen — nothing is saved until the manager confirms.
+    setConfirmed(false);
+    setReviewing(true);
+  };
+
+  const confirmSubmit = () => {
+    if (!confirmed) return;
     const entry = {
       id: `${selectedStore.id}-${form.date}-${Date.now()}`,
       brandId: selectedBrand?.id || selectedStore.brandId,
@@ -10248,6 +10259,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
       notes: form.notes, maintenanceTickets: [], timestamp: new Date().toISOString()
     };
     onAddEntry(entry);
+    setReviewing(false); setConfirmed(false);
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false); setZone(0);
@@ -10260,6 +10272,63 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
       <div className="w-16 h-16 rounded-2xl bg-emerald-500/25 border border-emerald-500/30 flex items-center justify-center"><CheckCircle size={32} className="text-emerald-400"/></div>
       <div className="text-xl font-bold text-white">Report Submitted</div>
       <div className="text-slate-600 text-sm">EOD entry saved. Resetting form…</div>
+    </div>
+  );
+
+  const reviewRows = [
+    ["Store", (selectedStore?.shortName || selectedStore?.name || "—")],
+    ["Date", form.date],
+    ["Gross sales", `£${(ns||0).toFixed(2)}`],
+    ["Flipdish (card)", `£${(parseFloat(form.cardRevenue)||0).toFixed(2)}`],
+    ["Lopay (card)", `£${(lopay||0).toFixed(2)}`],
+    ["Cash expected", `£${(ce||0).toFixed(2)}`],
+    ["Physical cash", `£${(pc||0).toFixed(2)}`],
+    ["Cash variance", `£${(variance||0).toFixed(2)}`],
+    ["Unreported expense", `£${(parseFloat(form.unreportedExpense)||0).toFixed(2)}`],
+    ["Total orders", String(parseInt(form.totalOrders)||0)],
+    ["Labour cost", `£${(lc||0).toFixed(2)}`],
+    ["COGS", `£${(cc||0).toFixed(2)}`],
+    ["Total hours", String(th||0)],
+  ];
+
+  if (reviewing) return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md sm:rounded-2xl rounded-t-3xl max-h-[90vh] overflow-y-auto" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <div className="px-5 py-4 border-b border-slate-800 sticky top-0 bg-slate-900">
+          <div className="text-base font-bold text-white">Review before submitting</div>
+          <div className="text-xs text-slate-500 mt-0.5">Check every figure is accurate — once submitted this goes to HQ for reconciliation.</div>
+        </div>
+        <div className="px-5 py-3 divide-y divide-slate-800/50">
+          {reviewRows.map(([label, val]) => (
+            <div key={label} className="flex items-center justify-between py-1.5">
+              <span className="text-xs text-slate-400">{label}</span>
+              <span className="text-sm text-slate-100 font-semibold tabular-nums">{val}</span>
+            </div>
+          ))}
+          {form.varianceJustification && (
+            <div className="py-1.5">
+              <span className="text-xs text-slate-400">Variance note</span>
+              <div className="text-xs text-slate-200 mt-0.5">{form.varianceJustification}</div>
+            </div>
+          )}
+          {form.notes && (
+            <div className="py-1.5">
+              <span className="text-xs text-slate-400">Notes</span>
+              <div className="text-xs text-slate-200 mt-0.5">{form.notes}</div>
+            </div>
+          )}
+        </div>
+        <div className="px-5 py-4 border-t border-slate-800 space-y-3 sticky bottom-0 bg-slate-900">
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} className="mt-0.5 w-4 h-4 accent-emerald-500"/>
+            <span className="text-xs text-slate-300">I confirm these figures are accurate and complete.</span>
+          </label>
+          <div className="flex gap-2">
+            <button onClick={() => { setReviewing(false); setConfirmed(false); }} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Back to edit</button>
+            <button onClick={confirmSubmit} disabled={!confirmed} className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">Confirm &amp; submit</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 
