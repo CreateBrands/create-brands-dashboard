@@ -4633,6 +4633,7 @@ export async function insertBankTransactions(rows) {
     description: r.description || null, reference: r.reference || null,
     amount: r.amount, balance: r.balance ?? null, category: r.category || null,
     reconciled: false, dedupe_key: r.dedupeKey,
+    account_id: r.accountId || null, store_id: r.storeId || null,
   }));
   const { data, error } = await supabase
     .from("bank_transactions")
@@ -4663,7 +4664,33 @@ function dbBankTxnToApp(t) {
     amount: Number(t.amount) || 0, balance: t.balance == null ? null : Number(t.balance),
     category: t.category || "", reconciled: !!t.reconciled,
     matchedTo: t.matched_to || "", notes: t.notes || "", importedAt: t.imported_at,
+    accountId: t.account_id || "", storeId: t.store_id || "",
   };
+}
+
+// ── Bank accounts (per store) ───────────────────────────────────────────────
+export async function fetchBankAccounts() {
+  const { data, error } = await supabase.from("bank_accounts").select("*").order("name");
+  if (error) throw error;
+  return (data || []).map(a => ({
+    id: a.id, name: a.name || "", bank: a.bank || "", storeId: a.store_id || "",
+    brandId: a.brand_id || "", archived: !!a.archived, createdAt: a.created_at,
+  }));
+}
+export async function upsertBankAccount(acc) {
+  const row = {
+    id: acc.id, name: acc.name, bank: acc.bank || null,
+    store_id: acc.storeId || null, brand_id: acc.brandId || null,
+    archived: !!acc.archived,
+  };
+  const { data, error } = await supabase.from("bank_accounts").upsert(row).select().single();
+  if (error) throw error;
+  return { id: data.id, name: data.name || "", bank: data.bank || "", storeId: data.store_id || "", brandId: data.brand_id || "", archived: !!data.archived, createdAt: data.created_at };
+}
+export async function deleteBankAccount(id) {
+  const { error } = await supabase.from("bank_accounts").delete().eq("id", id);
+  if (error) throw error;
+  return id;
 }
 
 export async function listStoresLite() {

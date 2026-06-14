@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -19881,13 +19881,15 @@ function OpsTeamView({
   );
 }
 
-function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, sharedFile, onConsumeSharedFile }) {
+function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
   const [errors, setErrors] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [account, setAccount] = useState("Tide");
   const [filter, setFilter] = useState("all");
+  const [accountFilter, setAccountFilter] = useState("all");   // list filter: all | accountId
+  const [selectedAccountId, setSelectedAccountId] = useState(""); // chosen at import
+  const [newAcct, setNewAcct] = useState(null);   // {name, bank, storeId} when adding inline
   const [XLSX, setXLSX] = useState(typeof window !== "undefined" ? window.XLSX : null);
   const fileRef = useRef(null);
 
@@ -19942,10 +19944,10 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, s
         else if (credit != null) amount = Math.abs(credit);
       }
       if (amount == null) { errs.push(`Row ${i+2}: couldn't read an amount`); return; }
-      const dedupeKey = `${account}|${txnDate}|${amount}|${norm(desc).slice(0,40)}|${bal ?? ""}`;
+      const dedupeKey = `${txnDate}|${amount}|${norm(desc).slice(0,40)}|${bal ?? ""}`;
       out.push({
         id: `bt-${Date.now()}-${i}-${Math.random().toString(36).slice(2,7)}`,
-        account, txnDate, description: String(desc).trim(), reference: String(ref).trim(),
+        txnDate, description: String(desc).trim(), reference: String(ref).trim(),
         amount, balance: bal, category: String(cat).trim(), dedupeKey,
       });
     });
@@ -19982,19 +19984,41 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, s
   }, [sharedFile, XLSX]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doImport = async () => {
+    const acct = bankAccounts.find(a => a.id === selectedAccountId);
+    if (!acct) { setErrors(["Pick which account this statement is for first."]); return; }
     setLoading(true);
     try {
-      const res = await onImport(preview);
-      const skipped = (res?.total || preview.length) - (res?.inserted ?? preview.length);
-      setErrors([`✓ Imported ${res?.inserted ?? preview.length} transaction${(res?.inserted)===1?"":"s"}${skipped>0?` · ${skipped} already in (skipped)`:""}.`]);
-      setPreview([]); setStep("list");
+      const stamped = preview.map(r => ({
+        ...r,
+        accountId: acct.id,
+        storeId: acct.storeId || "",
+        account: acct.name,
+        dedupeKey: `${acct.id}|${r.dedupeKey}`,   // scope dedupe to the account
+      }));
+      const res = await onImport(stamped);
+      const skipped = (res?.total || stamped.length) - (res?.inserted ?? stamped.length);
+      setErrors([`✓ Imported ${res?.inserted ?? stamped.length} transaction${(res?.inserted)===1?"":"s"} to ${acct.name}${skipped>0?` · ${skipped} already in (skipped)`:""}.`]);
+      setPreview([]); setStep("list"); setSelectedAccountId("");
       if (fileRef.current) fileRef.current.value = "";
     } catch (err) { setErrors(["Import failed: " + err.message]); }
     finally { setLoading(false); }
   };
 
+  const saveNewAccount = async () => {
+    if (!newAcct?.name?.trim()) { setErrors(["Give the account a name."]); return; }
+    try {
+      const saved = await onSaveAccount({ id: `ba-${Date.now()}`, name: newAcct.name.trim(), bank: newAcct.bank || "Tide", storeId: newAcct.storeId || "" });
+      setSelectedAccountId(saved.id);
+      setNewAcct(null);
+    } catch (err) { setErrors(["Couldn't save account: " + err.message]); }
+  };
+
+  const storeName = (id) => { const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : ""; };
+  const acctLabel = (a) => `${a.name}${a.storeId ? " · " + storeName(a.storeId) : " · (no store)"}`;
+
   const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toFixed(2)}`;
   const txns = bankTransactions.filter(t => {
+    if (accountFilter !== "all" && t.accountId !== accountFilter) return false;
     if (filter === "in") return t.amount > 0;
     if (filter === "out") return t.amount < 0;
     if (filter === "unreconciled") return !t.reconciled;
@@ -20011,15 +20035,18 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, s
           <p className="text-xs text-slate-500 mt-0.5">Import a statement export (CSV or Excel) from Tide or any bank. Re-importing is safe — duplicates are skipped automatically.</p>
         </div>
         <div className="flex items-center gap-2">
-          <select value={account} onChange={e=>setAccount(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
-            <option>Tide</option><option>Revolut</option><option>Monzo</option><option>Metro</option><option>Other</option>
-          </select>
           <button onClick={()=>fileRef.current?.click()} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">
             {loading ? "Reading…" : "Import statement"}
           </button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" className="hidden" onChange={e=>handleFile(e.target.files?.[0])}/>
         </div>
       </div>
+
+      {bankAccounts.length === 0 && step === "list" && (
+        <div className="rounded-xl px-4 py-3 text-sm bg-slate-900 border border-slate-800 text-slate-400">
+          No bank accounts set up yet. When you import a statement you'll be asked which account it's for — you can add one then (each account is linked to a store).
+        </div>
+      )}
 
       {errors.length > 0 && (
         <div className={`rounded-xl px-4 py-3 text-sm space-y-1 ${errors[0]?.startsWith("✓") ? "bg-emerald-950/30 border border-emerald-800/50 text-emerald-300" : "bg-amber-950/30 border border-amber-800/50 text-amber-300"}`}>
@@ -20030,12 +20057,43 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, s
 
       {step === "preview" ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-            <div className="text-sm font-bold text-white">{preview.length} transaction{preview.length===1?"":"s"} ready <span className="text-slate-500 font-normal">· {account}</span></div>
-            <div className="flex gap-2">
-              <button onClick={()=>{setStep("list"); setPreview([]); setErrors([]);}} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
-              <button onClick={doImport} disabled={loading || preview.length===0} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-semibold">{loading?"Importing…":`Import ${preview.length}`}</button>
+          <div className="px-4 py-3 border-b border-slate-800 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-sm font-bold text-white">{preview.length} transaction{preview.length===1?"":"s"} ready</div>
+              <div className="flex gap-2">
+                <button onClick={()=>{setStep("list"); setPreview([]); setErrors([]); setSelectedAccountId(""); setNewAcct(null);}} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+                <button onClick={doImport} disabled={loading || preview.length===0 || !selectedAccountId} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-semibold">{loading?"Importing…":`Import ${preview.length}`}</button>
+              </div>
             </div>
+            {/* Which account is this statement for? */}
+            {newAcct ? (
+              <div className="bg-slate-950/50 rounded-xl p-3 space-y-2">
+                <div className="text-xs font-semibold text-white">Add a new account</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <input value={newAcct.name} onChange={e=>setNewAcct({...newAcct, name:e.target.value})} placeholder="Account name (e.g. Loughborough — Tide)" className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white"/>
+                  <select value={newAcct.bank} onChange={e=>setNewAcct({...newAcct, bank:e.target.value})} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                    <option>Tide</option><option>Revolut</option><option>Monzo</option><option>Metro</option><option>Other</option>
+                  </select>
+                  <select value={newAcct.storeId} onChange={e=>setNewAcct({...newAcct, storeId:e.target.value})} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                    <option value="">— Link to store —</option>
+                    {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={saveNewAccount} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Save account</button>
+                  <button onClick={()=>setNewAcct(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-400">Import to:</span>
+                <select value={selectedAccountId} onChange={e=>setSelectedAccountId(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white min-w-[200px]">
+                  <option value="">— Choose account —</option>
+                  {bankAccounts.filter(a=>!a.archived).map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
+                </select>
+                <button onClick={()=>setNewAcct({ name:"", bank:"Tide", storeId:"" })} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold">+ New account</button>
+              </div>
+            )}
           </div>
           <div className="max-h-[50vh] overflow-y-auto divide-y divide-slate-800/50">
             {preview.slice(0,200).map((t,i) => (
@@ -20067,10 +20125,16 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, s
             </div>
           </div>
 
-          <div className="flex gap-1.5 flex-wrap">
+          <div className="flex gap-1.5 flex-wrap items-center">
             {[["all","All"],["in","Money in"],["out","Money out"],["unreconciled","Unreconciled"]].map(([k,l]) => (
               <button key={k} onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${filter===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
+            {bankAccounts.length > 0 && (
+              <select value={accountFilter} onChange={e=>setAccountFilter(e.target.value)} className="ml-auto px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200">
+                <option value="all">All accounts</option>
+                {bankAccounts.filter(a=>!a.archived).map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
+              </select>
+            )}
           </div>
 
           {txns.length === 0 ? (
@@ -20087,7 +20151,7 @@ function BankView({ bankTransactions = [], onImport, onUpdateTxn, onDeleteTxn, s
                   </button>
                   <div className="min-w-0 flex-1">
                     <div className="text-sm text-slate-200 truncate">{t.description || "—"}</div>
-                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.account?` · ${t.account}`:""}{t.category?` · ${t.category}`:""}</div>
+                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.account?` · ${t.account}`:""}{t.storeId?` · ${storeName(t.storeId)}`:""}{t.category?` · ${t.category}`:""}</div>
                   </div>
                   <div className={`text-sm font-semibold tabular-nums flex-shrink-0 ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{fmt(t.amount)}</div>
                   <button onClick={()=>{ if(window.confirm("Delete this transaction?")) onDeleteTxn(t.id); }} className="text-slate-600 hover:text-red-400 flex-shrink-0"><Trash2 size={13}/></button>
@@ -28690,6 +28754,19 @@ export default function App() {
     await deleteBankTransaction(id);
     setBankTransactions(list => list.filter(t => t.id !== id));
   }, []);
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const saveBankAccount = useCallback(async (acc) => {
+    const saved = await upsertBankAccount(acc);
+    setBankAccounts(list => {
+      const exists = list.some(a => a.id === saved.id);
+      return exists ? list.map(a => a.id === saved.id ? saved : a) : [...list, saved];
+    });
+    return saved;
+  }, []);
+  const removeBankAccount = useCallback(async (id) => {
+    await deleteBankAccount(id);
+    setBankAccounts(list => list.filter(a => a.id !== id));
+  }, []);
   // A punch is locked if its (store, date) falls inside an APPROVED pay period.
   // A period with no storeId applies to all stores.
   const isPunchLocked = useCallback((punch) => {
@@ -28852,11 +28929,12 @@ export default function App() {
       fetchAppSettings().catch(() => ({})),
       fetchPayPeriods().catch(() => []),
       fetchBankTransactions().catch(() => []),
+      fetchBankAccounts().catch(() => []),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP, bankTxns]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP, bankTxns, bankAccts]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -28871,6 +28949,7 @@ export default function App() {
       applyOtRulesFromSettings(appSet || {});
       setPayPeriods(payP || []);
       setBankTransactions(bankTxns || []);
+      setBankAccounts(bankAccts || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -29768,7 +29847,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
+            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
