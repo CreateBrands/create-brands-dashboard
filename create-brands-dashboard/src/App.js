@@ -27790,15 +27790,6 @@ export default function App() {
   const [schedules,       setSchedules]      = useState([]);
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
-  const updatePunchRec = useCallback(async rec => {
-    if (isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to edit it.");
-    const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p));
-  }, [isPunchLocked]);
-  const delPunchRec    = useCallback(async id => {
-    const rec = punchRecords.find(p => p.id === id);
-    if (rec && isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to delete it.");
-    await deletePunchRecord(id); setPunchRecords(ps => ps.filter(p => p.id !== id));
-  }, [isPunchLocked, punchRecords]);
   // Hiring / Onboarding (slice 1)
   const [applications,    setApplications]   = useState([]);
   const [advertisedRoles, setAdvertisedRoles] = useState([]);
@@ -27823,16 +27814,15 @@ export default function App() {
       && (!pp.storeId || pp.storeId === punch.storeId)
       && punch.date >= pp.periodStart && punch.date <= pp.periodEnd);
   }, [payPeriods]);
-  const approvePayPeriod = useCallback(async (pp) => {
-    const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
-    setPayPeriods(list => list.some(x => x.id === saved.id) ? list.map(x => x.id === saved.id ? saved : x) : [saved, ...list]);
-    return saved;
-  }, [currentUser]);
-  const reopenPayPeriod = useCallback(async (pp) => {
-    const saved = await upsertPayPeriod({ ...pp, status: "open", approvedBy: "", approvedAt: null });
-    setPayPeriods(list => list.map(x => x.id === saved.id ? saved : x));
-    return saved;
-  }, []);
+  const updatePunchRec = useCallback(async rec => {
+    if (isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to edit it.");
+    const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p));
+  }, [isPunchLocked]);
+  const delPunchRec    = useCallback(async id => {
+    const rec = punchRecords.find(p => p.id === id);
+    if (rec && isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to delete it.");
+    await deletePunchRecord(id); setPunchRecords(ps => ps.filter(p => p.id !== id));
+  }, [isPunchLocked, punchRecords]);
   const saveOtRules = useCallback(async (rules) => {
     await Promise.all([
       upsertAppSetting("ot_weekly_threshold", rules.weeklyThreshold),
@@ -28060,6 +28050,17 @@ export default function App() {
   }, [actualUser, impersonatedUserId, users]);
 
   const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
+
+  const approvePayPeriod = useCallback(async (pp) => {
+    const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
+    setPayPeriods(list => list.some(x => x.id === saved.id) ? list.map(x => x.id === saved.id ? saved : x) : [saved, ...list]);
+    return saved;
+  }, [currentUser]);
+  const reopenPayPeriod = useCallback(async (pp) => {
+    const saved = await upsertPayPeriod({ ...pp, status: "open", approvedBy: "", approvedAt: null });
+    setPayPeriods(list => list.map(x => x.id === saved.id ? saved : x));
+    return saved;
+  }, []);
 
   const handleImpersonate = useCallback(userId => {
     if (!actualUser || actualUser.role !== "owner") return;
