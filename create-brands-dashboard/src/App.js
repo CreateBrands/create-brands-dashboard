@@ -9760,6 +9760,27 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [flipAgg, setFlipAgg] = useState(null);     // matched Flipdish aggregate for selected entry
+  const [flipLoading, setFlipLoading] = useState(false);
+
+  // Pull the Flipdish daily aggregate for the selected entry's store + date.
+  useEffect(() => {
+    if (!selected || !selected.date) { setFlipAgg(null); return; }
+    let cancelled = false;
+    setFlipLoading(true); setFlipAgg(null);
+    fetchStoreDayAggregates({ from: selected.date, to: selected.date })
+      .then(rows => {
+        if (cancelled) return;
+        const match = (rows || []).find(r =>
+          (selected.storeId && r.storeId === selected.storeId) ||
+          (!selected.storeId && r.brandId === selected.brandId)
+        );
+        setFlipAgg(match || null);
+      })
+      .catch(() => { if (!cancelled) setFlipAgg(null); })
+      .finally(() => { if (!cancelled) setFlipLoading(false); });
+    return () => { cancelled = true; };
+  }, [selId, selected?.date, selected?.storeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selected) return;
@@ -9938,7 +9959,53 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                   );
                 })()}
 
-                {canAmend && changedFields.length > 0 && (
+                {/* Flipdish ↔ EOD reconciliation — match gross exactly, show breakdown */}
+                {(() => {
+                  if (flipLoading) return <div className="rounded-xl p-3 border border-slate-800 bg-slate-950/40 text-[11px] text-slate-500">Checking Flipdish for {selected.date}…</div>;
+                  if (!flipAgg) return (
+                    <div className="rounded-xl p-3 border border-slate-700/50 bg-slate-950/40 text-[11px] text-slate-400">
+                      No Flipdish sales data found for this store &amp; date — can't auto-reconcile. Approve manually if correct.
+                    </div>
+                  );
+                  const eodGross = Number(selected.netSales) || 0;
+                  const flipGross = flipAgg.revenueGross;
+                  // Exact match to the penny.
+                  const matched = Math.round(eodGross * 100) === Math.round(flipGross * 100);
+                  const diff = eodGross - flipGross;
+                  return (
+                    <div className={`rounded-xl p-3 border ${matched ? "bg-emerald-950/20 border-emerald-500/30" : "bg-amber-950/20 border-amber-500/40"}`}>
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className={`text-sm font-bold flex items-center gap-2 ${matched ? "text-emerald-400" : "text-amber-400"}`}>
+                          {matched ? <><CheckCircle size={15}/> Flipdish matches EOD gross</> : <><AlertTriangle size={15}/> Mismatch: EOD {fmtMoney(eodGross)} vs Flipdish {fmtMoney(flipGross)} ({diff>=0?"+":""}{fmtMoney(diff)})</>}
+                        </div>
+                        {selected.reconStatus !== "resolved" && (
+                          <button onClick={() => postComment("resolved")} disabled={busy}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-40 ${matched ? "bg-emerald-600 hover:bg-emerald-500" : "bg-amber-600 hover:bg-amber-500"}`}>
+                            {matched ? "Approve ✓" : "Approve anyway"}
+                          </button>
+                        )}
+                      </div>
+                      {/* Full breakdown for review */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+                        {[
+                          ["Gross", flipAgg.revenueGross],
+                          ["Net", flipAgg.revenueNet],
+                          ["Tax", flipAgg.tax],
+                          ["Discounts", flipAgg.discounts],
+                        ].map(([label, val]) => (
+                          <div key={label} className="bg-slate-950/50 rounded-lg px-2 py-1.5">
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wide">Flipdish {label}</div>
+                            <div className="text-xs font-semibold text-slate-200 tabular-nums">{fmtMoney(val)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-2">
+                        EOD gross sales: {fmtMoney(eodGross)} · Flipdish orders: {flipAgg.orders}
+                        {selected.reconStatus === "resolved" && <span className="text-emerald-400"> · already approved</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
                   <div className="space-y-2 bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
                     <div className="text-[11px] text-amber-300 font-semibold">{changedFields.length} change(s) pending — a reason is required:</div>
                     <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Why is this being amended?"
