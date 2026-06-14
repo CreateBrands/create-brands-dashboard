@@ -4534,6 +4534,37 @@ export async function deleteInvoice(invoiceId) {
 }
 
 // ── App settings (global key/value) ─────────────────────────────────────────
+// ── Pay periods (approval + lock) ───────────────────────────────────────────
+export async function fetchPayPeriods() {
+  const { data, error } = await supabase.from("pay_periods").select("*").order("period_start", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbPayPeriodToApp);
+}
+export async function upsertPayPeriod(pp) {
+  const row = {
+    id: pp.id, store_id: pp.storeId || null,
+    period_start: pp.periodStart, period_end: pp.periodEnd,
+    status: pp.status || "open", approved_by: pp.approvedBy || null,
+    approved_at: pp.approvedAt || null, updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase.from("pay_periods").upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return dbPayPeriodToApp(data);
+}
+export async function deletePayPeriod(id) {
+  const { error } = await supabase.from("pay_periods").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+function dbPayPeriodToApp(p) {
+  return {
+    id: p.id, storeId: p.store_id || null,
+    periodStart: p.period_start, periodEnd: p.period_end,
+    status: p.status || "open", approvedBy: p.approved_by || "",
+    approvedAt: p.approved_at || null, createdAt: p.created_at,
+  };
+}
+
 export async function fetchAppSettings() {
   const { data, error } = await supabase.from("app_settings").select("key, value");
   if (error) throw error;

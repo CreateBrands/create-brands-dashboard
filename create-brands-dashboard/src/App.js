@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -113,7 +113,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from "recharts";
 import {
-  Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight,
+  Utensils, Moon, Coffee, Building2, LogOut, Menu, X, ChevronRight, Lock, Unlock,
   Home, MoreHorizontal,
   Cloud, Sun, CloudRain, ArrowRight,
   QrCode,
@@ -24605,7 +24605,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 // TIME & ATTENDANCE — Manager view with approval + overtime comparison
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment }) {
+function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod }) {
   const { user } = useAuth();
 
   // Store-first scoping. Owner/HQ get the ownership filter (defaults to
@@ -24749,6 +24749,29 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     return { from: s, to: s };
   };
   const { from, to } = viewMode === "day" ? dayBounds(dayOffset) : getWeekBounds(weekOffset);
+
+  // Pay-period approval status for the current view (store + date range).
+  const periodStoreId = selStore === "all" ? null : selStore;
+  const matchingPeriod = (payPeriods || []).find(pp =>
+    (pp.storeId || null) === periodStoreId && pp.periodStart === from && pp.periodEnd === to);
+  const periodApproved = matchingPeriod?.status === "approved";
+  const [periodBusy, setPeriodBusy] = useState(false);
+  const doApprovePeriod = async () => {
+    if (!onApprovePeriod) return;
+    if (!window.confirm(`Approve and lock ${from === to ? from : `${from} → ${to}`}${periodStoreId ? "" : " (all stores)"}? Punches in this period will become read-only until re-opened.`)) return;
+    setPeriodBusy(true);
+    try { await onApprovePeriod(matchingPeriod || { id: `pp-${Date.now()}`, storeId: periodStoreId, periodStart: from, periodEnd: to, status: "open" }); }
+    catch (e) { window.alert("Couldn't approve: " + (e?.message || e)); }
+    finally { setPeriodBusy(false); }
+  };
+  const doReopenPeriod = async () => {
+    if (!onReopenPeriod || !matchingPeriod) return;
+    if (!window.confirm("Re-open this period for edits? It will need approving again before payroll.")) return;
+    setPeriodBusy(true);
+    try { await onReopenPeriod(matchingPeriod); }
+    catch (e) { window.alert("Couldn't re-open: " + (e?.message || e)); }
+    finally { setPeriodBusy(false); }
+  };
 
   const visible = punchRecords.filter(r => {
     if (!inScope(r)) return false;
@@ -25188,7 +25211,25 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
       {/* ── Summary ── */}
       {tab === "summary" && (
-        <div className="rounded-2xl border border-slate-800 overflow-hidden">
+        <div className="space-y-3">
+          <div className={`flex items-center justify-between gap-3 flex-wrap rounded-2xl border px-4 py-3 ${periodApproved ? "bg-emerald-950/30 border-emerald-800/50" : "bg-slate-900 border-slate-800"}`}>
+            <div className="flex items-center gap-2">
+              {periodApproved ? <Lock size={16} className="text-emerald-400"/> : <Unlock size={16} className="text-slate-500"/>}
+              <div>
+                <div className="text-sm font-semibold text-white">
+                  {periodApproved ? "Period approved & locked" : "Period open"}
+                  <span className="text-slate-500 font-normal ml-2">{from === to ? from : `${from} → ${to}`}{periodStoreId ? "" : " · all stores"}</span>
+                </div>
+                {periodApproved && matchingPeriod?.approvedBy && <div className="text-[11px] text-emerald-400/80">Approved by {matchingPeriod.approvedBy}</div>}
+              </div>
+            </div>
+            {periodApproved ? (
+              <button onClick={doReopenPeriod} disabled={periodBusy} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-200">Re-open for edits</button>
+            ) : (
+              <button onClick={doApprovePeriod} disabled={periodBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-semibold text-white">{periodBusy ? "…" : "Approve & lock period"}</button>
+            )}
+          </div>
+          <div className="rounded-2xl border border-slate-800 overflow-hidden">
           {Object.entries(summary).length === 0 ? (
             <div className="text-center py-12 text-slate-500 text-sm">No records this week</div>
           ) : (
@@ -25240,6 +25281,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           </table>
           </div>
           )}
+        </div>
         </div>
       )}
 
@@ -27748,8 +27790,15 @@ export default function App() {
   const [schedules,       setSchedules]      = useState([]);
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
-  const updatePunchRec = useCallback(async rec => { const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p)); }, []);
-  const delPunchRec    = useCallback(async id => { await deletePunchRecord(id); setPunchRecords(ps => ps.filter(p => p.id !== id)); }, []);
+  const updatePunchRec = useCallback(async rec => {
+    if (isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to edit it.");
+    const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p));
+  }, [isPunchLocked]);
+  const delPunchRec    = useCallback(async id => {
+    const rec = punchRecords.find(p => p.id === id);
+    if (rec && isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to delete it.");
+    await deletePunchRecord(id); setPunchRecords(ps => ps.filter(p => p.id !== id));
+  }, [isPunchLocked, punchRecords]);
   // Hiring / Onboarding (slice 1)
   const [applications,    setApplications]   = useState([]);
   const [advertisedRoles, setAdvertisedRoles] = useState([]);
@@ -27765,6 +27814,25 @@ export default function App() {
   const [whosWorkingOpen, setWhosWorkingOpen] = useState(false);   // "Who's working" popup
   const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
   const [appSettings, setAppSettings] = useState({});
+  const [payPeriods, setPayPeriods] = useState([]);
+  // A punch is locked if its (store, date) falls inside an APPROVED pay period.
+  // A period with no storeId applies to all stores.
+  const isPunchLocked = useCallback((punch) => {
+    if (!punch?.date) return false;
+    return payPeriods.some(pp => pp.status === "approved"
+      && (!pp.storeId || pp.storeId === punch.storeId)
+      && punch.date >= pp.periodStart && punch.date <= pp.periodEnd);
+  }, [payPeriods]);
+  const approvePayPeriod = useCallback(async (pp) => {
+    const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
+    setPayPeriods(list => list.some(x => x.id === saved.id) ? list.map(x => x.id === saved.id ? saved : x) : [saved, ...list]);
+    return saved;
+  }, [currentUser]);
+  const reopenPayPeriod = useCallback(async (pp) => {
+    const saved = await upsertPayPeriod({ ...pp, status: "open", approvedBy: "", approvedAt: null });
+    setPayPeriods(list => list.map(x => x.id === saved.id ? saved : x));
+    return saved;
+  }, []);
   const saveOtRules = useCallback(async (rules) => {
     await Promise.all([
       upsertAppSetting("ot_weekly_threshold", rules.weeklyThreshold),
@@ -27855,11 +27923,12 @@ export default function App() {
       fetchApplications(),
       fetchAdvertisedRoles().catch(() => []),
       fetchAppSettings().catch(() => ({})),
+      fetchPayPeriods().catch(() => []),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -27872,6 +27941,7 @@ export default function App() {
       setAdvertisedRoles(adroles || []);
       setAppSettings(appSet || {});
       applyOtRulesFromSettings(appSet || {});
+      setPayPeriods(payP || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -28738,6 +28808,7 @@ export default function App() {
               punchRecords={punchRecords} currentUser={currentUser}
               onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
               onAddComment={handleAddPunchComment}
+              payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
             />}
             {effectiveActiveView === "admin"          && currentUser.role === "owner" && <AdminPanelView
               brands={brands} users={users} entries={entries}
