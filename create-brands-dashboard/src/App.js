@@ -4763,6 +4763,51 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   }, [stores, currentUser.brandIds, currentUser.role, myOpsMember]);
   const [activeView, setActiveView] = useState("ops-tasks");
   const [moreOpen, setMoreOpen] = useState(false); // EMP_BOTTOMNAV_V1: "More" sheet
+
+  // Phone clock-in (geofenced) — shared by the home card and the More-sheet button.
+  const canPhoneClock = !!myOpsMember?.phoneClockIn;
+  const myOpenPunch = (punchRecords || []).find(p => p.employeeId === (currentUser.opsTeamMemberId || currentUser.id) && p.status === "open");
+  const myClockStore = (stores || []).find(s => s.id === (myOpenPunch?.storeId || (myOpsMember?.storeIds && myOpsMember.storeIds[0]) || null)) || null;
+  const [clockBusy, setClockBusy] = useState(false);
+  const [clockMsg, setClockMsg] = useState(null); // {type, msg}
+  const doPhoneClock = async () => {
+    const action = myOpenPunch ? "out" : "in";
+    setClockMsg(null); setClockBusy(true);
+    try {
+      if (!myClockStore) throw new Error("No store is linked to your account — ask your manager.");
+      if (myClockStore.latitude == null || myClockStore.longitude == null) throw new Error("Your store hasn't set its location yet — ask your manager.");
+      const coords = await new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("Location isn't available on this device."));
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve(pos.coords),
+          err => reject(new Error(err.code === 1 ? "Location permission denied. Enable location to clock in." : "Couldn't get your location — try again near a window.")),
+          { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+        );
+      });
+      const dist = metresBetween(coords.latitude, coords.longitude, myClockStore.latitude, myClockStore.longitude);
+      const radius = myClockStore.geofenceRadius || 200;
+      if (dist > radius) throw new Error(`You're about ${Math.round(dist)}m from ${myClockStore.shortName || myClockStore.name}. You must be within ${radius}m to clock ${action === "in" ? "in" : "out"}.`);
+      const todayStr = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
+      if (action === "in") {
+        await onEmpPunchIn({
+          id: `pr-${Date.now()}`, brandId: myClockStore.brandId, storeId: myClockStore.id,
+          employeeId: (currentUser.opsTeamMemberId || currentUser.id), employeeName: `${myOpsMember.firstName} ${myOpsMember.lastName}`.trim(),
+          date: todayStr, punchIn: new Date().toISOString(), punchOut: null, hoursWorked: null,
+          hourlyRate: myOpsMember.hourlyRate || 0, grossPay: null, status: "open", notes: "phone clock-in",
+        });
+        setClockMsg({ type: "ok", msg: "Clocked in ✓" });
+      } else {
+        const rawH = (Date.now() - new Date(myOpenPunch.punchIn).getTime()) / 3600000;
+        const breakH = (myOpenPunch.breakMinutes || 0) / 60;
+        const hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
+        const gross = myOpsMember.hourlyRate ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
+        await onEmpPunchOut(myOpenPunch.id, new Date().toISOString(), hours, gross);
+        setClockMsg({ type: "ok", msg: "Clocked out ✓" });
+      }
+    } catch (e) {
+      setClockMsg({ type: "error", msg: e.message || String(e) });
+    } finally { setClockBusy(false); }
+  };
   const overdueCount = assignments.filter(a =>
     currentUser.brandIds.includes(a.brandId) && isActiveToday(a) && isOverdue(a)
   ).length;
@@ -4869,6 +4914,18 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               <div className="text-xs text-slate-500 truncate">{brand?.name || "—"}</div>
             </div>
           </div>
+
+          {/* Phone clock in/out — only for staff allowed to clock in by phone */}
+          {canPhoneClock && (
+            <div className="mb-3">
+              <button onClick={doPhoneClock} disabled={clockBusy}
+                className={`w-full flex items-center justify-center gap-2 px-3 py-3.5 rounded-2xl text-sm font-bold disabled:opacity-50 ${myOpenPunch ? "bg-red-600 text-white hover:bg-red-500" : "bg-emerald-600 text-white hover:bg-emerald-500"}`}>
+                {clockBusy ? "Checking location…" : myOpenPunch ? "⏹ Clock out" : "▶ Clock in"}
+              </button>
+              {myOpenPunch && <div className="text-[11px] text-slate-500 text-center mt-1.5">Clocked in since {new Date(myOpenPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}{myClockStore ? ` · ${myClockStore.shortName || myClockStore.name}` : ""}</div>}
+              {clockMsg && <div className={`mt-2 text-xs font-semibold rounded-lg px-3 py-2 text-center ${clockMsg.type === "error" ? "bg-red-950/40 text-red-300" : "bg-emerald-950/40 text-emerald-300"}`}>{clockMsg.msg}</div>}
+            </div>
+          )}
 
           {/* tile grid */}
           <div className="grid grid-cols-2 gap-2.5">
