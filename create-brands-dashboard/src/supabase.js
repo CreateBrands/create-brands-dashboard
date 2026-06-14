@@ -4726,6 +4726,51 @@ export async function fetchInvoicesForAccounts({ from, to } = {}) {
   }));
 }
 
+// ── Categorisation (Stage 2) ────────────────────────────────────────────────
+export async function fetchTxnCategories() {
+  const { data, error } = await supabase.from("transaction_categories").select("*").order("sort_order");
+  if (error) throw error;
+  return (data || []).map(c => ({
+    id: c.id, name: c.name, type: c.type || "expense", pnlLine: c.pnl_line || "overheads",
+    sortOrder: c.sort_order ?? 100, archived: !!c.archived,
+  }));
+}
+export async function upsertTxnCategory(cat) {
+  const row = { id: cat.id, name: cat.name, type: cat.type || "expense", pnl_line: cat.pnlLine || "overheads", sort_order: cat.sortOrder ?? 100, archived: !!cat.archived };
+  const { data, error } = await supabase.from("transaction_categories").upsert(row).select().single();
+  if (error) throw error;
+  return { id: data.id, name: data.name, type: data.type, pnlLine: data.pnl_line, sortOrder: data.sort_order, archived: !!data.archived };
+}
+export async function deleteTxnCategory(id) {
+  const { error } = await supabase.from("transaction_categories").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function fetchTxnCategoryRules() {
+  const { data, error } = await supabase.from("category_rules").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, matchText: r.match_text, category: r.category, source: r.source || "bank" }));
+}
+export async function upsertTxnCategoryRule(rule) {
+  const row = { id: rule.id, match_text: (rule.matchText || "").trim().toLowerCase(), category: rule.category, source: rule.source || "bank" };
+  const { data, error } = await supabase.from("category_rules").upsert(row).select().single();
+  if (error) throw error;
+  return { id: data.id, matchText: data.match_text, category: data.category, source: data.source };
+}
+export async function deleteTxnCategoryRule(id) {
+  const { error } = await supabase.from("category_rules").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+export function applyTxnCategoryRules(description, rules) {
+  const d = String(description || "").toLowerCase();
+  for (const r of rules || []) {
+    if (r.matchText && d.includes(r.matchText)) return r.category;
+  }
+  return "";
+}
+
 export async function listStoresLite() {
   const { data, error } = await supabase.from("stores").select("id, name").order("name");
   if (error) throw error;

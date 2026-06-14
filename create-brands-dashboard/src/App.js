@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -20066,7 +20066,7 @@ function OpsTeamView({
   );
 }
 
-function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [] }) {
+function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [] }) {
   const [period, setPeriod] = useState("month");   // month | week
   const [vatMode, setVatMode] = useState("ex");     // ex | inc
   const [anchor, setAnchor] = useState(() => new Date());
@@ -20174,6 +20174,21 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [] })
     return { inflow, outflow, net: inflow - outflow };
   }, [bankTransactions, bounds.from, bounds.to, storeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // By-category breakdown of bank money in/out for the period.
+  const byCategory = useMemo(() => {
+    const inc = {}, exp = {};
+    bankTransactions.forEach(t => {
+      if (!inRange(t.txnDate)) return;
+      if (storeFilter !== "all" && t.storeId !== storeFilter) return;
+      const name = t.category || "Uncategorised";
+      const bucket = t.amount >= 0 ? inc : exp;
+      bucket[name] = (bucket[name] || 0) + Math.abs(t.amount);
+    });
+    const toArr = (o) => Object.entries(o).map(([name, amount]) => ({ name, amount })).sort((a,b)=>b.amount-a.amount);
+    const uncatCount = bankTransactions.filter(t => inRange(t.txnDate) && (storeFilter==="all"||t.storeId===storeFilter) && !t.category).length;
+    return { income: toArr(inc), expense: toArr(exp), uncatCount };
+  }, [bankTransactions, bounds.from, bounds.to, storeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const storeName = (id) => { if (id === "unassigned") return "Unassigned"; const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : id; };
   const shiftPeriod = (dir) => { const d = new Date(anchor); if (period === "month") d.setMonth(d.getMonth() + dir); else d.setDate(d.getDate() + dir*7); setAnchor(d); };
 
@@ -20252,6 +20267,39 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [] })
             <Stat label="Net cash" value={fmt(cash.net)} tone={cash.net>=0?"text-emerald-400":"text-red-400"} />
           </div>
 
+          {/* By-category breakdown (the categorisation reflected here) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-emerald-300">Money in by category</div>
+              <div className="divide-y divide-slate-800/50">
+                {byCategory.income.length === 0 ? <div className="px-4 py-3 text-xs text-slate-500">No income in this period.</div>
+                  : byCategory.income.map(c => (
+                    <div key={c.name} className="flex items-center justify-between px-4 py-2 text-sm">
+                      <span className={`${c.name==="Uncategorised"?"text-amber-400":"text-slate-300"}`}>{c.name}</span>
+                      <span className="text-emerald-400 font-semibold tabular-nums">{fmt(c.amount)}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-red-300">Money out by category</div>
+              <div className="divide-y divide-slate-800/50">
+                {byCategory.expense.length === 0 ? <div className="px-4 py-3 text-xs text-slate-500">No spend in this period.</div>
+                  : byCategory.expense.map(c => (
+                    <div key={c.name} className="flex items-center justify-between px-4 py-2 text-sm">
+                      <span className={`${c.name==="Uncategorised"?"text-amber-400":"text-slate-300"}`}>{c.name}</span>
+                      <span className="text-red-400 font-semibold tabular-nums">{fmt(c.amount)}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+          {byCategory.uncatCount > 0 && (
+            <div className="rounded-xl px-4 py-2.5 text-xs bg-amber-950/20 border border-amber-800/40 text-amber-300">
+              {byCategory.uncatCount} transaction{byCategory.uncatCount===1?"":"s"} still uncategorised — tag them in the Bank section to sharpen these figures.
+            </div>
+          )}
+
           {/* Per-store table (group view) */}
           {storeFilter === "all" && visibleRows.length > 0 && (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
@@ -20282,13 +20330,15 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [] })
   );
 }
 
-function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, sharedFile, onConsumeSharedFile }) {
+function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categories = [], categoryRules = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
   const [errors, setErrors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");   // list filter: all | accountId
+  const [manageCats, setManageCats] = useState(false);
+  const [newCat, setNewCat] = useState(null);   // {name, type, pnlLine}
   const [selectedAccountId, setSelectedAccountId] = useState(""); // chosen at import
   const [newAcct, setNewAcct] = useState(null);   // {name, bank, storeId} when adding inline
   const [XLSX, setXLSX] = useState(typeof window !== "undefined" ? window.XLSX : null);
@@ -20394,6 +20444,7 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImp
         accountId: acct.id,
         storeId: acct.storeId || "",
         account: acct.name,
+        category: r.category || applyTxnCategoryRules(r.description, categoryRules) || "",
         dedupeKey: `${acct.id}|${r.dedupeKey}`,   // scope dedupe to the account
       }));
       const res = await onImport(stamped);
@@ -20417,6 +20468,23 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImp
   const storeName = (id) => { const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : ""; };
   const acctLabel = (a) => `${a.name}${a.storeId ? " · " + storeName(a.storeId) : " · (no store)"}`;
 
+  // Tag a transaction, and offer to remember the payee → category for future imports.
+  const handleCategorise = async (t, category) => {
+    try {
+      await onUpdateTxn(t.id, { category });
+      if (!category || !onSaveRule) return;
+      // Derive a payee keyword: longest alphabetic token in the description.
+      const tokens = String(t.description || "").toLowerCase().match(/[a-z][a-z&' ]{2,}/g) || [];
+      const payee = (tokens.sort((a,b)=>b.length-a.length)[0] || "").trim();
+      if (!payee || payee.length < 3) return;
+      const already = (categoryRules || []).some(r => r.matchText === payee);
+      if (already) return;
+      if (window.confirm(`Always categorise payments matching "${payee}" as "${category}"?`)) {
+        await onSaveRule({ id: `cr-${Date.now()}`, matchText: payee, category, source: "bank" });
+      }
+    } catch (e) { /* non-fatal */ }
+  };
+
   const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toFixed(2)}`;
   const txns = bankTransactions.filter(t => {
     if (accountFilter !== "all" && t.accountId !== accountFilter) return false;
@@ -20436,12 +20504,58 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImp
           <p className="text-xs text-slate-500 mt-0.5">Import a statement export (CSV or Excel) from Tide or any bank. Re-importing is safe — duplicates are skipped automatically.</p>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={()=>setManageCats(m=>!m)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-sm font-semibold">Categories</button>
           <button onClick={()=>fileRef.current?.click()} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">
             {loading ? "Reading…" : "Import statement"}
           </button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" className="hidden" onChange={e=>handleFile(e.target.files?.[0])}/>
         </div>
       </div>
+
+      {manageCats && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-bold text-white">Categories</div>
+            <button onClick={()=>setNewCat({ name:"", type:"expense", pnlLine:"overheads" })} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">+ Add</button>
+          </div>
+          {newCat && (
+            <div className="bg-slate-950/50 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-4 gap-2 items-center">
+              <input value={newCat.name} onChange={e=>setNewCat({...newCat,name:e.target.value})} placeholder="Category name" className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+              <select value={newCat.type} onChange={e=>setNewCat({...newCat,type:e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                <option value="expense">Expense</option><option value="income">Income</option>
+              </select>
+              <select value={newCat.pnlLine} onChange={e=>setNewCat({...newCat,pnlLine:e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                <option value="revenue">Revenue</option><option value="cogs">COGS</option><option value="labour">Labour</option><option value="overheads">Overheads</option><option value="other">Other</option><option value="transfer">Transfer</option>
+              </select>
+              <div className="flex gap-2">
+                <button onClick={async()=>{ if(!newCat.name.trim())return; await onSaveCategory({ id:`cat-${Date.now()}`, ...newCat, name:newCat.name.trim() }); setNewCat(null); }} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold">Save</button>
+                <button onClick={()=>setNewCat(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+              </div>
+            </div>
+          )}
+          <div className="divide-y divide-slate-800/50">
+            {categories.filter(c=>!c.archived).map(c => (
+              <div key={c.id} className="flex items-center justify-between py-2 text-sm">
+                <span className="text-slate-200">{c.name} <span className="text-[10px] text-slate-500">· {c.type} · {c.pnlLine}</span></span>
+                <button onClick={async()=>{ if(window.confirm(`Archive "${c.name}"?`)) await onDeleteCategory(c.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>
+              </div>
+            ))}
+          </div>
+          {categoryRules.length > 0 && (
+            <div className="pt-2 border-t border-slate-800">
+              <div className="text-[11px] text-slate-500 mb-1">Auto-tag rules ({categoryRules.length})</div>
+              <div className="flex flex-wrap gap-1.5">
+                {categoryRules.map(r => (
+                  <span key={r.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 text-[11px] text-slate-300">
+                    "{r.matchText}" → {r.category}
+                    <button onClick={async()=>{ await onDeleteRule(r.id); }} className="text-slate-500 hover:text-red-400 ml-1">×</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {bankAccounts.length === 0 && step === "list" && (
         <div className="rounded-xl px-4 py-3 text-sm bg-slate-900 border border-slate-800 text-slate-400">
@@ -20552,8 +20666,13 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], onImp
                   </button>
                   <div className="min-w-0 flex-1">
                     <div className="text-sm text-slate-200 truncate">{t.description || "—"}</div>
-                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.account?` · ${t.account}`:""}{t.storeId?` · ${storeName(t.storeId)}`:""}{t.category?` · ${t.category}`:""}</div>
+                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.account?` · ${t.account}`:""}{t.storeId?` · ${storeName(t.storeId)}`:""}</div>
                   </div>
+                  <select value={t.category || ""} onChange={e => handleCategorise(t, e.target.value)}
+                    className={`text-[11px] rounded-lg px-2 py-1 flex-shrink-0 border max-w-[130px] ${t.category ? "bg-indigo-950/40 border-indigo-800/50 text-indigo-200" : "bg-slate-800 border-slate-700 text-slate-400"}`}>
+                    <option value="">Uncategorised</option>
+                    {categories.filter(c=>!c.archived).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
                   <div className={`text-sm font-semibold tabular-nums flex-shrink-0 ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{fmt(t.amount)}</div>
                   <button onClick={()=>{ if(window.confirm("Delete this transaction?")) onDeleteTxn(t.id); }} className="text-slate-600 hover:text-red-400 flex-shrink-0"><Trash2 size={13}/></button>
                 </div>
@@ -29169,6 +29288,26 @@ export default function App() {
     await deleteBankAccount(id);
     setBankAccounts(list => list.filter(a => a.id !== id));
   }, []);
+  const [categories, setCategories] = useState([]);
+  const [categoryRules, setCategoryRules] = useState([]);
+  const saveCategory = useCallback(async (cat) => {
+    const saved = await upsertTxnCategory(cat);
+    setCategories(list => { const ex = list.some(c => c.id === saved.id); return ex ? list.map(c => c.id===saved.id?saved:c) : [...list, saved]; });
+    return saved;
+  }, []);
+  const removeCategory = useCallback(async (id) => {
+    await deleteTxnCategory(id);
+    setCategories(list => list.filter(c => c.id !== id));
+  }, []);
+  const saveCategoryRule = useCallback(async (rule) => {
+    const saved = await upsertTxnCategoryRule(rule);
+    setCategoryRules(list => { const ex = list.some(r => r.id === saved.id); return ex ? list.map(r => r.id===saved.id?saved:r) : [...list, saved]; });
+    return saved;
+  }, []);
+  const removeCategoryRule = useCallback(async (id) => {
+    await deleteTxnCategoryRule(id);
+    setCategoryRules(list => list.filter(r => r.id !== id));
+  }, []);
   // A punch is locked if its (store, date) falls inside an APPROVED pay period.
   // A period with no storeId applies to all stores.
   const isPunchLocked = useCallback((punch) => {
@@ -29332,11 +29471,13 @@ export default function App() {
       fetchPayPeriods().catch(() => []),
       fetchBankTransactions().catch(() => []),
       fetchBankAccounts().catch(() => []),
+      fetchTxnCategories().catch(() => []),
+      fetchTxnCategoryRules().catch(() => []),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP, bankTxns, bankAccts]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet, payP, bankTxns, bankAccts, cats, catRules]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -29352,6 +29493,8 @@ export default function App() {
       setPayPeriods(payP || []);
       setBankTransactions(bankTxns || []);
       setBankAccounts(bankAccts || []);
+      setCategories(cats || []);
+      setCategoryRules(catRules || []);
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -30250,8 +30393,8 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && ["owner","hq_staff","manager"].includes(currentUser.role) && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {effectiveActiveView === "accounts" && ["owner","hq_staff"].includes(currentUser.role) && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts}/>}
-            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
+            {effectiveActiveView === "accounts" && ["owner","hq_staff"].includes(currentUser.role) && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
+            {effectiveActiveView === "bank" && ["owner","hq_staff"].includes(currentUser.role) && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
