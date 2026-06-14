@@ -536,6 +536,7 @@ function appOpsTeamToDb(m) {
   // Slice 6 follow-up — pay type. The hourly_rate column is reused as the
   // "amount" regardless of type, so no separate "pay_amount" column.
   if (m.payType       !== undefined) row.pay_type      = m.payType || "hourly";
+  if (m.phoneClockIn  !== undefined) row.phone_clock_in = !!m.phoneClockIn;
   // Payroll — how the pay RATE is determined: 'minimum_wage' (live NMW lookup by
   // age on work date) or 'fixed' (use hourly_rate). Defaults handled in DB.
   if (m.payBasis      !== undefined) row.pay_basis     = m.payBasis || "fixed";
@@ -596,6 +597,7 @@ function dbOpsTeamToApp(m) {
     archivedAt:  m.archived_at || null,
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
+    phoneClockIn: m.phone_clock_in ?? false,
     payBasis:    m.pay_basis || "fixed",
     profileStatus: m.profile_status || "pending",
     defaultBankHours:   m.default_bank_hours != null ? parseFloat(m.default_bank_hours) : null,
@@ -1214,6 +1216,9 @@ function dbStoreToApp(s) {
     // between ALTER TABLE and schema-cache reload.
     isHiring:         s.is_hiring ?? true,
     autoClockoutTime: s.auto_clockout_time || "",
+    latitude:         s.latitude == null ? null : Number(s.latitude),
+    longitude:        s.longitude == null ? null : Number(s.longitude),
+    geofenceRadius:   s.geofence_radius == null ? 200 : Number(s.geofence_radius),
   };
 }
 
@@ -1299,6 +1304,9 @@ function appStoreToDb(s) {
   if (s.kioskPin        !== undefined) row.kiosk_pin        = s.kioskPin || null;
   if (s.isHiring        !== undefined) row.is_hiring        = !!s.isHiring;
   if (s.autoClockoutTime !== undefined) row.auto_clockout_time = s.autoClockoutTime || null;
+  if (s.latitude        !== undefined) row.latitude        = s.latitude === "" || s.latitude == null ? null : Number(s.latitude);
+  if (s.longitude       !== undefined) row.longitude       = s.longitude === "" || s.longitude == null ? null : Number(s.longitude);
+  if (s.geofenceRadius  !== undefined) row.geofence_radius = s.geofenceRadius == null ? 200 : Number(s.geofenceRadius);
   return row;
 }
 

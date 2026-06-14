@@ -223,6 +223,13 @@ const PRIORITY_CONFIG = {
 
 // ─── Period Utilities ─────────────────────────────────────────────────────────
 function getMonday(d) { const dt = new Date(d); const day = dt.getDay(); dt.setDate(dt.getDate() + (day === 0 ? -6 : 1 - day)); return dt; }
+// Distance in metres between two lat/lng points (Haversine).
+function metresBetween(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = (x) => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 function fmtDate(d) { return d.toISOString().split("T")[0]; }
 
 // Role helpers (single source of truth used by every view).
@@ -4310,6 +4317,91 @@ function MyReviewImpact({ currentUser, opsTeam, stores = [] }) {
   );
 }
 
+function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords = [], onPunchIn, onPunchOut }) {
+  const myId = currentUser.opsTeamMemberId || currentUser.id;
+  const me = opsTeam.find(m => m.id === myId);
+  const [status, setStatus] = useState(null); // {type:"error"|"ok", msg}
+  const [busy, setBusy] = useState(false);
+
+  // Only render for employees explicitly allowed to clock in by phone.
+  if (!me?.phoneClockIn) return null;
+
+  const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
+  const openPunch = punchRecords.find(p => p.employeeId === myId && p.status === "open");
+  const isClockedIn = !!openPunch;
+
+  // Resolve the employee's store (first of their storeIds, or the open punch's store).
+  const myStoreId = openPunch?.storeId || (me.storeIds && me.storeIds[0]) || null;
+  const store = stores.find(s => s.id === myStoreId) || null;
+
+  const getPosition = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Location isn't available on this device."));
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve(pos.coords),
+      err => reject(new Error(err.code === 1 ? "Location permission denied. Enable location to clock in." : "Couldn't get your location — try again near a window.")),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  });
+
+  const doPunch = async (action) => {
+    setStatus(null); setBusy(true);
+    try {
+      if (!store) throw new Error("No store is linked to your account — ask your manager.");
+      if (store.latitude == null || store.longitude == null) throw new Error("Your store hasn't set its location yet — ask your manager to add it.");
+      const coords = await getPosition();
+      const dist = metresBetween(coords.latitude, coords.longitude, store.latitude, store.longitude);
+      const radius = store.geofenceRadius || 200;
+      if (dist > radius) {
+        throw new Error(`You're about ${Math.round(dist)}m from ${store.shortName || store.name}. You must be within ${radius}m to clock ${action === "in" ? "in" : "out"}.`);
+      }
+      if (action === "in") {
+        const now = new Date().toISOString();
+        await onPunchIn({
+          id: `pr-${Date.now()}`, brandId: store.brandId, storeId: store.id,
+          employeeId: myId, employeeName: `${me.firstName} ${me.lastName}`.trim(),
+          date: today, punchIn: now, punchOut: null, hoursWorked: null,
+          hourlyRate: me.hourlyRate || 0, grossPay: null, status: "open", notes: "phone clock-in",
+        });
+        setStatus({ type: "ok", msg: "Clocked in ✓" });
+      } else {
+        const now = new Date().toISOString();
+        const rawH = (Date.now() - new Date(openPunch.punchIn).getTime()) / 3600000;
+        const breakH = (openPunch.breakMinutes || 0) / 60;
+        const hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
+        const gross = me.hourlyRate ? Math.round(hours * me.hourlyRate * 100) / 100 : null;
+        await onPunchOut(openPunch.id, now, hours, gross);
+        setStatus({ type: "ok", msg: "Clocked out ✓" });
+      }
+    } catch (e) {
+      setStatus({ type: "error", msg: e.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="emp-greeting bg-indigo-600 rounded-2xl p-4 text-white">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-bold">{isClockedIn ? "You're clocked in" : "Clock in"}</div>
+          <div className="text-[11px] opacity-80">
+            {isClockedIn
+              ? `Since ${new Date(openPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}${store ? ` · ${store.shortName || store.name}` : ""}`
+              : store ? `${store.shortName || store.name} · location checked` : "No store linked"}
+          </div>
+        </div>
+        <button onClick={() => doPunch(isClockedIn ? "out" : "in")} disabled={busy}
+          className={`px-4 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 ${isClockedIn ? "bg-white/90 text-red-700" : "bg-white/90 text-indigo-700"}`}>
+          {busy ? "Checking location…" : isClockedIn ? "⏹ Clock out" : "▶ Clock in"}
+        </button>
+      </div>
+      {status && (
+        <div className={`mt-3 text-xs font-semibold rounded-lg px-3 py-2 ${status.type === "error" ? "bg-red-950/40 text-red-200" : "bg-emerald-950/40 text-emerald-200"}`}>
+          {status.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myMember = (opsTeam || []).find(m => m.id === myId);
@@ -4646,6 +4738,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
   availability, onAddAvailability, onUpdateAvailability,
   schedules, punchRecords, onAmendPunch, onAddPunchComment,
+  onEmpPunchIn, onEmpPunchOut,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -4841,6 +4934,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 currentUser={currentUser} brands={brands} opsTeam={opsTeam}
                 schedules={schedules || []} assignments={assignments} stores={stores}
                 visibleStoreIds={myVisibleStoreIds}
+              />
+              <PhoneClockInCard
+                currentUser={currentUser} opsTeam={opsTeam} stores={stores}
+                punchRecords={punchRecords || []} onPunchIn={onEmpPunchIn} onPunchOut={onEmpPunchOut}
               />
               <MyReviewImpact currentUser={currentUser} opsTeam={opsTeam} stores={stores}/>
               <TodaysTasks
@@ -11332,6 +11429,9 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
     // Per-store auto clock-out time (HH:MM). Any shift still open past this
     // time is auto-closed by the nightly job. Blank uses the global default.
     autoClockoutTime: store?.autoClockoutTime ? String(store.autoClockoutTime).slice(0,5) : "",
+    latitude:  store?.latitude  != null ? String(store.latitude)  : "",
+    longitude: store?.longitude != null ? String(store.longitude) : "",
+    geofenceRadius: store?.geofenceRadius != null ? String(store.geofenceRadius) : "200",
   });
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -11474,6 +11574,18 @@ function StoreEditModal({ store, brands, existingIds, onSave, onClose }) {
           />
           <div className="text-[10px] text-slate-500 mt-1">
             Any shift still clocked in past this time is automatically clocked out overnight (set it to closing time + a small buffer, e.g. close 02:00 → 02:30). Leave blank to use the global default.
+          </div>
+        </Field>
+        <Field label="Store location — latitude" >
+          <input value={form.latitude} onChange={set("latitude")} type="number" step="0.000001" placeholder="e.g. 52.6369" className={fieldCls}/>
+        </Field>
+        <Field label="Store location — longitude" >
+          <input value={form.longitude} onChange={set("longitude")} type="number" step="0.000001" placeholder="e.g. -1.1398" className={fieldCls}/>
+        </Field>
+        <Field label="Geofence radius (metres)" full>
+          <input value={form.geofenceRadius} onChange={set("geofenceRadius")} type="number" step="10" min="50" placeholder="200" className={fieldCls}/>
+          <div className="text-[10px] text-slate-500 mt-1">
+            Used for phone clock-in: staff allowed to clock in from their own phone must be within this distance of the store's location. Find coordinates by right-clicking the store in Google Maps → the lat,long appears at the top. 150–250m works well (GPS is less precise indoors).
           </div>
         </Field>
         <Field label="Accepting applications" full>
@@ -15810,6 +15922,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
     payType:        employee.payType || "hourly",
     hourlyRate:     employee.hourlyRate || 0,
     payBasis:       employee.payBasis || "fixed",
+    phoneClockIn:   employee.phoneClockIn || false,
     pin:            employee.pin || "",
     color:          employee.color || COLORS[0],
     // We don't expose isManagement here because it's derived from the role
@@ -15832,6 +15945,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
       payType:        employee.payType || "hourly",
       hourlyRate:     employee.hourlyRate || 0,
       payBasis:       employee.payBasis || "fixed",
+    phoneClockIn:   employee.phoneClockIn || false,
       pin:            employee.pin || "",
       color:          employee.color || COLORS[0],
     });
@@ -15908,6 +16022,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
         payType:      form.payType,
         hourlyRate:   parseFloat(form.hourlyRate) || 0,
         payBasis:     form.payBasis || "fixed",
+        phoneClockIn: !!form.phoneClockIn,
         pin:          form.pin || "",
         color:        form.color,
         ...(newStatus ? { status: newStatus } : {}),
@@ -16070,6 +16185,14 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
             className={inputCls}
           />
         </div>
+      </div>
+
+      <div className="flex items-start gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+        <input id="phoneClockIn" type="checkbox" checked={!!form.phoneClockIn} onChange={e => set("phoneClockIn", e.target.checked)} className="mt-0.5 w-4 h-4 accent-indigo-600"/>
+        <label htmlFor="phoneClockIn" className="flex-1 cursor-pointer">
+          <div className="text-sm font-semibold text-white">Allow phone clock-in</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">This employee can clock in/out from their own phone (not just the store kiosk). A location check requires them to be at the store. Leave off for kiosk-only staff.</div>
+        </label>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -28678,6 +28801,7 @@ export default function App() {
           messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
           availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
           schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch} onAddPunchComment={handleAddPunchComment}
+          onEmpPunchIn={handlePunchIn} onEmpPunchOut={handlePunchOut}
           onLogout={handleLogout}
         />
       </AuthContext.Provider>
