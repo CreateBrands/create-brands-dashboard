@@ -5636,6 +5636,7 @@ function InvoicesView({ currentUser, categories = [] }) {
   const [payF, setPayF] = useState("all");             // all | unpaid | partial | paid | overdue
   const [storeF, setStoreF] = useState("all");
   const [bulkProgress, setBulkProgress] = useState("");
+  const [fullscreen, setFullscreen] = useState(false);
 
   const refreshList = async () => {
     try { setInvoices(await listInvoices()); } catch (e) { setError(e?.message || String(e)); }
@@ -5947,23 +5948,53 @@ function InvoicesView({ currentUser, categories = [] }) {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-2 min-h-[280px]">
-                  {fileUrl ? (
-                    selected.image_path?.toLowerCase().endsWith(".pdf")
-                      ? <iframe title="invoice" src={fileUrl} className="w-full h-[480px] rounded-lg" />
-                      : <img src={fileUrl} alt="invoice" className="w-full rounded-lg" />
-                  ) : (
-                    <div className="text-xs text-slate-600 p-4">No preview available.</div>
-                  )}
-                </div>
-                <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-                  {lines.length === 0 && <div className="text-xs text-slate-600">No lines extracted.</div>}
-                  {lines.map((l) => (
-                    <InvoiceLineRow key={l.id} line={l} domain={selected.entity === "kitchen" ? "kitchen" : "shop"} onChanged={reloadSelected} />
-                  ))}
-                </div>
-              </div>
+              {(() => {
+                const MatchGrid = ({ tall }) => (
+                  <div className={`grid grid-cols-1 lg:grid-cols-2 gap-3 ${tall ? "h-full" : ""}`}>
+                    <div className={`bg-slate-950 border border-slate-800 rounded-xl p-2 ${tall ? "h-full overflow-auto" : "min-h-[280px]"}`}>
+                      {fileUrl ? (
+                        selected.image_path?.toLowerCase().endsWith(".pdf")
+                          ? <iframe title="invoice" src={fileUrl} className={`w-full rounded-lg ${tall ? "h-full min-h-[70vh]" : "h-[480px]"}`} />
+                          : <img src={fileUrl} alt="invoice" className="w-full rounded-lg" />
+                      ) : (
+                        <div className="text-xs text-slate-600 p-4">No preview available.</div>
+                      )}
+                    </div>
+                    <div className={`space-y-2 overflow-y-auto pr-1 ${tall ? "h-full max-h-[80vh]" : "max-h-[520px]"}`}>
+                      {lines.length === 0 && <div className="text-xs text-slate-600">No lines extracted.</div>}
+                      {lines.map((l) => (
+                        <InvoiceLineRow key={l.id} line={l} domain={selected.entity === "kitchen" ? "kitchen" : "shop"} onChanged={reloadSelected} />
+                      ))}
+                    </div>
+                  </div>
+                );
+                return (
+                  <>
+                    <div className="flex justify-end -mb-1">
+                      <button onClick={()=>setFullscreen(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold">
+                        <Maximize2 size={13}/> Fullscreen
+                      </button>
+                    </div>
+                    <MatchGrid tall={false} />
+                    {fullscreen && (
+                      <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col">
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 flex-shrink-0">
+                          <div className="text-sm font-bold text-white truncate">
+                            {selected.supplier_name || "Invoice"} {selected.invoice_number ? `· ${selected.invoice_number}` : ""}
+                            <span className="text-xs text-slate-500 font-normal ml-2">ex-VAT £{selected.total_ex_vat ?? "—"} · lines £{confirmedSum.toFixed(2)}</span>
+                          </div>
+                          <button onClick={()=>setFullscreen(false)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold flex-shrink-0">
+                            <X size={14}/> Close
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-hidden p-4">
+                          <MatchGrid tall={true} />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {selected.status === "pending_review" && (
                 <div className="flex items-center justify-end gap-2">
