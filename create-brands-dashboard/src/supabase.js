@@ -1198,8 +1198,8 @@ function dbStoreToApp(s) {
     city:             s.city,
     postcode:         s.postcode,
     country:          s.country,
-    latitude:         s.latitude,
-    longitude:        s.longitude,
+    latitude:         s.lat ?? s.latitude,
+    longitude:        s.lng ?? s.longitude,
     openedDate:       s.opened_date,
     phone:            s.phone,
     email:            s.email,
@@ -1216,8 +1216,8 @@ function dbStoreToApp(s) {
     // between ALTER TABLE and schema-cache reload.
     isHiring:         s.is_hiring ?? true,
     autoClockoutTime: s.auto_clockout_time || "",
-    latitude:         s.latitude == null ? null : Number(s.latitude),
-    longitude:        s.longitude == null ? null : Number(s.longitude),
+    latitude:         (s.lat ?? s.latitude) == null ? null : Number(s.lat ?? s.latitude),
+    longitude:        (s.lng ?? s.longitude) == null ? null : Number(s.lng ?? s.longitude),
     geofenceRadius:   s.geofence_radius == null ? 200 : Number(s.geofence_radius),
   };
 }
@@ -1304,8 +1304,8 @@ function appStoreToDb(s) {
   if (s.kioskPin        !== undefined) row.kiosk_pin        = s.kioskPin || null;
   if (s.isHiring        !== undefined) row.is_hiring        = !!s.isHiring;
   if (s.autoClockoutTime !== undefined) row.auto_clockout_time = s.autoClockoutTime || null;
-  if (s.latitude        !== undefined) row.latitude        = s.latitude === "" || s.latitude == null ? null : Number(s.latitude);
-  if (s.longitude       !== undefined) row.longitude       = s.longitude === "" || s.longitude == null ? null : Number(s.longitude);
+  if (s.latitude        !== undefined) row.lat            = s.latitude === "" || s.latitude == null ? null : Number(s.latitude);
+  if (s.longitude       !== undefined) row.lng            = s.longitude === "" || s.longitude == null ? null : Number(s.longitude);
   if (s.geofenceRadius  !== undefined) row.geofence_radius = s.geofenceRadius == null ? 200 : Number(s.geofenceRadius);
   return row;
 }
