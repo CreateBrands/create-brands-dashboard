@@ -9761,24 +9761,23 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [flipAgg, setFlipAgg] = useState(null);     // matched Flipdish aggregate for selected entry
+  const [flipPayments, setFlipPayments] = useState([]); // Flipdish payment-method lines for the day
   const [flipLoading, setFlipLoading] = useState(false);
 
-  // Pull the Flipdish daily aggregate for the selected entry's store + date.
+  // Pull the Flipdish daily aggregate + payment breakdown for the selected entry's store + date.
   useEffect(() => {
-    if (!selected || !selected.date) { setFlipAgg(null); return; }
+    if (!selected || !selected.date) { setFlipAgg(null); setFlipPayments([]); return; }
     let cancelled = false;
-    setFlipLoading(true); setFlipAgg(null);
-    fetchStoreDayAggregates({ from: selected.date, to: selected.date })
-      .then(rows => {
-        if (cancelled) return;
-        const match = (rows || []).find(r =>
-          (selected.storeId && r.storeId === selected.storeId) ||
-          (!selected.storeId && r.brandId === selected.brandId)
-        );
-        setFlipAgg(match || null);
-      })
-      .catch(() => { if (!cancelled) setFlipAgg(null); })
-      .finally(() => { if (!cancelled) setFlipLoading(false); });
+    setFlipLoading(true); setFlipAgg(null); setFlipPayments([]);
+    const matchRow = (r) => (selected.storeId && r.storeId === selected.storeId) || (!selected.storeId && r.brandId === selected.brandId);
+    Promise.all([
+      fetchStoreDayAggregates({ from: selected.date, to: selected.date }).catch(() => []),
+      fetchStoreDayPayments({ from: selected.date, to: selected.date }).catch(() => []),
+    ]).then(([aggs, pays]) => {
+      if (cancelled) return;
+      setFlipAgg((aggs || []).find(matchRow) || null);
+      setFlipPayments((pays || []).filter(matchRow));
+    }).finally(() => { if (!cancelled) setFlipLoading(false); });
     return () => { cancelled = true; };
   }, [selId, selected?.date, selected?.storeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -10006,6 +10005,51 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                     </div>
                   );
                 })()}
+
+                {/* Tenders breakdown — Flipdish card auto-checked; Lopay/cash for review (reconcile vs bank) */}
+                {flipAgg && (() => {
+                  const eodGross = Number(selected.netSales) || 0;
+                  const eodFlipCard = Number(selected.cardRevenue) || 0;
+                  const eodLopay = Number(selected.lopay) || 0;
+                  const eodCash = Number(selected.physicalCash) || 0;
+                  const eodUnreported = Number(selected.unreportedExpense) || 0;
+                  // Flipdish's own card total from payment-method lines (card / online / non-cash).
+                  const isCardLine = (m) => { const s = String(m || "").toLowerCase(); return s && !s.includes("cash"); };
+                  const flipCardTotal = (flipPayments || []).filter(p => isCardLine(p.paymentMethod)).reduce((a,p) => a + p.amount, 0);
+                  const hasFlipPayments = (flipPayments || []).length > 0;
+                  const cardMatch = hasFlipPayments && Math.round(eodFlipCard*100) === Math.round(flipCardTotal*100);
+                  // Do the entered tenders sum to gross?
+                  const tenderSum = eodFlipCard + eodLopay + eodCash;
+                  const sumMatch = Math.round(tenderSum*100) === Math.round(eodGross*100);
+                  const Line = ({ label, amount, status, note }) => (
+                    <div className="flex items-center justify-between gap-2 py-1.5 border-b border-slate-800/40 last:border-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs text-slate-300">{label}</span>
+                        {status === "ok" && <span className="text-[10px] text-emerald-400 font-semibold">✓ matches Flipdish</span>}
+                        {status === "bad" && <span className="text-[10px] text-amber-400 font-semibold">⚠ differs from Flipdish</span>}
+                        {status === "review" && <span className="text-[10px] text-slate-500">— check vs bank</span>}
+                      </div>
+                      <span className="text-xs font-semibold text-slate-200 tabular-nums">{fmtMoney(amount)}{note}</span>
+                    </div>
+                  );
+                  return (
+                    <div className="rounded-xl p-3 border border-slate-700/50 bg-slate-950/40">
+                      <div className="text-xs font-bold text-white mb-2">Tenders breakdown</div>
+                      <Line label="Flipdish (card)" amount={eodFlipCard} status={hasFlipPayments ? (cardMatch ? "ok" : "bad") : "review"}
+                        note={hasFlipPayments && !cardMatch ? ` · Flipdish says ${fmtMoney(flipCardTotal)}` : ""} />
+                      <Line label="Lopay (card)" amount={eodLopay} status="review" />
+                      <Line label="Cash (counted)" amount={eodCash} status="review" />
+                      {eodUnreported > 0 && <Line label="Unreported cash/expense" amount={eodUnreported} status="review" />}
+                      <div className={`flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-700/50 text-sm font-bold ${sumMatch ? "text-emerald-400" : "text-amber-400"}`}>
+                        <span>{sumMatch ? "✓ Tenders sum to gross" : "⚠ Tenders don't sum to gross"}</span>
+                        <span className="tabular-nums">{fmtMoney(tenderSum)} / {fmtMoney(eodGross)}</span>
+                      </div>
+                      {!hasFlipPayments && <div className="text-[11px] text-slate-500 mt-2">No Flipdish payment-method breakdown for this day — card line shown for review only.</div>}
+                      <div className="text-[10px] text-slate-600 mt-1">Lopay and cash settle outside Flipdish — these reconcile against the bank (next stage).</div>
+                    </div>
+                  );
+                })()}
+                {canAmend && changedFields.length > 0 && (
                   <div className="space-y-2 bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
                     <div className="text-[11px] text-amber-300 font-semibold">{changedFields.length} change(s) pending — a reason is required:</div>
                     <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Why is this being amended?"
