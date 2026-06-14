@@ -25299,80 +25299,103 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       })()}
 
       {!isMobile && viewMode==="week" && (
-        <div className="overflow-x-auto">
-          <div className={`min-w-[920px] ${fullscreen ? "max-h-[calc(100vh-240px)]" : "max-h-[calc(100vh-340px)]"} overflow-y-auto`}>
-            <div className="grid gap-1 mb-2 sticky top-0 z-20 bg-slate-950 pt-1 pb-1" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
-              <div className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 py-2">Employee</div>
+        <div className="overflow-x-auto rounded-2xl border border-slate-800/70 bg-slate-950">
+          <div className={`min-w-[980px] ${fullscreen ? "max-h-[calc(100vh-240px)]" : "max-h-[calc(100vh-340px)]"} overflow-y-auto`}>
+            {/* ── Day header row ─────────────────────────────────────────── */}
+            <div className="grid sticky top-0 z-20 bg-slate-950 border-b border-slate-800" style={{gridTemplateColumns:"minmax(190px,210px) repeat(7, minmax(0,1fr)) minmax(84px,104px)"}}>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 flex items-end">Employee</div>
               {weekDays.map((day,idx)=>{
                 const isToday = toLocalDateStr(day)===toLocalDateStr(today);
                 const dt = dailyTotals[idx];
                 return (
-                  <div key={idx} className={`text-center rounded-xl py-2 ${isToday?"bg-indigo-600/20 border border-indigo-500/30":"bg-slate-900/40"}`}>
-                    <div className={`text-xs font-semibold ${isToday?"text-indigo-300":"text-slate-600"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
-                    <div className={`text-sm font-bold ${isToday?"text-indigo-300":"text-slate-700"}`}>{day.getDate()}</div>
-                    {dt.headcount > 0 && <div className="text-xs text-slate-500 mt-0.5">{dt.headcount} on shift</div>}
+                  <div key={idx} className={`text-center px-1 py-2.5 border-l border-slate-800/60 ${isToday?"bg-indigo-600/10":""}`}>
+                    <div className={`text-[11px] font-semibold uppercase tracking-wide ${isToday?"text-indigo-300":"text-slate-500"}`}>{DAYS_OF_WEEK[idx].slice(0,3)}</div>
+                    <div className={`text-lg font-black leading-tight ${isToday?"text-indigo-300":"text-slate-300"}`}>{day.getDate()}</div>
+                    <div className="text-[10px] text-slate-600 mt-0.5">{dt.headcount>0?`${dt.headcount} on shift`:"—"}</div>
                     {showCosts && dailyLabourPct[idx] != null && (
-                      <div className={`text-[11px] font-bold mt-0.5 ${
+                      <div className={`text-[10px] font-bold ${
                         labourPctRating(dailyLabourPct[idx]) === "green" ? "text-emerald-400" : labourPctRating(dailyLabourPct[idx]) === "amber" ? "text-amber-400" : "text-red-400"
                       }`} title={`Labour ${dailyLabourPct[idx].toFixed(1)}% vs ${labourPctTarget}% target`}>
-                        {dailyLabourPct[idx] > labourPctTarget ? "⚠ " : ""}{dailyLabourPct[idx].toFixed(0)}%
+                        {dailyLabourPct[idx].toFixed(0)}%
                       </div>
                     )}
                   </div>
                 );
               })}
-              <div className="text-center rounded-xl py-2 bg-slate-900/40">
-                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Total</div>
+              <div className="text-center px-1 py-3 border-l border-slate-800/60 flex items-end justify-center">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Total</span>
               </div>
             </div>
 
-            {filteredMembers.length===0 && <div className="text-center py-10 text-slate-500 text-sm">No team members match filters</div>}
+            {filteredMembers.length===0 && <div className="text-center py-12 text-slate-500 text-sm">No team members match filters</div>}
 
+            {/* ── Employee rows ──────────────────────────────────────────── */}
             {filteredMembers.map((member, mIdx)=>{
               const empTotal = employeeTotals[mIdx];
+              const roleLabel = member.role || member.department || "";
               return (
-                <div key={member.id} className="grid gap-1 mb-1.5" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
-                  <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-900 rounded-xl">
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                <div key={member.id} className="grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors" style={{gridTemplateColumns:"minmax(190px,210px) repeat(7, minmax(0,1fr)) minmax(84px,104px)"}}>
+                  {/* Left: avatar + name + role + running total */}
+                  <div className="flex items-center gap-2.5 px-3 py-2.5">
+                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs font-semibold text-white truncate">{member.firstName} {member.lastName}</div>
-                      <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
+                      <div className="text-[13px] font-semibold text-white truncate leading-tight">{member.firstName} {member.lastName}</div>
+                      {roleLabel && <div className="text-[11px] text-slate-500 truncate uppercase tracking-wide">{roleLabel}</div>}
+                      <div className="text-[11px] mt-0.5 flex items-center gap-1.5">
+                        <span className="text-slate-400 font-semibold">{fmtHrs(empTotal.hours)}</span>
+                        {showCosts && member.hourlyRate > 0 && <span className="text-emerald-500/80">· {fmtMoney(empTotal.cost)}</span>}
+                      </div>
                     </div>
                   </div>
 
+                  {/* Day cells */}
                   {weekDays.map((day,dIdx)=>{
                     const dateStr = toLocalDateStr(day);
                     const slots   = getSlotsFor(member.id, dateStr);
                     const avails  = getAvailFor(member.id, dateStr);
-                    const isAvail = avails.some(a=>a.available);
-                    const availWindow = avails.find(a=>a.available);
+                    const unavail = avails.find(a=>!a.available);
+                    const availWin = avails.find(a=>a.available);
                     const isToday = toLocalDateStr(day)===toLocalDateStr(today);
+                    const hasShift = slots.length>0;
+                    // Tooltip text mirrors 7shifts: status + window + reason.
+                    const availTip = unavail
+                      ? `Not available${(unavail.startTime&&unavail.endTime)?` ${unavail.startTime}–${unavail.endTime}`:""}${unavail.notes?` · ${unavail.notes}`:""}`
+                      : availWin
+                        ? `Available${(availWin.startTime&&availWin.endTime)?` ${availWin.startTime}–${availWin.endTime}`:" all day"}${availWin.notes?` · ${availWin.notes}`:""}`
+                        : "";
                     return (
                       <div key={dIdx}
-                        className={`relative rounded-xl min-h-16 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/60 bg-slate-900/30 hover:bg-slate-800/40"}`}
+                        className={`group relative min-h-[70px] border-l border-slate-800/40 p-1 transition-all ${
+                          editLocked ? "cursor-default" : "cursor-pointer"
+                        } ${isToday?"bg-indigo-600/5":""} ${
+                          unavail ? "bg-red-950/10" : availWin && !hasShift ? "bg-emerald-950/[0.06]" : ""
+                        } ${!editLocked ? "hover:bg-slate-800/40" : ""}`}
+                        title={availTip || undefined}
                         onClick={()=>!editLocked && setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}>
-                        {/* Availability strip — thin bar + time label */}
-                        {avails.length>0 && (() => {
-                          const win = availWindow && availWindow.startTime && availWindow.endTime
-                            ? `${availWindow.startTime}–${availWindow.endTime}` : null;
-                          const label = isAvail ? (win || "All day") : (win ? `Off ${win}` : "Unavailable");
-                          return (
-                            <div className="mb-1">
-                              <div className={`w-full rounded-full h-1 ${isAvail ? "bg-emerald-500" : "bg-red-500"}`}
-                                title={isAvail ? (win?`Available ${win}`:"Available all day") : (win?`Unavailable ${win}`:"Marked unavailable")}/>
-                              <div className={`text-[8px] leading-tight mt-0.5 truncate ${isAvail?"text-emerald-400/80":"text-red-400/80"}`}>{label}</div>
-                            </div>
-                          );
-                        })()}
-                        <div className="space-y-0.5">
+
+                        {/* Availability ribbon at top of cell */}
+                        {avails.length>0 && (
+                          <div className="flex items-center gap-1 mb-1 px-0.5">
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${unavail?"bg-red-500":"bg-emerald-500"}`}/>
+                            <span className={`text-[9px] font-semibold truncate ${unavail?"text-red-400/90":"text-emerald-400/90"}`}>
+                              {unavail
+                                ? (unavail.startTime&&unavail.endTime ? `Off ${unavail.startTime}–${unavail.endTime}` : "Not available")
+                                : (availWin?.startTime&&availWin?.endTime ? `${availWin.startTime}–${availWin.endTime}` : "Available")}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Shifts */}
+                        <div className="space-y-1">
                           {slots.map(s=>{
                             const conflict = getSlotConflict(s, member);
                             const hrs = calcShiftHours(s.startTime, s.endTime);
                             const isSelected = selected.has(s.id);
                             const displayEnd = resizingShift?.id === s.id && resizingShift?.currentEnd ? resizingShift.currentEnd : s.endTime;
+                            const col = getPresetColor(s.shift);
                             return (
                               <div key={s.id}
                                 onClick={e=>{
@@ -25380,64 +25403,71 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                                   if (e.shiftKey) toggleSelect(s.id, e);
                                   else if (!editLocked) setShiftModal({date:dateStr,slot:s,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()});
                                 }}
-                                className={`relative text-xs rounded-md px-1.5 py-0.5 font-bold truncate cursor-pointer transition-all hover:opacity-80 ${conflict?"ring-1 ring-red-500/60":""} ${isSelected?"ring-2 ring-indigo-400":""}`}
-                                style={{background:getPresetColor(s.shift)+"40",color:getPresetColor(s.shift)}}
+                                className={`relative rounded-lg px-2 py-1.5 cursor-pointer transition-all hover:brightness-110 ${conflict?"ring-1 ring-red-500/70":""} ${isSelected?"ring-2 ring-indigo-400":""} ${!s.published?"opacity-90":""}`}
+                                style={{background:col+"26",borderLeft:`3px solid ${col}`}}
                                 title={`${s.shift}: ${s.startTime}–${displayEnd} · ${hrs.toFixed(1)}h${s.published?"":" (draft)"} · Shift-click to multi-select${editLocked?"":" · Drag right edge to resize"}`}>
-                                {conflict && <span className="absolute -top-0.5 -left-0.5 w-2 h-2 rounded-full bg-red-500 border border-slate-950"/>}
-                                {s.startTime}–{displayEnd}{!s.published&&" ✎"}
-                                {/* Resize handle */}
+                                {conflict && <span className="absolute -top-1 -left-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-slate-950"/>}
+                                <div className="text-[11px] font-bold leading-tight" style={{color:col}}>{s.startTime}–{displayEnd}</div>
+                                <div className="text-[9px] text-slate-400 truncate leading-tight">{s.shift}{!s.published&&" · draft"}</div>
                                 {!editLocked && (
                                   <span
                                     onMouseDown={e=>handleResizeStart(e,s)}
                                     onTouchStart={e=>handleResizeStart(e,s)}
-                                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-slate-900/30 rounded-r-md"/>
+                                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-slate-900/40 rounded-r-lg"/>
                                 )}
                               </div>
                             );
                           })}
-                          {slots.length===0&&<div className="hidden group-hover:flex items-center justify-center h-6 text-slate-600 hover:text-slate-600"><Plus size={12}/></div>}
+                          {/* Empty-cell add affordance */}
+                          {!hasShift && !editLocked && (
+                            <div className="hidden group-hover:flex items-center justify-center h-9 rounded-lg border border-dashed border-slate-700 text-slate-600">
+                              <Plus size={14}/>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
                   })}
 
-                  <div className="flex flex-col items-center justify-center px-2 py-1.5 bg-slate-900/40 rounded-xl border border-slate-800/60">
-                    <div className="text-sm font-bold text-white">{fmtHrs(empTotal.hours)}</div>
+                  {/* Right: week total for this person */}
+                  <div className="flex flex-col items-center justify-center px-2 border-l border-slate-800/40">
+                    <div className="text-sm font-black text-white">{fmtHrs(empTotal.hours)}</div>
                     {showCosts && member.hourlyRate > 0 && (
-                      <div className="text-xs text-emerald-400 font-semibold">{fmtMoney(empTotal.cost)}</div>
+                      <div className="text-[11px] text-emerald-400 font-semibold">{fmtMoney(empTotal.cost)}</div>
                     )}
                   </div>
                 </div>
               );
             })}
 
-            <div className="grid gap-1 mt-3 pt-3 border-t border-slate-800/60" style={{gridTemplateColumns:"minmax(120px,180px) repeat(7, minmax(0,1fr)) minmax(70px,110px)"}}>
-              <div className="flex flex-col justify-center px-2">
-                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Daily</div>
-                <div className="text-xs text-slate-600">hours / wages / sales</div>
+            {/* ── Daily totals footer ────────────────────────────────────── */}
+            <div className="grid border-t-2 border-slate-800 bg-slate-900/40" style={{gridTemplateColumns:"minmax(190px,210px) repeat(7, minmax(0,1fr)) minmax(84px,104px)"}}>
+              <div className="flex flex-col justify-center px-4 py-2.5">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Daily total</div>
+                <div className="text-[10px] text-slate-600">hours · wages · sales</div>
               </div>
               {dailyTotals.map((dt, idx) => (
-                <div key={idx} className="rounded-xl py-2 px-1 bg-slate-900 border border-slate-800/60 text-center">
-                  <div className="text-sm font-bold text-white">{fmtHrs(dt.hours)}</div>
-                  {showCosts && <div className="text-xs text-emerald-400 font-semibold">{fmtMoney(dt.cost)}</div>}
-                  {dailySales[idx] > 0 && <div className="text-xs text-indigo-400 mt-0.5">{fmtMoney(dailySales[idx])}</div>}
-                  {dt.actualHours > 0 && <div className="text-xs text-slate-500 mt-0.5">act {fmtHrs(dt.actualHours)}</div>}
+                <div key={idx} className="py-2.5 px-1 border-l border-slate-800/40 text-center">
+                  <div className="text-[13px] font-bold text-white">{fmtHrs(dt.hours)}</div>
+                  {showCosts && <div className="text-[11px] text-emerald-400 font-semibold">{fmtMoney(dt.cost)}</div>}
+                  {dailySales[idx] > 0 && <div className="text-[10px] text-indigo-400 mt-0.5">{fmtMoney(dailySales[idx])}</div>}
+                  {dt.actualHours > 0 && <div className="text-[10px] text-slate-500 mt-0.5">act {fmtHrs(dt.actualHours)}</div>}
                 </div>
               ))}
-              <div className="rounded-xl py-2 px-1 bg-indigo-950/30 border border-indigo-500/30 text-center">
-                <div className="text-sm font-black text-white">{fmtHrs(weekTotals.hours)}</div>
-                {showCosts && <div className="text-xs text-emerald-300 font-bold">{fmtMoney(weekTotals.cost)}</div>}
+              <div className="py-2.5 px-1 border-l border-slate-800/40 text-center bg-indigo-950/20">
+                <div className="text-[13px] font-black text-white">{fmtHrs(weekTotals.hours)}</div>
+                {showCosts && <div className="text-[11px] text-emerald-300 font-bold">{fmtMoney(weekTotals.cost)}</div>}
               </div>
             </div>
+          </div>
 
-            <div className="flex items-center gap-4 mt-4 text-xs text-slate-500 flex-wrap">
-              <div className="flex items-center gap-1.5"><div className="w-8 h-1 rounded-full bg-emerald-500"/> Available</div>
-              <div className="flex items-center gap-1.5"><div className="w-8 h-1 rounded-full bg-red-500"/> Unavailable</div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"/> Conflict</div>
-              <div className="flex items-center gap-1.5"><span className="text-slate-600">✎</span> Draft</div>
-              <div className="flex items-center gap-1.5"><span className="text-slate-600">⇨</span> Drag right edge of shift to resize</div>
-              <div className="flex items-center gap-1.5"><span className="text-slate-600">⇧</span>+click for multi-select</div>
-            </div>
+          {/* Legend */}
+          <div className="flex items-center gap-4 px-4 py-2.5 text-[11px] text-slate-500 flex-wrap border-t border-slate-800/60">
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/> Available</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500"/> Not available</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500"/> Conflict</div>
+            <div className="flex items-center gap-1.5"><span className="text-slate-600">drag right edge</span> resize</div>
+            <div className="flex items-center gap-1.5"><span className="text-slate-600">shift+click</span> multi-select</div>
           </div>
         </div>
       )}
