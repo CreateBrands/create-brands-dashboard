@@ -21991,13 +21991,8 @@ function EmployeeAvailabilityForm({ brands, currentUser, onSubmit, onCancel }) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
-        {/* Location */}
-        {myBrands.length > 1 && (
-          <div>
-            <label className={labelCls}>Location</label>
-            <LocationDropdown brands={myBrands} value={brandId} onChange={setBrandId} className="w-full"/>
-          </div>
-        )}
+        {/* No location picker — availability applies to all of the employee's
+            stores. brandId is set automatically from their assignment. */}
 
         {/* Available / Unavailable */}
         <div>
@@ -22461,15 +22456,19 @@ function AmendAvailabilityModal({ item, onSave, onClose }) {
 }
 
 // ── Manager: Add Availability for Employee ────────────────────────────────────
-function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
+function AddAvailabilityModal({ brands, stores = [], opsTeam, onSave, onClose }) {
   const [form, setFormState] = useState({
-    brandId: brands[0]?.id || "", employeeId: "", type: "one_off",
+    brandId: brands[0]?.id || "", storeId: "", employeeId: "", type: "one_off",
     available: true, date: "", dayOfWeek: "Monday",
     startDate: "", endDate: "", startTime: "09:00", endTime: "17:00",
     notes: "", managerNotes: "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
-  const brandMembers   = opsTeam.filter(m => m.brandId === form.brandId);
+  const sortedStores = [...stores].filter(s=>!s.archivedAt).sort((a,b)=>(a.shortName||a.name||"").localeCompare(b.shortName||b.name||""));
+  // Members of the picked store (or, if none picked, everyone).
+  const brandMembers = form.storeId
+    ? opsTeam.filter(m => (m.storeIds || []).includes(form.storeId))
+    : opsTeam;
   const selectedMember = opsTeam.find(m => m.id === form.employeeId);
 
   const isValid = () => {
@@ -22484,7 +22483,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
     if (!isValid()) return;
     onSave({
       id: `av-${Date.now()}`,
-      brandId: form.brandId,
+      brandId: selectedMember?.brandId || form.brandId,
       employeeId: form.employeeId,
       employeeName: selectedMember ? `${selectedMember.firstName} ${selectedMember.lastName}`.trim() : "",
       type: form.type, available: form.available,
@@ -22508,8 +22507,11 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
         <button onClick={handleSave} disabled={!isValid()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40">Add</button>
       </>}>
       <div className="space-y-4">
-        <div><label className={labelCls}>Location</label>
-          <LocationDropdown brands={brands} value={form.brandId} onChange={v => { set("brandId", v); set("employeeId", ""); }} className="w-full"/>
+        <div><label className={labelCls}>Store</label>
+          <SelectDropdown value={form.storeId} onChange={v => { set("storeId", v); set("employeeId", ""); }} className="w-full">
+            <option value="">— All stores —</option>
+            {sortedStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+          </SelectDropdown>
         </div>
         <div><label className={labelCls}>Employee *</label>
           <SelectDropdown value={form.employeeId} onChange={v => set("employeeId", v)} className="w-full">
@@ -22544,7 +22546,7 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
 }
 
 // ── Manager: Availability Tracker ─────────────────────────────────────────────
-function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
+function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   // Store scope: HQ/owner see everything; a manager sees only availability for
@@ -22805,7 +22807,7 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
         </Modal>
       )}
       {addModal && (
-        <AddAvailabilityModal brands={vb} opsTeam={opsTeam}
+        <AddAvailabilityModal brands={vb} stores={(stores||[]).filter(s => isHq || (currentUser?.storeIds||[]).includes(s.id))} opsTeam={opsTeam}
           onSave={a => { onAdd(a); setAddModal(false); }}
           onClose={() => setAddModal(false)}/>
       )}
@@ -24196,7 +24198,7 @@ function CommunicationView({
         {tab === "availability" && (
           isEmployee
             ? <EmployeeAvailabilityView brands={brands} currentUser={currentUser} availability={availability||[]} onAdd={onAddAvailability} onUpdate={onUpdateAvailability}/>
-            : <ManagerAvailabilityView  brands={brands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={onUpdateAvailability} onAdd={onAddAvailability} onDelete={id => onUpdateAvailability({id, status:"rejected"})}/>
+            : <ManagerAvailabilityView  brands={brands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={onUpdateAvailability} onAdd={onAddAvailability} onDelete={id => onUpdateAvailability({id, status:"rejected"})}/>
         )}
         {tab === "schedule" && !isEmployee && (
           <ScheduleView
@@ -31241,7 +31243,7 @@ export default function App() {
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
             {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
-            {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
+            {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
