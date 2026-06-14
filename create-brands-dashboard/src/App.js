@@ -5220,7 +5220,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
           {activeView === "emp-schedule" && (
             <EmployeeScheduleView
-              currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules || []}
+              currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules || []} stores={stores || []}
             />
           )}
 
@@ -22547,6 +22547,22 @@ function AddAvailabilityModal({ brands, opsTeam, onSave, onClose }) {
 function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
+  // Store scope: HQ/owner see everything; a manager sees only availability for
+  // employees who belong to one of the manager's assigned stores.
+  const isHq = isHqOrAbove(user.role);
+  const myStoreIds = new Set(currentUser?.storeIds || []);
+  const empStoreIds = useMemo(() => {
+    const map = {};
+    (opsTeam || []).forEach(m => { map[m.id] = m.storeIds || []; });
+    return map;
+  }, [opsTeam]);
+  const inMyScope = (a) => {
+    if (!vb.some(b => b.id === a.brandId)) return false;
+    if (isHq) return true;
+    const sids = empStoreIds[a.employeeId] || [];
+    if (sids.length === 0) return true; // legacy rows with no store — don't hide
+    return sids.some(id => myStoreIds.has(id));
+  };
   const [filterBrand,    setFilterBrand]    = useState("all");
   const [filterStatus,   setFilterStatus]   = useState("pending");
   const [filterType,     setFilterType]     = useState("all");
@@ -22567,7 +22583,7 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
   }, [availability]);
 
   const visible = availability.filter(a => {
-    if (!vb.some(b => b.id === a.brandId)) return false;
+    if (!inMyScope(a)) return false;
     if (filterBrand    !== "all" && a.brandId    !== filterBrand)    return false;
     if (filterStatus   !== "all" && a.status     !== filterStatus)   return false;
     if (filterType     !== "all" && a.type       !== filterType)     return false;
@@ -22579,12 +22595,12 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
     return new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt);
   });
 
-  const pendingCount = availability.filter(a => vb.some(b => b.id === a.brandId) && a.status === "pending").length;
+  const pendingCount = availability.filter(a => inMyScope(a) && a.status === "pending").length;
   const handleApprove = (a) => onUpdate({ ...a, status: "approved", updatedAt: new Date().toISOString() });
   const handleReject  = (a, note) => onUpdate({ ...a, status: "rejected", managerNotes: note, updatedAt: new Date().toISOString() });
 
   const employeeOptions = [...new Map(
-    availability.filter(a => vb.some(b => b.id === a.brandId)).map(a => [a.employeeId, { id: a.employeeId, name: a.employeeName }])
+    availability.filter(a => inMyScope(a)).map(a => [a.employeeId, { id: a.employeeId, name: a.employeeName }])
   ).values()];
 
   const statusColor = s => ({ pending:"amber", approved:"emerald", rejected:"red", amended:"indigo" }[s]||"slate");
@@ -22600,7 +22616,7 @@ function ManagerAvailabilityView({ brands, opsTeam, availability, currentUser, o
     const dateStr = `${y}-${mo}-${dd}`;
     const dayName = DAYS_OF_WEEK[date.getDay() === 0 ? 6 : date.getDay() - 1];
     return availability.filter(a => {
-      if (!vb.some(b => b.id === a.brandId)) return false;
+      if (!inMyScope(a)) return false;
       if (a.status === "rejected") return false;
       if (a.type === "one_off") return a.date === dateStr;
       if (a.type === "weekly") return (a.amendedDayOfWeek || a.dayOfWeek) === dayName;
@@ -24195,7 +24211,7 @@ function CommunicationView({
           />
         )}
         {tab === "emp-schedule" && isEmployee && (
-          <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]}/>
+          <EmployeeScheduleView currentUser={currentUser} brands={brands} opsTeam={opsTeam} schedules={schedules||[]} stores={stores||[]}/>
         )}
         {tab === "my-hours" && isEmployee && (
           <EmployeeHoursView currentUser={currentUser} brands={brands} schedules={schedules||[]} punchRecords={punchRecords||[]} onUpdate={onUpdatePunchRecord} onAddComment={onAddPunchComment}/>
@@ -24570,7 +24586,7 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
 // SCHEDULE VIEW — totals, costs, copy-week, conflicts, coverage, drag-resize,
 // auto-fill, forecasted SPLH, lock, multi-select bulk, mobile day view
 // ═══════════════════════════════════════════════════════════════════════════════
-function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore }) {
+function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore, onUpdateMember }) {
   const { user } = useAuth();
 
   // Store-first scoping (the new pattern). We pick a SINGLE store for the
@@ -24661,8 +24677,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // via ops_team.store_ids text[]). Falls back to brandId match for any legacy
   // ops_team row that doesn't yet have storeIds populated.
   // MANAGERS_IN_TEAM_V1: roster = ops staff + managers (schedulable, multi-brand via storeIds)
+  const [showAllStaff, setShowAllStaff] = useState(false);
   const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
   const brandMembers = roster.filter(m => {
+    if (showAllStaff) {
+      // Show every schedulable person in a visible brand, regardless of store.
+      return vb.some(b => b.id === m.brandId) || (m.storeIds || []).length === 0 || (m.storeIds||[]).some(id => visibleStores.some(s=>s.id===id));
+    }
     const ids = m.storeIds || [];
     if (ids.length > 0) return ids.includes(storeId);
     return m.brandId === brandId;  // legacy fallback
@@ -24996,6 +25017,10 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
         {allDepts.length > 0 && <SelectDropdown value={filterDept} onChange={setFilterDept} className="w-32"><option value="all">All Depts</option>{allDepts.map(d=><option key={d}>{d}</option>)}</SelectDropdown>}
         {allRoles.length > 0 && <SelectDropdown value={filterRole} onChange={setFilterRole} className="w-32"><option value="all">All Roles</option>{allRoles.map(r=><option key={r}>{r}</option>)}</SelectDropdown>}
         {allShiftNames.length > 0 && <SelectDropdown value={filterShift} onChange={setFilterShift} className="w-32"><option value="all">All Shifts</option>{allShiftNames.map(n=><option key={n}>{n}</option>)}</SelectDropdown>}
+        <button onClick={()=>setShowAllStaff(v=>!v)} title="Show staff from other stores so you can add them to this rota"
+          className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${showAllStaff?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 border-slate-700 text-slate-400 hover:text-white"}`}>
+          {showAllStaff ? "✓ All staff" : "+ Add staff"}
+        </button>
 
         <div className="flex items-center gap-2 flex-wrap ml-auto">
           {allWeekSlots.length > 0 && (
@@ -25301,15 +25326,19 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                       <div key={dIdx}
                         className={`relative rounded-xl min-h-16 p-1.5 border transition-all cursor-pointer group ${isToday?"border-indigo-500/30 bg-indigo-950/10":"border-slate-800/60 bg-slate-900/30 hover:bg-slate-800/40"}`}
                         onClick={()=>!editLocked && setShiftModal({date:dateStr,memberId:member.id,memberName:`${member.firstName} ${member.lastName}`.trim()})}>
-                        {/* Availability strip — thin bar, hover for details */}
-                        {avails.length>0 && (
-                          <div className={`w-full rounded-full h-1 mb-1 ${
-                            isAvail ? "bg-emerald-500" : "bg-red-500"
-                          }`}
-                          title={isAvail
-                            ? (availWindow?`Available ${availWindow.startTime}–${availWindow.endTime}`:"Available")
-                            : "Marked unavailable"}/>
-                        )}
+                        {/* Availability strip — thin bar + time label */}
+                        {avails.length>0 && (() => {
+                          const win = availWindow && availWindow.startTime && availWindow.endTime
+                            ? `${availWindow.startTime}–${availWindow.endTime}` : null;
+                          const label = isAvail ? (win || "All day") : (win ? `Off ${win}` : "Unavailable");
+                          return (
+                            <div className="mb-1">
+                              <div className={`w-full rounded-full h-1 ${isAvail ? "bg-emerald-500" : "bg-red-500"}`}
+                                title={isAvail ? (win?`Available ${win}`:"Available all day") : (win?`Unavailable ${win}`:"Marked unavailable")}/>
+                              <div className={`text-[8px] leading-tight mt-0.5 truncate ${isAvail?"text-emerald-400/80":"text-red-400/80"}`}>{label}</div>
+                            </div>
+                          );
+                        })()}
                         <div className="space-y-0.5">
                           {slots.map(s=>{
                             const conflict = getSlotConflict(s, member);
@@ -25510,7 +25539,21 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           memberId={shiftModal.memberId||null} memberName={shiftModal.memberName||""}
           filterRole={filterRole!=="all"?filterRole:""} filterDept={filterDept!=="all"?filterDept:""}
           opsTeam={roster} availability={availability} shiftPresets={shiftPresets} schedules={schedules} currentUser={currentUser}
-          onSave={s=>{onAdd(s);setShiftModal(null);}}
+          onSave={async (s)=>{
+            onAdd(s);
+            // If the assigned employee isn't a member of this store, offer to add them.
+            try {
+              const m = roster.find(x => x.id === s.employeeId);
+              const sids = m?.storeIds || [];
+              if (m && onUpdateMember && storeId && sids.length > 0 && !sids.includes(storeId)) {
+                const storeNm = selectedStore ? (selectedStore.shortName || selectedStore.name) : "this store";
+                if (window.confirm(`${m.firstName||m.lastName||"This employee"} isn't assigned to ${storeNm}. Also add them to ${storeNm} so they appear on its rota in future?`)) {
+                  await onUpdateMember(m.id, { storeIds: [...sids, storeId] });
+                }
+              }
+            } catch (e) { /* non-fatal */ }
+            setShiftModal(null);
+          }}
           onDelete={id=>{onDelete(id);setShiftModal(null);}}
           onClose={()=>setShiftModal(null)}
         />
@@ -25765,11 +25808,12 @@ function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClo
 }
 
 // ── Employee Schedule View ────────────────────────────────────────────────────
-function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
+function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules, stores = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myBrandId = currentUser.brandIds[0];
   const myMember = opsTeam.find(m => m.id === myId);
   const myDept = myMember?.department || "";
+  const storeNameFor = (s) => { const st = stores.find(x => x.id === s.storeId); return st ? (st.shortName || st.name) : ""; };
 
   // Use local date (not UTC) so BST/timezone doesn't shift the day
   const toLocalDateStr = (d) => {
@@ -25787,17 +25831,20 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
   const [viewDate, setViewDate] = useState(todayStr);
   const viewLabel = viewDate === todayStr ? "Today" : "Tomorrow";
 
-  // Only published schedules for this brand on this date
+  // Only published schedules for this brand on this date (for colleagues view)
   const daySchedules = schedules.filter(s =>
     s.brandId === myBrandId && s.date === viewDate &&
     !!s.published &&
     s.status !== "cancelled"
   );
 
-  // My own shifts — match by opsTeamMemberId OR currentUser.id
-  const myShifts = daySchedules.filter(s =>
-    s.employeeId === myId || s.employeeId === currentUser.id
-  );
+  // My own shifts — match by opsTeamMemberId OR currentUser.id, ACROSS all
+  // stores/brands (an employee can be scheduled at a store outside their home
+  // brand), and an employee can have several shifts the same day.
+  const myShifts = schedules.filter(s =>
+    s.date === viewDate && !!s.published && s.status !== "cancelled" &&
+    (s.employeeId === myId || s.employeeId === currentUser.id)
+  ).sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
 
   // Colleague shifts — everyone else at same location, same day
   // Grouped: same dept first, then others
@@ -25839,6 +25886,7 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules }) {
             </div>
             <div className="text-xs text-slate-600 mt-0.5">
               {shift.shift} · {shift.startTime} – {shift.endTime}
+              {storeNameFor(shift) && <span className="text-indigo-400"> · {storeNameFor(shift)}</span>}
             </div>
             {shift.notes && isMe && <div className="text-xs text-slate-500 italic mt-1">{shift.notes}</div>}
           </div>
@@ -31168,7 +31216,7 @@ export default function App() {
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
             {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
-            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek}/>}
+            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
