@@ -18,7 +18,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -13596,14 +13596,31 @@ function daysInPeriod(fromStr, toStr) {
 // contract specifies one). Overtime is conventionally hours worked beyond a
 // weekly threshold. The 48h figure is the Working Time Directive average ceiling
 // (a compliance warning), separate from the OT pay threshold.
-const OT_WEEKLY_THRESHOLD = 40;   // hours/week above which time counts as overtime
-const OT_MULTIPLIER       = 1.0;  // UK: no statutory premium; raise if contractual (e.g. 1.5)
-const WTD_WEEKLY_LIMIT    = 48;   // Working Time Directive average weekly ceiling
+const OT_WEEKLY_THRESHOLD = 40;   // default hours/week above which time counts as overtime
+const OT_MULTIPLIER       = 1.0;  // default UK: no statutory premium; raise if contractual (e.g. 1.5)
+const WTD_WEEKLY_LIMIT    = 48;   // default Working Time Directive average weekly ceiling
+
+// Live overtime rules — defaults above, overridden from app_settings at load.
+// Edited in Ops Setup → Overtime. Read everywhere OT is computed.
+const OT_RULES = {
+  weeklyThreshold: OT_WEEKLY_THRESHOLD,
+  multiplier: OT_MULTIPLIER,
+  wtdLimit: WTD_WEEKLY_LIMIT,
+};
+function applyOtRulesFromSettings(settings) {
+  if (!settings) return;
+  const wt = parseFloat(settings.ot_weekly_threshold);
+  const mu = parseFloat(settings.ot_multiplier);
+  const wt2 = parseFloat(settings.wtd_weekly_limit);
+  if (!isNaN(wt) && wt > 0) OT_RULES.weeklyThreshold = wt;
+  if (!isNaN(mu) && mu >= 1) OT_RULES.multiplier = mu;
+  if (!isNaN(wt2) && wt2 > 0) OT_RULES.wtdLimit = wt2;
+}
 
 // Given a map of ISO-week-start -> total paid hours that week, split into
 // regular (<= threshold) and overtime (> threshold) across all weeks.
 // Returns { regular, overtime, weeks: [{ weekStart, hours, regular, ot }] }.
-function splitWeeklyOvertime(weekHoursMap, threshold = OT_WEEKLY_THRESHOLD) {
+function splitWeeklyOvertime(weekHoursMap, threshold = OT_RULES.weeklyThreshold) {
   let regular = 0, overtime = 0;
   const weeks = [];
   Object.keys(weekHoursMap).forEach(weekStart => {
@@ -19476,6 +19493,60 @@ function OpsTeamView({
   );
 }
 
+function OvertimeRulesEditor({ appSettings = {}, onSave }) {
+  const init = {
+    weeklyThreshold: appSettings.ot_weekly_threshold ?? "40",
+    multiplier: appSettings.ot_multiplier ?? "1.0",
+    wtdLimit: appSettings.wtd_weekly_limit ?? "48",
+  };
+  const [form, setForm] = useState(init);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const set = (k) => (e) => { setForm(f => ({ ...f, [k]: e.target.value })); setSaved(false); };
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSave({
+        weeklyThreshold: parseFloat(form.weeklyThreshold) || 40,
+        multiplier: parseFloat(form.multiplier) || 1.0,
+        wtdLimit: parseFloat(form.wtdLimit) || 48,
+      });
+      setSaved(true);
+    } catch (e) { window.alert("Couldn't save: " + (e?.message || e)); }
+    finally { setBusy(false); }
+  };
+  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500";
+  return (
+    <div className="max-w-lg space-y-5">
+      <div>
+        <h3 className="text-base font-bold text-white">Overtime rules</h3>
+        <p className="text-xs text-slate-500 mt-1">UK model — overtime is hours worked beyond the weekly threshold. These apply across all stores when calculating timesheets and pay.</p>
+      </div>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4">
+        <div>
+          <label className="text-xs font-semibold text-slate-400 mb-1 block">Weekly overtime threshold (hours)</label>
+          <input type="number" step="1" min="1" value={form.weeklyThreshold} onChange={set("weeklyThreshold")} className={inputCls}/>
+          <p className="text-[11px] text-slate-600 mt-1">Hours per week above this count as overtime. UK convention is 40.</p>
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-400 mb-1 block">Overtime pay multiplier</label>
+          <input type="number" step="0.1" min="1" value={form.multiplier} onChange={set("multiplier")} className={inputCls}/>
+          <p className="text-[11px] text-slate-600 mt-1">1.0 = paid at normal rate (UK has no statutory premium). Set 1.5 for time-and-a-half if your contracts require it.</p>
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-400 mb-1 block">Working Time Directive weekly limit (hours)</label>
+          <input type="number" step="1" min="1" value={form.wtdLimit} onChange={set("wtdLimit")} className={inputCls}/>
+          <p className="text-[11px] text-slate-600 mt-1">Staff whose week exceeds this get a ⚠ warning flag. UK WTD average ceiling is 48.</p>
+        </div>
+        <div className="flex items-center gap-3 pt-1">
+          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">{busy ? "Saving…" : "Save rules"}</button>
+          {saved && <span className="text-xs text-emerald-400 font-semibold">✓ Saved</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OpsSettingsView({
   brands, stores = [], visibleStoreIds = [],
   storeDepartments = [], storeRoles = [],
@@ -19489,6 +19560,7 @@ function OpsSettingsView({
   onAddStoreRole, onUpdateStoreRole, onArchiveStoreRole, onUnarchiveStoreRole,
   onCopyStoreStructure,
   onOpenEmployeeProfile,         // slice 6 — open profile drill-down from team row
+  appSettings = {}, onSaveOtRules,
   currentUser
 }) {
   const [tab, setTab] = useState("structure");
@@ -19505,6 +19577,7 @@ function OpsSettingsView({
     { key: "tempunits",  label: "Temp Units" },
     { key: "cleaning",   label: "Cleaning Tasks" },
     { key: "presets",    label: "Shift Presets" },
+    { key: "overtime",   label: "Overtime" },
   ];
 
   return (
@@ -19584,6 +19657,10 @@ function OpsSettingsView({
           onAdd={onAddShiftPreset} onUpdate={onUpdateShiftPreset} onDelete={onDeleteShiftPreset}
           currentUser={currentUser}
         />
+      )}
+
+      {tab === "overtime" && (
+        <OvertimeRulesEditor appSettings={appSettings} onSave={onSaveOtRules} />
       )}
 
       {clModal && (
@@ -24741,7 +24818,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     s.overtimeHours = split.overtime;
     s.weeks = split.weeks;
     // WTD compliance flag: any week averaging over 48h.
-    s.wtdBreached = split.weeks.some(w => w.hours > WTD_WEEKLY_LIMIT);
+    s.wtdBreached = split.weeks.some(w => w.hours > OT_RULES.wtdLimit);
     // Salaried staff: pay is the fixed daily slice × days worked in this view,
     // NOT hours × rate (their "rate" column holds the annual/monthly amount).
     if (isSalaried(s.member)) {
@@ -24749,7 +24826,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       s.isSalaried = true;
     } else {
       // Regular hours at rate + overtime at rate × multiplier.
-      s.totalPay = Math.round((s.regularHours * s.hourlyRate + s.overtimeHours * s.hourlyRate * OT_MULTIPLIER) * 100) / 100;
+      s.totalPay = Math.round((s.regularHours * s.hourlyRate + s.overtimeHours * s.hourlyRate * OT_RULES.multiplier) * 100) / 100;
     }
   });
 
@@ -27687,6 +27764,17 @@ export default function App() {
   const [activeView,      setActiveView]     = useState("dashboard");
   const [whosWorkingOpen, setWhosWorkingOpen] = useState(false);   // "Who's working" popup
   const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
+  const [appSettings, setAppSettings] = useState({});
+  const saveOtRules = useCallback(async (rules) => {
+    await Promise.all([
+      upsertAppSetting("ot_weekly_threshold", rules.weeklyThreshold),
+      upsertAppSetting("ot_multiplier", rules.multiplier),
+      upsertAppSetting("wtd_weekly_limit", rules.wtdLimit),
+    ]);
+    const next = { ...appSettings, ot_weekly_threshold: String(rules.weeklyThreshold), ot_multiplier: String(rules.multiplier), wtd_weekly_limit: String(rules.wtdLimit) };
+    setAppSettings(next);
+    applyOtRulesFromSettings(next);
+  }, [appSettings]);
   // Entity landing: which brand/entity the user has stepped into. null = show
   // the entity picker (tiles). Persisted so a refresh keeps you in the entity.
   const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
@@ -27766,11 +27854,12 @@ export default function App() {
       fetchStoreDepartments(), fetchStoreRoles(),
       fetchApplications(),
       fetchAdvertisedRoles().catch(() => []),
+      fetchAppSettings().catch(() => ({})),
       // NOTE: flipdishSales and flipdishOrders are NOT fetched here. They're
       // ~40k rows of POS+marketplace data and were forcing every user to wait
       // even if they never opened Chain Performance. ChainPerformanceView now
       // fetches its own data on mount (with a 5-min cache, see fetchSalesCached).
-    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles]) => {
+    ]).then(([b,u,e,i,cl,tu,ct,as,ot,tl,dl,cs,at,hd,msgs,avail,scheds,spreset,punches, st, fs, fsl, sdepts, sroles, apps, adroles, appSet]) => {
       setBrands(b); setUsers(u); setEntries(e); setIssues(i);
       setChecklists(cl); setTempUnits(tu); setCleaningTasks(ct); setAssignments(as);
       setOpsTeam(ot); setTempLogs(tl); setDeliveries(dl);
@@ -27781,6 +27870,8 @@ export default function App() {
       setStoreDepartments(sdepts || []); setStoreRoles(sroles || []);
       setApplications(apps || []);
       setAdvertisedRoles(adroles || []);
+      setAppSettings(appSet || {});
+      applyOtRulesFromSettings(appSet || {});
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
@@ -28639,6 +28730,7 @@ export default function App() {
               onAddStoreRole={addStoreRole} onUpdateStoreRole={updateStoreRoleRow}
               onArchiveStoreRole={archiveStoreRoleRow} onUnarchiveStoreRole={unarchiveStoreRoleRow}
               onCopyStoreStructure={copyStructureFromStore}
+              appSettings={appSettings} onSaveOtRules={saveOtRules}
               currentUser={currentUser}
             />}
             {effectiveActiveView === "time-attend"    && <TimeAttendanceView

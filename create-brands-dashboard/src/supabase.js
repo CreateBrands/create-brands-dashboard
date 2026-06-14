@@ -4533,6 +4533,20 @@ export async function deleteInvoice(invoiceId) {
   return invoiceId;
 }
 
+// ── App settings (global key/value) ─────────────────────────────────────────
+export async function fetchAppSettings() {
+  const { data, error } = await supabase.from("app_settings").select("key, value");
+  if (error) throw error;
+  const out = {};
+  (data || []).forEach(r => { out[r.key] = r.value; });
+  return out;
+}
+export async function upsertAppSetting(key, value) {
+  const { error } = await supabase.from("app_settings").upsert({ key, value: String(value) }, { onConflict: "key" });
+  if (error) throw error;
+  return { key, value: String(value) };
+}
+
 export async function listStoresLite() {
   const { data, error } = await supabase.from("stores").select("id, name").order("name");
   if (error) throw error;
