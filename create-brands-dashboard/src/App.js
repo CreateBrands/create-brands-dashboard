@@ -3375,7 +3375,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2"><ChefHat size={18}/> Central Kitchen — Inventory</h2>
-          <p className="text-xs text-slate-500 mt-0.5">{kitchen.shortName || kitchen.name} · raw materials in, batch-tracked.</p>
+          <p className="text-xs text-slate-500 mt-0.5">{kitchen.shortName || kitchen.name} · raw materials in, batch-tracked. Ingredients are shared with COGS recipes.</p>
         </div>
         <div className="flex gap-2">
           <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>
@@ -3410,7 +3410,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
                     {s.low && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">low</span>}
                     {(s.allergens||[]).length>0 && <span className="text-[9px] text-red-400/80">⚠ {s.allergens.join(", ")}</span>}
                   </div>
-                  <div className="text-[11px] text-slate-500">{s.category || "Uncategorised"}{s.reorderPoint!=null?` · reorder at ${s.reorderPoint} ${s.unit}`:""}</div>
+                  <div className="text-[11px] text-slate-500">{s.category || "Uncategorised"}{s.reorderPoint!=null?` · reorder at ${s.reorderPoint} ${s.unit}`:""}{s.costPerBaseUnit!=null?` · ${money(s.costPerBaseUnit)}/${s.unit}`:""}</div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <div className="text-right"><div className={`text-sm font-bold ${s.low?"text-amber-300":"text-white"}`}>{s.stock} {s.unit}</div></div>

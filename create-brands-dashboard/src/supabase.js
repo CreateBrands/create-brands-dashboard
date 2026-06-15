@@ -5276,6 +5276,8 @@ const _invMap = (r) => ({
   id: r.id, name: r.name, category: r.category, supplier: r.supplier,
   packDesc: r.pack_desc, packQty: r.pack_qty, baseUnit: r.base_unit, packPrice: r.pack_price,
   costPerBaseUnit: r.cost_per_base_unit, notes: r.notes,
+  allergens: r.allergens || [], reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
+  siteId: r.site_id || null, archivedAt: r.archived_at || null,
 });
 function _invBody(p) {
   const b = {};
@@ -5287,6 +5289,9 @@ function _invBody(p) {
   if ("baseUnit" in p) b.base_unit = p.baseUnit;
   if ("packPrice" in p) b.pack_price = p.packPrice === "" || p.packPrice == null ? null : Number(p.packPrice);
   if ("notes" in p) b.notes = p.notes;
+  if ("allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
+  if ("reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
+  if ("siteId" in p) b.site_id = p.siteId || null;
   return b;
 }
 
@@ -5567,9 +5572,11 @@ export async function deletePosMapping(id) {
 // ============================================================================
 const mapIngredient = (r) => ({
   id: r.id, siteId: r.site_id || null, name: r.name, category: r.category || "",
-  unit: r.unit || "kg", allergens: r.allergens || [],
+  unit: r.base_unit || "kg", allergens: r.allergens || [],
   reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
-  defaultSupplier: r.default_supplier || "", note: r.note || "",
+  defaultSupplier: r.supplier || "", note: r.notes || "",
+  packDesc: r.pack_desc || "", packQty: r.pack_qty, packPrice: r.pack_price,
+  costPerBaseUnit: r.cost_per_base_unit != null ? Number(r.cost_per_base_unit) : null,
   archivedAt: r.archived_at || null, createdAt: r.created_at,
 });
 const mapGoodsIn = (r) => ({
@@ -5584,34 +5591,33 @@ const mapGoodsIn = (r) => ({
 });
 
 export async function fetchCkIngredients(siteId) {
-  let q = supabase.from("ck_ingredients").select("*").is("archived_at", null).order("name");
-  if (siteId) q = q.eq("site_id", siteId);
-  const { data, error } = await q;
+  // Unified: central-kitchen ingredients live in cogs_ck_items (shared with the
+  // RecipeBuilder costing). siteId is accepted but items may be unscoped (null).
+  const { data, error } = await supabase.from("cogs_ck_items").select("*").is("archived_at", null).order("name");
   if (error) throw error;
   return (data || []).map(mapIngredient);
 }
 
 export async function upsertCkIngredient(ing) {
   const row = {
-    site_id: ing.siteId || null, name: ing.name, category: ing.category || null,
-    unit: ing.unit || "kg", allergens: ing.allergens || [],
+    name: ing.name, category: ing.category || null, base_unit: ing.unit || "kg",
+    allergens: ing.allergens || [],
     reorder_point: ing.reorderPoint != null && ing.reorderPoint !== "" ? Number(ing.reorderPoint) : null,
-    default_supplier: ing.defaultSupplier || null, note: ing.note || null,
-    updated_at: new Date().toISOString(),
+    supplier: ing.defaultSupplier || null, notes: ing.note || null,
+    site_id: ing.siteId || null,
   };
   if (ing.id) {
-    const { data, error } = await supabase.from("ck_ingredients").update(row).eq("id", ing.id).select().maybeSingle();
+    const { data, error } = await supabase.from("cogs_ck_items").update(row).eq("id", ing.id).select().maybeSingle();
     if (error) throw error;
     return data ? mapIngredient(data) : null;
   }
-  row.id = `ing-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-  const { data, error } = await supabase.from("ck_ingredients").insert(row).select().maybeSingle();
+  const { data, error } = await supabase.from("cogs_ck_items").insert(row).select().maybeSingle();
   if (error) throw error;
   return data ? mapIngredient(data) : null;
 }
 
 export async function archiveCkIngredient(id) {
-  const { error } = await supabase.from("ck_ingredients").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  const { error } = await supabase.from("cogs_ck_items").update({ archived_at: new Date().toISOString() }).eq("id", id);
   if (error) throw error;
   return id;
 }
@@ -5695,17 +5701,16 @@ export async function upsertCkSupplier(s) {
 }
 export async function archiveCkSupplier(id) { const { error } = await supabase.from("ck_suppliers").update({ archived_at: new Date().toISOString() }).eq("id", id); if (error) throw error; return id; }
 
-// Bulk insert ingredients. `rows` = array of {name, unit, category, allergens[], reorderPoint, defaultSupplier}.
+// Bulk insert ingredients into the unified cogs_ck_items table.
 export async function bulkAddCkIngredients(siteId, rows) {
   const clean = (rows || []).filter(r => r.name && r.name.trim()).map(r => ({
-    id: `ing-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
     site_id: siteId || null, name: r.name.trim(), category: r.category?.trim() || null,
-    unit: r.unit || "kg", allergens: Array.isArray(r.allergens) ? r.allergens : [],
+    base_unit: r.unit || "kg", allergens: Array.isArray(r.allergens) ? r.allergens : [],
     reorder_point: r.reorderPoint != null && r.reorderPoint !== "" ? Number(r.reorderPoint) : null,
-    default_supplier: r.defaultSupplier?.trim() || null,
+    supplier: r.defaultSupplier?.trim() || null,
   }));
   if (!clean.length) return 0;
-  const { error } = await supabase.from("ck_ingredients").insert(clean);
+  const { error } = await supabase.from("cogs_ck_items").insert(clean);
   if (error) throw error;
   return clean.length;
 }
