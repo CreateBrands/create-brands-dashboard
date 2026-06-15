@@ -67,7 +67,7 @@ import {
   // Payroll
   fetchMinimumWageRates, upsertMinimumWageRate, removeMinimumWageRate,
   fetchPayrollPeriods, upsertPayrollPeriod,
-  fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
+  fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, attachLoanContract, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
   resolveHourlyRate, ageOnDate, bandForAge,
   uploadInvoiceFile,
   extractInvoice,
