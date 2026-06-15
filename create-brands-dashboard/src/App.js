@@ -22570,6 +22570,15 @@ function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, c
     return sids.some(id => myStoreIds.has(id));
   };
   const [filterBrand,    setFilterBrand]    = useState("all");
+  const [filterStore,    setFilterStore]    = useState("all");
+  // Stores this manager can filter by (their own; HQ sees all).
+  const scopeStores = (stores || []).filter(s => !s.archivedAt && (isHq || myStoreIds.has(s.id)))
+    .sort((a,b)=>(a.shortName||a.name||"").localeCompare(b.shortName||b.name||""));
+  const empStoreNames = (employeeId) => {
+    const ids = empStoreIds[employeeId] || [];
+    const names = ids.map(id => { const s = (stores||[]).find(x=>x.id===id); return s ? (s.shortName||s.name) : null; }).filter(Boolean);
+    return names;
+  };
   const [filterStatus,   setFilterStatus]   = useState("pending");
   const [filterType,     setFilterType]     = useState("all");
   const [filterEmployee, setFilterEmployee] = useState("all");
@@ -22591,6 +22600,7 @@ function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, c
   const visible = availability.filter(a => {
     if (!inMyScope(a)) return false;
     if (filterBrand    !== "all" && a.brandId    !== filterBrand)    return false;
+    if (filterStore    !== "all" && !((empStoreIds[a.employeeId] || []).includes(filterStore))) return false;
     if (filterStatus   !== "all" && a.status     !== filterStatus)   return false;
     if (filterType     !== "all" && a.type       !== filterType)     return false;
     if (filterEmployee !== "all" && a.employeeId !== filterEmployee) return false;
@@ -22650,7 +22660,10 @@ function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, c
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <LocationDropdown brands={vb} value={filterBrand} onChange={setFilterBrand} allLabel="All Locations" className="w-40"/>
+        <SelectDropdown value={filterStore} onChange={setFilterStore} className="w-40">
+          <option value="all">All stores</option>
+          {scopeStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </SelectDropdown>
         <SelectDropdown value={filterStatus} onChange={setFilterStatus} className="w-36">
           <option value="all">All Status</option>
           <option value="pending">⏳ Pending</option>
@@ -22697,7 +22710,9 @@ function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, c
                         <Badge label={`${AVAIL_STATUS_ICON[a.status]} ${a.status.charAt(0).toUpperCase()+a.status.slice(1)}`} color={statusColor(a.status)}/>
                         <Badge label={a.available ? "✓ Available" : "✗ Unavailable"} color={a.available ? "emerald" : "red"}/>
                         <Badge label={a.type === "one_off" ? "One-off" : a.type === "weekly" ? "Weekly" : "Date Range"} color="slate"/>
-                        {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}
+                        {(() => { const sn = empStoreNames(a.employeeId); return sn.length > 0
+                          ? <span className="text-xs text-slate-500 flex items-center gap-1"><MapPin size={10}/>{sn.join(", ")}</span>
+                          : (brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>); })()}
                       </div>
                       <div className="text-sm font-semibold text-slate-200">{fmtAvailDate(a)}</div>
                       <div className="text-xs text-slate-600">{fmtAvailTime(a)}</div>
