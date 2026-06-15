@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3262,6 +3262,204 @@ function findSimilar(name, candidates, getName = (x) => x.name) {
 
 // COGS / INVENTORY BUILDER — two masters (store + CK), fully editable, no seed
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Central Kitchen — Phase 1: Inventory (ingredients + goods-in) ────────────
+const CK_ALLERGENS = ["gluten","milk","egg","soya","nuts","peanuts","sesame","fish","crustaceans","molluscs","celery","mustard","lupin","sulphites"];
+const CK_UNITS = ["kg","g","L","ml","each"];
+
+function CentralKitchenView({ stores = [], currentUser }) {
+  // The central kitchen site.
+  const kitchen = useMemo(() => (stores || []).find(s => s.siteType === "central_kitchen" && !s.archivedAt), [stores]);
+  const siteId = kitchen?.id || null;
+  const [tab, setTab] = useState("stock");
+  const [ingredients, setIngredients] = useState([]);
+  const [goodsIn, setGoodsIn] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
+
+  const load = useCallback(() => {
+    if (!siteId) { setLoading(false); return; }
+    setLoading(true);
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId)])
+      .then(([i, g]) => { setIngredients(i); setGoodsIn(g); })
+      .catch(e => setErr(e?.message || String(e)))
+      .finally(() => setLoading(false));
+  }, [siteId]);
+  useEffect(() => { load(); }, [load]);
+
+  const stock = useMemo(() => computeCkStock(ingredients, goodsIn), [ingredients, goodsIn]);
+  const lowCount = stock.filter(s => s.low).length;
+  const today = new Date(); const soon = new Date(); soon.setDate(today.getDate() + 7);
+  const expiringSoon = goodsIn.filter(g => g.qtyRemaining > 0 && g.expiryDate && new Date(g.expiryDate) <= soon);
+
+  // Ingredient editor
+  const [ingModal, setIngModal] = useState(null); // ingredient or "new"
+  const [ingForm, setIngForm] = useState({});
+  const openIng = (i) => { setIngModal(i || "new"); setIngForm(i ? { ...i } : { name:"", unit:"kg", category:"", allergens:[], reorderPoint:"", defaultSupplier:"", note:"" }); setErr(""); };
+  const saveIng = async () => {
+    if (!ingForm.name?.trim()) { setErr("Name required."); return; }
+    try { await upsertCkIngredient({ ...ingForm, id: ingModal === "new" ? undefined : ingModal.id, siteId }); setIngModal(null); load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+  };
+  const removeIng = async (i) => { if (!window.confirm(`Archive ${i.name}?`)) return; try { await archiveCkIngredient(i.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
+  const toggleAllergen = (a) => setIngForm(f => ({ ...f, allergens: (f.allergens||[]).includes(a) ? f.allergens.filter(x=>x!==a) : [...(f.allergens||[]), a] }));
+
+  // Goods-in editor
+  const [ginModal, setGinModal] = useState(false);
+  const [ginForm, setGinForm] = useState({});
+  const openGin = () => { setGinForm({ ingredientId: ingredients[0]?.id || "", qtyReceived:"", unit: ingredients[0]?.unit||"kg", batchNo:"", supplier:"", receivedDate: new Date().toISOString().split("T")[0], expiryDate:"", unitCost:"" }); setGinModal(true); setErr(""); };
+  const saveGin = async () => {
+    if (!ginForm.ingredientId) { setErr("Pick an ingredient."); return; }
+    if (!(Number(ginForm.qtyReceived) > 0)) { setErr("Enter a quantity."); return; }
+    try { await addCkGoodsIn({ ...ginForm, siteId, receivedBy: currentUser?.name }); setGinModal(false); load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+  };
+  const ingName = (id) => ingredients.find(i=>i.id===id)?.name || "—";
+
+  if (!kitchen) return (
+    <div className="text-center py-16">
+      <ChefHat size={32} className="text-slate-700 mx-auto mb-3"/>
+      <div className="text-slate-400 font-semibold">No central kitchen site found</div>
+      <div className="text-sm text-slate-600 mt-1">Add a site with type “central kitchen” in the Stores settings first.</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><ChefHat size={18}/> Central Kitchen — Inventory</h2>
+          <p className="text-xs text-slate-500 mt-0.5">{kitchen.shortName || kitchen.name} · raw materials in, batch-tracked.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>
+          <button onClick={()=>openIng(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Ingredient</button>
+        </div>
+      </div>
+
+      {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+
+      {/* Alert tiles */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredients</div><div className="text-2xl font-black text-white">{ingredients.length}</div></div>
+        <div className={`rounded-xl p-3 border ${lowCount?"bg-amber-950/30 border-amber-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Low stock</div><div className={`text-2xl font-black ${lowCount?"text-amber-300":"text-white"}`}>{lowCount}</div></div>
+        <div className={`rounded-xl p-3 border ${expiringSoon.length?"bg-red-950/30 border-red-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Expiring ≤7d</div><div className={`text-2xl font-black ${expiringSoon.length?"text-red-300":"text-white"}`}>{expiringSoon.length}</div></div>
+      </div>
+
+      <div className="flex gap-1 border-b border-slate-800">
+        {[["stock","Stock"],["goods","Goods in log"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
+        ))}
+      </div>
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : tab === "stock" ? (
+        stock.length === 0 ? <div className="text-center py-10 text-sm text-slate-500">No ingredients yet. Add your first with “Ingredient”.</div> : (
+          <div className="space-y-2">
+            {stock.map(s => (
+              <div key={s.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-200 flex items-center gap-2 flex-wrap">
+                    {s.name}
+                    {s.low && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">low</span>}
+                    {(s.allergens||[]).length>0 && <span className="text-[9px] text-red-400/80">⚠ {s.allergens.join(", ")}</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-500">{s.category || "Uncategorised"}{s.reorderPoint!=null?` · reorder at ${s.reorderPoint} ${s.unit}`:""}</div>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="text-right"><div className={`text-sm font-bold ${s.low?"text-amber-300":"text-white"}`}>{s.stock} {s.unit}</div></div>
+                  <button onClick={()=>openIng(s)} className="text-slate-500 hover:text-white"><Edit size={13}/></button>
+                  <button onClick={()=>removeIng(s)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        goodsIn.length === 0 ? <div className="text-center py-10 text-sm text-slate-500">No deliveries logged yet.</div> : (
+          <div className="space-y-2">
+            {goodsIn.map(g => (
+              <div key={g.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-200">{ingName(g.ingredientId)} · {g.qtyReceived} {g.unit}</div>
+                  <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
+                    <span>{g.receivedDate}</span>
+                    {g.batchNo && <span>batch {g.batchNo}</span>}
+                    {g.supplier && <span>· {g.supplier}</span>}
+                    {g.expiryDate && <span>· exp {g.expiryDate}</span>}
+                    {g.unitCost!=null && <span>· {money(g.unitCost)}/{g.unit}</span>}
+                    <span className="text-slate-600">· {g.qtyRemaining} left</span>
+                  </div>
+                </div>
+                <button onClick={async()=>{ if(window.confirm("Delete this goods-in entry?")){ try{await deleteCkGoodsIn(g.id); load();}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* Ingredient modal */}
+      {ingModal && (
+        <Modal title={ingModal==="new"?"New ingredient":`Edit — ${ingModal.name}`} onClose={()=>setIngModal(null)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setIngModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={saveIng} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Save</button>
+          </>}>
+          <div className="space-y-3">
+            <div><label className={labelCls}>Name *</label><input value={ingForm.name||""} onChange={e=>setIngForm(f=>({...f,name:e.target.value}))} className={inputCls}/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Unit</label><select value={ingForm.unit||"kg"} onChange={e=>setIngForm(f=>({...f,unit:e.target.value}))} className={inputCls}>{CK_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
+              <div><label className={labelCls}>Category</label><input value={ingForm.category||""} onChange={e=>setIngForm(f=>({...f,category:e.target.value}))} placeholder="Dairy, Dry goods…" className={inputCls}/></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Reorder point ({ingForm.unit||"kg"})</label><input type="number" value={ingForm.reorderPoint??""} onChange={e=>setIngForm(f=>({...f,reorderPoint:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Default supplier</label><input value={ingForm.defaultSupplier||""} onChange={e=>setIngForm(f=>({...f,defaultSupplier:e.target.value}))} className={inputCls}/></div>
+            </div>
+            <div>
+              <label className={labelCls}>Allergens</label>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {CK_ALLERGENS.map(a => { const on = (ingForm.allergens||[]).includes(a); return (
+                  <button key={a} onClick={()=>toggleAllergen(a)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize ${on?"bg-red-600/30 text-red-200 border border-red-500/40":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{a}</button>
+                ); })}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Goods-in modal */}
+      {ginModal && (
+        <Modal title="Goods in — log a delivery" onClose={()=>setGinModal(false)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setGinModal(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={saveGin} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold">Save delivery</button>
+          </>}>
+          <div className="space-y-3">
+            <div><label className={labelCls}>Ingredient *</label>
+              <select value={ginForm.ingredientId||""} onChange={e=>{ const ing=ingredients.find(i=>i.id===e.target.value); setGinForm(f=>({...f,ingredientId:e.target.value,unit:ing?.unit||f.unit})); }} className={inputCls}>
+                {ingredients.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Quantity *</label><input type="number" value={ginForm.qtyReceived||""} onChange={e=>setGinForm(f=>({...f,qtyReceived:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Unit</label><select value={ginForm.unit||"kg"} onChange={e=>setGinForm(f=>({...f,unit:e.target.value}))} className={inputCls}>{CK_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Batch / lot no.</label><input value={ginForm.batchNo||""} onChange={e=>setGinForm(f=>({...f,batchNo:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Supplier</label><input value={ginForm.supplier||""} onChange={e=>setGinForm(f=>({...f,supplier:e.target.value}))} className={inputCls}/></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Received</label><input type="date" value={ginForm.receivedDate||""} onChange={e=>setGinForm(f=>({...f,receivedDate:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Expiry / use-by</label><input type="date" value={ginForm.expiryDate||""} onChange={e=>setGinForm(f=>({...f,expiryDate:e.target.value}))} className={inputCls}/></div>
+            </div>
+            <div><label className={labelCls}>Unit cost (£ per {ginForm.unit||"kg"})</label><input type="number" value={ginForm.unitCost||""} onChange={e=>setGinForm(f=>({...f,unitCost:e.target.value}))} className={inputCls}/></div>
+            <div className="text-[11px] text-slate-600">Capturing the supplier batch number here is what makes full traceability possible later.</div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function CogsView({ stores = [] }) {
   const [tab, setTab] = useState("inventory");
   const TABS = [
@@ -32321,6 +32519,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
+      { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"] },
       { key: "payslip-inbox", label: "Payslips Inbox", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
@@ -32573,6 +32772,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}

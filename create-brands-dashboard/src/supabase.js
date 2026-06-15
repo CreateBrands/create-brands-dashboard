@@ -5561,3 +5561,100 @@ export async function deletePosMapping(id) {
   if (error) throw error;
 }
 // ===== end POS_MAPPER_V1 =====
+
+// ============================================================================
+// CENTRAL KITCHEN — Phase 1: ingredients + goods-in (batch-tracked)
+// ============================================================================
+const mapIngredient = (r) => ({
+  id: r.id, siteId: r.site_id || null, name: r.name, category: r.category || "",
+  unit: r.unit || "kg", allergens: r.allergens || [],
+  reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
+  defaultSupplier: r.default_supplier || "", note: r.note || "",
+  archivedAt: r.archived_at || null, createdAt: r.created_at,
+});
+const mapGoodsIn = (r) => ({
+  id: r.id, siteId: r.site_id || null, ingredientId: r.ingredient_id,
+  qtyReceived: Number(r.qty_received) || 0, qtyRemaining: Number(r.qty_remaining) || 0,
+  unit: r.unit || "kg", batchNo: r.batch_no || "", supplier: r.supplier || "",
+  receivedDate: r.received_date, expiryDate: r.expiry_date || null,
+  unitCost: r.unit_cost != null ? Number(r.unit_cost) : null,
+  totalCost: r.total_cost != null ? Number(r.total_cost) : null,
+  invoiceRef: r.invoice_ref || "", receivedBy: r.received_by || "", note: r.note || "",
+  createdAt: r.created_at,
+});
+
+export async function fetchCkIngredients(siteId) {
+  let q = supabase.from("ck_ingredients").select("*").is("archived_at", null).order("name");
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapIngredient);
+}
+
+export async function upsertCkIngredient(ing) {
+  const row = {
+    site_id: ing.siteId || null, name: ing.name, category: ing.category || null,
+    unit: ing.unit || "kg", allergens: ing.allergens || [],
+    reorder_point: ing.reorderPoint != null && ing.reorderPoint !== "" ? Number(ing.reorderPoint) : null,
+    default_supplier: ing.defaultSupplier || null, note: ing.note || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (ing.id) {
+    const { data, error } = await supabase.from("ck_ingredients").update(row).eq("id", ing.id).select().maybeSingle();
+    if (error) throw error;
+    return data ? mapIngredient(data) : null;
+  }
+  row.id = `ing-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { data, error } = await supabase.from("ck_ingredients").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapIngredient(data) : null;
+}
+
+export async function archiveCkIngredient(id) {
+  const { error } = await supabase.from("ck_ingredients").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function fetchCkGoodsIn(siteId, { ingredientId } = {}) {
+  let q = supabase.from("ck_goods_in").select("*").order("received_date", { ascending: false });
+  if (siteId) q = q.eq("site_id", siteId);
+  if (ingredientId) q = q.eq("ingredient_id", ingredientId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapGoodsIn);
+}
+
+export async function addCkGoodsIn(g) {
+  const qty = Number(g.qtyReceived);
+  const unitCost = g.unitCost != null && g.unitCost !== "" ? Number(g.unitCost) : null;
+  const row = {
+    id: `gin-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+    site_id: g.siteId || null, ingredient_id: g.ingredientId,
+    qty_received: qty, qty_remaining: qty, unit: g.unit || "kg",
+    batch_no: g.batchNo || null, supplier: g.supplier || null,
+    received_date: g.receivedDate || new Date().toISOString().split("T")[0],
+    expiry_date: g.expiryDate || null, unit_cost: unitCost,
+    total_cost: g.totalCost != null && g.totalCost !== "" ? Number(g.totalCost) : (unitCost != null ? +(unitCost * qty).toFixed(2) : null),
+    invoice_ref: g.invoiceRef || null, received_by: g.receivedBy || null, note: g.note || null,
+  };
+  const { data, error } = await supabase.from("ck_goods_in").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapGoodsIn(data) : null;
+}
+
+export async function deleteCkGoodsIn(id) {
+  const { error } = await supabase.from("ck_goods_in").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Current stock per ingredient = sum of remaining across goods-in batches.
+export function computeCkStock(ingredients, goodsIn) {
+  const byIng = {};
+  (goodsIn || []).forEach(g => { byIng[g.ingredientId] = (byIng[g.ingredientId] || 0) + (g.qtyRemaining || 0); });
+  return (ingredients || []).map(i => ({
+    ...i, stock: byIng[i.id] || 0,
+    low: i.reorderPoint != null && (byIng[i.id] || 0) <= i.reorderPoint,
+  }));
+}
