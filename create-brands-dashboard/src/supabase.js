@@ -3489,6 +3489,18 @@ export async function ignorePayslipInbox(inboxId) {
   if (error) throw error;
   return inboxId;
 }
+
+// Insert an inbox row from a manual (browser) upload that couldn't be
+// auto-matched, so it shows in the Unmatched queue for assignment.
+export async function addPayslipInboxItem({ fileUrl, filePath, fileName, extractedName, payPeriodLabel, matchConfidence }) {
+  const { data, error } = await supabase.from("payslip_inbox").insert({
+    file_url: fileUrl, file_path: filePath, file_name: fileName || null,
+    extracted_name: extractedName || null, pay_period_label: payPeriodLabel || null,
+    match_confidence: matchConfidence || "none", status: "unmatched", from_email: "Manual upload",
+  }).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapInbox(data) : null;
+}
 // — never hard-delete from app; manual SQL only for compliance.
 //
 // Note: the file in Storage is NOT deleted automatically. Use

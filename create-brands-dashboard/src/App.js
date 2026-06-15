@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -1942,6 +1942,54 @@ function PayslipInboxView({ currentUser, opsTeam = [] }) {
   const [assignPeriod, setAssignPeriod] = useState("");
   const [assignDate, setAssignDate] = useState("");
   const [err, setErr] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+
+  // Token-set name match (order-independent), used to auto-match uploads.
+  const normName = (s) => (s||"").toLowerCase().normalize("NFKD").replace(/[^a-z\s]/g," ").replace(/\s+/g," ").trim();
+  const tokenSet = (s) => new Set(normName(s).split(" ").filter(Boolean));
+  const sameTokens = (a,b) => a.size>0 && a.size===b.size && [...a].every(t=>b.has(t));
+  const matchByName = (name) => {
+    const nt = tokenSet(name);
+    const exact = opsTeam.filter(m => sameTokens(tokenSet(`${m.firstName} ${m.lastName}`), nt));
+    if (exact.length === 1) return { id: exact[0].id, confidence: "exact" };
+    if (exact.length > 1) return { id: null, confidence: "ambiguous" };
+    const subs = opsTeam.filter(m => { const et = tokenSet(`${m.firstName} ${m.lastName}`); return nt.size>=2 && [...nt].every(t=>et.has(t)); });
+    if (subs.length === 1) return { id: subs[0].id, confidence: "fuzzy" };
+    return { id: null, confidence: subs.length>1 ? "ambiguous" : "none" };
+  };
+  // "...for May-2026 for Zakia Fatima.pdf" → { name:"Zakia Fatima", period:"May 2026" }
+  const parseFilename = (fn) => {
+    const base = fn.replace(/\.[^.]+$/, "");
+    const name = base.split(/ for /i).pop().trim();
+    const pm = base.match(/for\s+([A-Za-z]+-?\d{4})/);
+    const period = pm ? pm[1].replace("-", " ") : "";
+    return { name, period };
+  };
+
+  const onBulkUpload = async (files) => {
+    if (!files || !files.length) return;
+    setUploading(true); setErr(""); let filed = 0, queued = 0;
+    for (const file of Array.from(files)) {
+      try {
+        setUploadMsg(`Uploading ${file.name}…`);
+        const { url, path } = await uploadEmployeeDocument(file);
+        const { name, period } = parseFilename(file.name);
+        const m = matchByName(name);
+        if (m.id && (m.confidence === "exact" || m.confidence === "fuzzy")) {
+          await addPayslip({ employeeId: m.id, fileUrl: url, filePath: path, fileName: file.name,
+            payPeriodLabel: period, uploadedById: currentUser?.opsTeamMemberId || currentUser?.id, uploadedByName: currentUser?.name });
+          filed++;
+        } else {
+          await addPayslipInboxItem({ fileUrl: url, filePath: path, fileName: file.name,
+            extractedName: name, payPeriodLabel: period, matchConfidence: m.confidence });
+          queued++;
+        }
+      } catch (e) { setErr(`${file.name}: ${e?.message || e}`); }
+    }
+    setUploadMsg(`Done — ${filed} auto-filed, ${queued} need assigning.`);
+    setUploading(false); load();
+  };
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1971,10 +2019,17 @@ function PayslipInboxView({ currentUser, opsTeam = [] }) {
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <div>
-        <h2 className="text-base font-bold text-white flex items-center gap-2"><FileText size={18}/> Unmatched payslips</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Payslips that arrived by email but couldn't be auto-matched. Assign each to the right employee.</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><FileText size={18}/> Unmatched payslips</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Upload payslip PDFs from the accountant. They're matched to employees by name; assign any that can't be matched automatically.</p>
+        </div>
+        <label className={`px-3 py-2 rounded-xl text-sm font-semibold cursor-pointer flex-shrink-0 flex items-center gap-1 ${uploading?"bg-slate-700 text-slate-400":"bg-indigo-600 hover:bg-indigo-500 text-white"}`}>
+          <Upload size={14}/> {uploading ? "Uploading…" : "Upload payslips"}
+          <input type="file" accept="application/pdf" multiple disabled={uploading} onChange={e=>onBulkUpload(e.target.files)} className="hidden"/>
+        </label>
       </div>
+      {uploadMsg && <div className="text-xs text-emerald-400 bg-emerald-950/20 border border-emerald-800/40 rounded-xl px-3 py-2">{uploadMsg}</div>}
       {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
 
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : items.length === 0 ? (
@@ -32215,7 +32270,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
-      { key: "payslip-inbox", label: "Unmatched Payslips", icon: FileText, roles: ["owner", "hq_staff"] },
+      { key: "payslip-inbox", label: "Payslips Inbox", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
