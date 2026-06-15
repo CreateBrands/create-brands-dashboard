@@ -5245,7 +5245,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             />
           )}
           {activeView === "my-loans" && (
-            <MyLoansView currentUser={currentUser}/>
+            <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
           )}
 
           {activeView === "emp-contracts" && (
@@ -15399,6 +15399,12 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   const [loanNote, setLoanNote] = useState("");
   const [loanBusy, setLoanBusy] = useState(false);
   const [loanErr, setLoanErr] = useState("");
+  // Loan eligibility + request workflow
+  const [loanEligible, setLoanEligible] = useState(!!employee?.loanEligible);
+  const [loanRequests, setLoanRequests] = useState([]);
+  const [loanPayments, setLoanPayments] = useState([]);
+  const [contracts, setContracts] = useState([]);
+  const [wfBusy, setWfBusy] = useState(false);
 
   useEffect(() => {
     setBankAmount(employee?.defaultBankAmount ?? "");
@@ -15415,6 +15421,89 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
       .finally(() => setLoansLoading(false));
   }, [employee?.id]);
   useEffect(() => { loadLoans(); }, [loadLoans]);
+  useEffect(() => { setLoanEligible(!!employee?.loanEligible); }, [employee?.id, employee?.loanEligible]);
+  const loadWorkflow = useCallback(() => {
+    if (!employee?.id) return;
+    fetchLoanRequests({ employeeId: employee.id }).then(setLoanRequests).catch(()=>{});
+    fetchLoanPayments({ employeeId: employee.id }).then(setLoanPayments).catch(()=>{});
+    fetchEmployeeContracts(employee.id).then(setContracts).catch(()=>{});
+  }, [employee?.id]);
+  useEffect(() => { loadWorkflow(); }, [loadWorkflow]);
+
+  const toggleEligible = async () => {
+    const next = !loanEligible;
+    setLoanEligible(next);
+    try { await onUpdateEmployee?.({ id: employee.id, loanEligible: next }); }
+    catch (e) { setLoanEligible(!next); setLoanErr(e?.message || String(e)); }
+  };
+
+  // Contract-send modal for a loan request
+  const [loanContractFor, setLoanContractFor] = useState(null); // request being gated
+  const [loanTemplates, setLoanTemplates] = useState([]);
+  const [loanTplId, setLoanTplId] = useState("");
+  const [loanFields, setLoanFields] = useState({});
+  useEffect(() => {
+    if (loanContractFor) fetchContractTemplates().then(t => setLoanTemplates(t || [])).catch(()=>{});
+  }, [loanContractFor]);
+
+  const contractForReq = (req) => contracts.find(c => c.id === req.contractId) || null;
+
+  const sendLoanContract = async () => {
+    const tpl = loanTemplates.find(t => t.id === loanTplId);
+    if (!tpl) { setLoanErr("Pick a contract template."); return; }
+    const employeeName = [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim();
+    const filled = fillContractForSend(tpl.body, employeeName, loanFields);
+    if (/\[\[ .+ — not set \]\]/.test(filled)) { setLoanErr("Fill every field before sending — no blanks."); return; }
+    setWfBusy(true); setLoanErr("");
+    try {
+      const sent = await sendContract({ employeeId: employee.id, templateId: tpl.id, title: tpl.title,
+        filledBody: filled, fieldValues: { employee_name: employeeName, ...loanFields }, sentBy: currentUser });
+      await attachLoanContract({ id: loanContractFor.id, contractId: sent.id });
+      setLoanContractFor(null); setLoanTplId(""); setLoanFields({});
+      loadWorkflow();
+    } catch (e) { setLoanErr(e?.message || String(e)); }
+    setWfBusy(false);
+  };
+
+  const [approveFor, setApproveFor] = useState(null);
+  const [apprAmt, setApprAmt] = useState("");
+  const [apprInst, setApprInst] = useState("");
+  const [apprFreq, setApprFreq] = useState("monthly");
+  const openApprove = (req) => { setApproveFor(req); setApprAmt(String(req.amountRequested)); setApprInst(""); setApprFreq("monthly"); };
+  const doApproveLoan = async () => {
+    const amt = parseFloat(apprAmt);
+    if (!(amt > 0)) { setLoanErr("Enter an approve amount."); return; }
+    setWfBusy(true); setLoanErr("");
+    try {
+      await approveLoanRequest({ id: approveFor.id, employeeId: employee.id, brandId: employee.brandId,
+        amountApproved: amt, installmentAmount: apprInst ? parseFloat(apprInst) : null,
+        installmentFreq: apprInst ? apprFreq : null, decidedBy: currentUser?.name });
+      setApproveFor(null); loadWorkflow(); loadLoans();
+    } catch (e) { setLoanErr(e?.message || String(e)); }
+    setWfBusy(false);
+  };
+  const doDeclineLoan = async (req) => {
+    const reason = window.prompt("Reason for declining? (optional)") || "";
+    setWfBusy(true);
+    try { await declineLoanRequest({ id: req.id, decidedBy: currentUser?.name, declineReason: reason }); loadWorkflow(); }
+    catch (e) { setLoanErr(e?.message || String(e)); }
+    setWfBusy(false);
+  };
+  const confirmPay = async (p) => {
+    setWfBusy(true);
+    try { await confirmLoanPayment({ paymentId: p.id, loanId: p.loanId, employeeId: employee.id, brandId: employee.brandId, amount: p.amount, confirmedBy: currentUser?.name });
+      loadWorkflow(); loadLoans();
+    } catch (e) { setLoanErr(e?.message || String(e)); }
+    setWfBusy(false);
+  };
+  const rejectPay = async (p) => {
+    const reason = window.prompt("Reason for rejecting this repayment? (optional)") || "";
+    setWfBusy(true);
+    try { await rejectLoanPayment({ paymentId: p.id, confirmedBy: currentUser?.name, rejectReason: reason }); loadWorkflow(); }
+    catch (e) { setLoanErr(e?.message || String(e)); }
+    setWfBusy(false);
+  };
+  const pendingPays = loanPayments.filter(p => p.status === "pending");
 
   const balance = loanBalance(loans);
 
@@ -15538,6 +15627,71 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
         <div className="text-[10px] text-slate-600 mt-2">Read-only here. Edit these on the Personal &amp; HR tab. Included in the payroll export.</div>
       </div>
 
+      {/* Loan requests workflow */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-bold text-slate-200">Loans</h3>
+          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={loanEligible} onChange={toggleEligible} className="rounded"/>
+            Loan eligible
+          </label>
+        </div>
+        <div className="text-[10px] text-slate-600 -mt-2">
+          {loanEligible ? "This employee can request a loan from their app." : "Tick to let this employee request loans from their app."}
+        </div>
+
+        {/* Pending requests needing action */}
+        {loanRequests.filter(r => ["pending","contract_sent"].includes(r.status)).map(req => {
+          const ctr = contractForReq(req);
+          const signed = ctr && ctr.status === "signed";
+          return (
+            <div key={req.id} className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-white">Requested {fmtGBP(req.amountRequested)}</span>
+                <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-amber-600/20 text-amber-300">{req.status.replace("_"," ")}</span>
+              </div>
+              {req.reason && <div className="text-xs text-slate-500">{req.reason}</div>}
+              {/* Contract gate */}
+              {!req.contractId ? (
+                <div className="text-[11px] text-slate-500">Send a loan contract before approving.</div>
+              ) : signed ? (
+                <div className="text-[11px] text-emerald-400">✓ Loan contract signed{ctr.signedAt?` on ${String(ctr.signedAt).split("T")[0]}`:""}.</div>
+              ) : (
+                <div className="text-[11px] text-amber-400">Contract sent — waiting for the employee to sign.</div>
+              )}
+              <div className="flex gap-2">
+                {!req.contractId && (
+                  <button onClick={()=>setLoanContractFor(req)} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Send loan contract</button>
+                )}
+                <button onClick={()=>openApprove(req)} disabled={!signed} title={signed?"":"Contract must be signed first"}
+                  className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-semibold">Approve</button>
+                <button onClick={()=>doDeclineLoan(req)} className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-red-950/40 text-slate-300 text-xs font-semibold">Decline</button>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Pending repayments to confirm */}
+        {pendingPays.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Repayments to confirm</div>
+            {pendingPays.map(p => (
+              <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                <div className="text-sm text-slate-200">{fmtGBP(p.amount)} <span className="text-[11px] text-slate-500">· {p.paidDate} · {p.method}</span></div>
+                <div className="flex gap-1.5">
+                  <button onClick={()=>confirmPay(p)} disabled={wfBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Confirm</button>
+                  <button onClick={()=>rejectPay(p)} disabled={wfBusy} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 text-xs font-semibold">Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {loanRequests.filter(r => r.status==="active").map(r => (
+          <div key={r.id} className="text-[11px] text-slate-500">Active loan: {fmtGBP(r.amountApproved)} approved{r.installmentAmount?` · ${fmtGBP(r.installmentAmount)} ${r.installmentFreq}`:""}.</div>
+        ))}
+      </div>
+
       {/* Staff loan (internal only) */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex items-center justify-between">
@@ -15596,6 +15750,67 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
           </div>
         )}
       </div>
+
+      {/* Send loan contract modal */}
+      {loanContractFor && (
+        <Modal title="Send loan contract" onClose={()=>{setLoanContractFor(null);setLoanErr("");}} maxW="max-w-lg"
+          footer={<>
+            <button onClick={()=>{setLoanContractFor(null);setLoanErr("");}} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={sendLoanContract} disabled={wfBusy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40">Send for signing</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="text-xs text-slate-500">Pick a loan contract template. The employee signs it in their app; only then can the loan be approved.</div>
+            <div>
+              <label className={labelCls}>Template</label>
+              <select value={loanTplId} onChange={e=>{setLoanTplId(e.target.value);setLoanFields({});}} className={inputCls}>
+                <option value="">— choose —</option>
+                {loanTemplates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </div>
+            {(() => {
+              const tpl = loanTemplates.find(t => t.id === loanTplId);
+              if (!tpl) return null;
+              const tokens = [...new Set((tpl.body.match(/{{\s*([a-z0-9_]+)\s*}}/gi) || [])
+                .map(m => m.replace(/[{}]/g,"").trim()).filter(t => t !== "employee_name"))];
+              if (tokens.length === 0) return <div className="text-[11px] text-slate-500">No extra fields — employee name fills automatically.</div>;
+              return tokens.map(tok => (
+                <div key={tok}>
+                  <label className={labelCls}>{tok.replace(/_/g," ")}</label>
+                  <input value={loanFields[tok] || ""} onChange={e=>setLoanFields(f=>({...f,[tok]:e.target.value}))} className={inputCls}/>
+                </div>
+              ));
+            })()}
+            {loanErr && <div className="text-xs text-red-400">{loanErr}</div>}
+          </div>
+        </Modal>
+      )}
+
+      {/* Approve loan modal */}
+      {approveFor && (
+        <Modal title="Approve loan" onClose={()=>{setApproveFor(null);setLoanErr("");}} maxW="max-w-sm"
+          footer={<>
+            <button onClick={()=>{setApproveFor(null);setLoanErr("");}} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doApproveLoan} disabled={wfBusy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">Approve</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="text-xs text-slate-500">Requested {fmtGBP(approveFor.amountRequested)}. Contract signed.</div>
+            <div>
+              <label className={labelCls}>Approve amount (£)</label>
+              <input type="number" value={apprAmt} onChange={e=>setApprAmt(e.target.value)} className={inputCls}/>
+            </div>
+            <div>
+              <label className={labelCls}>Installment (£) — optional</label>
+              <div className="flex gap-2">
+                <input type="number" value={apprInst} onChange={e=>setApprInst(e.target.value)} placeholder="e.g. 50" className={inputCls}/>
+                <select value={apprFreq} onChange={e=>setApprFreq(e.target.value)} className={inputCls + " w-32"}>
+                  <option value="weekly">weekly</option><option value="monthly">monthly</option>
+                </select>
+              </div>
+            </div>
+            {loanErr && <div className="text-xs text-red-400">{loanErr}</div>}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -24242,7 +24457,7 @@ function CommunicationView({
           <EmployeeHoursView currentUser={currentUser} brands={brands} schedules={schedules||[]} punchRecords={punchRecords||[]} onUpdate={onUpdatePunchRecord} onAddComment={onAddPunchComment}/>
         )}
         {tab === "my-loans" && isEmployee && (
-          <MyLoansView currentUser={currentUser}/>
+          <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
         )}
       </div>
     </div>
@@ -28463,8 +28678,10 @@ function LoanApprovalsView({ currentUser, opsTeam = [] }) {
 }
 
 // ── Employee: My Loans (request + record repayments) ─────────────────────────
-function MyLoansView({ currentUser }) {
+function MyLoansView({ currentUser, opsTeam = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
+  const me = opsTeam.find(m => m.id === myId);
+  const eligible = !!me?.loanEligible;
   const brandId = currentUser.brandIds?.[0] || null;
   const [requests, setRequests] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -28541,12 +28758,20 @@ function MyLoansView({ currentUser }) {
           <h2 className="text-base font-bold text-white flex items-center gap-2"><PoundSterling size={18}/> My Loans</h2>
           <p className="text-xs text-slate-500 mt-0.5">Request a loan and record your repayments. HQ approves everything.</p>
         </div>
-        {!activeLoan && pending.length===0 && (
+        {eligible && !activeLoan && pending.length===0 && (
           <button onClick={()=>setShowRequest(true)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Request a loan</button>
         )}
       </div>
 
       {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+
+      {!eligible && requests.length===0 && payments.length===0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-center">
+          <PoundSterling size={22} className="mx-auto text-slate-600 mb-2"/>
+          <div className="text-sm text-slate-400">Loans aren't enabled on your account.</div>
+          <div className="text-xs text-slate-600 mt-1">Speak to HQ if you'd like to request one.</div>
+        </div>
+      )}
 
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
         <>
@@ -31768,7 +31993,6 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
-      { key: "loan-approvals", label: "Loan Approvals", icon: PoundSterling, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -32020,7 +32244,6 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {effectiveActiveView === "loan-approvals" && ["owner","hq_staff"].includes(currentUser.role) && <LoanApprovalsView currentUser={currentUser} opsTeam={opsTeam}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

@@ -558,6 +558,7 @@ function appOpsTeamToDb(m) {
   if (m.taxStarterStatement !== undefined) row.tax_starter_statement = m.taxStarterStatement || "";
   if (m.hasP45              !== undefined) row.has_p45               = !!m.hasP45;
   if (m.studentLoan         !== undefined) row.student_loan          = !!m.studentLoan;
+  if (m.loanEligible        !== undefined) row.loan_eligible         = !!m.loanEligible;
   if (m.taxCompletedAt      !== undefined) row.tax_completed_at      = m.taxCompletedAt || null;
   // Onboarding — bank details (owner/HR only; app-gated)
   if (m.bankAccountName !== undefined) row.bank_account_name = m.bankAccountName?.trim() || null;
@@ -615,6 +616,7 @@ function dbOpsTeamToApp(m) {
     taxStarterStatement: m.tax_starter_statement || "",
     hasP45:              m.has_p45 ?? false,
     studentLoan:         m.student_loan ?? false,
+    loanEligible:        m.loan_eligible ?? false,
     taxCompletedAt:      m.tax_completed_at || null,
     // Onboarding — bank (owner/HR only; UI must gate display)
     bankAccountName: m.bank_account_name || "",
@@ -4479,6 +4481,7 @@ const mapLoanReq = (r) => ({
   reason: r.reason || "", status: r.status,
   installmentAmount: r.installment_amount != null ? Number(r.installment_amount) : null,
   installmentFreq: r.installment_freq || "",
+  contractId: r.contract_id || null,
   decidedBy: r.decided_by || "", decidedAt: r.decided_at, declineReason: r.decline_reason || "",
   createdAt: r.created_at,
 });
@@ -4543,6 +4546,15 @@ export async function approveLoanRequest({ id, employeeId, brandId, amountApprov
     amount: amountApproved, note: "Loan approved", created_by: decidedBy || null,
     loan_id: id, source: "request_approved",
   });
+  return data ? mapLoanReq(data) : null;
+}
+
+// Link a sent loan contract to a request, moving it to contract_sent.
+export async function attachLoanContract({ id, contractId }) {
+  const { data, error } = await supabase.from("loan_requests").update({
+    contract_id: contractId, status: "contract_sent", updated_at: new Date().toISOString(),
+  }).eq("id", id).select().maybeSingle();
+  if (error) throw error;
   return data ? mapLoanReq(data) : null;
 }
 
