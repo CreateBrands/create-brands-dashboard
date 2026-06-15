@@ -3316,13 +3316,76 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
   // Goods-in editor
   const [ginModal, setGinModal] = useState(false);
-  const [ginForm, setGinForm] = useState({});
-  const openGin = () => { setGinForm({ ingredientId: ingredients[0]?.id || "", qtyReceived:"", unit: ingredients[0]?.unit||"kg", batchNo:"", supplier:"", receivedDate: new Date().toISOString().split("T")[0], expiryDate:"", unitCost:"" }); setGinModal(true); setErr(""); };
+  const [ginSupplier, setGinSupplier] = useState("");
+  const [ginDate, setGinDate] = useState(()=>new Date().toISOString().split("T")[0]);
+  const [ginLines, setGinLines] = useState([]); // {ingredientId, ingredientName, qtyReceived, unit, batchNo, expiryDate, unitCost, raw, needsCreate}
+  const [ginBusy, setGinBusy] = useState(false);
+  const [scanBusy, setScanBusy] = useState("");
+  const blankGinLine = () => ({ ingredientId: ingredients[0]?.id ? String(ingredients[0].id) : "", ingredientName: ingredients[0]?.name||"", qtyReceived:"", unit: ingredients[0]?.unit||"kg", batchNo:"", expiryDate:"", unitCost:"" });
+  const openGin = () => { setGinSupplier(""); setGinDate(new Date().toISOString().split("T")[0]); setGinLines([blankGinLine()]); setGinModal(true); setErr(""); };
+  const addGinLine = () => setGinLines(ls => [...ls, blankGinLine()]);
+  const setGinLine = (idx, patch) => setGinLines(ls => ls.map((l,i)=> i===idx ? { ...l, ...patch } : l));
+  const rmGinLine = (idx) => setGinLines(ls => ls.filter((_,i)=>i!==idx));
   const saveGin = async () => {
-    if (!ginForm.ingredientId) { setErr("Pick an ingredient."); return; }
-    if (!(Number(ginForm.qtyReceived) > 0)) { setErr("Enter a quantity."); return; }
-    try { await addCkGoodsIn({ ...ginForm, siteId, receivedBy: currentUser?.name }); setGinModal(false); load(); }
-    catch (e) { setErr(e?.message || String(e)); }
+    const valid = ginLines.filter(l => l.ingredientId && Number(l.qtyReceived) > 0);
+    if (!valid.length) { setErr("Add at least one line with an ingredient and quantity."); return; }
+    setGinBusy(true); setErr("");
+    try {
+      for (const l of valid) {
+        await addCkGoodsIn({ siteId, ingredientId: l.ingredientId, qtyReceived: l.qtyReceived, unit: l.unit,
+          batchNo: l.batchNo, supplier: ginSupplier, receivedDate: ginDate, expiryDate: l.expiryDate || null,
+          unitCost: l.unitCost, receivedBy: currentUser?.name });
+      }
+      setGinModal(false); load();
+    } catch (e) { setErr(e?.message || String(e)); }
+    setGinBusy(false);
+  };
+
+  // Scan an invoice/delivery note to pre-fill goods-in lines. Reuses the
+  // existing invoice extractor (matches lines to cogs_ck_items = our ingredients).
+  const onScanGin = async (file) => {
+    if (!file) return;
+    setScanBusy("Uploading…"); setErr("");
+    try {
+      const inv = await uploadInvoiceFile(file, "central_kitchen", currentUser?.id);
+      setScanBusy("Reading invoice…");
+      await extractInvoice(inv.id);
+      // poll for lines (extraction is async)
+      let lines = [];
+      for (let i=0;i<10;i++) {
+        const { invoice, lines: ls } = await getInvoiceWithLines(inv.id);
+        if (ls && ls.length) { lines = ls; if (invoice?.supplier_name) setGinSupplier(invoice.supplier_name); break; }
+        await new Promise(r=>setTimeout(r, 1500));
+      }
+      if (!lines.length) { setErr("Couldn't read line items from that file — add them manually."); setScanBusy(""); return; }
+      const mapped = lines.map(l => {
+        const matched = l.matched_ingredient_id ? ingredients.find(i=>String(i.id)===String(l.matched_ingredient_id)) : null;
+        return {
+          ingredientId: matched ? String(matched.id) : "",
+          ingredientName: matched ? matched.name : (l.raw_description||""),
+          raw: l.raw_description || "",
+          needsCreate: !matched,
+          qtyReceived: l.pack_qty_base != null ? String(l.pack_qty_base) : "",
+          unit: matched?.unit || "kg",
+          batchNo: "", expiryDate: "",
+          unitCost: l.pack_price_ex_vat != null ? String(l.pack_price_ex_vat) : "",
+        };
+      });
+      setGinLines(mapped);
+      setScanBusy("");
+    } catch (e) { setErr(e?.message || String(e)); setScanBusy(""); }
+  };
+  // Create an ingredient from an unmatched scanned line, then select it on that line.
+  const createFromLine = async (idx) => {
+    const l = ginLines[idx];
+    const name = (l.ingredientName || l.raw || "").trim();
+    if (!name) { setErr("Give the new ingredient a name first."); return; }
+    if (!window.confirm(`Create new ingredient "${name}"? Set its allergens afterward in the Stock tab.`)) return;
+    try {
+      const created = await upsertCkIngredient({ name, unit: l.unit||"kg", siteId, allergens: [] });
+      const fresh = await fetchCkIngredients(siteId); setIngredients(fresh);
+      setGinLine(idx, { ingredientId: String(created.id), ingredientName: created.name, needsCreate: false });
+    } catch (e) { setErr(e?.message || String(e)); }
   };
   const ingName = (id) => ingredients.find(i=>i.id===id)?.name || "—";
 
@@ -3788,38 +3851,70 @@ function CentralKitchenView({ stores = [], currentUser }) {
         </Modal>
       )}
 
-      {/* Goods-in modal */}
+      {/* Goods-in modal — multi-line, with scan-to-prefill */}
       {ginModal && (
-        <Modal title="Goods in — log a delivery" onClose={()=>setGinModal(false)} maxW="max-w-md"
+        <Modal title="Goods in — log a delivery" onClose={()=>setGinModal(false)} maxW="max-w-2xl"
           footer={<>
             <button onClick={()=>setGinModal(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
-            <button onClick={saveGin} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold">Save delivery</button>
+            <button onClick={saveGin} disabled={ginBusy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">{ginBusy?"Saving…":"Save delivery"}</button>
           </>}>
           <div className="space-y-3">
-            <div><label className={labelCls}>Ingredient *</label>
-              <select value={ginForm.ingredientId||""} onChange={e=>{ const ing=ingredients.find(i=>i.id===e.target.value); setGinForm(f=>({...f,ingredientId:e.target.value,unit:ing?.unit||f.unit})); }} className={inputCls}>
-                {ingredients.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
-              </select>
+            {/* Scan + shared delivery fields */}
+            <div className="flex items-center justify-between gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2">
+              <div className="text-[11px] text-slate-500">Scan an invoice / delivery note to pre-fill the lines, or add them by hand.</div>
+              <label className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer flex items-center gap-1 flex-shrink-0 ${scanBusy?"bg-slate-700 text-slate-400":"bg-indigo-600 hover:bg-indigo-500 text-white"}`}>
+                <Camera size={13}/> {scanBusy || "Scan invoice"}
+                <input type="file" accept="image/*,application/pdf" disabled={!!scanBusy} onChange={e=>onScanGin(e.target.files?.[0])} className="hidden"/>
+              </label>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Quantity *</label><input type="number" value={ginForm.qtyReceived||""} onChange={e=>setGinForm(f=>({...f,qtyReceived:e.target.value}))} className={inputCls}/></div>
-              <div><label className={labelCls}>Unit</label><select value={ginForm.unit||"kg"} onChange={e=>setGinForm(f=>({...f,unit:e.target.value}))} className={inputCls}>{CK_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Batch / lot no.</label><input value={ginForm.batchNo||""} onChange={e=>setGinForm(f=>({...f,batchNo:e.target.value}))} className={inputCls}/></div>
               <div><label className={labelCls}>Supplier</label>
-                <select value={ginForm.supplier||""} onChange={e=>setGinForm(f=>({...f,supplier:e.target.value}))} className={inputCls}>
+                <select value={ginSupplier} onChange={e=>setGinSupplier(e.target.value)} className={inputCls}>
                   <option value="">— none —</option>
                   {suppliers.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}
+                  {ginSupplier && !suppliers.some(s=>s.name===ginSupplier) && <option value={ginSupplier}>{ginSupplier}</option>}
                 </select>
               </div>
+              <div><label className={labelCls}>Received date</label><input type="date" value={ginDate} onChange={e=>setGinDate(e.target.value)} className={inputCls}/></div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Received</label><input type="date" value={ginForm.receivedDate||""} onChange={e=>setGinForm(f=>({...f,receivedDate:e.target.value}))} className={inputCls}/></div>
-              <div><label className={labelCls}>Expiry / use-by</label><input type="date" value={ginForm.expiryDate||""} onChange={e=>setGinForm(f=>({...f,expiryDate:e.target.value}))} className={inputCls}/></div>
+
+            {/* Line items */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className={labelCls}>Items received</label>
+                <button onClick={addGinLine} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300">+ Add line</button>
+              </div>
+              <div className="space-y-2">
+                {ginLines.map((l, idx) => (
+                  <div key={idx} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-2">
+                    <div className="flex items-center gap-2">
+                      {l.needsCreate ? (
+                        <div className="flex-1 flex items-center gap-2">
+                          <input value={l.ingredientName} onChange={e=>setGinLine(idx,{ingredientName:e.target.value})} placeholder="New ingredient name" className="flex-1 px-2 py-1.5 bg-slate-900 border border-amber-500/40 rounded-lg text-xs text-white"/>
+                          <button onClick={()=>createFromLine(idx)} className="px-2 py-1.5 rounded-lg bg-amber-600/30 text-amber-200 text-[10px] font-semibold whitespace-nowrap">Create</button>
+                        </div>
+                      ) : (
+                        <select value={l.ingredientId} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setGinLine(idx,{ingredientId:e.target.value, ingredientName:ing?.name||"", unit:ing?.unit||l.unit}); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                          <option value="">— pick ingredient —</option>
+                          {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
+                        </select>
+                      )}
+                      <button onClick={()=>rmGinLine(idx)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
+                    </div>
+                    {l.raw && l.needsCreate && <div className="text-[10px] text-amber-400/70">From invoice: “{l.raw}” — unmatched, create or pick an ingredient.</div>}
+                    <div className="grid grid-cols-4 gap-2">
+                      <div><label className="text-[9px] text-slate-600 uppercase">Qty</label><input type="number" value={l.qtyReceived} onChange={e=>setGinLine(idx,{qtyReceived:e.target.value})} className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/></div>
+                      <div><label className="text-[9px] text-slate-600 uppercase">Unit</label><select value={l.unit} onChange={e=>setGinLine(idx,{unit:e.target.value})} className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">{CK_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
+                      <div><label className="text-[9px] text-slate-600 uppercase">Batch</label><input value={l.batchNo} onChange={e=>setGinLine(idx,{batchNo:e.target.value})} className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/></div>
+                      <div><label className="text-[9px] text-slate-600 uppercase">£/unit</label><input type="number" value={l.unitCost} onChange={e=>setGinLine(idx,{unitCost:e.target.value})} className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/></div>
+                    </div>
+                    <div><label className="text-[9px] text-slate-600 uppercase">Expiry / use-by</label><input type="date" value={l.expiryDate} onChange={e=>setGinLine(idx,{expiryDate:e.target.value})} className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/></div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div><label className={labelCls}>Unit cost (£ per {ginForm.unit||"kg"})</label><input type="number" value={ginForm.unitCost||""} onChange={e=>setGinForm(f=>({...f,unitCost:e.target.value}))} className={inputCls}/></div>
-            <div className="text-[11px] text-slate-600">Capturing the supplier batch number here is what makes full traceability possible later.</div>
+            <div className="text-[11px] text-slate-600">Batch number + expiry come from the physical packaging — add them per line. They're what make full traceability possible.</div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
           </div>
         </Modal>
       )}
