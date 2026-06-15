@@ -17060,7 +17060,7 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
   // Franchise / JV stores excluded; if you ever need staff there, separate
   // workflow.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"), // facilities (kitchen/distribution) included — staff work there
     [stores]
   );
 
@@ -19431,7 +19431,9 @@ function OpsTeamMemberFormModal({
   // their own teams, not company HQ. If you ever need to add staff at a JV
   // or franchise store, that's a separate workflow.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
+    // Include facility sites (central kitchen, distribution) — staff work there
+    // and need a primary/also assignment. Owned sites only.
+    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
     [stores]
   );
 
