@@ -6091,3 +6091,115 @@ export async function fetchDistributionStock(siteId) {
   if (error) throw error;
   return (data || []).map(mapDistStock);
 }
+
+// ============================================================================
+// CENTRAL KITCHEN — weekly production planner
+// ============================================================================
+const mapPlan = (p) => ({
+  id: p.id, siteId: p.site_id || null, name: p.name, weekStart: p.week_start || null,
+  note: p.note || "", archivedAt: p.archived_at || null, createdAt: p.created_at,
+});
+const mapPlanLine = (l) => ({
+  id: l.id, planId: l.plan_id, productId: l.product_id, dow: l.dow, qty: Number(l.qty) || 0,
+  producedRunId: l.produced_run_id || null,
+});
+
+export async function fetchProductionPlans(siteId) {
+  let q = supabase.from("ck_production_plans").select("*").is("archived_at", null).order("week_start", { ascending: false });
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapPlan);
+}
+
+export async function fetchPlanLines(planId) {
+  const { data, error } = await supabase.from("ck_plan_lines").select("*").eq("plan_id", planId);
+  if (error) throw error;
+  return (data || []).map(mapPlanLine);
+}
+
+export async function upsertProductionPlan(p) {
+  const row = { site_id: p.siteId || null, name: p.name, week_start: p.weekStart || null, note: p.note || null, updated_at: new Date().toISOString() };
+  if (p.id) {
+    const { data, error } = await supabase.from("ck_production_plans").update(row).eq("id", p.id).select().maybeSingle();
+    if (error) throw error;
+    return data ? mapPlan(data) : null;
+  }
+  row.id = `plan-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { data, error } = await supabase.from("ck_production_plans").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapPlan(data) : null;
+}
+
+export async function archiveProductionPlan(id) {
+  const { error } = await supabase.from("ck_production_plans").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Replace all lines for a plan. lines = [{ productId, dow, qty, producedRunId? }].
+export async function savePlanLines(planId, lines) {
+  await supabase.from("ck_plan_lines").delete().eq("plan_id", planId);
+  const rows = (lines || []).filter(l => Number(l.qty) > 0).map(l => ({
+    id: `pl-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    plan_id: planId, product_id: String(l.productId), dow: l.dow, qty: Number(l.qty),
+    produced_run_id: l.producedRunId || null,
+  }));
+  if (rows.length) { const { error } = await supabase.from("ck_plan_lines").insert(rows); if (error) throw error; }
+  return rows.length;
+}
+
+// Compute the economics of a plan. Pure. For each (product, total weekly qty),
+// expand recipe (incl. preps) → ingredient demand → cost (from ingredient
+// cost-per-unit) and requirement vs current stock.
+// products: ck_products[]; compsByProduct: map productId -> components[];
+// preps: ck_preps[]; prepCompsByPrep: map prepId -> prepComponents[];
+// ingredients: cogs_ck_items[] (with costPerBaseUnit + stock); plannedByProduct: map productId -> totalQty.
+export function computePlanEconomics({ products, compsByProduct, preps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct }) {
+  const ingMap = new Map((ingredients || []).map(i => [String(i.id), i]));
+  const demand = new Map(); // ingredientId -> qty needed
+  let totalCost = 0;
+  const perProduct = [];
+
+  (products || []).forEach(prod => {
+    const plannedQty = Number(plannedByProduct[prod.id] || 0);
+    if (plannedQty <= 0) return;
+    const yieldQty = prod.yieldQty ? Number(prod.yieldQty) : 1;
+    const factor = yieldQty > 0 ? plannedQty / yieldQty : plannedQty;
+    const comps = compsByProduct[prod.id] || [];
+    let prodCost = 0;
+    const addNeed = (ingId, qty) => {
+      const k = String(ingId);
+      demand.set(k, (demand.get(k) || 0) + qty);
+      const it = ingMap.get(k);
+      if (it && it.costPerBaseUnit != null) prodCost += qty * Number(it.costPerBaseUnit);
+    };
+    comps.forEach(c => {
+      if (c.kind === "prep" && c.prepId) {
+        const prep = (preps || []).find(p => String(p.id) === String(c.prepId));
+        const pYield = prep?.yieldQty ? Number(prep.yieldQty) : 1;
+        const prepFactor = (pYield > 0 ? (Number(c.qty) || 0) / pYield : (Number(c.qty) || 0)) * factor;
+        (prepCompsByPrep[c.prepId] || []).forEach(pc => addNeed(pc.ingredientId, (Number(pc.qty) || 0) * prepFactor));
+      } else {
+        addNeed(c.ingredientId, (Number(c.qty) || 0) * factor);
+      }
+    });
+    totalCost += prodCost;
+    perProduct.push({ productId: prod.id, name: prod.name, plannedQty, outputUnit: prod.outputUnit, cost: +prodCost.toFixed(2), costPerUnit: plannedQty>0 ? +(prodCost/plannedQty).toFixed(3) : null });
+  });
+
+  const requirements = [...demand.entries()].map(([ingId, need]) => {
+    const it = ingMap.get(ingId);
+    const stock = Number(stockByIngredient?.[ingId] || 0);
+    const toBuy = Math.max(0, need - stock);
+    return {
+      ingredientId: ingId, name: it?.name || ingId, unit: it?.unit || "",
+      needed: +need.toFixed(3), inStock: +stock.toFixed(3), toBuy: +toBuy.toFixed(3),
+      costPerUnit: it?.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null,
+      buyCost: it?.costPerBaseUnit != null ? +(toBuy * Number(it.costPerBaseUnit)).toFixed(2) : null,
+    };
+  }).sort((a,b)=> (b.toBuy>0?1:0)-(a.toBuy>0?1:0) || a.name.localeCompare(b.name));
+
+  const buyCost = requirements.reduce((s,r)=> s + (r.buyCost || 0), 0);
+  return { totalCost: +totalCost.toFixed(2), buyCost: +buyCost.toFixed(2), perProduct, requirements };
+}

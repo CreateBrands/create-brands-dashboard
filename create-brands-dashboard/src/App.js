@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3279,6 +3279,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [allComponents, setAllComponents] = useState([]);
   const [ckPreps, setCkPreps] = useState([]);
   const [allPrepComps, setAllPrepComps] = useState([]);
+  const [plans, setPlans] = useState([]);
   const [runs, setRuns] = useState([]);
   const [dispatches, setDispatches] = useState([]);
   const [dispatchedByRun, setDispatchedByRun] = useState({});
@@ -3290,12 +3291,16 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const distributionSites = useMemo(() => (stores || []).filter(s => s.siteType === "distribution" && !s.archivedAt), [stores]);
   // prepId -> components (for allergen + run expansion)
   const prepCompsByPrep = useMemo(() => { const m = {}; (allPrepComps||[]).forEach(c => { (m[c.prepId] = m[c.prepId] || []).push(c); }); return m; }, [allPrepComps]);
+  // productId -> components
+  const compsByProduct = useMemo(() => { const m = {}; (allComponents||[]).forEach(c => { (m[c.productId] = m[c.productId] || []).push(c); }); return m; }, [allComponents]);
+  // ingredientId -> current stock (sum of goods-in remaining)
+  const stockByIngredient = useMemo(() => { const m = {}; (goodsIn||[]).forEach(g => { m[String(g.ingredientId)] = (m[String(g.ingredientId)]||0) + (g.qtyRemaining||0); }); return m; }, [goodsIn]);
 
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[])])
-      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[])])
+      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -3487,6 +3492,60 @@ function CentralKitchenView({ stores = [], currentUser }) {
     } catch (e) { setErr(e?.message||String(e)); }
   };
   const removePrep = async (p) => { if (!window.confirm(`Archive prep "${p.name}"?`)) return; try { await archiveCkPrep(p.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
+
+  // Production planner
+  const DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const [planId, setPlanId] = useState("");        // selected plan
+  const [planName, setPlanName] = useState("");
+  const [planWeek, setPlanWeek] = useState("");
+  const [planGrid, setPlanGrid] = useState({});    // `${productId}:${dow}` -> qty
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planDirty, setPlanDirty] = useState(false);
+  const loadPlan = async (id) => {
+    setPlanId(id); setErr("");
+    if (!id) { setPlanName(""); setPlanWeek(""); setPlanGrid({}); setPlanDirty(false); return; }
+    const p = plans.find(x=>x.id===id);
+    setPlanName(p?.name||""); setPlanWeek(p?.weekStart||"");
+    try { const lines = await fetchPlanLines(id); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(false); }
+    catch (e) { setErr(e?.message||String(e)); }
+  };
+  const setCell = (productId, dow, qty) => { setPlanGrid(g => ({ ...g, [`${productId}:${dow}`]: qty })); setPlanDirty(true); };
+  const newPlan = async () => {
+    const name = window.prompt("Name this plan (e.g. 'Week of 16 Jun'):"); if (!name) return;
+    try { const p = await upsertProductionPlan({ siteId, name, weekStart: planWeek || null }); const fresh = await fetchProductionPlans(siteId); setPlans(fresh); setPlanId(p.id); setPlanName(p.name); setPlanGrid({}); setPlanDirty(false); }
+    catch (e) { setErr(e?.message||String(e)); }
+  };
+  const savePlan = async () => {
+    if (!planId) { setErr("Create or pick a plan first."); return; }
+    setPlanBusy(true); setErr("");
+    try {
+      await upsertProductionPlan({ id: planId, siteId, name: planName, weekStart: planWeek || null });
+      const lines = [];
+      Object.entries(planGrid).forEach(([k,v]) => { const [productId, dow] = k.split(":"); if (Number(v)>0) lines.push({ productId, dow: Number(dow), qty: Number(v) }); });
+      await savePlanLines(planId, lines);
+      const fresh = await fetchProductionPlans(siteId); setPlans(fresh); setPlanDirty(false);
+    } catch (e) { setErr(e?.message||String(e)); }
+    setPlanBusy(false);
+  };
+  const deletePlan = async () => {
+    if (!planId || !window.confirm("Delete this plan?")) return;
+    try { await archiveProductionPlan(planId); const fresh = await fetchProductionPlans(siteId); setPlans(fresh); loadPlan(""); }
+    catch (e) { setErr(e?.message||String(e)); }
+  };
+  // Weekly total per product from the grid
+  const plannedByProduct = useMemo(() => {
+    const m = {};
+    Object.entries(planGrid).forEach(([k,v]) => { const [pid] = k.split(":"); m[pid] = (m[pid]||0) + (Number(v)||0); });
+    return m;
+  }, [planGrid]);
+  const planEcon = useMemo(() => computePlanEconomics({ products: ckProducts, compsByProduct, preps: ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct }),
+    [ckProducts, compsByProduct, ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct]);
+  // Turn a planned product (its weekly total) into a production run
+  const planToRun = (productId) => {
+    const p = ckProducts.find(x=>x.id===productId); const qty = plannedByProduct[productId];
+    if (!p || !(qty>0)) return;
+    setRunProductId(String(productId)); setRunQty(String(qty)); setRunModal(true); setTab("production");
+  };
   // Live allergen preview while editing a product's recipe
   const editingDerived = useMemo(() => {
     const map = new Map(ingredients.map(i=>[String(i.id), i.allergens||[]]));
@@ -3617,7 +3676,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
       </div>
 
       <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"],["preps","Preps"],["products","Products"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
+        {[["stock","Stock"],["goods","Goods in log"],["preps","Preps"],["products","Products"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -3768,6 +3827,90 @@ function CentralKitchenView({ stores = [], currentUser }) {
                 );
               })}
             </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "planner" && (
+        <div className="space-y-4">
+          {/* Plan selector */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={planId} onChange={e=>loadPlan(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white">
+              <option value="">— select a plan —</option>
+              {plans.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button onClick={newPlan} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New plan</button>
+            {planId && <>
+              <input type="date" value={planWeek||""} onChange={e=>{setPlanWeek(e.target.value);setPlanDirty(true);}} className="px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white" title="Week starting"/>
+              <button onClick={savePlan} disabled={planBusy||!planDirty} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{planBusy?"Saving…":planDirty?"Save plan":"Saved"}</button>
+              <button onClick={deletePlan} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 text-sm font-semibold">Delete</button>
+            </>}
+          </div>
+
+          {!planId ? <div className="text-xs text-slate-600">Select a plan or create a new one to start planning the week.</div> :
+           !ckProducts.length ? <div className="text-xs text-slate-600">Create kitchen products first.</div> : (
+            <>
+              {/* Weekly grid */}
+              <div className="overflow-x-auto border border-slate-800 rounded-xl">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-900 text-slate-500">
+                      <th className="text-left px-3 py-2 font-semibold sticky left-0 bg-slate-900">Product</th>
+                      {DOW.map(d=><th key={d} className="px-2 py-2 font-semibold w-16">{d}</th>)}
+                      <th className="px-3 py-2 font-semibold">Week</th>
+                      <th className="px-3 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ckProducts.map(p => {
+                      const wk = plannedByProduct[p.id] || 0;
+                      return (
+                        <tr key={p.id} className="border-t border-slate-800/60">
+                          <td className="px-3 py-1.5 text-slate-200 sticky left-0 bg-slate-950 whitespace-nowrap">{p.name} <span className="text-slate-600">{p.outputUnit}</span></td>
+                          {DOW.map((d,dow)=>(
+                            <td key={dow} className="px-1 py-1">
+                              <input type="number" value={planGrid[`${p.id}:${dow}`]||""} onChange={e=>setCell(p.id, dow, e.target.value)} className="w-14 px-1.5 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white text-center focus:border-indigo-500"/>
+                            </td>
+                          ))}
+                          <td className="px-3 py-1.5 text-center font-bold text-white">{wk||"—"}</td>
+                          <td className="px-2 py-1.5">{wk>0 && <button onClick={()=>planToRun(p.id)} className="text-[10px] px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-300 font-semibold whitespace-nowrap" title="Create a production run for the weekly total">→ Run</button>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Economics summary */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredient cost (plan)</div><div className="text-2xl font-black text-white">{money(planEcon.totalCost)}</div></div>
+                <div className={`rounded-xl p-3 border ${planEcon.buyCost>0?"bg-amber-950/30 border-amber-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Still to buy</div><div className={`text-2xl font-black ${planEcon.buyCost>0?"text-amber-300":"text-white"}`}>{money(planEcon.buyCost)}</div></div>
+              </div>
+              <div className="text-[10px] text-slate-600">Ingredient cost only — excludes labour, utilities, packaging and overheads.</div>
+
+              {/* Ingredient requirements vs stock */}
+              <div>
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Ingredients needed for this plan</div>
+                {planEcon.requirements.length === 0 ? <div className="text-xs text-slate-600">Enter planned quantities to see requirements.</div> : (
+                  <div className="overflow-x-auto border border-slate-800 rounded-xl">
+                    <table className="w-full text-xs">
+                      <thead><tr className="bg-slate-900 text-slate-500"><th className="text-left px-3 py-2">Ingredient</th><th className="px-2 py-2">Needed</th><th className="px-2 py-2">In stock</th><th className="px-2 py-2">To buy</th><th className="px-2 py-2">Buy cost</th></tr></thead>
+                      <tbody>
+                        {planEcon.requirements.map(r => (
+                          <tr key={r.ingredientId} className={`border-t border-slate-800/60 ${r.toBuy>0?"":"opacity-60"}`}>
+                            <td className="px-3 py-1.5 text-slate-200">{r.name}</td>
+                            <td className="px-2 py-1.5 text-center text-slate-300">{r.needed} {r.unit}</td>
+                            <td className="px-2 py-1.5 text-center text-slate-400">{r.inStock} {r.unit}</td>
+                            <td className={`px-2 py-1.5 text-center font-semibold ${r.toBuy>0?"text-amber-300":"text-emerald-400"}`}>{r.toBuy>0?`${r.toBuy} ${r.unit}`:"✓"}</td>
+                            <td className="px-2 py-1.5 text-center text-slate-300">{r.buyCost!=null?money(r.buyCost):"—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
