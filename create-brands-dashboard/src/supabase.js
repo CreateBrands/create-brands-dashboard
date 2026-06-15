@@ -6249,3 +6249,28 @@ export async function fetchPlanActuals(planId) {
   (data||[]).forEach(r => { if (r.product_id) m[r.product_id] = (m[r.product_id]||0) + (Number(r.produced_qty)||0); });
   return m;
 }
+
+// ── Production scheduler: per-day jobs (item + qty + slot + staff) ────────────
+const mapScheduleJob = (j) => ({
+  id: j.id, planId: j.plan_id, productId: j.product_id, dow: j.dow, slot: j.slot || "morning",
+  qty: Number(j.qty) || 0, staffIds: j.staff_ids || [], producedRunId: j.produced_run_id || null, note: j.note || "",
+});
+
+export async function fetchScheduleJobs(planId) {
+  if (!planId) return [];
+  const { data, error } = await supabase.from("ck_schedule_jobs").select("*").eq("plan_id", planId).order("dow").order("slot");
+  if (error) throw error;
+  return (data || []).map(mapScheduleJob);
+}
+
+// Replace all jobs for a plan. jobs = [{ productId, dow, slot, qty, staffIds, note, producedRunId? }].
+export async function saveScheduleJobs(planId, jobs) {
+  await supabase.from("ck_schedule_jobs").delete().eq("plan_id", planId);
+  const rows = (jobs || []).filter(j => j.productId && Number(j.qty) > 0).map(j => ({
+    id: j.id && String(j.id).startsWith("job-") ? j.id : `job-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    plan_id: planId, product_id: String(j.productId), dow: j.dow, slot: j.slot || "morning",
+    qty: Number(j.qty), staff_ids: j.staffIds || [], produced_run_id: j.producedRunId || null, note: j.note || null,
+  }));
+  if (rows.length) { const { error } = await supabase.from("ck_schedule_jobs").insert(rows); if (error) throw error; }
+  return rows.length;
+}

@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3498,7 +3498,13 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const [planId, setPlanId] = useState("");        // selected plan
   const [planName, setPlanName] = useState("");
   const [planWeek, setPlanWeek] = useState("");
-  const [planGrid, setPlanGrid] = useState({});    // `${productId}:${dow}` -> qty
+  const [planGrid, setPlanGrid] = useState({});    // legacy `${productId}:${dow}` -> qty (kept for migration)
+  const [jobs, setJobs] = useState([]);            // scheduler jobs: {id, productId, dow, slot, qty, staffIds, note, producedRunId}
+  const [schedDay, setSchedDay] = useState(() => { const d = new Date().getDay(); return d === 0 ? 6 : d - 1; });
+  const SLOTS = [["morning","Morning"],["afternoon","Afternoon"],["evening","Evening"]];
+  // Kitchen staff available to assign
+  const kitchenStaff = useMemo(() => (opsTeam || []).filter(m => !m.archivedAt && (m.storeIds || []).includes(siteId)), [opsTeam, siteId]);
+  const staffName = (id) => { const m = (opsTeam||[]).find(x=>x.id===id); return m ? `${m.firstName||""} ${m.lastName||""}`.trim() || m.nickname || "Staff" : "—"; };
   const [planBusy, setPlanBusy] = useState(false);
   const [planDirty, setPlanDirty] = useState(false);
   const [templates, setTemplates] = useState([]);
@@ -3520,23 +3526,20 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
   const loadPlan = async (id) => {
     setPlanId(id); setErr(""); setPlanActuals({});
-    if (!id) { setPlanName(""); setPlanWeek(""); setPlanGrid({}); setPlanDirty(false); return; }
+    if (!id) { setPlanName(""); setPlanWeek(""); setPlanGrid({}); setJobs([]); setPlanDirty(false); return; }
     const p = plans.find(x=>x.id===id);
     setPlanName(p?.name||""); setPlanWeek(p?.weekStart||"");
     setLabourRate(p?.labourRate != null ? String(p.labourRate) : "");
     setShiftHours(p?.shiftHours != null ? p.shiftHours : 8);
     setEfficiency(p?.efficiency != null ? p.efficiency : 0.8);
     try {
-      const lines = await fetchPlanLines(id); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(false);
+      const lines = await fetchPlanLines(id); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g);
+      let js = await fetchScheduleJobs(id);
+      // Migrate: if no jobs yet but legacy grid lines exist, seed jobs (morning slot, no staff).
+      if (!js.length && lines.length) js = lines.map(l => ({ id:`job-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, productId:l.productId, dow:l.dow, slot:"morning", qty:l.qty, staffIds:[], note:"" }));
+      setJobs(js); setPlanDirty(false);
       fetchPlanActuals(id).then(setPlanActuals).catch(()=>{});
     } catch (e) { setErr(e?.message||String(e)); }
-  };
-  const setCell = (productId, dow, qty) => { setPlanGrid(g => ({ ...g, [`${productId}:${dow}`]: qty })); setPlanDirty(true); };
-  const setWeekTotal = (productId, total) => {
-    // Distribute a week total evenly across 7 days (remainder on Mon).
-    const t = Number(total) || 0; const per = Math.floor(t/7); const rem = t - per*7;
-    setPlanGrid(g => { const n = { ...g }; for (let d=0;d<7;d++) n[`${productId}:${d}`] = per + (d===0?rem:0); return n; });
-    setPlanDirty(true);
   };
   const newPlan = async (asTemplate=false) => {
     const name = window.prompt(asTemplate?"Name this template:":"Name this plan (e.g. 'Week of 16 Jun'):"); if (!name) return;
@@ -3549,8 +3552,11 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
     try {
       await upsertProductionPlan({ id: planId, siteId, name: planName, weekStart: planWeek || null,
         labourRate: labourRate === "" ? null : Number(labourRate), shiftHours: Number(shiftHours), efficiency: Number(efficiency) });
-      const lines = [];
-      Object.entries(planGrid).forEach(([k,v]) => { const [productId, dow] = k.split(":"); if (Number(v)>0) lines.push({ productId, dow: Number(dow), qty: Number(v) }); });
+      await saveScheduleJobs(planId, jobs);
+      // Keep plan_lines in sync (per product/day totals) so other views/economics stay valid.
+      const byPd = {};
+      (jobs||[]).forEach(j => { if (Number(j.qty)>0){ const k=`${j.productId}:${j.dow}`; byPd[k]=(byPd[k]||0)+Number(j.qty); } });
+      const lines = Object.entries(byPd).map(([k,v]) => { const [productId,dow]=k.split(":"); return { productId, dow:Number(dow), qty:v }; });
       await savePlanLines(planId, lines);
       const fresh = await fetchProductionPlans(siteId); setPlans(fresh); setPlanDirty(false);
     } catch (e) { setErr(e?.message||String(e)); }
@@ -3560,7 +3566,9 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
     const name = window.prompt("Save current plan as template named:"); if (!name) return;
     try {
       const t = await upsertProductionPlan({ siteId, name, isTemplate: true });
-      const lines = []; Object.entries(planGrid).forEach(([k,v]) => { const [productId, dow] = k.split(":"); if (Number(v)>0) lines.push({ productId, dow: Number(dow), qty: Number(v) }); });
+      await saveScheduleJobs(t.id, jobs);
+      const byPd = {}; (jobs||[]).forEach(j => { if (Number(j.qty)>0){ const k=`${j.productId}:${j.dow}`; byPd[k]=(byPd[k]||0)+Number(j.qty); } });
+      const lines = Object.entries(byPd).map(([k,v]) => { const [productId,dow]=k.split(":"); return { productId, dow:Number(dow), qty:v }; });
       await savePlanLines(t.id, lines); refreshTemplates();
       alert(`Saved template "${name}".`);
     } catch (e) { setErr(e?.message||String(e)); }
@@ -3574,36 +3582,40 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const startFrom = async (source) => {
     if (!planId) { setErr("Create or pick a plan first."); return; }
     try {
-      if (source === "template-pick") return; // handled by dropdown below
+      if (source === "template-pick") return;
       let totals = {};
       if (source === "production" || source === "dispatch") totals = await suggestPlanFromHistory(siteId, source);
-      const g = {};
-      Object.entries(totals).forEach(([pid, total]) => { const t=Number(total)||0; const per=Math.floor(t/7); const rem=t-per*7; for (let d=0;d<7;d++) g[`${pid}:${d}`] = per + (d===0?rem:0); });
-      setPlanGrid(g); setPlanDirty(true);
+      // Seed one job per product on Monday morning (user then schedules across days/slots/staff).
+      const seeded = Object.entries(totals).filter(([,t])=>Number(t)>0).map(([pid,t]) => ({ id:`job-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, productId:pid, dow:0, slot:"morning", qty:Number(t), staffIds:[], note:"" }));
+      setJobs(seeded); setPlanDirty(true);
     } catch (e) { setErr(e?.message||String(e)); }
   };
   const applyTemplate = async (templateId) => {
     if (!templateId || !planId) return;
-    try { const lines = await fetchPlanLines(templateId); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(true); }
-    catch (e) { setErr(e?.message||String(e)); }
+    try {
+      const tJobs = await fetchScheduleJobs(templateId);
+      if (tJobs.length) { setJobs(tJobs.map(j=>({ ...j, id:`job-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, producedRunId:null }))); }
+      else { const lines = await fetchPlanLines(templateId); setJobs(lines.map(l=>({ id:`job-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, productId:l.productId, dow:l.dow, slot:"morning", qty:l.qty, staffIds:[], note:"" }))); }
+      setPlanDirty(true);
+    } catch (e) { setErr(e?.message||String(e)); }
   };
-  // Weekly total per product from the grid
+  // Weekly total per product from scheduled jobs
   const plannedByProduct = useMemo(() => {
     const m = {};
-    Object.entries(planGrid).forEach(([k,v]) => { const [pid] = k.split(":"); m[pid] = (m[pid]||0) + (Number(v)||0); });
+    (jobs||[]).forEach(j => { if (Number(j.qty)>0) m[j.productId] = (m[j.productId]||0) + Number(j.qty); });
     return m;
-  }, [planGrid]);
+  }, [jobs]);
   // Per-day load (minutes) from minutes_per_unit
   const dayLoad = useMemo(() => {
     const mins = Array(7).fill(0); const units = Array(7).fill(0);
-    Object.entries(planGrid).forEach(([k,v]) => {
-      const [pid, dow] = k.split(":"); const q = Number(v)||0; if (!q) return;
-      const prod = ckProducts.find(p=>String(p.id)===pid);
-      units[Number(dow)] += q;
-      mins[Number(dow)] += q * (prod?.minutesPerUnit || 0);
+    (jobs||[]).forEach(j => {
+      const q = Number(j.qty)||0; if (!q) return;
+      const prod = ckProducts.find(p=>String(p.id)===String(j.productId));
+      units[j.dow] += q;
+      mins[j.dow] += q * (prod?.minutesPerUnit || 0);
     });
     return { mins, units, maxMin: Math.max(1, ...mins) };
-  }, [planGrid, ckProducts]);
+  }, [jobs, ckProducts]);
   // Labour planning: hours/people/cost per day + week, from minutes-per-unit.
   const labourPlan = useMemo(() => {
     const eff = Math.max(0.01, Number(efficiency) || 0.8);       // productive fraction
@@ -3621,6 +3633,20 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
     const anyTime = dayLoad.mins.some(m=>m>0);
     return { perDay, totalHours: +totalHours.toFixed(2), totalCost, peakPeople, capPerPerson: +capPerPerson.toFixed(2), anyTime };
   }, [dayLoad, efficiency, shiftHours, effRate]);
+  // Per-person scheduled hours for the selected day (job minutes split across its staff)
+  const personHoursForDay = useMemo(() => {
+    const m = {}; // staffId -> minutes
+    (jobs||[]).filter(j=>j.dow===schedDay).forEach(j => {
+      const prod = ckProducts.find(p=>String(p.id)===String(j.productId));
+      const mins = (Number(j.qty)||0) * (prod?.minutesPerUnit || 0);
+      const staff = j.staffIds && j.staffIds.length ? j.staffIds : [];
+      if (!staff.length) return;
+      const each = mins / staff.length;
+      staff.forEach(sid => { m[sid] = (m[sid]||0) + each; });
+    });
+    return m;
+  }, [jobs, schedDay, ckProducts]);
+  const dayJobs = useMemo(() => (jobs||[]).filter(j=>j.dow===schedDay), [jobs, schedDay]);
   const planEcon = useMemo(() => computePlanEconomics({ products: ckProducts, compsByProduct, preps: ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct }),
     [ckProducts, compsByProduct, ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct]);
   // Shopping list grouped by supplier
@@ -3635,10 +3661,23 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
     return Object.entries(groups).map(([supplier, g]) => ({ supplier, lines: g.lines, cost: +g.cost.toFixed(2) })).sort((a,b)=>b.cost-a.cost);
   }, [planEcon, ingredients]);
   // Turn a planned product (its weekly total) into a production run, linked to the plan
-  const planToRun = (productId) => {
-    const p = ckProducts.find(x=>x.id===productId); const qty = plannedByProduct[productId];
-    if (!p || !(qty>0)) return;
-    setRunProductId(String(productId)); setRunQty(String(qty)); setRunPlanId(planId); setRunModal(true); setTab("production");
+  // Scheduler job handlers
+  const addJob = () => {
+    const firstProd = ckProducts[0]; if (!firstProd) return;
+    setJobs(js => [...js, { id:`job-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, productId:String(firstProd.id), dow:schedDay, slot:"morning", qty:"", staffIds:[], note:"" }]);
+    setPlanDirty(true);
+  };
+  const updateJob = (jobId, patch) => { setJobs(js => js.map(j => j.id===jobId ? { ...j, ...patch } : j)); setPlanDirty(true); };
+  const removeJob = (jobId) => { setJobs(js => js.filter(j => j.id!==jobId)); setPlanDirty(true); };
+  const toggleJobStaff = (jobId, staffId) => {
+    setJobs(js => js.map(j => { if (j.id!==jobId) return j; const has=(j.staffIds||[]).includes(staffId); return { ...j, staffIds: has ? j.staffIds.filter(s=>s!==staffId) : [...(j.staffIds||[]), staffId] }; }));
+    setPlanDirty(true);
+  };
+  // Turn one scheduled job into a production run
+  const jobToRun = (job) => {
+    const p = ckProducts.find(x=>String(x.id)===String(job.productId));
+    if (!p || !(Number(job.qty)>0)) return;
+    setRunProductId(String(job.productId)); setRunQty(String(job.qty)); setRunPlanId(planId); setRunModal(true); setTab("production");
   };
 
   // Live allergen preview while editing a product's recipe
@@ -3970,59 +4009,97 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                     {templates.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
                 )}
-                <button onClick={()=>{ setPlanGrid({}); setPlanDirty(true); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 font-semibold">Clear all</button>
+                <button onClick={()=>{ setJobs([]); setPlanDirty(true); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 font-semibold">Clear all</button>
               </div>
 
-              {/* ── THE PLAN: products × days table ─────────────────────────── */}
-              <div className="overflow-x-auto rounded-2xl border border-slate-800">
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
-                      <th className="text-left px-3 py-2.5 font-bold sticky left-0 bg-slate-900 z-10">Product</th>
-                      {DOW.map(d=><th key={d} className="px-1 py-2.5 font-bold w-[52px] text-center">{d}</th>)}
-                      <th className="px-3 py-2.5 font-bold text-center bg-slate-900/80">Week</th>
-                      <th className="px-3 py-2.5 font-bold text-right">Cost</th>
-                      <th className="px-2 py-2.5"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ckProducts.map(p => {
-                      const wk = plannedByProduct[p.id]||0;
-                      const pe = planEcon.perProduct.find(x=>x.productId===p.id);
-                      return (
-                        <tr key={p.id} className="border-t border-slate-800 hover:bg-slate-900/40">
-                          <td className="px-3 py-2 sticky left-0 bg-slate-950 z-10">
-                            <div className="font-semibold text-slate-200 whitespace-nowrap">{p.name}</div>
-                            <div className="text-[10px] text-slate-600">{p.outputUnit}{p.minutesPerUnit?` · ${p.minutesPerUnit}m/unit`:""}</div>
-                          </td>
-                          {DOW.map((d,dow)=>(
-                            <td key={dow} className="px-1 py-1.5 text-center">
-                              <input type="number" value={planGrid[`${p.id}:${dow}`]||""} onChange={e=>setCell(p.id,dow,e.target.value)} placeholder="·"
-                                className="w-11 px-1 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white text-center focus:border-indigo-500 focus:bg-slate-950 placeholder:text-slate-700"/>
-                            </td>
-                          ))}
-                          <td className="px-3 py-2 text-center bg-slate-900/40">
-                            <input type="number" value={wk||""} onChange={e=>setWeekTotal(p.id, e.target.value)} placeholder="0"
-                              className="w-16 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-sm font-bold text-white text-center focus:border-indigo-500"/>
-                          </td>
-                          <td className="px-3 py-2 text-right text-slate-300 whitespace-nowrap">{pe?money(pe.cost):"—"}</td>
-                          <td className="px-2 py-2">{wk>0 && <button onClick={()=>planToRun(p.id)} className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-bold whitespace-nowrap">→ Run</button>}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t-2 border-slate-700 bg-slate-900 text-slate-300 font-bold text-xs">
-                      <td className="px-3 py-2 sticky left-0 bg-slate-900">Daily total</td>
-                      {DOW.map((d,i)=>(<td key={i} className="px-1 py-2 text-center">{dayLoad.units[i]||""}</td>))}
-                      <td className="px-3 py-2 text-center bg-slate-900">{Object.values(plannedByProduct).reduce((s,n)=>s+(Number(n)||0),0)||""}</td>
-                      <td className="px-3 py-2 text-right">{money(planEcon.totalCost)}</td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+              {/* ── DAY SCHEDULER: pick a day, schedule production jobs ───────── */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 space-y-3">
+                {/* Day picker */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {DOW.map((d,i)=>{
+                    const dayUnits = dayLoad.units[i]; const dayPeople = labourPlan.anyTime ? labourPlan.perDay[i].people : 0;
+                    const active = schedDay===i;
+                    return (
+                      <button key={d} onClick={()=>setSchedDay(i)} className={`px-3 py-2 rounded-xl text-xs font-bold flex flex-col items-center min-w-[58px] ${active?"bg-indigo-600 text-white":"bg-slate-950 text-slate-400 hover:bg-slate-800"}`}>
+                        <span>{d}</span>
+                        <span className={`text-[10px] font-normal ${active?"text-indigo-200":"text-slate-600"}`}>{dayUnits>0?`${dayUnits}u${dayPeople?` · ${dayPeople}👤`:""}`:"—"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Jobs for the selected day */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-bold text-slate-200">{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][schedDay]} — production</div>
+                    <button onClick={addJob} disabled={!ckProducts.length} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-semibold flex items-center gap-1"><Plus size={13}/> Add item</button>
+                  </div>
+
+                  {dayJobs.length===0 ? <div className="text-xs text-slate-600 py-3 text-center">No production scheduled for this day. Add an item to begin.</div> : (
+                    <div className="space-y-2">
+                      {SLOTS.map(([slotKey,slotLabel])=>{
+                        const slotJobs = dayJobs.filter(j=>j.slot===slotKey);
+                        if (!slotJobs.length) return null;
+                        return (
+                          <div key={slotKey}>
+                            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">{slotLabel}</div>
+                            <div className="space-y-1.5">
+                              {slotJobs.map(job=>{
+                                const prod = ckProducts.find(p=>String(p.id)===String(job.productId));
+                                const mins = (Number(job.qty)||0) * (prod?.minutesPerUnit||0);
+                                return (
+                                  <div key={job.id} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <select value={job.productId} onChange={e=>updateJob(job.id,{productId:e.target.value})} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                                        {ckProducts.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                                      </select>
+                                      <input type="number" value={job.qty} onChange={e=>updateJob(job.id,{qty:e.target.value})} placeholder="qty" className="w-16 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white text-center"/>
+                                      <span className="text-[10px] text-slate-600 w-8">{prod?.outputUnit||""}</span>
+                                      <select value={job.slot} onChange={e=>updateJob(job.id,{slot:e.target.value})} className="px-1.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-slate-300">
+                                        {SLOTS.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                                      </select>
+                                      {Number(job.qty)>0 && <button onClick={()=>jobToRun(job)} className="text-[10px] px-2 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-bold whitespace-nowrap">→ Run</button>}
+                                      <button onClick={()=>removeJob(job.id)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                                    </div>
+                                    {/* Staff assignment */}
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-[10px] text-slate-600">Staff:</span>
+                                      {kitchenStaff.length===0 ? <span className="text-[10px] text-amber-400/70">No kitchen staff assigned — add staff to this site.</span> :
+                                        kitchenStaff.map(m=>{ const on=(job.staffIds||[]).includes(m.id); return (
+                                          <button key={m.id} onClick={()=>toggleJobStaff(job.id,m.id)} className={`px-2 py-1 rounded-lg text-[10px] font-semibold ${on?"bg-indigo-600/30 text-indigo-200 border border-indigo-500/40":"bg-slate-900 text-slate-500 border border-slate-700"}`}>{(m.firstName||m.nickname||"?")}{m.lastName?` ${m.lastName[0]}`:""}</button>
+                                        ); })}
+                                      {mins>0 && <span className="text-[10px] text-slate-600 ml-auto">{job.staffIds&&job.staffIds.length?`${(mins/60/job.staffIds.length).toFixed(1)}h each`:`${(mins/60).toFixed(1)}h work`}</span>}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Who's working this day + hours */}
+                {Object.keys(personHoursForDay).length>0 && (
+                  <div className="pt-2 border-t border-slate-800">
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Staff scheduled — {DOW[schedDay]}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(personHoursForDay).sort((a,b)=>b[1]-a[1]).map(([sid,mins])=>{
+                        const hrs = mins/60; const over = hrs > labourPlan.capPerPerson + 0.001;
+                        return (
+                          <div key={sid} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${over?"bg-amber-600/20 text-amber-200 border border-amber-500/40":"bg-slate-950 text-slate-300 border border-slate-800"}`}>
+                            {staffName(sid)} · {hrs.toFixed(1)}h{over?" ⚠":""}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {Object.values(personHoursForDay).some(m=> m/60 > labourPlan.capPerPerson + 0.001) && <div className="text-[10px] text-amber-400/80 mt-1">⚠ over one person's productive capacity ({labourPlan.capPerPerson}h) — add staff or move work to another day/slot.</div>}
+                  </div>
+                )}
               </div>
-              <div className="text-[10px] text-slate-600">Type per-day quantities, or set a weekly total and it spreads across the week. Cost is ingredients only (excludes labour, utilities, packaging, overheads).</div>
+              <div className="text-[10px] text-slate-600">Pick a day, schedule each item with a quantity, slot and staff. Cost is ingredients only (excludes utilities, packaging, overheads).</div>
 
               {/* ── Daily load ──────────────────────────────────────────────── */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
