@@ -28712,6 +28712,7 @@ function MyLoansView({ currentUser, opsTeam = [] }) {
   const balance = loanBalance(ledger);
   const activeLoan = requests.find(r => r.status === "active");
   const pending = requests.filter(r => r.status === "pending");
+  const awaitingContract = requests.find(r => r.status === "contract_sent" && r.contractId);
 
   const submitRequest = async () => {
     const amt = parseFloat(reqAmount);
@@ -28749,6 +28750,7 @@ function MyLoansView({ currentUser, opsTeam = [] }) {
     active:"bg-indigo-600/20 text-indigo-300", declined:"bg-red-600/20 text-red-300",
     settled:"bg-slate-700/30 text-slate-400", cancelled:"bg-slate-700/30 text-slate-500",
     confirmed:"bg-emerald-600/20 text-emerald-300", rejected:"bg-red-600/20 text-red-300",
+    contract_sent:"bg-amber-600/20 text-amber-300", contract_signed:"bg-indigo-600/20 text-indigo-300",
   }[s] || "bg-slate-700/30 text-slate-400");
 
   return (
@@ -28843,6 +28845,19 @@ function MyLoansView({ currentUser, opsTeam = [] }) {
             </div>
           )}
 
+          {/* Loan contract awaiting signature — surfaced here so the employee
+              can read & sign without hunting for the Contracts tab. */}
+          {awaitingContract && (
+            <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <FileText size={16} className="text-amber-300"/>
+                <div className="text-sm font-bold text-white">Sign your loan contract</div>
+              </div>
+              <div className="text-xs text-slate-500">HQ has sent your loan agreement. Read it and sign below — your loan can only be approved once it's signed.</div>
+              <EmployeeContractsSection employeeId={myId} currentUser={currentUser}/>
+            </div>
+          )}
+
           {/* My requests */}
           {requests.length > 0 && (
             <div>
@@ -28852,7 +28867,7 @@ function MyLoansView({ currentUser, opsTeam = [] }) {
                   <div key={r.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold text-white">{money(r.amountApproved ?? r.amountRequested)}</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${statusChip(r.status)}`}>{r.status}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${statusChip(r.status)}`}>{r.status.replace(/_/g," ")}</span>
                     </div>
                     {r.reason && <div className="text-xs text-slate-500 mt-1">{r.reason}</div>}
                     {r.status==="declined" && r.declineReason && <div className="text-xs text-red-400 mt-1">Declined: {r.declineReason}</div>}
