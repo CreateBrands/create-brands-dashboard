@@ -6894,6 +6894,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "my-loans",       label: "My Loans",        icon: PoundSterling },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
     { key: "review-qr",      label: "Review QR",       icon: QrCode },
+    { key: "my-review",      label: "Review Impact",   icon: Star },
   ];
 
   const titles = {
@@ -6908,6 +6909,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-training":   "Training",
     "emp-contracts":  "Contracts",
     "review-qr":      "Review QR",
+    "my-review":      "Review Impact",
   };
 
   // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
@@ -6979,18 +6981,18 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
 
           {/* tile grid */}
-          <div className="grid grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-2 gap-2">
             {MORE_NAV.map(n => {
               const NIcon = n.icon; const active = activeView === n.key;
               return (
                 <button key={n.key} onClick={() => goTo(n.key)}
                   style={{ backgroundColor: active ? "#6B3520" : "#844429" }}
-                  className="relative flex flex-col items-start gap-2.5 p-3.5 rounded-2xl text-left transition-all active:scale-[0.97] hover:opacity-90">
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(253,242,224,0.18)" }}>
-                    <NIcon size={18} style={{ color: "#FDF2E0" }}/>
+                  className="relative flex flex-col items-start gap-2 p-3 rounded-2xl text-left transition-all active:scale-[0.97] hover:opacity-90">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(253,242,224,0.18)" }}>
+                    <NIcon size={16} style={{ color: "#FDF2E0" }}/>
                   </div>
-                  <span className="text-sm font-semibold" style={{ color: "#FDF2E0" }}>{n.label}</span>
-                  {n.badge && <span className="absolute top-3 right-3 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
+                  <span className="text-[13px] font-semibold" style={{ color: "#FDF2E0" }}>{n.label}</span>
+                  {n.badge && <span className="absolute top-2.5 right-2.5 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
                 </button>
               );
             })}
@@ -7066,7 +7068,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 currentUser={currentUser} opsTeam={opsTeam} stores={stores}
                 punchRecords={punchRecords || []} onPunchIn={onEmpPunchIn} onPunchOut={onEmpPunchOut}
               />
-              <MyReviewImpact currentUser={currentUser} opsTeam={opsTeam} stores={stores}/>
               <TodaysTasks
                 brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
                 assignments={assignments} checklists={checklists}
@@ -7167,6 +7168,9 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
           {activeView === "review-qr" && (
             <EmployeeReviewQR currentUser={currentUser} stores={stores} visibleStoreIds={myVisibleStoreIds} />
+          )}
+          {activeView === "my-review" && (
+            <MyReviewImpact currentUser={currentUser} opsTeam={opsTeam} stores={stores}/>
           )}
         </main>
 
