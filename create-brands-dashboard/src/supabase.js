@@ -3238,6 +3238,13 @@ function dbEmployeeDocumentToApp(d) {
     signedById:            d.signed_by_id || null,
     signedByName:          d.signed_by_name || null,
     signatureStatement:    d.signature_statement || null,
+    // Payslip fields (doc_type='payslip')
+    payPeriodLabel: d.pay_period_label || null,
+    payDate:        d.pay_date || null,
+    grossPay:       d.gross_pay != null ? Number(d.gross_pay) : null,
+    netPay:         d.net_pay   != null ? Number(d.net_pay)   : null,
+    taxPaid:        d.tax_paid  != null ? Number(d.tax_paid)  : null,
+    niPaid:         d.ni_paid   != null ? Number(d.ni_paid)   : null,
     createdAt:      d.created_at,
     updatedAt:      d.updated_at,
     archivedAt:     d.archived_at || null,
@@ -3388,7 +3395,50 @@ export async function addEmployeeDocument({
   return data ? dbEmployeeDocumentToApp(data) : dbEmployeeDocumentToApp(row);
 }
 
-// Soft-delete an employee document (archive). Same pattern as certifications
+// ── Payslips (employee_documents with doc_type='payslip') ────────────────────
+export async function fetchPayslips(employeeId) {
+  if (!employeeId) return [];
+  const { data, error } = await supabase
+    .from("employee_documents")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .eq("doc_type", "payslip")
+    .is("archived_at", null)
+    .order("pay_date", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbEmployeeDocumentToApp);
+}
+
+// Add a payslip: uploads the file (caller does upload) then inserts the row
+// with optional figures. payDate/period are optional.
+export async function addPayslip({ employeeId, fileUrl, filePath, fileName, payPeriodLabel, payDate, grossPay, netPay, taxPaid, niPaid, uploadedById, uploadedByName }) {
+  if (!employeeId) throw new Error("employeeId required");
+  if (!fileUrl || !filePath) throw new Error("file required");
+  const row = {
+    id: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id: employeeId, doc_type: "payslip",
+    file_url: fileUrl, file_path: filePath, file_name: fileName?.trim() || null,
+    pay_period_label: payPeriodLabel?.trim() || null, pay_date: payDate || null,
+    gross_pay: grossPay != null && grossPay !== "" ? Number(grossPay) : null,
+    net_pay:   netPay   != null && netPay   !== "" ? Number(netPay)   : null,
+    tax_paid:  taxPaid  != null && taxPaid  !== "" ? Number(taxPaid)  : null,
+    ni_paid:   niPaid   != null && niPaid   !== "" ? Number(niPaid)   : null,
+    uploaded_by_id: uploadedById || null, uploaded_by_name: uploadedByName || "Unknown",
+    review_stage: "hr_approved", status: "accepted",
+  };
+  const { data, error } = await supabase.from("employee_documents").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? dbEmployeeDocumentToApp(data) : dbEmployeeDocumentToApp(row);
+}
+
+export async function archivePayslip(id) {
+  if (!id) throw new Error("id required");
+  const { error } = await supabase.from("employee_documents")
+    .update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
 // — never hard-delete from app; manual SQL only for compliance.
 //
 // Note: the file in Storage is NOT deleted automatically. Use

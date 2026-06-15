@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -1933,6 +1933,105 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
 
 // Contracts sent to an employee — read, sign, and print. Shown in their portal.
 // Also reused (read-only-ish) on the manager profile via ContractsForEmployee.
+function PayslipsSection({ employeeId, currentUser, canUpload = false }) {
+  const [slips, setSlips] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [file, setFile] = useState(null);
+  const [period, setPeriod] = useState("");
+  const [payDate, setPayDate] = useState("");
+  const [gross, setGross] = useState("");
+  const [net, setNet] = useState("");
+  const [tax, setTax] = useState("");
+  const [ni, setNi] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
+
+  const load = useCallback(() => {
+    if (!employeeId) return;
+    setLoading(true);
+    fetchPayslips(employeeId).then(setSlips).catch(e=>setErr(e?.message||String(e))).finally(()=>setLoading(false));
+  }, [employeeId]);
+  useEffect(() => { load(); }, [load]);
+
+  const reset = () => { setFile(null); setPeriod(""); setPayDate(""); setGross(""); setNet(""); setTax(""); setNi(""); setErr(""); };
+
+  const submit = async () => {
+    if (!file) { setErr("Choose a payslip PDF."); return; }
+    setBusy(true); setErr("");
+    try {
+      const { url, path } = await uploadEmployeeDocument(file);
+      await addPayslip({ employeeId, fileUrl: url, filePath: path, fileName: file.name,
+        payPeriodLabel: period, payDate: payDate || null, grossPay: gross, netPay: net, taxPaid: tax, niPaid: ni,
+        uploadedById: currentUser?.opsTeamMemberId || currentUser?.id, uploadedByName: currentUser?.name });
+      setShowAdd(false); reset(); load();
+    } catch (e) { setErr(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  const remove = async (s) => {
+    if (!window.confirm("Remove this payslip?")) return;
+    setBusy(true);
+    try { await archivePayslip(s.id); load(); } catch (e) { setErr(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  if (loading) return <div className="text-sm text-slate-500">Loading payslips…</div>;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold">Payslips</div>
+        {canUpload && <button onClick={()=>setShowAdd(v=>!v)} className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 flex items-center gap-1"><Plus size={12}/> Add payslip</button>}
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+
+      {canUpload && showAdd && (
+        <div className="bg-slate-900 border border-indigo-500/30 rounded-xl p-3 space-y-2">
+          <input type="file" accept="application/pdf,image/*" onChange={e=>setFile(e.target.files?.[0]||null)} className="text-xs text-slate-300"/>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[10px] uppercase text-slate-500">Pay period</label><input value={period} onChange={e=>setPeriod(e.target.value)} placeholder="e.g. May 2026" className="w-full mt-0.5 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white"/></div>
+            <div><label className="text-[10px] uppercase text-slate-500">Pay date</label><input type="date" value={payDate} onChange={e=>setPayDate(e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white"/></div>
+            <div><label className="text-[10px] uppercase text-slate-500">Gross £</label><input type="number" value={gross} onChange={e=>setGross(e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white"/></div>
+            <div><label className="text-[10px] uppercase text-slate-500">Net £</label><input type="number" value={net} onChange={e=>setNet(e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white"/></div>
+            <div><label className="text-[10px] uppercase text-slate-500">Tax £</label><input type="number" value={tax} onChange={e=>setTax(e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white"/></div>
+            <div><label className="text-[10px] uppercase text-slate-500">NI £</label><input type="number" value={ni} onChange={e=>setNi(e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white"/></div>
+          </div>
+          <div className="text-[10px] text-slate-600">Figures are optional — the PDF is what matters.</div>
+          <div className="flex gap-2">
+            <button onClick={()=>{setShowAdd(false);reset();}} className="flex-1 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+            <button onClick={submit} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold disabled:opacity-40">{busy?"Uploading…":"Save payslip"}</button>
+          </div>
+        </div>
+      )}
+
+      {slips.length === 0 ? (
+        <div className="text-xs text-slate-600">{canUpload ? "No payslips yet. Add one above." : "No payslips available yet."}</div>
+      ) : (
+        <div className="space-y-2">
+          {slips.map(s => (
+            <div key={s.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-200">{s.payPeriodLabel || s.fileName || "Payslip"}</div>
+                <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
+                  {s.payDate && <span>{s.payDate}</span>}
+                  {s.grossPay != null && <span>Gross {money(s.grossPay)}</span>}
+                  {s.netPay   != null && <span>Net {money(s.netPay)}</span>}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <a href={s.fileUrl} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">View</a>
+                {canUpload && <button onClick={()=>remove(s)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmployeeContractsSection({ employeeId, currentUser, managerView = false, asPage = false }) {
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5013,6 +5112,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Hours",        icon: Clock },
+    { key: "my-payslips",    label: "My Payslips",     icon: FileText },
     { key: "my-loans",       label: "My Loans",        icon: PoundSterling },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
     { key: "review-qr",      label: "Review QR",       icon: QrCode },
@@ -5246,6 +5346,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
           {activeView === "my-loans" && (
             <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
+          )}
+          {activeView === "my-payslips" && (
+            <div className="max-w-xl">
+              <h2 className="text-base font-bold text-white flex items-center gap-2 mb-3"><FileText size={18}/> My Payslips</h2>
+              <PayslipsSection employeeId={currentUser.opsTeamMemberId || currentUser.id} currentUser={currentUser} canUpload={false}/>
+            </div>
           )}
 
           {activeView === "emp-contracts" && (
@@ -15627,6 +15733,11 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
         <div className="text-[10px] text-slate-600 mt-2">Read-only here. Edit these on the Personal &amp; HR tab. Included in the payroll export.</div>
       </div>
 
+      {/* Payslips */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+        <PayslipsSection employeeId={employee.id} currentUser={currentUser} canUpload={true}/>
+      </div>
+
       {/* Loan requests workflow */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex items-center justify-between gap-2">
@@ -15651,9 +15762,9 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
                 <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-amber-600/20 text-amber-300">{req.status.replace("_"," ")}</span>
               </div>
               {req.reason && <div className="text-xs text-slate-500">{req.reason}</div>}
-              {/* Contract gate */}
+              {/* Contract (optional) */}
               {!req.contractId ? (
-                <div className="text-[11px] text-slate-500">Send a loan contract before approving.</div>
+                <div className="text-[11px] text-slate-500">Optional: send a loan contract to sign, or approve directly.</div>
               ) : signed ? (
                 <div className="text-[11px] text-emerald-400">✓ Loan contract signed{ctr.signedAt?` on ${String(ctr.signedAt).split("T")[0]}`:""}.</div>
               ) : (
@@ -15661,10 +15772,10 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
               )}
               <div className="flex gap-2">
                 {!req.contractId && (
-                  <button onClick={()=>setLoanContractFor(req)} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Send loan contract</button>
+                  <button onClick={()=>setLoanContractFor(req)} className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 text-xs font-semibold">Send contract</button>
                 )}
-                <button onClick={()=>openApprove(req)} disabled={!signed} title={signed?"":"Contract must be signed first"}
-                  className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-semibold">Approve</button>
+                <button onClick={()=>openApprove(req)} title={req.contractId && !signed ? "Contract sent but not yet signed — you can still approve" : ""}
+                  className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Approve</button>
                 <button onClick={()=>doDeclineLoan(req)} className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-red-950/40 text-slate-300 text-xs font-semibold">Decline</button>
               </div>
             </div>
@@ -15793,7 +15904,7 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
             <button onClick={doApproveLoan} disabled={wfBusy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">Approve</button>
           </>}>
           <div className="space-y-3">
-            <div className="text-xs text-slate-500">Requested {fmtGBP(approveFor.amountRequested)}. Contract signed.</div>
+            <div className="text-xs text-slate-500">Requested {fmtGBP(approveFor.amountRequested)}.{(() => { const c = contractForReq(approveFor); return c ? (c.status==="signed" ? " Contract signed ✓" : " Contract sent, not yet signed.") : " No contract (optional)."; })()}</div>
             <div>
               <label className={labelCls}>Approve amount (£)</label>
               <input type="number" value={apprAmt} onChange={e=>setApprAmt(e.target.value)} className={inputCls}/>
@@ -24458,6 +24569,12 @@ function CommunicationView({
         )}
         {tab === "my-loans" && isEmployee && (
           <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
+        )}
+        {tab === "my-payslips" && isEmployee && (
+          <div className="max-w-xl">
+            <h2 className="text-base font-bold text-white flex items-center gap-2 mb-3"><FileText size={18}/> My Payslips</h2>
+            <PayslipsSection employeeId={currentUser.opsTeamMemberId || currentUser.id} currentUser={currentUser} canUpload={false}/>
+          </div>
         )}
       </div>
     </div>
