@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveProductAllergens, fetchKitchenProducts, updateKitchenProduct, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3275,8 +3275,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [goodsIn, setGoodsIn] = useState([]);
   const [categories, setCategories] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
-  const [recipes, setRecipes] = useState(null);
-  const [kitchenProducts, setKitchenProducts] = useState([]);
+  const [ckProducts, setCkProducts] = useState([]);
+  const [allComponents, setAllComponents] = useState([]);
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -3285,8 +3285,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchRecipes().catch(()=>null), fetchKitchenProducts().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[])])
-      .then(([i, g, c, s, r, kp, rn]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setRecipes(r); setKitchenProducts(kp); setRuns(rn); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[])])
+      .then(([i, g, c, s, kp, comps, rn]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -3365,14 +3365,38 @@ function CentralKitchenView({ stores = [], currentUser }) {
     setBulkBusy(false);
   };
 
-  // Products — allergen view + may-contain
-  const allCogsProducts = recipes?.products || [];
-  const productAllergens = (p) => recipes ? deriveProductAllergens(p, recipes, ingredients) : { derived: [], mayContain: [] };
-  const [prodModal, setProdModal] = useState(null);
+  // Kitchen products — own list, own recipe from kitchen ingredients
+  const componentsFor = (productId) => allComponents.filter(c => c.productId === productId);
+  const productAllergens = (product, comps) => deriveCkProductAllergens(product, comps || componentsFor(product.id), ingredients);
+  const [prodModal, setProdModal] = useState(null); // product or "new"
   const [prodForm, setProdForm] = useState({});
-  const openProd = (p) => { const kp = kitchenProducts.find(k=>k.id===p.id); setProdModal(p); setProdForm({ isKitchen: kp?.isKitchen ?? true, mayContainAllergens: kp?.mayContainAllergens||[], shelfLifeDays: kp?.shelfLifeDays??"", outputUnit: kp?.outputUnit||"each" }); setErr(""); };
-  const saveProd = async () => { try { await updateKitchenProduct(prodModal.id, prodForm); setProdModal(null); load(); } catch (e) { setErr(e?.message||String(e)); } };
+  const [prodComps, setProdComps] = useState([]);
+  const openProd = (p) => {
+    setProdModal(p || "new");
+    setProdForm(p ? { ...p } : { name:"", category:"", outputUnit:"each", yieldQty:"", shelfLifeDays:"", mayContainAllergens:[], note:"" });
+    setProdComps(p ? componentsFor(p.id).map(c=>({...c})) : []);
+    setErr("");
+  };
+  const addProdComp = () => setProdComps(cs => [...cs, { ingredientId: ingredients[0]?.id ? String(ingredients[0].id) : "", ingredientName: ingredients[0]?.name||"", qty:"", unit: ingredients[0]?.unit||"kg" }]);
+  const setProdComp = (idx, patch) => setProdComps(cs => cs.map((c,i)=> i===idx ? { ...c, ...patch } : c));
+  const rmProdComp = (idx) => setProdComps(cs => cs.filter((_,i)=>i!==idx));
   const toggleMayContain = (a) => setProdForm(f => ({ ...f, mayContainAllergens: (f.mayContainAllergens||[]).includes(a) ? f.mayContainAllergens.filter(x=>x!==a) : [...(f.mayContainAllergens||[]), a] }));
+  const saveProd = async () => {
+    if (!prodForm.name?.trim()) { setErr("Product name required."); return; }
+    try {
+      const saved = await upsertCkProduct({ ...prodForm, id: prodModal==="new"?undefined:prodModal.id, siteId });
+      await setCkProductComponents(saved.id, prodComps.map(c => ({ ...c, ingredientName: ingredients.find(i=>String(i.id)===String(c.ingredientId))?.name || c.ingredientName })));
+      setProdModal(null); load();
+    } catch (e) { setErr(e?.message||String(e)); }
+  };
+  const removeProd = async (p) => { if (!window.confirm(`Archive kitchen product "${p.name}"?`)) return; try { await archiveCkProduct(p.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
+  // Live allergen preview while editing a product's recipe
+  const editingDerived = useMemo(() => {
+    const map = new Map(ingredients.map(i=>[String(i.id), i.allergens||[]]));
+    const set = new Set();
+    prodComps.forEach(c => (map.get(String(c.ingredientId))||[]).forEach(a=>set.add(a)));
+    return [...set].sort();
+  }, [prodComps, ingredients]);
 
   // Production runs
   const [runModal, setRunModal] = useState(false);
@@ -3382,28 +3406,24 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [runUseBy, setRunUseBy] = useState("");
   const [runAlloc, setRunAlloc] = useState([]);
   const [runBusy, setRunBusy] = useState(false);
-  const runProduct = useMemo(() => allCogsProducts.find(p => String(p.id) === String(runProductId)), [allCogsProducts, runProductId]);
+  const runProduct = useMemo(() => ckProducts.find(p => String(p.id) === String(runProductId)), [ckProducts, runProductId]);
   const runPlan = useMemo(() => {
-    if (!runProduct || !recipes || !(Number(runQty) > 0)) return null;
-    const kp = kitchenProducts.find(k=>k.id===runProduct.id);
-    return planRunConsumption({ product: { ...runProduct, outputUnit: kp?.outputUnit }, producedQty: Number(runQty), recipes, goodsIn });
-  }, [runProduct, runQty, recipes, goodsIn, kitchenProducts]);
+    if (!runProduct || !(Number(runQty) > 0)) return null;
+    return planRunConsumption({ product: runProduct, components: componentsFor(runProduct.id), producedQty: Number(runQty), goodsIn });
+  }, [runProduct, runQty, goodsIn, allComponents]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (runPlan) setRunAlloc(runPlan.allocations.map(a=>({...a}))); }, [runPlan]);
-  // Auto use-by from shelf life
   useEffect(() => {
-    const kp = kitchenProducts.find(k=>String(k.id)===String(runProductId));
-    if (kp?.shelfLifeDays && runDate) { const d = new Date(runDate); d.setDate(d.getDate()+kp.shelfLifeDays); setRunUseBy(d.toISOString().slice(0,10)); }
-  }, [runProductId, runDate, kitchenProducts]);
-  const openRun = () => { const kps = kitchenProducts; setRunProductId(kps[0]?.id ? String(kps[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunModal(true); setErr(""); };
+    if (runProduct?.shelfLifeDays && runDate) { const d = new Date(runDate); d.setDate(d.getDate()+runProduct.shelfLifeDays); setRunUseBy(d.toISOString().slice(0,10)); }
+  }, [runProductId, runDate, runProduct]);
+  const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunModal(true); setErr(""); };
   const shortfalls = (runAlloc||[]).filter(a => a.shortfall);
   const doCreateRun = async () => {
     if (!runProduct) { setErr("Pick a product."); return; }
     if (!(Number(runQty) > 0)) { setErr("Enter a quantity."); return; }
     setRunBusy(true); setErr("");
     try {
-      const kp = kitchenProducts.find(k=>k.id===runProduct.id);
       const al = productAllergens(runProduct);
-      await createProductionRun({ siteId, product: { ...runProduct, outputUnit: kp?.outputUnit }, producedQty: Number(runQty),
+      await createProductionRun({ siteId, product: runProduct, producedQty: Number(runQty),
         runDate, useByDate: runUseBy || null, allocations: runAlloc.filter(a=>!a.shortfall),
         allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)], runBy: currentUser?.name });
       setRunModal(false); load();
@@ -3536,28 +3556,33 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
       {!loading && tab === "products" && (
         <div className="space-y-3">
-          <div className="text-[11px] text-slate-500 bg-slate-900/50 border border-slate-800 rounded-lg px-3 py-2">
-            Products and recipes are shared with COGS. Mark which ones the kitchen makes; allergens are auto-derived from each recipe's ingredients. <span className="text-amber-400/80">Confirm allergen accuracy with your food-safety lead.</span>
+          <div className="flex items-center justify-between gap-2">
+            <button onClick={()=>openProd(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New kitchen product</button>
           </div>
-          {!recipes ? <div className="text-xs text-slate-600">Recipes unavailable.</div> : allCogsProducts.length === 0 ? (
-            <div className="text-xs text-slate-600">No recipes yet. Build them in COGS / Recipes — they'll appear here.</div>
+          <div className="text-[11px] text-amber-400/80 bg-amber-950/20 border border-amber-500/20 rounded-lg px-3 py-2">Allergens are auto-derived from each product's kitchen ingredients. Confirm accuracy with your food-safety lead.</div>
+          {ckProducts.length === 0 ? (
+            <div className="text-xs text-slate-600">No kitchen products yet. Create one with “New kitchen product”.</div>
           ) : (
             <div className="space-y-2">
-              {allCogsProducts.map(p => {
-                const kp = kitchenProducts.find(k=>k.id===p.id);
-                const al = productAllergens(p);
+              {ckProducts.map(p => {
+                const comps = componentsFor(p.id);
+                const al = productAllergens(p, comps);
                 return (
-                  <div key={p.id} className={`bg-slate-900 border rounded-xl p-3 ${kp?.isKitchen?"border-indigo-500/30":"border-slate-800"}`}>
+                  <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">{p.name}{kp?.isKitchen && <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-300 uppercase">kitchen</span>}</div>
+                        <div className="text-sm font-semibold text-slate-200">{p.name} <span className="text-[11px] text-slate-500 font-normal">· makes {p.yieldQty||"?"} {p.outputUnit}{p.shelfLifeDays?` · ${p.shelfLifeDays}d shelf life`:""}</span></div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">{comps.length} ingredient{comps.length!==1?"s":""}</div>
                         <div className="text-[11px] mt-1 flex flex-wrap gap-1.5">
-                          {al.derived.length === 0 && al.mayContain.length === 0 ? <span className="text-slate-600">No allergens derived</span> :
+                          {al.derived.length === 0 && al.mayContain.length === 0 ? <span className="text-slate-600">No allergens</span> :
                             <>{al.derived.map(a=><span key={a} className="px-1.5 py-0.5 rounded bg-red-600/20 text-red-300 capitalize">{a}</span>)}
                             {al.mayContain.map(a=><span key={a} className="px-1.5 py-0.5 rounded bg-amber-600/15 text-amber-300/90 capitalize">may contain {a}</span>)}</>}
                         </div>
                       </div>
-                      <button onClick={()=>openProd(p)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700 flex-shrink-0">Settings</button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button onClick={()=>openProd(p)} className="text-slate-500 hover:text-white"><Edit size={13}/></button>
+                        <button onClick={()=>removeProd(p)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -3569,8 +3594,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
       {!loading && tab === "production" && (
         <div className="space-y-3">
-          <button onClick={openRun} disabled={!kitchenProducts.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New production run</button>
-          {!kitchenProducts.length && <div className="text-xs text-amber-400">Mark at least one product as “kitchen” in the Products tab first.</div>}
+          <button onClick={openRun} disabled={!ckProducts.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New production run</button>
+          {!ckProducts.length && <div className="text-xs text-amber-400">Create a kitchen product first (Products tab).</div>}
           {runs.length === 0 ? <div className="text-xs text-slate-600">No production runs yet.</div> : (
             <div className="space-y-2">
               {runs.map(r => (
@@ -3725,34 +3750,57 @@ function CentralKitchenView({ stores = [], currentUser }) {
         </Modal>
       )}
 
-      {/* Product settings modal */}
+      {/* Kitchen product modal — name, output, recipe from kitchen ingredients */}
       {prodModal && (
-        <Modal title={`Product — ${prodModal.name}`} onClose={()=>setProdModal(null)} maxW="max-w-md"
+        <Modal title={prodModal==="new"?"New kitchen product":`Edit — ${prodModal.name}`} onClose={()=>setProdModal(null)} maxW="max-w-lg"
           footer={<>
             <button onClick={()=>setProdModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
-            <button onClick={saveProd} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Save</button>
+            <button onClick={saveProd} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Save product</button>
           </>}>
           <div className="space-y-3">
-            <label className="flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
-              <input type="checkbox" checked={!!prodForm.isKitchen} onChange={e=>setProdForm(f=>({...f,isKitchen:e.target.checked}))}/>
-              Made in the central kitchen
-            </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div><label className={labelCls}>Name *</label><input value={prodForm.name||""} onChange={e=>setProdForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Brownie batter" className={inputCls}/></div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className={labelCls}>Makes (yield)</label><input type="number" value={prodForm.yieldQty??""} onChange={e=>setProdForm(f=>({...f,yieldQty:e.target.value}))} className={inputCls}/></div>
               <div><label className={labelCls}>Output unit</label><select value={prodForm.outputUnit||"each"} onChange={e=>setProdForm(f=>({...f,outputUnit:e.target.value}))} className={inputCls}>{["each","kg","g","L","ml","tray","batch"].map(u=><option key={u} value={u}>{u}</option>)}</select></div>
-              <div><label className={labelCls}>Shelf life (days)</label><input type="number" value={prodForm.shelfLifeDays??""} onChange={e=>setProdForm(f=>({...f,shelfLifeDays:e.target.value}))} placeholder="e.g. 5" className={inputCls}/></div>
+              <div><label className={labelCls}>Shelf life (d)</label><input type="number" value={prodForm.shelfLifeDays??""} onChange={e=>setProdForm(f=>({...f,shelfLifeDays:e.target.value}))} className={inputCls}/></div>
             </div>
+
+            {/* Recipe from kitchen ingredients */}
             <div>
-              <label className={labelCls}>Derived allergens (from recipe)</label>
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {productAllergens(prodModal).derived.length === 0 ? <span className="text-[11px] text-slate-600">None — tag the recipe's ingredients with allergens.</span> :
-                  productAllergens(prodModal).derived.map(a=><span key={a} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-300 text-xs capitalize">{a}</span>)}
+              <div className="flex items-center justify-between mb-1">
+                <label className={labelCls}>Recipe (kitchen ingredients)</label>
+                <button onClick={addProdComp} disabled={!ingredients.length} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 disabled:text-slate-600">+ Add ingredient</button>
               </div>
-              <div className="text-[10px] text-slate-600 mt-1">Auto-derived and read-only — change them by editing ingredient allergens.</div>
+              {!ingredients.length ? <div className="text-[11px] text-slate-600">Add kitchen ingredients first (Stock tab).</div> : prodComps.length === 0 ? (
+                <div className="text-[11px] text-slate-600">No ingredients yet — add some to build the recipe.</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {prodComps.map((c, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <select value={c.ingredientId} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setProdComp(idx,{ ingredientId:e.target.value, ingredientName:ing?.name||"", unit: ing?.unit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                        {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
+                      </select>
+                      <input type="number" value={c.qty} onChange={e=>setProdComp(idx,{qty:e.target.value})} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                      <span className="text-[11px] text-slate-500 w-8">{c.unit}</span>
+                      <button onClick={()=>rmProdComp(idx)} className="text-slate-600 hover:text-red-400"><X size={13}/></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Live allergen preview */}
+            <div>
+              <label className={labelCls}>Allergens (auto-derived)</label>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {editingDerived.length === 0 ? <span className="text-[11px] text-slate-600">None — tag ingredient allergens in the Stock tab.</span> :
+                  editingDerived.map(a=><span key={a} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-300 text-xs capitalize">{a}</span>)}
+              </div>
             </div>
             <div>
               <label className={labelCls}>“May contain” (cross-contamination)</label>
               <div className="flex flex-wrap gap-1.5 mt-1">
-                {CK_ALLERGENS.map(a => { const on = (prodForm.mayContainAllergens||[]).includes(a); const derived = productAllergens(prodModal).derived.includes(a); return (
+                {CK_ALLERGENS.map(a => { const on=(prodForm.mayContainAllergens||[]).includes(a); const derived=editingDerived.includes(a); return (
                   <button key={a} disabled={derived} onClick={()=>toggleMayContain(a)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize ${derived?"bg-slate-800 text-slate-600 cursor-not-allowed":on?"bg-amber-600/30 text-amber-200 border border-amber-500/40":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{a}</button>
                 ); })}
               </div>
@@ -3772,7 +3820,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Product</label>
                 <select value={runProductId} onChange={e=>setRunProductId(e.target.value)} className={inputCls}>
-                  {kitchenProducts.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                  {ckProducts.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
               <div><label className={labelCls}>Quantity made</label><input type="number" value={runQty} onChange={e=>setRunQty(e.target.value)} className={inputCls}/></div>

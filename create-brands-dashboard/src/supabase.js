@@ -5720,50 +5720,79 @@ export async function bulkAddCkIngredients(siteId, rows) {
 // ============================================================================
 
 // Allergens for a kitchen product = union of its component ingredients'
-// allergens (auto-derived) + the product's manual "may contain" list.
-// `recipes` is the object from fetchRecipes(); `ckItems` from fetchCkIngredients().
-export function deriveProductAllergens(product, recipes, ckItems) {
+// allergens (auto-derived from cogs_ck_items) + the product's manual
+// "may contain" list. `components` = ck_product_components for the product;
+// `ckItems` from fetchCkIngredients().
+export function deriveCkProductAllergens(product, components, ckItems) {
   const itemAllergens = new Map((ckItems || []).map(i => [String(i.id), i.allergens || []]));
-  const prepAllergens = (prepId, seen = new Set()) => {
-    if (seen.has(prepId)) return [];
-    seen.add(prepId);
-    const comps = (recipes.prepComponents || []).filter(c => c.prepId === prepId);
-    const set = new Set();
-    comps.forEach(c => { (itemAllergens.get(String(c.itemId)) || []).forEach(a => set.add(a)); });
-    return [...set];
-  };
-  const comps = (recipes.productComponents || []).filter(c => c.productId === product.id);
   const derived = new Set();
-  comps.forEach(c => {
-    if (c.kind === "prep" && c.prepId) prepAllergens(c.prepId).forEach(a => derived.add(a));
-    else (itemAllergens.get(String(c.itemId)) || []).forEach(a => derived.add(a));
-  });
+  (components || []).forEach(c => { (itemAllergens.get(String(c.ingredientId)) || []).forEach(a => derived.add(a)); });
   return { derived: [...derived].sort(), mayContain: (product.mayContainAllergens || []).filter(a => !derived.has(a)) };
 }
 
-const mapKitchenProduct = (p) => ({
-  id: p.id, name: p.name, category: p.category || "", notes: p.notes || "",
-  isKitchen: !!p.is_kitchen_product, mayContainAllergens: p.may_contain_allergens || [],
+const mapCkProduct = (p) => ({
+  id: p.id, siteId: p.site_id || null, name: p.name, category: p.category || "",
+  outputUnit: p.output_unit || "each", yieldQty: p.yield_qty != null ? Number(p.yield_qty) : null,
   shelfLifeDays: p.shelf_life_days != null ? Number(p.shelf_life_days) : null,
-  outputUnit: p.output_unit || "",
+  mayContainAllergens: p.may_contain_allergens || [], note: p.note || "",
+  archivedAt: p.archived_at || null,
+});
+const mapCkComponent = (c) => ({
+  id: c.id, productId: c.product_id, ingredientId: c.ingredient_id,
+  ingredientName: c.ingredient_name || "", qty: Number(c.qty) || 0, unit: c.unit || "",
 });
 
-export async function fetchKitchenProducts() {
-  const { data, error } = await supabase.from("cogs_products").select("*").eq("is_kitchen_product", true).order("name");
+export async function fetchCkProducts(siteId) {
+  let q = supabase.from("ck_products").select("*").is("archived_at", null).order("name");
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
   if (error) throw error;
-  return (data || []).map(mapKitchenProduct);
+  return (data || []).map(mapCkProduct);
 }
 
-// Mark/unmark a product as kitchen-made, set may-contain + shelf life + unit.
-export async function updateKitchenProduct(productId, patch) {
-  const body = {};
-  if ("isKitchen" in patch) body.is_kitchen_product = !!patch.isKitchen;
-  if ("mayContainAllergens" in patch) body.may_contain_allergens = patch.mayContainAllergens || [];
-  if ("shelfLifeDays" in patch) body.shelf_life_days = patch.shelfLifeDays === "" || patch.shelfLifeDays == null ? null : Number(patch.shelfLifeDays);
-  if ("outputUnit" in patch) body.output_unit = patch.outputUnit || null;
-  const { data, error } = await supabase.from("cogs_products").update(body).eq("id", productId).select().maybeSingle();
+export async function fetchCkProductComponents(productId) {
+  let q = supabase.from("ck_product_components").select("*");
+  if (productId) q = q.eq("product_id", productId);
+  const { data, error } = await q.order("created_at");
   if (error) throw error;
-  return data ? mapKitchenProduct(data) : null;
+  return (data || []).map(mapCkComponent);
+}
+
+export async function upsertCkProduct(p) {
+  const row = {
+    site_id: p.siteId || null, name: p.name, category: p.category || null,
+    output_unit: p.outputUnit || "each", yield_qty: p.yieldQty === "" || p.yieldQty == null ? null : Number(p.yieldQty),
+    shelf_life_days: p.shelfLifeDays === "" || p.shelfLifeDays == null ? null : Number(p.shelfLifeDays),
+    may_contain_allergens: p.mayContainAllergens || [], note: p.note || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (p.id) {
+    const { data, error } = await supabase.from("ck_products").update(row).eq("id", p.id).select().maybeSingle();
+    if (error) throw error;
+    return data ? mapCkProduct(data) : null;
+  }
+  row.id = `ckp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { data, error } = await supabase.from("ck_products").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCkProduct(data) : null;
+}
+
+export async function archiveCkProduct(id) {
+  const { error } = await supabase.from("ck_products").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Replace a product's recipe components wholesale (simplest correct semantics).
+export async function setCkProductComponents(productId, components) {
+  await supabase.from("ck_product_components").delete().eq("product_id", productId);
+  const rows = (components || []).filter(c => c.ingredientId && Number(c.qty) > 0).map(c => ({
+    id: `ckc-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    product_id: productId, ingredient_id: String(c.ingredientId), ingredient_name: c.ingredientName || null,
+    qty: Number(c.qty), unit: c.unit || null,
+  }));
+  if (rows.length) { const { error } = await supabase.from("ck_product_components").insert(rows); if (error) throw error; }
+  return rows.length;
 }
 
 const mapRun = (r) => ({
@@ -5793,30 +5822,19 @@ export async function fetchRunConsumption(runId) {
   return (data || []).map(mapConsumption);
 }
 
-// Plan a run's consumption: for each recipe ingredient, total qty needed =
-// per-batch portion × (producedQty / yield). Returns the ingredient demands +
-// a FEFO batch allocation suggestion. Pure (no writes) — UI shows it, allows override.
-export function planRunConsumption({ product, producedQty, recipes, goodsIn }) {
-  // Build flat ingredient demand from product components (preps expanded one level).
+// Plan a run's consumption from a kitchen product's own recipe components.
+// Demand scales by (producedQty / product yield). `components` =
+// ck_product_components; `goodsIn` = ck goods-in batches. Pure (no writes).
+export function planRunConsumption({ product, components, producedQty, goodsIn }) {
+  const yieldQty = product?.yieldQty ? Number(product.yieldQty) : 1;
+  const factor = yieldQty > 0 ? (producedQty / yieldQty) : producedQty;
   const demand = new Map(); // ingredientId -> { qty, unit, name }
-  const addDemand = (itemId, name, qty, unit) => {
-    const k = String(itemId); const cur = demand.get(k) || { qty: 0, unit, name };
-    cur.qty += qty; demand.set(k, cur);
-  };
-  const comps = (recipes.productComponents || []).filter(c => c.productId === product.id && (c.variantId == null));
-  comps.forEach(c => {
-    if (c.kind === "prep" && c.prepId) {
-      const prep = (recipes.preps || []).find(p => p.id === c.prepId);
-      const pcomps = (recipes.prepComponents || []).filter(x => x.prepId === c.prepId);
-      const yieldQty = prep?.yieldQty ? Number(prep.yieldQty) : 1;
-      // portionQty of prep per product unit; scale prep components accordingly
-      const prepFactor = (Number(c.portionQty) || 0) / yieldQty;
-      pcomps.forEach(pc => addDemand(pc.itemId, pc.itemName, (Number(pc.portionQty) || 0) * prepFactor * producedQty, pc.unit));
-    } else {
-      addDemand(c.itemId, c.itemName, (Number(c.portionQty) || 0) * producedQty, c.unit);
-    }
+  (components || []).forEach(c => {
+    const k = String(c.ingredientId);
+    const cur = demand.get(k) || { qty: 0, unit: c.unit, name: c.ingredientName };
+    cur.qty += (Number(c.qty) || 0) * factor;
+    demand.set(k, cur);
   });
-  // FEFO allocation against available goods-in batches.
   const allocations = [];
   demand.forEach((d, ingId) => {
     let need = d.qty;
@@ -5825,7 +5843,7 @@ export function planRunConsumption({ product, producedQty, recipes, goodsIn }) {
       .sort((a, b) => {
         const ax = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
         const bx = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity;
-        return ax - bx; // earliest expiry first
+        return ax - bx; // earliest expiry first (FEFO)
       });
     for (const b of batches) {
       if (need <= 0.00001) break;
