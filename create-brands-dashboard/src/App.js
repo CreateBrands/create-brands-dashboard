@@ -11025,7 +11025,10 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
   // Active stores grouped by brand for the picker. Archived stores excluded
   // so managers can't be assigned to a store that's been retired.
   const activeStores = useMemo(
-    () => stores.filter(s => !s.archivedAt && isShopSite(s)),
+    // Include facility sites (central kitchen, distribution) here — staff can
+    // be assigned to work at them, even though they're excluded from shop-only
+    // scopes elsewhere (schedule store dropdowns, sales reports, etc.).
+    () => stores.filter(s => !s.archivedAt && s.id !== "store-system-non-trading"),
     [stores]
   );
   const storesByBrand = useMemo(() => {
@@ -11152,6 +11155,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
                                   {checked && <Check size={11} className="text-white"/>}
                                 </div>
                                 <span className="text-sm text-slate-200">{s.shortName || s.name}</span>
+                                {FACILITY_SITE_TYPES.has(s.siteType) && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase tracking-wide">{s.siteType === "central_kitchen" ? "Kitchen" : s.siteType === "distribution" ? "Depot" : "Facility"}</span>}
                               </div>
                               {s.ownershipModel && <span className="text-[10px] text-slate-600 uppercase">{s.ownershipModel === "joint_venture" ? "JV" : s.ownershipModel}</span>}
                             </button>
