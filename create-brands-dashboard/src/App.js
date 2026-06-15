@@ -24831,6 +24831,23 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     const sortRows = (arr) => [...arr].sort((a,b) =>
       orderOf(a) - orderOf(b) || `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)
     );
+    // Derive the shift period from the role name suffix (… - Morning/Evening/Night).
+    const periodOf = (m) => {
+      const r = `${m.role || ""}`.toLowerCase();
+      if (/\bmorning\b|\bam\b|\bday\b/.test(r)) return "Morning";
+      if (/\bevening\b|\bnight\b|\bpm\b|\blate\b/.test(r)) return "Evening";
+      return "Other";
+    };
+    const PERIOD_ORDER = { Morning: 0, Evening: 1, Other: 2 };
+    // Split a section's members into period groups (only those that exist).
+    const toGroups = (members) => {
+      const byPeriod = {};
+      members.forEach(m => { const p = periodOf(m); (byPeriod[p] = byPeriod[p] || []).push(m); });
+      return Object.keys(byPeriod)
+        .sort((a,b) => (PERIOD_ORDER[a] ?? 9) - (PERIOD_ORDER[b] ?? 9))
+        .map(p => ({ period: p, members: sortRows(byPeriod[p]) }));
+    };
+
     const storeStaff = filteredMembers.filter(m => isStoreMember(m));
     const otherStaff = filteredMembers.filter(m => !isStoreMember(m));
     const byDept = {};
@@ -24840,10 +24857,12 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     });
     const deptNames = Object.keys(byDept).sort((a,b)=>a.localeCompare(b));
     const sections = deptNames.map(d => ({
-      key: `dept-${d}`, title: d, removable: false, members: sortRows(byDept[d]),
+      key: `dept-${d}`, title: d, removable: false,
+      members: sortRows(byDept[d]), groups: toGroups(byDept[d]),
     }));
     if (otherStaff.length) {
-      sections.push({ key: "other-stores", title: "Other stores staff", removable: true, members: sortRows(otherStaff) });
+      sections.push({ key: "other-stores", title: "Other stores staff", removable: true,
+        members: sortRows(otherStaff), groups: toGroups(otherStaff) });
     }
     return sections;
   }, [filteredMembers, storeId, memberOrder]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -25425,7 +25444,19 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                     {section.removable && <span className="text-[11px] text-slate-400">(removable)</span>}
                   </div>
                 </div>
-                {section.members.map((member)=>{
+                {section.groups.map((grp) => (
+                  <Fragment key={`${section.key}-${grp.period}`}>
+                    {/* Period divider — only when the section spans >1 period */}
+                    {section.groups.length > 1 && (
+                      <div className="grid bg-slate-900/50 border-b border-slate-800/50" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                        <div className="col-span-full px-6 py-1 flex items-center gap-2">
+                          <span className={`w-1.5 h-1.5 rounded-full ${grp.period==="Morning"?"bg-amber-400":grp.period==="Evening"?"bg-indigo-400":"bg-slate-500"}`}/>
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{grp.period}</span>
+                          <span className="text-[10px] text-slate-600">· {grp.members.length}</span>
+                        </div>
+                      </div>
+                    )}
+                {grp.members.map((member)=>{
               const empTotal = empTotalById[member.id] || { hours:0, cost:0 };
               const roleLabel = member.role || member.department || "";
               const canRemove = section.removable;
@@ -25568,6 +25599,8 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                 </div>
               );
                 })}
+                  </Fragment>
+                ))}
               </Fragment>
             ))}
 
