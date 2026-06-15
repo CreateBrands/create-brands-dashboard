@@ -67,7 +67,7 @@ import {
   // Payroll
   fetchMinimumWageRates, upsertMinimumWageRate, removeMinimumWageRate,
   fetchPayrollPeriods, upsertPayrollPeriod,
-  fetchEmployeeLoans, addLoanEntry, loanBalance,
+  fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
   resolveHourlyRate, ageOnDate, bandForAge,
   uploadInvoiceFile,
   extractInvoice,
@@ -5013,6 +5013,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Hours",        icon: Clock },
+    { key: "my-loans",       label: "My Loans",        icon: PoundSterling },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
     { key: "review-qr",      label: "Review QR",       icon: QrCode },
   ];
@@ -5242,6 +5243,9 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               currentUser={currentUser} brands={brands} schedules={schedules || []}
               punchRecords={punchRecords || []} onUpdate={onAmendPunch} onAddComment={onAddPunchComment}
             />
+          )}
+          {activeView === "my-loans" && (
+            <MyLoansView currentUser={currentUser}/>
           )}
 
           {activeView === "emp-contracts" && (
@@ -24237,6 +24241,9 @@ function CommunicationView({
         {tab === "my-hours" && isEmployee && (
           <EmployeeHoursView currentUser={currentUser} brands={brands} schedules={schedules||[]} punchRecords={punchRecords||[]} onUpdate={onUpdatePunchRecord} onAddComment={onAddPunchComment}/>
         )}
+        {tab === "my-loans" && isEmployee && (
+          <MyLoansView currentUser={currentUser}/>
+        )}
       </div>
     </div>
   );
@@ -28275,6 +28282,389 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
 // ═══════════════════════════════════════════════════════════════════════════════
 // EMPLOYEE HOURS VIEW — own records + overtime reason submission
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── HQ: Loan Approvals (requests + repayment confirmations) ──────────────────
+function LoanApprovalsView({ currentUser, opsTeam = [] }) {
+  const [requests, setRequests] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [approveModal, setApproveModal] = useState(null); // request being approved
+  const [apprAmount, setApprAmount] = useState("");
+  const [apprInstallment, setApprInstallment] = useState("");
+  const [apprFreq, setApprFreq] = useState("monthly");
+  const [declineModal, setDeclineModal] = useState(null);
+  const [declineReason, setDeclineReason] = useState("");
+
+  const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
+  const empName = (id) => { const m = opsTeam.find(x=>x.id===id); return m ? `${m.firstName} ${m.lastName}`.trim() : "Employee"; };
+  const empBrand = (id) => { const m = opsTeam.find(x=>x.id===id); return m?.brandId || null; };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [r, p] = await Promise.all([
+      fetchLoanRequests().catch(()=>[]),
+      fetchLoanPayments({ status: "pending" }).catch(()=>[]),
+    ]);
+    setRequests(r||[]); setPayments(p||[]); setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const pendingReqs = requests.filter(r => r.status === "pending");
+  const activeReqs  = requests.filter(r => r.status === "active");
+
+  const openApprove = (r) => { setApproveModal(r); setApprAmount(String(r.amountRequested)); setApprInstallment(""); setApprFreq("monthly"); };
+  const doApprove = async () => {
+    const amt = parseFloat(apprAmount);
+    if (!amt || amt <= 0) return;
+    setBusy(true);
+    try {
+      await approveLoanRequest({
+        id: approveModal.id, employeeId: approveModal.employeeId, brandId: empBrand(approveModal.employeeId),
+        amountApproved: amt, installmentAmount: apprInstallment ? parseFloat(apprInstallment) : null,
+        installmentFreq: apprInstallment ? apprFreq : null, decidedBy: currentUser.name,
+      });
+      setApproveModal(null); await load();
+    } catch (e) { alert("Couldn't approve: " + e.message); }
+    setBusy(false);
+  };
+  const doDecline = async () => {
+    setBusy(true);
+    try { await declineLoanRequest({ id: declineModal.id, decidedBy: currentUser.name, declineReason: declineReason.trim() });
+      setDeclineModal(null); setDeclineReason(""); await load();
+    } catch (e) { alert("Couldn't decline: " + e.message); }
+    setBusy(false);
+  };
+  const confirmPay = async (p) => {
+    setBusy(true);
+    try { await confirmLoanPayment({ paymentId: p.id, loanId: p.loanId, employeeId: p.employeeId, brandId: empBrand(p.employeeId), amount: p.amount, confirmedBy: currentUser.name });
+      await load();
+    } catch (e) { alert("Couldn't confirm: " + e.message); }
+    setBusy(false);
+  };
+  const rejectPay = async (p) => {
+    const reason = window.prompt("Reason for rejecting this repayment? (optional)") || "";
+    setBusy(true);
+    try { await rejectLoanPayment({ paymentId: p.id, confirmedBy: currentUser.name, rejectReason: reason });
+      await load();
+    } catch (e) { alert("Couldn't reject: " + e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><PoundSterling size={18}/> Loan Approvals</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Approve loan requests and confirm employee repayments. Balances update on confirmation.</p>
+      </div>
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
+        <>
+          {/* Pending requests */}
+          <div>
+            <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Pending requests ({pendingReqs.length})</div>
+            {pendingReqs.length===0 ? <div className="text-xs text-slate-600">No requests waiting.</div> : (
+              <div className="space-y-2">
+                {pendingReqs.map(r => (
+                  <div key={r.id} className="bg-slate-900 border border-amber-500/30 rounded-xl p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-white">{empName(r.employeeId)} · {money(r.amountRequested)}</div>
+                      <span className="text-[10px] text-slate-500">{r.createdAt?.split("T")[0]}</span>
+                    </div>
+                    {r.reason && <div className="text-xs text-slate-500 mt-1">{r.reason}</div>}
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={()=>openApprove(r)} className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Approve</button>
+                      <button onClick={()=>setDeclineModal(r)} className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-red-950/40 text-slate-300 text-xs font-semibold">Decline</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Pending repayments */}
+          <div>
+            <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Repayments to confirm ({payments.length})</div>
+            {payments.length===0 ? <div className="text-xs text-slate-600">No repayments waiting.</div> : (
+              <div className="space-y-2">
+                {payments.map(p => (
+                  <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm text-slate-200">{empName(p.employeeId)} · {money(p.amount)}</div>
+                      <div className="text-[11px] text-slate-500">{p.paidDate} · {p.method}{p.note?` · ${p.note}`:""}</div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button onClick={()=>confirmPay(p)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Confirm</button>
+                      <button onClick={()=>rejectPay(p)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 text-xs font-semibold">Reject</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Active loans */}
+          {activeReqs.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">Active loans ({activeReqs.length})</div>
+              <div className="space-y-2">
+                {activeReqs.map(r => (
+                  <div key={r.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                    <div className="text-sm text-slate-200">{empName(r.employeeId)} · {money(r.amountApproved)}</div>
+                    <div className="text-[11px] text-slate-500">{r.installmentAmount?`${money(r.installmentAmount)} ${r.installmentFreq}`:"open repayment"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Approve modal */}
+      {approveModal && (
+        <Modal title={`Approve loan — ${empName(approveModal.employeeId)}`} onClose={()=>setApproveModal(null)} maxW="max-w-sm"
+          footer={<>
+            <button onClick={()=>setApproveModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doApprove} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">Approve</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="text-xs text-slate-500">Requested {money(approveModal.amountRequested)}{approveModal.reason?` — ${approveModal.reason}`:""}</div>
+            <div>
+              <label className="text-[11px] text-slate-500 uppercase tracking-wide">Approve amount (£)</label>
+              <input type="number" value={apprAmount} onChange={e=>setApprAmount(e.target.value)} className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white"/>
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500 uppercase tracking-wide">Installment (£) — optional</label>
+              <div className="flex gap-2 mt-1">
+                <input type="number" value={apprInstallment} onChange={e=>setApprInstallment(e.target.value)} placeholder="e.g. 50" className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white"/>
+                <select value={apprFreq} onChange={e=>setApprFreq(e.target.value)} className="px-2 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white">
+                  <option value="weekly">weekly</option><option value="monthly">monthly</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Decline modal */}
+      {declineModal && (
+        <Modal title={`Decline loan — ${empName(declineModal.employeeId)}`} onClose={()=>setDeclineModal(null)} maxW="max-w-sm"
+          footer={<>
+            <button onClick={()=>setDeclineModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doDecline} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold disabled:opacity-40">Decline</button>
+          </>}>
+          <div className="space-y-2">
+            <label className="text-[11px] text-slate-500 uppercase tracking-wide">Reason (optional)</label>
+            <textarea value={declineReason} onChange={e=>setDeclineReason(e.target.value)} rows={2} className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white resize-none"/>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Employee: My Loans (request + record repayments) ─────────────────────────
+function MyLoansView({ currentUser }) {
+  const myId = currentUser.opsTeamMemberId || currentUser.id;
+  const brandId = currentUser.brandIds?.[0] || null;
+  const [requests, setRequests] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showRequest, setShowRequest] = useState(false);
+  const [reqAmount, setReqAmount] = useState("");
+  const [reqReason, setReqReason] = useState("");
+  const [payFor, setPayFor] = useState(null);     // loan being repaid
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState("transfer");
+  const [payDate, setPayDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [r, p, l] = await Promise.all([
+      fetchLoanRequests({ employeeId: myId }).catch(()=>[]),
+      fetchLoanPayments({ employeeId: myId }).catch(()=>[]),
+      fetchEmployeeLoans(myId).catch(()=>[]),
+    ]);
+    setRequests(r||[]); setPayments(p||[]); setLedger(l||[]); setLoading(false);
+  }, [myId]);
+  useEffect(() => { load(); }, [load]);
+
+  const balance = loanBalance(ledger);
+  const activeLoan = requests.find(r => r.status === "active");
+  const pending = requests.filter(r => r.status === "pending");
+
+  const submitRequest = async () => {
+    const amt = parseFloat(reqAmount);
+    if (!amt || amt <= 0) { setErr("Enter a valid amount."); return; }
+    setBusy(true); setErr("");
+    try {
+      await createLoanRequest({ employeeId: myId, brandId, amountRequested: amt, reason: reqReason.trim() });
+      setShowRequest(false); setReqAmount(""); setReqReason("");
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  };
+
+  const submitPayment = async () => {
+    const amt = parseFloat(payAmount);
+    if (!amt || amt <= 0) { setErr("Enter a valid amount."); return; }
+    setBusy(true); setErr("");
+    try {
+      await recordLoanPayment({ loanId: payFor.id, employeeId: myId, amount: amt, paidDate: payDate, method: payMethod });
+      setPayFor(null); setPayAmount("");
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  };
+
+  const cancelReq = async (id) => {
+    if (!window.confirm("Cancel this loan request?")) return;
+    setBusy(true);
+    try { await cancelLoanRequest(id); await load(); } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const statusChip = (s) => ({
+    pending:"bg-amber-600/20 text-amber-300", approved:"bg-emerald-600/20 text-emerald-300",
+    active:"bg-indigo-600/20 text-indigo-300", declined:"bg-red-600/20 text-red-300",
+    settled:"bg-slate-700/30 text-slate-400", cancelled:"bg-slate-700/30 text-slate-500",
+    confirmed:"bg-emerald-600/20 text-emerald-300", rejected:"bg-red-600/20 text-red-300",
+  }[s] || "bg-slate-700/30 text-slate-400");
+
+  return (
+    <div className="space-y-5 max-w-xl">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2"><PoundSterling size={18}/> My Loans</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Request a loan and record your repayments. HQ approves everything.</p>
+        </div>
+        {!activeLoan && pending.length===0 && (
+          <button onClick={()=>setShowRequest(true)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Request a loan</button>
+        )}
+      </div>
+
+      {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
+        <>
+          {/* Balance card */}
+          {(activeLoan || balance > 0) && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-[11px] text-slate-500 uppercase tracking-widest">Outstanding balance</div>
+              <div className="text-3xl font-black text-white mt-1">{money(balance)}</div>
+              {activeLoan && activeLoan.installmentAmount > 0 && (
+                <div className="text-xs text-slate-500 mt-1">Agreed installment: {money(activeLoan.installmentAmount)} {activeLoan.installmentFreq||""}</div>
+              )}
+              {activeLoan && balance > 0 && (
+                <button onClick={()=>{ setPayFor(activeLoan); setPayAmount(activeLoan.installmentAmount ? String(activeLoan.installmentAmount) : ""); }}
+                  className="mt-3 w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">Record a repayment</button>
+              )}
+            </div>
+          )}
+
+          {/* Request form */}
+          {showRequest && (
+            <div className="bg-slate-900 border border-indigo-500/30 rounded-2xl p-4 space-y-3">
+              <div className="text-sm font-bold text-white">Request a loan</div>
+              <div>
+                <label className="text-[11px] text-slate-500 uppercase tracking-wide">Amount (£)</label>
+                <input type="number" value={reqAmount} onChange={e=>setReqAmount(e.target.value)} placeholder="0.00"
+                  className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white"/>
+              </div>
+              <div>
+                <label className="text-[11px] text-slate-500 uppercase tracking-wide">Reason</label>
+                <textarea value={reqReason} onChange={e=>setReqReason(e.target.value)} rows={2} placeholder="Briefly, what's it for?"
+                  className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white resize-none"/>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={()=>{setShowRequest(false);setErr("");}} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                <button onClick={submitRequest} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40">Submit</button>
+              </div>
+            </div>
+          )}
+
+          {/* Repayment form */}
+          {payFor && (
+            <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 space-y-3">
+              <div className="text-sm font-bold text-white">Record a repayment</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-slate-500 uppercase tracking-wide">Amount (£)</label>
+                  <input type="number" value={payAmount} onChange={e=>setPayAmount(e.target.value)} placeholder="0.00"
+                    className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white"/>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500 uppercase tracking-wide">Date</label>
+                  <input type="date" value={payDate} onChange={e=>setPayDate(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white"/>
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] text-slate-500 uppercase tracking-wide">Method</label>
+                <div className="flex gap-2 mt-1">
+                  {["transfer","cash","other"].map(m=>(
+                    <button key={m} onClick={()=>setPayMethod(m)} className={`flex-1 py-2 rounded-lg text-xs font-semibold capitalize ${payMethod===m?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{m}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-500">This will be sent to HQ to confirm. Your balance updates once confirmed.</div>
+              <div className="flex gap-2">
+                <button onClick={()=>{setPayFor(null);setErr("");}} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                <button onClick={submitPayment} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">Submit</button>
+              </div>
+            </div>
+          )}
+
+          {/* My requests */}
+          {requests.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">My requests</div>
+              <div className="space-y-2">
+                {requests.map(r => (
+                  <div key={r.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-white">{money(r.amountApproved ?? r.amountRequested)}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${statusChip(r.status)}`}>{r.status}</span>
+                    </div>
+                    {r.reason && <div className="text-xs text-slate-500 mt-1">{r.reason}</div>}
+                    {r.status==="declined" && r.declineReason && <div className="text-xs text-red-400 mt-1">Declined: {r.declineReason}</div>}
+                    {r.status==="pending" && <button onClick={()=>cancelReq(r.id)} className="text-[11px] text-slate-500 hover:text-red-400 mt-1">Cancel request</button>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* My repayments */}
+          {payments.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-2">My repayments</div>
+              <div className="space-y-2">
+                {payments.map(p => (
+                  <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm text-slate-200">{money(p.amount)} <span className="text-[11px] text-slate-500">· {p.paidDate} · {p.method}</span></div>
+                      {p.status==="rejected" && p.rejectReason && <div className="text-xs text-red-400">{p.rejectReason}</div>}
+                    </div>
+                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${statusChip(p.status)}`}>{p.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {requests.length===0 && !showRequest && (
+            <div className="text-center py-8 text-sm text-slate-500">No loans yet. Tap "Request a loan" to apply.</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpdate, onAddComment }) {
   const myId      = currentUser.opsTeamMemberId || currentUser.id;
   const myBrandId = currentUser.brandIds[0];
@@ -31378,6 +31768,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
+      { key: "loan-approvals", label: "Loan Approvals", icon: PoundSterling, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -31629,6 +32020,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "loan-approvals" && ["owner","hq_staff"].includes(currentUser.role) && <LoanApprovalsView currentUser={currentUser} opsTeam={opsTeam}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

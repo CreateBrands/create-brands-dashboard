@@ -4471,6 +4471,132 @@ export function loanBalance(entries) {
   return entries.reduce((bal, e) => bal + (e.entry_type === "advance" ? Number(e.amount) : -Number(e.amount)), 0);
 }
 
+// ── Loan request → approval → repayment workflow ────────────────────────────
+const mapLoanReq = (r) => ({
+  id: r.id, employeeId: r.employee_id, brandId: r.brand_id || "",
+  amountRequested: Number(r.amount_requested) || 0,
+  amountApproved: r.amount_approved != null ? Number(r.amount_approved) : null,
+  reason: r.reason || "", status: r.status,
+  installmentAmount: r.installment_amount != null ? Number(r.installment_amount) : null,
+  installmentFreq: r.installment_freq || "",
+  decidedBy: r.decided_by || "", decidedAt: r.decided_at, declineReason: r.decline_reason || "",
+  createdAt: r.created_at,
+});
+const mapLoanPay = (p) => ({
+  id: p.id, loanId: p.loan_id, employeeId: p.employee_id,
+  amount: Number(p.amount) || 0, paidDate: p.paid_date, method: p.method || "",
+  note: p.note || "", status: p.status, confirmedBy: p.confirmed_by || "",
+  confirmedAt: p.confirmed_at, rejectReason: p.reject_reason || "", createdAt: p.created_at,
+});
+
+export async function fetchLoanRequests({ employeeId, status } = {}) {
+  let q = supabase.from("loan_requests").select("*").order("created_at", { ascending: false });
+  if (employeeId) q = q.eq("employee_id", employeeId);
+  if (status) q = q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapLoanReq);
+}
+
+export async function fetchLoanPayments({ loanId, employeeId, status } = {}) {
+  let q = supabase.from("loan_payments").select("*").order("paid_date", { ascending: false });
+  if (loanId) q = q.eq("loan_id", loanId);
+  if (employeeId) q = q.eq("employee_id", employeeId);
+  if (status) q = q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapLoanPay);
+}
+
+// Employee submits a loan request.
+export async function createLoanRequest({ employeeId, brandId, amountRequested, reason }) {
+  const { data, error } = await supabase.from("loan_requests").insert({
+    employee_id: employeeId, brand_id: brandId || null,
+    amount_requested: amountRequested, reason: reason || null, status: "pending",
+  }).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapLoanReq(data) : null;
+}
+
+// Employee cancels their own pending request.
+export async function cancelLoanRequest(id) {
+  const { error } = await supabase.from("loan_requests")
+    .update({ status: "cancelled", updated_at: new Date().toISOString() })
+    .eq("id", id).eq("status", "pending");
+  if (error) throw error;
+  return id;
+}
+
+// HQ approves: sets approved amount + installment terms, marks active, and
+// writes the disbursement as an 'advance' to the employee_loans ledger.
+export async function approveLoanRequest({ id, employeeId, brandId, amountApproved, installmentAmount, installmentFreq, decidedBy }) {
+  const { data, error } = await supabase.from("loan_requests").update({
+    status: "active", amount_approved: amountApproved,
+    installment_amount: installmentAmount || null, installment_freq: installmentFreq || null,
+    decided_by: decidedBy || null, decided_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq("id", id).select().maybeSingle();
+  if (error) throw error;
+  // Ledger advance (drives the running balance).
+  await supabase.from("employee_loans").insert({
+    employee_id: employeeId, brand_id: brandId || null, entry_type: "advance",
+    amount: amountApproved, note: "Loan approved", created_by: decidedBy || null,
+    loan_id: id, source: "request_approved",
+  });
+  return data ? mapLoanReq(data) : null;
+}
+
+export async function declineLoanRequest({ id, decidedBy, declineReason }) {
+  const { data, error } = await supabase.from("loan_requests").update({
+    status: "declined", decided_by: decidedBy || null, decided_at: new Date().toISOString(),
+    decline_reason: declineReason || null, updated_at: new Date().toISOString(),
+  }).eq("id", id).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapLoanReq(data) : null;
+}
+
+// Employee records a repayment (pending HQ confirmation).
+export async function recordLoanPayment({ loanId, employeeId, amount, paidDate, method, note }) {
+  const { data, error } = await supabase.from("loan_payments").insert({
+    loan_id: loanId, employee_id: employeeId, amount, paid_date: paidDate || new Date().toISOString().split("T")[0],
+    method: method || null, note: note || null, status: "pending",
+  }).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapLoanPay(data) : null;
+}
+
+// HQ confirms a payment: writes a 'repayment' to the ledger and, if the loan is
+// fully repaid, marks the request settled.
+export async function confirmLoanPayment({ paymentId, loanId, employeeId, brandId, amount, confirmedBy }) {
+  const { data, error } = await supabase.from("loan_payments").update({
+    status: "confirmed", confirmed_by: confirmedBy || null, confirmed_at: new Date().toISOString(),
+  }).eq("id", paymentId).select().maybeSingle();
+  if (error) throw error;
+  await supabase.from("employee_loans").insert({
+    employee_id: employeeId, brand_id: brandId || null, entry_type: "repayment",
+    amount, note: "Loan repayment confirmed", created_by: confirmedBy || null,
+    loan_id: loanId, source: "payment_confirmed",
+  });
+  // If balance now zero or below for this employee, settle any active loans.
+  try {
+    const entries = await fetchEmployeeLoans(employeeId);
+    if (loanBalance(entries) <= 0.001) {
+      await supabase.from("loan_requests").update({ status: "settled", updated_at: new Date().toISOString() })
+        .eq("employee_id", employeeId).eq("status", "active");
+    }
+  } catch { /* non-fatal */ }
+  return data ? mapLoanPay(data) : null;
+}
+
+export async function rejectLoanPayment({ paymentId, confirmedBy, rejectReason }) {
+  const { data, error } = await supabase.from("loan_payments").update({
+    status: "rejected", confirmed_by: confirmedBy || null, confirmed_at: new Date().toISOString(),
+    reject_reason: rejectReason || null,
+  }).eq("id", paymentId).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapLoanPay(data) : null;
+}
+
 
 // ===== INVOICE_HELPERS_V1: invoice capture (upload → extract → review → approve) =====
 export async function uploadInvoiceFile(file, entity, userId) {
