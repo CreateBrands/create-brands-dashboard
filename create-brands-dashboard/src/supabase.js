@@ -5720,13 +5720,19 @@ export async function bulkAddCkIngredients(siteId, rows) {
 // ============================================================================
 
 // Allergens for a kitchen product = union of its component ingredients'
-// allergens (auto-derived from cogs_ck_items) + the product's manual
-// "may contain" list. `components` = ck_product_components for the product;
-// `ckItems` from fetchCkIngredients().
-export function deriveCkProductAllergens(product, components, ckItems) {
+// allergens (auto-derived from cogs_ck_items, expanding preps) + manual
+// "may contain". `components` = ck_product_components; `prepComps` = map of
+// prepId -> ck_prep_components[]; `ckItems` from fetchCkIngredients().
+export function deriveCkProductAllergens(product, components, ckItems, prepCompsByPrep = {}) {
   const itemAllergens = new Map((ckItems || []).map(i => [String(i.id), i.allergens || []]));
   const derived = new Set();
-  (components || []).forEach(c => { (itemAllergens.get(String(c.ingredientId)) || []).forEach(a => derived.add(a)); });
+  (components || []).forEach(c => {
+    if (c.kind === "prep" && c.prepId) {
+      (prepCompsByPrep[c.prepId] || []).forEach(pc => (itemAllergens.get(String(pc.ingredientId)) || []).forEach(a => derived.add(a)));
+    } else {
+      (itemAllergens.get(String(c.ingredientId)) || []).forEach(a => derived.add(a));
+    }
+  });
   return { derived: [...derived].sort(), mayContain: (product.mayContainAllergens || []).filter(a => !derived.has(a)) };
 }
 
@@ -5738,7 +5744,8 @@ const mapCkProduct = (p) => ({
   archivedAt: p.archived_at || null,
 });
 const mapCkComponent = (c) => ({
-  id: c.id, productId: c.product_id, ingredientId: c.ingredient_id,
+  id: c.id, productId: c.product_id, kind: c.kind || "ingredient",
+  ingredientId: c.ingredient_id, prepId: c.prep_id || null,
   ingredientName: c.ingredient_name || "", qty: Number(c.qty) || 0, unit: c.unit || "",
 });
 
@@ -5786,12 +5793,74 @@ export async function archiveCkProduct(id) {
 // Replace a product's recipe components wholesale (simplest correct semantics).
 export async function setCkProductComponents(productId, components) {
   await supabase.from("ck_product_components").delete().eq("product_id", productId);
-  const rows = (components || []).filter(c => c.ingredientId && Number(c.qty) > 0).map(c => ({
+  const rows = (components || []).filter(c => (c.kind === "prep" ? c.prepId : c.ingredientId) && Number(c.qty) > 0).map(c => ({
     id: `ckc-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
-    product_id: productId, ingredient_id: String(c.ingredientId), ingredient_name: c.ingredientName || null,
-    qty: Number(c.qty), unit: c.unit || null,
+    product_id: productId, kind: c.kind || "ingredient",
+    ingredient_id: c.kind === "prep" ? null : String(c.ingredientId),
+    prep_id: c.kind === "prep" ? String(c.prepId) : null,
+    ingredient_name: c.ingredientName || null, qty: Number(c.qty), unit: c.unit || null,
   }));
   if (rows.length) { const { error } = await supabase.from("ck_product_components").insert(rows); if (error) throw error; }
+  return rows.length;
+}
+
+// ── Kitchen preps (reusable sub-recipes) ─────────────────────────────────────
+const mapCkPrep = (p) => ({
+  id: p.id, siteId: p.site_id || null, name: p.name,
+  yieldQty: p.yield_qty != null ? Number(p.yield_qty) : null, yieldUnit: p.yield_unit || "kg",
+  note: p.note || "", archivedAt: p.archived_at || null,
+});
+const mapCkPrepComp = (c) => ({
+  id: c.id, prepId: c.prep_id, ingredientId: c.ingredient_id, ingredientName: c.ingredient_name || "",
+  qty: Number(c.qty) || 0, unit: c.unit || "",
+});
+
+export async function fetchCkPreps(siteId) {
+  let q = supabase.from("ck_preps").select("*").is("archived_at", null).order("name");
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapCkPrep);
+}
+
+export async function fetchCkPrepComponents(prepId) {
+  let q = supabase.from("ck_prep_components").select("*");
+  if (prepId) q = q.eq("prep_id", prepId);
+  const { data, error } = await q.order("created_at");
+  if (error) throw error;
+  return (data || []).map(mapCkPrepComp);
+}
+
+export async function upsertCkPrep(p) {
+  const row = {
+    site_id: p.siteId || null, name: p.name, yield_qty: p.yieldQty === "" || p.yieldQty == null ? null : Number(p.yieldQty),
+    yield_unit: p.yieldUnit || "kg", note: p.note || null, updated_at: new Date().toISOString(),
+  };
+  if (p.id) {
+    const { data, error } = await supabase.from("ck_preps").update(row).eq("id", p.id).select().maybeSingle();
+    if (error) throw error;
+    return data ? mapCkPrep(data) : null;
+  }
+  row.id = `ckpr-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { data, error } = await supabase.from("ck_preps").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCkPrep(data) : null;
+}
+
+export async function archiveCkPrep(id) {
+  const { error } = await supabase.from("ck_preps").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function setCkPrepComponents(prepId, components) {
+  await supabase.from("ck_prep_components").delete().eq("prep_id", prepId);
+  const rows = (components || []).filter(c => c.ingredientId && Number(c.qty) > 0).map(c => ({
+    id: `ckpc-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    prep_id: prepId, ingredient_id: String(c.ingredientId), ingredient_name: c.ingredientName || null,
+    qty: Number(c.qty), unit: c.unit || null,
+  }));
+  if (rows.length) { const { error } = await supabase.from("ck_prep_components").insert(rows); if (error) throw error; }
   return rows.length;
 }
 
@@ -5822,18 +5891,28 @@ export async function fetchRunConsumption(runId) {
   return (data || []).map(mapConsumption);
 }
 
-// Plan a run's consumption from a kitchen product's own recipe components.
-// Demand scales by (producedQty / product yield). `components` =
-// ck_product_components; `goodsIn` = ck goods-in batches. Pure (no writes).
-export function planRunConsumption({ product, components, producedQty, goodsIn }) {
+// Plan a run's consumption from a kitchen product's recipe, expanding preps
+// down to raw ingredients. Demand scales by (producedQty / product yield).
+// `components` = ck_product_components; `preps` = ck_preps[]; `prepCompsByPrep`
+// = map prepId -> ck_prep_components[]; `goodsIn` = ck goods-in. Pure.
+export function planRunConsumption({ product, components, preps = [], prepCompsByPrep = {}, producedQty, goodsIn }) {
   const yieldQty = product?.yieldQty ? Number(product.yieldQty) : 1;
   const factor = yieldQty > 0 ? (producedQty / yieldQty) : producedQty;
   const demand = new Map(); // ingredientId -> { qty, unit, name }
+  const addDemand = (ingId, name, qty, unit) => {
+    const k = String(ingId); const cur = demand.get(k) || { qty: 0, unit, name };
+    cur.qty += qty; demand.set(k, cur);
+  };
   (components || []).forEach(c => {
-    const k = String(c.ingredientId);
-    const cur = demand.get(k) || { qty: 0, unit: c.unit, name: c.ingredientName };
-    cur.qty += (Number(c.qty) || 0) * factor;
-    demand.set(k, cur);
+    if (c.kind === "prep" && c.prepId) {
+      // Expand the prep: scale its components by (qty of prep used / prep yield).
+      const prep = (preps || []).find(p => String(p.id) === String(c.prepId));
+      const pYield = prep?.yieldQty ? Number(prep.yieldQty) : 1;
+      const prepFactor = (pYield > 0 ? (Number(c.qty) || 0) / pYield : (Number(c.qty) || 0)) * factor;
+      (prepCompsByPrep[c.prepId] || []).forEach(pc => addDemand(pc.ingredientId, pc.ingredientName, (Number(pc.qty) || 0) * prepFactor, pc.unit));
+    } else {
+      addDemand(c.ingredientId, c.ingredientName, (Number(c.qty) || 0) * factor, c.unit);
+    }
   });
   const allocations = [];
   demand.forEach((d, ingId) => {
@@ -5843,7 +5922,7 @@ export function planRunConsumption({ product, components, producedQty, goodsIn }
       .sort((a, b) => {
         const ax = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
         const bx = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity;
-        return ax - bx; // earliest expiry first (FEFO)
+        return ax - bx; // FEFO
       });
     for (const b of batches) {
       if (need <= 0.00001) break;

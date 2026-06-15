@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3277,6 +3277,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [suppliers, setSuppliers] = useState([]);
   const [ckProducts, setCkProducts] = useState([]);
   const [allComponents, setAllComponents] = useState([]);
+  const [ckPreps, setCkPreps] = useState([]);
+  const [allPrepComps, setAllPrepComps] = useState([]);
   const [runs, setRuns] = useState([]);
   const [dispatches, setDispatches] = useState([]);
   const [dispatchedByRun, setDispatchedByRun] = useState({});
@@ -3286,12 +3288,14 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
   // Distribution depots (destinations for dispatch).
   const distributionSites = useMemo(() => (stores || []).filter(s => s.siteType === "distribution" && !s.archivedAt), [stores]);
+  // prepId -> components (for allergen + run expansion)
+  const prepCompsByPrep = useMemo(() => { const m = {}; (allPrepComps||[]).forEach(c => { (m[c.prepId] = m[c.prepId] || []).push(c); }); return m; }, [allPrepComps]);
 
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({}))])
-      .then(([i, g, c, s, kp, comps, rn, dsp, dbr]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[])])
+      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -3435,7 +3439,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
   // Kitchen products — own list, own recipe from kitchen ingredients
   const componentsFor = (productId) => allComponents.filter(c => c.productId === productId);
-  const productAllergens = (product, comps) => deriveCkProductAllergens(product, comps || componentsFor(product.id), ingredients);
+  const productAllergens = (product, comps) => deriveCkProductAllergens(product, comps || componentsFor(product.id), ingredients, prepCompsByPrep);
   const [prodModal, setProdModal] = useState(null); // product or "new"
   const [prodForm, setProdForm] = useState({});
   const [prodComps, setProdComps] = useState([]);
@@ -3445,7 +3449,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
     setProdComps(p ? componentsFor(p.id).map(c=>({...c})) : []);
     setErr("");
   };
-  const addProdComp = () => setProdComps(cs => [...cs, { ingredientId: ingredients[0]?.id ? String(ingredients[0].id) : "", ingredientName: ingredients[0]?.name||"", qty:"", unit: ingredients[0]?.unit||"kg" }]);
+  const addProdComp = () => setProdComps(cs => [...cs, { kind:"ingredient", ingredientId: ingredients[0]?.id ? String(ingredients[0].id) : "", ingredientName: ingredients[0]?.name||"", qty:"", unit: ingredients[0]?.unit||"kg" }]);
+  const addProdPrep = () => setProdComps(cs => [...cs, { kind:"prep", prepId: ckPreps[0]?.id ? String(ckPreps[0].id) : "", ingredientName: ckPreps[0]?.name||"", qty:"", unit: ckPreps[0]?.yieldUnit||"kg" }]);
   const setProdComp = (idx, patch) => setProdComps(cs => cs.map((c,i)=> i===idx ? { ...c, ...patch } : c));
   const rmProdComp = (idx) => setProdComps(cs => cs.filter((_,i)=>i!==idx));
   const toggleMayContain = (a) => setProdForm(f => ({ ...f, mayContainAllergens: (f.mayContainAllergens||[]).includes(a) ? f.mayContainAllergens.filter(x=>x!==a) : [...(f.mayContainAllergens||[]), a] }));
@@ -3458,13 +3463,43 @@ function CentralKitchenView({ stores = [], currentUser }) {
     } catch (e) { setErr(e?.message||String(e)); }
   };
   const removeProd = async (p) => { if (!window.confirm(`Archive kitchen product "${p.name}"?`)) return; try { await archiveCkProduct(p.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
+
+  // Preps (reusable sub-recipes)
+  const prepComponentsFor = (prepId) => (allPrepComps||[]).filter(c => c.prepId === prepId);
+  const [prepModal, setPrepModal] = useState(null); // prep or "new"
+  const [prepForm, setPrepForm] = useState({});
+  const [prepComps, setPrepComps] = useState([]);
+  const openPrep = (p) => {
+    setPrepModal(p || "new");
+    setPrepForm(p ? { ...p } : { name:"", yieldQty:"", yieldUnit:"kg", note:"" });
+    setPrepComps(p ? prepComponentsFor(p.id).map(c=>({...c})) : []);
+    setErr("");
+  };
+  const addPrepComp = () => setPrepComps(cs => [...cs, { ingredientId: ingredients[0]?.id ? String(ingredients[0].id) : "", ingredientName: ingredients[0]?.name||"", qty:"", unit: ingredients[0]?.unit||"kg" }]);
+  const setPrepComp = (idx, patch) => setPrepComps(cs => cs.map((c,i)=> i===idx ? {...c, ...patch} : c));
+  const rmPrepComp = (idx) => setPrepComps(cs => cs.filter((_,i)=>i!==idx));
+  const savePrep = async () => {
+    if (!prepForm.name?.trim()) { setErr("Prep name required."); return; }
+    try {
+      const saved = await upsertCkPrep({ ...prepForm, id: prepModal==="new"?undefined:prepModal.id, siteId });
+      await setCkPrepComponents(saved.id, prepComps.map(c => ({ ...c, ingredientName: ingredients.find(i=>String(i.id)===String(c.ingredientId))?.name || c.ingredientName })));
+      setPrepModal(null); load();
+    } catch (e) { setErr(e?.message||String(e)); }
+  };
+  const removePrep = async (p) => { if (!window.confirm(`Archive prep "${p.name}"?`)) return; try { await archiveCkPrep(p.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
   // Live allergen preview while editing a product's recipe
   const editingDerived = useMemo(() => {
     const map = new Map(ingredients.map(i=>[String(i.id), i.allergens||[]]));
     const set = new Set();
-    prodComps.forEach(c => (map.get(String(c.ingredientId))||[]).forEach(a=>set.add(a)));
+    prodComps.forEach(c => {
+      if (c.kind === "prep" && c.prepId) {
+        (prepCompsByPrep[c.prepId] || []).forEach(pc => (map.get(String(pc.ingredientId))||[]).forEach(a=>set.add(a)));
+      } else {
+        (map.get(String(c.ingredientId))||[]).forEach(a=>set.add(a));
+      }
+    });
     return [...set].sort();
-  }, [prodComps, ingredients]);
+  }, [prodComps, ingredients, prepCompsByPrep]);
 
   // Production runs
   const [runModal, setRunModal] = useState(false);
@@ -3477,8 +3512,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const runProduct = useMemo(() => ckProducts.find(p => String(p.id) === String(runProductId)), [ckProducts, runProductId]);
   const runPlan = useMemo(() => {
     if (!runProduct || !(Number(runQty) > 0)) return null;
-    return planRunConsumption({ product: runProduct, components: componentsFor(runProduct.id), producedQty: Number(runQty), goodsIn });
-  }, [runProduct, runQty, goodsIn, allComponents]); // eslint-disable-line react-hooks/exhaustive-deps
+    return planRunConsumption({ product: runProduct, components: componentsFor(runProduct.id), preps: ckPreps, prepCompsByPrep, producedQty: Number(runQty), goodsIn });
+  }, [runProduct, runQty, goodsIn, allComponents, ckPreps, prepCompsByPrep]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (runPlan) setRunAlloc(runPlan.allocations.map(a=>({...a}))); }, [runPlan]);
   useEffect(() => {
     if (runProduct?.shelfLifeDays && runDate) { const d = new Date(runDate); d.setDate(d.getDate()+runProduct.shelfLifeDays); setRunUseBy(d.toISOString().slice(0,10)); }
@@ -3582,7 +3617,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
       </div>
 
       <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"],["products","Products"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
+        {[["stock","Stock"],["goods","Goods in log"],["preps","Preps"],["products","Products"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -3668,6 +3703,32 @@ function CentralKitchenView({ stores = [], currentUser }) {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "preps" && (
+        <div className="space-y-3">
+          <button onClick={()=>openPrep(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New prep</button>
+          <div className="text-[11px] text-slate-500">Preps are reusable sub-recipes (e.g. a base or sauce) built from kitchen ingredients. Use them inside products; production expands them to raw ingredients.</div>
+          {ckPreps.length === 0 ? <div className="text-xs text-slate-600">No preps yet.</div> : (
+            <div className="space-y-2">
+              {ckPreps.map(p => {
+                const comps = prepComponentsFor(p.id);
+                return (
+                  <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-200">{p.name} <span className="text-[11px] text-slate-500 font-normal">· makes {p.yieldQty||"?"} {p.yieldUnit}</span></div>
+                      <div className="text-[11px] text-slate-500">{comps.length} ingredient{comps.length!==1?"s":""}</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={()=>openPrep(p)} className="text-slate-500 hover:text-white"><Edit size={13}/></button>
+                      <button onClick={()=>removePrep(p)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -3978,7 +4039,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
       {/* Kitchen product modal — name, output, recipe from kitchen ingredients */}
       {prodModal && (
-        <Modal title={prodModal==="new"?"New kitchen product":`Edit — ${prodModal.name}`} onClose={()=>setProdModal(null)} maxW="max-w-lg"
+        <Modal title={prodModal==="new"?"New kitchen product":`Edit — ${prodModal.name}`} onClose={()=>setProdModal(null)} maxW="max-w-2xl"
           footer={<>
             <button onClick={()=>setProdModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
             <button onClick={saveProd} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Save product</button>
@@ -3991,21 +4052,35 @@ function CentralKitchenView({ stores = [], currentUser }) {
               <div><label className={labelCls}>Shelf life (d)</label><input type="number" value={prodForm.shelfLifeDays??""} onChange={e=>setProdForm(f=>({...f,shelfLifeDays:e.target.value}))} className={inputCls}/></div>
             </div>
 
-            {/* Recipe from kitchen ingredients */}
+            {/* Recipe: kitchen ingredients + preps */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className={labelCls}>Recipe (kitchen ingredients)</label>
-                <button onClick={addProdComp} disabled={!ingredients.length} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 disabled:text-slate-600">+ Add ingredient</button>
+                <label className={labelCls}>Recipe</label>
+                <div className="flex gap-3">
+                  <button onClick={addProdComp} disabled={!ingredients.length} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 disabled:text-slate-600">+ Add ingredient</button>
+                  <button onClick={addProdPrep} disabled={!ckPreps.length} className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 disabled:text-slate-600" title={ckPreps.length?"":"Build a prep in the Preps tab first"}>+ Add prep</button>
+                </div>
               </div>
-              {!ingredients.length ? <div className="text-[11px] text-slate-600">Add kitchen ingredients first (Stock tab).</div> : prodComps.length === 0 ? (
-                <div className="text-[11px] text-slate-600">No ingredients yet — add some to build the recipe.</div>
+              {prodComps.length === 0 ? (
+                <div className="text-[11px] text-slate-600">No components yet — add ingredients and/or preps to build the recipe.</div>
               ) : (
                 <div className="space-y-1.5">
                   {prodComps.map((c, idx) => (
                     <div key={idx} className="flex items-center gap-2">
-                      <select value={c.ingredientId} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setProdComp(idx,{ ingredientId:e.target.value, ingredientName:ing?.name||"", unit: ing?.unit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                        {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
-                      </select>
+                      {c.kind === "prep" ? (
+                        <>
+                          <span className="text-[9px] px-1.5 py-1 rounded bg-emerald-600/20 text-emerald-300 uppercase font-bold flex-shrink-0">prep</span>
+                          <select value={c.prepId||""} onChange={e=>{ const p=ckPreps.find(x=>String(x.id)===e.target.value); setProdComp(idx,{ prepId:e.target.value, ingredientName:p?.name||"", unit:p?.yieldUnit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                            <option value="">— pick prep —</option>
+                            {ckPreps.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                          </select>
+                        </>
+                      ) : (
+                        <select value={c.ingredientId||""} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setProdComp(idx,{ ingredientId:e.target.value, ingredientName:ing?.name||"", unit: ing?.unit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                          <option value="">— pick ingredient —</option>
+                          {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
+                        </select>
+                      )}
                       <input type="number" value={c.qty} onChange={e=>setProdComp(idx,{qty:e.target.value})} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
                       <span className="text-[11px] text-slate-500 w-8">{c.unit}</span>
                       <button onClick={()=>rmProdComp(idx)} className="text-slate-600 hover:text-red-400"><X size={13}/></button>
@@ -4013,6 +4088,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
                   ))}
                 </div>
               )}
+              {!ingredients.length && <div className="text-[11px] text-slate-600 mt-1">Add kitchen ingredients first (Stock tab).</div>}
             </div>
 
             {/* Live allergen preview */}
@@ -4030,6 +4106,45 @@ function CentralKitchenView({ stores = [], currentUser }) {
                   <button key={a} disabled={derived} onClick={()=>toggleMayContain(a)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize ${derived?"bg-slate-800 text-slate-600 cursor-not-allowed":on?"bg-amber-600/30 text-amber-200 border border-amber-500/40":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{a}</button>
                 ); })}
               </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Prep builder modal */}
+      {prepModal && (
+        <Modal title={prepModal==="new"?"New prep":`Edit — ${prepModal.name}`} onClose={()=>setPrepModal(null)} maxW="max-w-xl"
+          footer={<>
+            <button onClick={()=>setPrepModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={savePrep} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Save prep</button>
+          </>}>
+          <div className="space-y-3">
+            <div><label className={labelCls}>Name *</label><input value={prepForm.name||""} onChange={e=>setPrepForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Brownie base" className={inputCls}/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Makes (yield)</label><input type="number" value={prepForm.yieldQty??""} onChange={e=>setPrepForm(f=>({...f,yieldQty:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Yield unit</label><select value={prepForm.yieldUnit||"kg"} onChange={e=>setPrepForm(f=>({...f,yieldUnit:e.target.value}))} className={inputCls}>{CK_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className={labelCls}>Ingredients</label>
+                <button onClick={addPrepComp} disabled={!ingredients.length} className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 disabled:text-slate-600">+ Add ingredient</button>
+              </div>
+              {prepComps.length === 0 ? <div className="text-[11px] text-slate-600">No ingredients yet.</div> : (
+                <div className="space-y-1.5">
+                  {prepComps.map((c, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <select value={c.ingredientId||""} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setPrepComp(idx,{ ingredientId:e.target.value, ingredientName:ing?.name||"", unit:ing?.unit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
+                        <option value="">— pick ingredient —</option>
+                        {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
+                      </select>
+                      <input type="number" value={c.qty} onChange={e=>setPrepComp(idx,{qty:e.target.value})} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                      <span className="text-[11px] text-slate-500 w-8">{c.unit}</span>
+                      <button onClick={()=>rmPrepComp(idx)} className="text-slate-600 hover:text-red-400"><X size={13}/></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!ingredients.length && <div className="text-[11px] text-slate-600 mt-1">Add kitchen ingredients first (Stock tab).</div>}
             </div>
           </div>
         </Modal>
