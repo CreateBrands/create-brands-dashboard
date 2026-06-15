@@ -5897,3 +5897,118 @@ export async function deleteProductionRun(id) {
   if (error) throw error;
   return id;
 }
+
+// ============================================================================
+// CENTRAL KITCHEN — Phase 3a: dispatch Kitchen → Distribution (two-step)
+// ============================================================================
+const mapDispatch = (d) => ({
+  id: d.id, fromSiteId: d.from_site_id || null, toSiteId: d.to_site_id || null, toSiteName: d.to_site_name || "",
+  dispatchNo: d.dispatch_no || "", status: d.status, sentDate: d.sent_date, sentBy: d.sent_by || "",
+  receivedDate: d.received_date || null, receivedBy: d.received_by || "", note: d.note || "", createdAt: d.created_at,
+});
+const mapDispatchLine = (l) => ({
+  id: l.id, dispatchId: l.dispatch_id, runId: l.run_id, productId: l.product_id, productName: l.product_name || "",
+  finishedBatchNo: l.finished_batch_no || "", useByDate: l.use_by_date || null, allergens: l.allergens || [],
+  qtySent: Number(l.qty_sent) || 0, qtyReceived: l.qty_received != null ? Number(l.qty_received) : null, unit: l.unit || "",
+});
+const mapDistStock = (s) => ({
+  id: s.id, siteId: s.site_id || null, dispatchLineId: s.dispatch_line_id, runId: s.run_id,
+  productId: s.product_id, productName: s.product_name || "", finishedBatchNo: s.finished_batch_no || "",
+  useByDate: s.use_by_date || null, allergens: s.allergens || [], qtyReceived: Number(s.qty_received) || 0,
+  qtyRemaining: Number(s.qty_remaining) || 0, unit: s.unit || "", receivedDate: s.received_date,
+});
+
+export async function fetchDispatches({ fromSiteId, toSiteId, status } = {}) {
+  let q = supabase.from("ck_dispatches").select("*").order("sent_date", { ascending: false });
+  if (fromSiteId) q = q.eq("from_site_id", fromSiteId);
+  if (toSiteId) q = q.eq("to_site_id", toSiteId);
+  if (status) q = q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDispatch);
+}
+
+export async function fetchDispatchLines(dispatchId) {
+  let q = supabase.from("ck_dispatch_lines").select("*");
+  if (dispatchId) q = q.eq("dispatch_id", dispatchId);
+  const { data, error } = await q.order("created_at");
+  if (error) throw error;
+  return (data || []).map(mapDispatchLine);
+}
+
+// How much of each run's output has already been dispatched (sent or received,
+// not cancelled). Returns map runId -> qty already dispatched.
+export async function fetchDispatchedByRun() {
+  const { data: lines, error } = await supabase.from("ck_dispatch_lines").select("run_id, qty_sent, dispatch_id");
+  if (error) throw error;
+  const { data: disp } = await supabase.from("ck_dispatches").select("id, status");
+  const active = new Set((disp || []).filter(d => d.status !== "cancelled").map(d => d.id));
+  const m = {};
+  (lines || []).forEach(l => { if (active.has(l.dispatch_id) && l.run_id) m[l.run_id] = (m[l.run_id] || 0) + (Number(l.qty_sent) || 0); });
+  return m;
+}
+
+// Create a dispatch from selected production-run lines.
+// lines = [{ runId, productId, productName, finishedBatchNo, useByDate, allergens, qtySent, unit }]
+export async function createDispatch({ fromSiteId, toSiteId, toSiteName, sentDate, sentBy, note, lines }) {
+  const valid = (lines || []).filter(l => Number(l.qtySent) > 0);
+  if (!valid.length) throw new Error("Add at least one line with a quantity.");
+  const dispatchId = `dsp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const dispatchNo = `DSP-${(sentDate||new Date().toISOString().slice(0,10)).replace(/-/g,"")}-${Math.random().toString(36).slice(2,5).toUpperCase()}`;
+  const { error: dErr } = await supabase.from("ck_dispatches").insert({
+    id: dispatchId, from_site_id: fromSiteId || null, to_site_id: toSiteId || null, to_site_name: toSiteName || null,
+    dispatch_no: dispatchNo, status: "sent", sent_date: sentDate || new Date().toISOString().slice(0,10),
+    sent_by: sentBy || null, note: note || null,
+  });
+  if (dErr) throw dErr;
+  const { error: lErr } = await supabase.from("ck_dispatch_lines").insert(valid.map(l => ({
+    id: `dl-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    dispatch_id: dispatchId, run_id: l.runId || null, product_id: l.productId || null, product_name: l.productName || null,
+    finished_batch_no: l.finishedBatchNo || null, use_by_date: l.useByDate || null, allergens: l.allergens || [],
+    qty_sent: Number(l.qtySent), unit: l.unit || null,
+  })));
+  if (lErr) throw lErr;
+  return { dispatchId, dispatchNo };
+}
+
+export async function cancelDispatch(id) {
+  const { error } = await supabase.from("ck_dispatches").update({ status: "cancelled" }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Confirm receipt at distribution. receipts = [{ lineId, qtyReceived }].
+// Writes distribution stock rows for received quantities and flips status.
+export async function receiveDispatch({ dispatchId, toSiteId, receivedDate, receivedBy, receipts }) {
+  const lines = await fetchDispatchLines(dispatchId);
+  const byId = new Map(lines.map(l => [l.id, l]));
+  const stockRows = [];
+  for (const r of (receipts || [])) {
+    const line = byId.get(r.lineId);
+    if (!line) continue;
+    const qty = Number(r.qtyReceived);
+    // update the line's received qty
+    await supabase.from("ck_dispatch_lines").update({ qty_received: qty }).eq("id", r.lineId);
+    if (qty > 0) stockRows.push({
+      id: `ds-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      site_id: toSiteId || null, dispatch_line_id: line.id, run_id: line.runId, product_id: line.productId,
+      product_name: line.productName, finished_batch_no: line.finishedBatchNo, use_by_date: line.useByDate,
+      allergens: line.allergens || [], qty_received: qty, qty_remaining: qty, unit: line.unit,
+      received_date: receivedDate || new Date().toISOString().slice(0,10),
+    });
+  }
+  if (stockRows.length) { const { error } = await supabase.from("ck_distribution_stock").insert(stockRows); if (error) throw error; }
+  const { error } = await supabase.from("ck_dispatches").update({
+    status: "received", received_date: receivedDate || new Date().toISOString().slice(0,10), received_by: receivedBy || null,
+  }).eq("id", dispatchId);
+  if (error) throw error;
+  return dispatchId;
+}
+
+export async function fetchDistributionStock(siteId) {
+  let q = supabase.from("ck_distribution_stock").select("*").gt("qty_remaining", 0).order("use_by_date", { ascending: true });
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistStock);
+}

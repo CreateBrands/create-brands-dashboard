@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3278,15 +3278,20 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [ckProducts, setCkProducts] = useState([]);
   const [allComponents, setAllComponents] = useState([]);
   const [runs, setRuns] = useState([]);
+  const [dispatches, setDispatches] = useState([]);
+  const [dispatchedByRun, setDispatchedByRun] = useState({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
 
+  // Distribution depots (destinations for dispatch).
+  const distributionSites = useMemo(() => (stores || []).filter(s => s.siteType === "distribution" && !s.archivedAt), [stores]);
+
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[])])
-      .then(([i, g, c, s, kp, comps, rn]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({}))])
+      .then(([i, g, c, s, kp, comps, rn, dsp, dbr]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -3431,6 +3436,50 @@ function CentralKitchenView({ stores = [], currentUser }) {
     setRunBusy(false);
   };
 
+  // Dispatch (Kitchen → Distribution), two-step
+  const runRemaining = (r) => Math.max(0, (r.producedQty || 0) - (dispatchedByRun[r.id] || 0));
+  const dispatchableRuns = runs.filter(r => runRemaining(r) > 0.00001);
+  const [dispModal, setDispModal] = useState(false);
+  const [dispDest, setDispDest] = useState("");
+  const [dispDate, setDispDate] = useState(()=>new Date().toISOString().slice(0,10));
+  const [dispLines, setDispLines] = useState([]); // { runId, qty }
+  const [dispBusy, setDispBusy] = useState(false);
+  const openDisp = () => { setDispDest(distributionSites[0]?.id || ""); setDispDate(new Date().toISOString().slice(0,10)); setDispLines(dispatchableRuns.map(r=>({ runId:r.id, qty:"" }))); setDispModal(true); setErr(""); };
+  const setDispQty = (runId, qty) => setDispLines(ls => ls.map(l => l.runId===runId ? {...l, qty} : l));
+  const doCreateDisp = async () => {
+    const dest = distributionSites.find(s=>s.id===dispDest);
+    if (!dest) { setErr("Pick a distribution destination."); return; }
+    const lines = dispLines.map(l => { const r = runs.find(x=>x.id===l.runId); const q = Number(l.qty);
+      if (!r || !(q>0)) return null;
+      if (q > runRemaining(r)+0.00001) return { _over: r.productName };
+      return { runId:r.id, productId:r.productId, productName:r.productName, finishedBatchNo:r.finishedBatchNo, useByDate:r.useByDate, allergens:r.allergens, qtySent:q, unit:r.outputUnit };
+    }).filter(Boolean);
+    const over = lines.find(l => l._over);
+    if (over) { setErr(`Quantity for ${over._over} exceeds what's left to dispatch.`); return; }
+    if (!lines.length) { setErr("Enter at least one quantity."); return; }
+    setDispBusy(true); setErr("");
+    try { await createDispatch({ fromSiteId: siteId, toSiteId: dest.id, toSiteName: dest.shortName||dest.name, sentDate: dispDate, sentBy: currentUser?.name, lines }); setDispModal(false); load(); }
+    catch (e) { setErr(e?.message||String(e)); }
+    setDispBusy(false);
+  };
+
+  // Receive confirmation
+  const [recvModal, setRecvModal] = useState(null); // dispatch
+  const [recvLines, setRecvLines] = useState([]);
+  const [recvBusy, setRecvBusy] = useState(false);
+  const openRecv = async (d) => {
+    setRecvModal(d); setErr("");
+    try { const lines = await fetchDispatchLines(d.id); setRecvLines(lines.map(l=>({ lineId:l.id, productName:l.productName, batch:l.finishedBatchNo, qtySent:l.qtySent, unit:l.unit, qtyReceived:String(l.qtySent) }))); }
+    catch (e) { setErr(e?.message||String(e)); }
+  };
+  const setRecvQty = (lineId, q) => setRecvLines(ls => ls.map(l => l.lineId===lineId ? {...l, qtyReceived:q} : l));
+  const doReceive = async () => {
+    setRecvBusy(true); setErr("");
+    try { await receiveDispatch({ dispatchId: recvModal.id, toSiteId: recvModal.toSiteId, receivedDate: new Date().toISOString().slice(0,10), receivedBy: currentUser?.name, receipts: recvLines.map(l=>({ lineId:l.lineId, qtyReceived:Number(l.qtyReceived)||0 })) }); setRecvModal(null); load(); }
+    catch (e) { setErr(e?.message||String(e)); }
+    setRecvBusy(false);
+  };
+
   if (!kitchen) return (
     <div className="text-center py-16">
       <ChefHat size={32} className="text-slate-700 mx-auto mb-3"/>
@@ -3463,7 +3512,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
       </div>
 
       <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"],["products","Products"],["production","Production"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
+        {[["stock","Stock"],["goods","Goods in log"],["products","Products"],["production","Production"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -3608,6 +3657,36 @@ function CentralKitchenView({ stores = [], currentUser }) {
                     <span className="text-indigo-300">batch {r.finishedBatchNo}</span>
                     {r.useByDate && <span>· use by {r.useByDate}</span>}
                     {(r.allergens||[]).length>0 && <span className="text-red-400/80">· {r.allergens.join(", ")}</span>}
+                    <span className="text-slate-600">· {runRemaining(r)} {r.outputUnit} to dispatch</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "dispatch" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <button onClick={openDisp} disabled={!distributionSites.length || !dispatchableRuns.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Truck size={14}/> New dispatch to distribution</button>
+          </div>
+          {!distributionSites.length && <div className="text-xs text-amber-400">No distribution site found. Add a site of type “distribution” in Stores settings.</div>}
+          {distributionSites.length>0 && !dispatchableRuns.length && <div className="text-xs text-slate-600">Nothing to dispatch — record production runs first.</div>}
+          {dispatches.length === 0 ? <div className="text-xs text-slate-600">No dispatches yet.</div> : (
+            <div className="space-y-2">
+              {dispatches.map(d => (
+                <div key={d.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-200">{d.dispatchNo} → {d.toSiteName}</div>
+                      <div className="text-[11px] text-slate-500">sent {d.sentDate}{d.sentBy?` by ${d.sentBy}`:""}{d.receivedDate?` · received ${d.receivedDate}`:""}</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`text-[10px] px-2 py-0.5 rounded uppercase font-bold ${d.status==="received"?"bg-emerald-600/20 text-emerald-300":d.status==="sent"?"bg-amber-600/20 text-amber-300":"bg-slate-700 text-slate-400"}`}>{d.status}</span>
+                      {d.status==="sent" && <button onClick={()=>openRecv(d)} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold">Confirm receipt</button>}
+                      {d.status==="sent" && <button onClick={async()=>{ if(window.confirm("Cancel this dispatch?")){ try{await cancelDispatch(d.id); load();}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -3849,6 +3928,69 @@ function CentralKitchenView({ stores = [], currentUser }) {
               </div>
             )}
             {runProduct && <div className="text-[11px] text-slate-600">A finished batch code + the product's allergen profile are recorded automatically on this run.</div>}
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+
+      {/* New dispatch modal */}
+      {dispModal && (
+        <Modal title="Dispatch to distribution" onClose={()=>setDispModal(false)} maxW="max-w-lg"
+          footer={<>
+            <button onClick={()=>setDispModal(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doCreateDisp} disabled={dispBusy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">{dispBusy?"Sending…":"Send dispatch"}</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>To (distribution)</label>
+                <select value={dispDest} onChange={e=>setDispDest(e.target.value)} className={inputCls}>
+                  {distributionSites.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+                </select>
+              </div>
+              <div><label className={labelCls}>Sent date</label><input type="date" value={dispDate} onChange={e=>setDispDate(e.target.value)} className={inputCls}/></div>
+            </div>
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Finished batches to send</div>
+              <div className="space-y-1.5">
+                {dispatchableRuns.map(r => { const line = dispLines.find(l=>l.runId===r.id); return (
+                  <div key={r.id} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs text-slate-200 truncate">{r.productName} <span className="text-indigo-300">· {r.finishedBatchNo}</span></div>
+                      <div className="text-[10px] text-slate-500">{runRemaining(r)} {r.outputUnit} available{r.useByDate?` · use by ${r.useByDate}`:""}</div>
+                    </div>
+                    <input type="number" value={line?.qty||""} onChange={e=>setDispQty(r.id, e.target.value)} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                    <span className="text-[11px] text-slate-500 w-8">{r.outputUnit}</span>
+                  </div>
+                ); })}
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-600">Distribution will confirm received quantities — any discrepancy is captured there.</div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+
+      {/* Receive confirmation modal */}
+      {recvModal && (
+        <Modal title={`Confirm receipt — ${recvModal.dispatchNo}`} onClose={()=>setRecvModal(null)} maxW="max-w-lg"
+          footer={<>
+            <button onClick={()=>setRecvModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doReceive} disabled={recvBusy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40">{recvBusy?"Confirming…":"Confirm received"}</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="text-[11px] text-slate-500">Enter what actually arrived. Differences from sent quantities are recorded.</div>
+            <div className="space-y-1.5">
+              {recvLines.map(l => (
+                <div key={l.lineId} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-slate-200 truncate">{l.productName} <span className="text-indigo-300">· {l.batch}</span></div>
+                    <div className="text-[10px] text-slate-500">sent {l.qtySent} {l.unit}</div>
+                  </div>
+                  <input type="number" value={l.qtyReceived} onChange={e=>setRecvQty(l.lineId, e.target.value)} className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                  <span className="text-[11px] text-slate-500 w-8">{l.unit}</span>
+                </div>
+              ))}
+            </div>
             {err && <div className="text-xs text-red-400">{err}</div>}
           </div>
         </Modal>
