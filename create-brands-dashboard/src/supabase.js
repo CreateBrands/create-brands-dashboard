@@ -5658,3 +5658,54 @@ export function computeCkStock(ingredients, goodsIn) {
     low: i.reorderPoint != null && (byIng[i.id] || 0) <= i.reorderPoint,
   }));
 }
+
+// ── Central Kitchen — categories, suppliers, bulk ingredient add ─────────────
+const mapCkCat = (r) => ({ id: r.id, siteId: r.site_id||null, name: r.name, sortOrder: r.sort_order||0, archivedAt: r.archived_at||null });
+const mapCkSup = (r) => ({ id: r.id, siteId: r.site_id||null, name: r.name, contact: r.contact||"", phone: r.phone||"", email: r.email||"", note: r.note||"", archivedAt: r.archived_at||null });
+
+export async function fetchCkCategories(siteId) {
+  let q = supabase.from("ck_categories").select("*").is("archived_at", null).order("sort_order").order("name");
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapCkCat);
+}
+export async function upsertCkCategory(c) {
+  const row = { site_id: c.siteId||null, name: c.name, sort_order: c.sortOrder||0 };
+  if (c.id) { const { data, error } = await supabase.from("ck_categories").update(row).eq("id", c.id).select().maybeSingle(); if (error) throw error; return data?mapCkCat(data):null; }
+  row.id = `cat-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { data, error } = await supabase.from("ck_categories").insert(row).select().maybeSingle();
+  if (error) throw error; return data?mapCkCat(data):null;
+}
+export async function archiveCkCategory(id) { const { error } = await supabase.from("ck_categories").update({ archived_at: new Date().toISOString() }).eq("id", id); if (error) throw error; return id; }
+
+export async function fetchCkSuppliers(siteId) {
+  let q = supabase.from("ck_suppliers").select("*").is("archived_at", null).order("name");
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapCkSup);
+}
+export async function upsertCkSupplier(s) {
+  const row = { site_id: s.siteId||null, name: s.name, contact: s.contact||null, phone: s.phone||null, email: s.email||null, note: s.note||null };
+  if (s.id) { const { data, error } = await supabase.from("ck_suppliers").update(row).eq("id", s.id).select().maybeSingle(); if (error) throw error; return data?mapCkSup(data):null; }
+  row.id = `sup-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { data, error } = await supabase.from("ck_suppliers").insert(row).select().maybeSingle();
+  if (error) throw error; return data?mapCkSup(data):null;
+}
+export async function archiveCkSupplier(id) { const { error } = await supabase.from("ck_suppliers").update({ archived_at: new Date().toISOString() }).eq("id", id); if (error) throw error; return id; }
+
+// Bulk insert ingredients. `rows` = array of {name, unit, category, allergens[], reorderPoint, defaultSupplier}.
+export async function bulkAddCkIngredients(siteId, rows) {
+  const clean = (rows || []).filter(r => r.name && r.name.trim()).map(r => ({
+    id: `ing-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    site_id: siteId || null, name: r.name.trim(), category: r.category?.trim() || null,
+    unit: r.unit || "kg", allergens: Array.isArray(r.allergens) ? r.allergens : [],
+    reorder_point: r.reorderPoint != null && r.reorderPoint !== "" ? Number(r.reorderPoint) : null,
+    default_supplier: r.defaultSupplier?.trim() || null,
+  }));
+  if (!clean.length) return 0;
+  const { error } = await supabase.from("ck_ingredients").insert(clean);
+  if (error) throw error;
+  return clean.length;
+}

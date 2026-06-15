@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3273,6 +3273,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [tab, setTab] = useState("stock");
   const [ingredients, setIngredients] = useState([]);
   const [goodsIn, setGoodsIn] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
@@ -3280,8 +3282,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId)])
-      .then(([i, g]) => { setIngredients(i); setGoodsIn(g); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId)])
+      .then(([i, g, c, s]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -3316,6 +3318,50 @@ function CentralKitchenView({ stores = [], currentUser }) {
   };
   const ingName = (id) => ingredients.find(i=>i.id===id)?.name || "—";
 
+  // Category builder
+  const [catName, setCatName] = useState("");
+  const addCat = async () => { if (!catName.trim()) return; try { await upsertCkCategory({ siteId, name: catName.trim() }); setCatName(""); load(); } catch (e) { setErr(e?.message||String(e)); } };
+  const removeCat = async (c) => { if (!window.confirm(`Remove category "${c.name}"?`)) return; try { await archiveCkCategory(c.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
+
+  // Supplier builder
+  const [supModal, setSupModal] = useState(null);
+  const [supForm, setSupForm] = useState({});
+  const openSup = (s) => { setSupModal(s||"new"); setSupForm(s?{...s}:{ name:"", contact:"", phone:"", email:"", note:"" }); setErr(""); };
+  const saveSup = async () => { if (!supForm.name?.trim()) { setErr("Supplier name required."); return; } try { await upsertCkSupplier({ ...supForm, id: supModal==="new"?undefined:supModal.id, siteId }); setSupModal(null); load(); } catch (e) { setErr(e?.message||String(e)); } };
+  const removeSup = async (s) => { if (!window.confirm(`Remove supplier "${s.name}"?`)) return; try { await archiveCkSupplier(s.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
+
+  // Bulk add ingredients
+  const [bulkModal, setBulkModal] = useState(false);
+  const [bulkMode, setBulkMode] = useState("paste"); // paste | csv
+  const [bulkText, setBulkText] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const parseAllergens = (s) => (s||"").split(/[;|]/).map(x=>x.trim().toLowerCase()).filter(a => CK_ALLERGENS.includes(a));
+  const parseBulk = (text, mode) => {
+    const lines = (text||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    if (!lines.length) return [];
+    if (mode === "paste") {
+      // one name per line, optionally "Name, unit, category"
+      return lines.map(l => { const p = l.split(",").map(x=>x.trim()); return { name: p[0], unit: CK_UNITS.includes(p[1])?p[1]:"kg", category: p[2]||"" }; });
+    }
+    // CSV: header row → name,unit,category,allergens,reorder_point,supplier
+    const header = lines[0].toLowerCase().split(",").map(h=>h.trim());
+    const idx = (k) => header.findIndex(h => h === k || h === k.replace("_"," "));
+    const iN=idx("name"), iU=idx("unit"), iC=idx("category"), iA=idx("allergens"), iR=idx("reorder_point"), iS=idx("supplier");
+    return lines.slice(1).map(l => { const c = l.split(","); return {
+      name: (c[iN]||"").trim(), unit: CK_UNITS.includes((c[iU]||"").trim())?(c[iU]||"").trim():"kg",
+      category: iC>=0?(c[iC]||"").trim():"", allergens: iA>=0?parseAllergens(c[iA]):[],
+      reorderPoint: iR>=0?(c[iR]||"").trim():"", defaultSupplier: iS>=0?(c[iS]||"").trim():"",
+    }; }).filter(r => r.name);
+  };
+  const bulkPreview = useMemo(() => parseBulk(bulkText, bulkMode), [bulkText, bulkMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const doBulkAdd = async () => {
+    if (!bulkPreview.length) { setErr("Nothing to add — check your input."); return; }
+    setBulkBusy(true); setErr("");
+    try { const n = await bulkAddCkIngredients(siteId, bulkPreview); setBulkModal(false); setBulkText(""); load(); setErr(""); alert(`Added ${n} ingredient${n!==1?"s":""}.`); }
+    catch (e) { setErr(e?.message||String(e)); }
+    setBulkBusy(false);
+  };
+
   if (!kitchen) return (
     <div className="text-center py-16">
       <ChefHat size={32} className="text-slate-700 mx-auto mb-3"/>
@@ -3334,6 +3380,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
         <div className="flex gap-2">
           <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>
           <button onClick={()=>openIng(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Ingredient</button>
+          <button onClick={()=>{setBulkModal(true);setBulkText("");setErr("");}} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Bulk add</button>
         </div>
       </div>
 
@@ -3347,7 +3394,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
       </div>
 
       <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"]].map(([k,l])=>(
+        {[["stock","Stock"],["goods","Goods in log"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -3397,6 +3444,47 @@ function CentralKitchenView({ stores = [], currentUser }) {
         )
       )}
 
+      {!loading && tab === "categories" && (
+        <div className="space-y-3 max-w-lg">
+          <div className="flex gap-2">
+            <input value={catName} onChange={e=>setCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();}} placeholder="New category (e.g. Dairy)" className={inputCls}/>
+            <button onClick={addCat} className="px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold whitespace-nowrap">Add</button>
+          </div>
+          {categories.length === 0 ? <div className="text-xs text-slate-600">No categories yet.</div> : (
+            <div className="space-y-1.5">
+              {categories.map(c => (
+                <div key={c.id} className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 flex items-center justify-between">
+                  <span className="text-sm text-slate-200">{c.name}</span>
+                  <button onClick={()=>removeCat(c)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "suppliers" && (
+        <div className="space-y-3 max-w-lg">
+          <button onClick={()=>openSup(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Add supplier</button>
+          {suppliers.length === 0 ? <div className="text-xs text-slate-600">No suppliers yet.</div> : (
+            <div className="space-y-1.5">
+              {suppliers.map(s => (
+                <div key={s.id} className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200">{s.name}</div>
+                    {(s.contact||s.phone||s.email) && <div className="text-[11px] text-slate-500 truncate">{[s.contact,s.phone,s.email].filter(Boolean).join(" · ")}</div>}
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button onClick={()=>openSup(s)} className="text-slate-500 hover:text-white"><Edit size={13}/></button>
+                    <button onClick={()=>removeSup(s)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Ingredient modal */}
       {ingModal && (
         <Modal title={ingModal==="new"?"New ingredient":`Edit — ${ingModal.name}`} onClose={()=>setIngModal(null)} maxW="max-w-md"
@@ -3408,11 +3496,23 @@ function CentralKitchenView({ stores = [], currentUser }) {
             <div><label className={labelCls}>Name *</label><input value={ingForm.name||""} onChange={e=>setIngForm(f=>({...f,name:e.target.value}))} className={inputCls}/></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Unit</label><select value={ingForm.unit||"kg"} onChange={e=>setIngForm(f=>({...f,unit:e.target.value}))} className={inputCls}>{CK_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
-              <div><label className={labelCls}>Category</label><input value={ingForm.category||""} onChange={e=>setIngForm(f=>({...f,category:e.target.value}))} placeholder="Dairy, Dry goods…" className={inputCls}/></div>
+              <div><label className={labelCls}>Category</label>
+                <select value={ingForm.category||""} onChange={e=>setIngForm(f=>({...f,category:e.target.value}))} className={inputCls}>
+                  <option value="">— none —</option>
+                  {categories.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+                  {ingForm.category && !categories.some(c=>c.name===ingForm.category) && <option value={ingForm.category}>{ingForm.category}</option>}
+                </select>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Reorder point ({ingForm.unit||"kg"})</label><input type="number" value={ingForm.reorderPoint??""} onChange={e=>setIngForm(f=>({...f,reorderPoint:e.target.value}))} className={inputCls}/></div>
-              <div><label className={labelCls}>Default supplier</label><input value={ingForm.defaultSupplier||""} onChange={e=>setIngForm(f=>({...f,defaultSupplier:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Default supplier</label>
+                <select value={ingForm.defaultSupplier||""} onChange={e=>setIngForm(f=>({...f,defaultSupplier:e.target.value}))} className={inputCls}>
+                  <option value="">— none —</option>
+                  {suppliers.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}
+                  {ingForm.defaultSupplier && !suppliers.some(s=>s.name===ingForm.defaultSupplier) && <option value={ingForm.defaultSupplier}>{ingForm.defaultSupplier}</option>}
+                </select>
+              </div>
             </div>
             <div>
               <label className={labelCls}>Allergens</label>
@@ -3445,7 +3545,12 @@ function CentralKitchenView({ stores = [], currentUser }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Batch / lot no.</label><input value={ginForm.batchNo||""} onChange={e=>setGinForm(f=>({...f,batchNo:e.target.value}))} className={inputCls}/></div>
-              <div><label className={labelCls}>Supplier</label><input value={ginForm.supplier||""} onChange={e=>setGinForm(f=>({...f,supplier:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Supplier</label>
+                <select value={ginForm.supplier||""} onChange={e=>setGinForm(f=>({...f,supplier:e.target.value}))} className={inputCls}>
+                  <option value="">— none —</option>
+                  {suppliers.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}
+                </select>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Received</label><input type="date" value={ginForm.receivedDate||""} onChange={e=>setGinForm(f=>({...f,receivedDate:e.target.value}))} className={inputCls}/></div>
@@ -3453,6 +3558,63 @@ function CentralKitchenView({ stores = [], currentUser }) {
             </div>
             <div><label className={labelCls}>Unit cost (£ per {ginForm.unit||"kg"})</label><input type="number" value={ginForm.unitCost||""} onChange={e=>setGinForm(f=>({...f,unitCost:e.target.value}))} className={inputCls}/></div>
             <div className="text-[11px] text-slate-600">Capturing the supplier batch number here is what makes full traceability possible later.</div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Supplier modal */}
+      {supModal && (
+        <Modal title={supModal==="new"?"New supplier":`Edit — ${supModal.name}`} onClose={()=>setSupModal(null)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setSupModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={saveSup} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Save</button>
+          </>}>
+          <div className="space-y-3">
+            <div><label className={labelCls}>Name *</label><input value={supForm.name||""} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} className={inputCls}/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Contact</label><input value={supForm.contact||""} onChange={e=>setSupForm(f=>({...f,contact:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Phone</label><input value={supForm.phone||""} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} className={inputCls}/></div>
+            </div>
+            <div><label className={labelCls}>Email</label><input value={supForm.email||""} onChange={e=>setSupForm(f=>({...f,email:e.target.value}))} className={inputCls}/></div>
+            <div><label className={labelCls}>Note</label><input value={supForm.note||""} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} className={inputCls}/></div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk add ingredients modal */}
+      {bulkModal && (
+        <Modal title="Bulk add ingredients" onClose={()=>setBulkModal(false)} maxW="max-w-lg"
+          footer={<>
+            <button onClick={()=>setBulkModal(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doBulkAdd} disabled={bulkBusy||!bulkPreview.length} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">{bulkBusy?"Adding…":`Add ${bulkPreview.length||""}`}</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="flex gap-1 bg-slate-800 rounded-lg p-1">
+              {[["paste","Paste list"],["csv","CSV"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setBulkMode(k)} className={`flex-1 py-1.5 rounded-md text-xs font-semibold ${bulkMode===k?"bg-indigo-600 text-white":"text-slate-400"}`}>{l}</button>
+              ))}
+            </div>
+            {bulkMode==="paste" ? (
+              <div className="text-[11px] text-slate-500">One ingredient per line. Optionally add unit and category: <span className="text-slate-400">Plain Flour, kg, Dry goods</span></div>
+            ) : (
+              <div className="text-[11px] text-slate-500">
+                First row = header. Columns: <span className="text-slate-400">name, unit, category, allergens, reorder_point, supplier</span>. Allergens separated by <span className="text-slate-400">;</span> (e.g. gluten;milk).
+                <label className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 text-slate-200 cursor-pointer hover:bg-slate-700">
+                  <Upload size={12}/> Choose CSV
+                  <input type="file" accept=".csv,text/csv" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f){ const r=new FileReader(); r.onload=()=>setBulkText(String(r.result||"")); r.readAsText(f); } }}/>
+                </label>
+              </div>
+            )}
+            <textarea value={bulkText} onChange={e=>setBulkText(e.target.value)} rows={8}
+              placeholder={bulkMode==="paste" ? "Plain Flour\nCocoa Powder, kg, Dry goods\nWhole Milk, L, Dairy" : "name,unit,category,allergens,reorder_point,supplier\nPlain Flour,kg,Dry goods,gluten,10,Bookers\nWhole Milk,L,Dairy,milk,20,Dairy Co"}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono resize-none"/>
+            {bulkPreview.length > 0 && (
+              <div className="text-[11px] text-slate-500">
+                <span className="text-emerald-400 font-semibold">{bulkPreview.length}</span> ingredient{bulkPreview.length!==1?"s":""} ready:
+                <span className="text-slate-400"> {bulkPreview.slice(0,5).map(r=>r.name).join(", ")}{bulkPreview.length>5?"…":""}</span>
+              </div>
+            )}
+            {err && <div className="text-xs text-red-400">{err}</div>}
           </div>
         </Modal>
       )}
