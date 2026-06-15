@@ -24787,19 +24787,21 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // Manual row ordering within a section (memberId -> rank). Drag to reorder.
   // Persisted per store so it survives reloads.
   const orderStorageKey = `cbd_sched_order_${storeId || "none"}`;
+  const periodStorageKey = `cbd_sched_period_${storeId || "none"}`;
   const [memberOrder, setMemberOrder] = useState({});
+  const [memberPeriod, setMemberPeriod] = useState({}); // memberId -> "Morning"|"Evening" override
   const [dragId, setDragId] = useState(null);
-  // Load saved order when the store changes.
+  // Load saved order + period overrides when the store changes.
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(orderStorageKey);
-      setMemberOrder(raw ? JSON.parse(raw) : {});
-    } catch { setMemberOrder({}); }
-  }, [orderStorageKey]);
-  // Save whenever it changes.
+    try { const raw = window.localStorage.getItem(orderStorageKey); setMemberOrder(raw ? JSON.parse(raw) : {}); } catch { setMemberOrder({}); }
+    try { const raw = window.localStorage.getItem(periodStorageKey); setMemberPeriod(raw ? JSON.parse(raw) : {}); } catch { setMemberPeriod({}); }
+  }, [orderStorageKey, periodStorageKey]);
   useEffect(() => {
     try { window.localStorage.setItem(orderStorageKey, JSON.stringify(memberOrder)); } catch { /* ignore */ }
   }, [memberOrder, orderStorageKey]);
+  useEffect(() => {
+    try { window.localStorage.setItem(periodStorageKey, JSON.stringify(memberPeriod)); } catch { /* ignore */ }
+  }, [memberPeriod, periodStorageKey]);
   const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
   const isStoreMember = (m) => {
     const ids = m.storeIds || [];
@@ -24831,21 +24833,24 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
     const sortRows = (arr) => [...arr].sort((a,b) =>
       orderOf(a) - orderOf(b) || `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)
     );
-    // Derive the shift period from the role name suffix (… - Morning/Evening/Night).
+    // Period: a manual drag override wins; otherwise derive a sensible default
+    // from the role name. Anything unrecognised defaults to Morning so there
+    // are always just two groups (Morning / Evening) to drag between.
     const periodOf = (m) => {
+      if (memberPeriod[m.id]) return memberPeriod[m.id];
       const r = `${m.role || ""}`.toLowerCase();
-      if (/\bmorning\b|\bam\b|\bday\b/.test(r)) return "Morning";
       if (/\bevening\b|\bnight\b|\bpm\b|\blate\b/.test(r)) return "Evening";
-      return "Other";
+      return "Morning";
     };
-    const PERIOD_ORDER = { Morning: 0, Evening: 1, Other: 2 };
-    // Split a section's members into period groups (only those that exist).
+    const PERIOD_ORDER = { Morning: 0, Evening: 1 };
+    // Always expose both Morning and Evening groups (even if empty) so a row
+    // can be dragged into either period.
     const toGroups = (members) => {
-      const byPeriod = {};
+      const byPeriod = { Morning: [], Evening: [] };
       members.forEach(m => { const p = periodOf(m); (byPeriod[p] = byPeriod[p] || []).push(m); });
-      return Object.keys(byPeriod)
+      return ["Morning","Evening"]
         .sort((a,b) => (PERIOD_ORDER[a] ?? 9) - (PERIOD_ORDER[b] ?? 9))
-        .map(p => ({ period: p, members: sortRows(byPeriod[p]) }));
+        .map(p => ({ period: p, members: sortRows(byPeriod[p] || []) }));
     };
 
     const storeStaff = filteredMembers.filter(m => isStoreMember(m));
@@ -24865,7 +24870,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
         members: sortRows(otherStaff), groups: toGroups(otherStaff) });
     }
     return sections;
-  }, [filteredMembers, storeId, memberOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filteredMembers, storeId, memberOrder, memberPeriod]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drop `dragId` ahead of `targetId` within their section; re-rank that section.
   const reorderRows = (section, draggedId, targetId) => {
@@ -25446,16 +25451,19 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                 </div>
                 {section.groups.map((grp) => (
                   <Fragment key={`${section.key}-${grp.period}`}>
-                    {/* Period divider — only when the section spans >1 period */}
-                    {section.groups.length > 1 && (
-                      <div className="grid bg-slate-900/50 border-b border-slate-800/50" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
-                        <div className="col-span-full px-6 py-1 flex items-center gap-2">
-                          <span className={`w-1.5 h-1.5 rounded-full ${grp.period==="Morning"?"bg-amber-400":grp.period==="Evening"?"bg-indigo-400":"bg-slate-500"}`}/>
-                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{grp.period}</span>
-                          <span className="text-[10px] text-slate-600">· {grp.members.length}</span>
-                        </div>
+                    {/* Period divider — always shown; drop a row here to move
+                        that person to this period (Morning/Evening). */}
+                    <div
+                      onDragOver={(e)=>{ if(dragId) e.preventDefault(); }}
+                      onDrop={(e)=>{ e.preventDefault(); if(dragId) setMemberPeriod(prev=>({ ...prev, [dragId]: grp.period })); setDragId(null); }}
+                      className={`grid bg-slate-900/50 border-y border-slate-800/50 ${dragId?"ring-1 ring-inset ring-indigo-500/40":""}`} style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                      <div className="col-span-full px-6 py-1.5 flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${grp.period==="Morning"?"bg-amber-400":"bg-indigo-400"}`}/>
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{grp.period}</span>
+                        <span className="text-[10px] text-slate-600">· {grp.members.length}</span>
+                        {dragId && <span className="text-[10px] text-indigo-400/80 ml-1">drop here for {grp.period.toLowerCase()}</span>}
                       </div>
-                    )}
+                    </div>
                 {grp.members.map((member)=>{
               const empTotal = empTotalById[member.id] || { hours:0, cost:0 };
               const roleLabel = member.role || member.department || "";
@@ -25465,7 +25473,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                   draggable={true}
                   onDragStart={()=>setDragId(member.id)}
                   onDragOver={(e)=>{ if(dragId && dragId!==member.id) e.preventDefault(); }}
-                  onDrop={(e)=>{ e.preventDefault(); reorderRows(section, dragId, member.id); setDragId(null); }}
+                  onDrop={(e)=>{ e.preventDefault(); if(dragId){ if(grp.period) setMemberPeriod(prev=>({ ...prev, [dragId]: grp.period })); reorderRows(section, dragId, member.id); } setDragId(null); }}
                   onDragEnd={()=>setDragId(null)}
                   className={`grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors ${dragId===member.id?"opacity-40":""}`} style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
                   {/* Left: avatar + name + role + running total */}
@@ -25599,6 +25607,13 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                 </div>
               );
                 })}
+                    {grp.members.length === 0 && (
+                      <div className="grid border-b border-slate-800/40" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                        <div className="col-span-full px-6 py-2 text-[10px] text-slate-700 italic">
+                          {dragId ? `Drop here to set as ${grp.period.toLowerCase()}` : `No ${grp.period.toLowerCase()} staff`}
+                        </div>
+                      </div>
+                    )}
                   </Fragment>
                 ))}
               </Fragment>
