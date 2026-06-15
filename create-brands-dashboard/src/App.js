@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3398,6 +3398,29 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   };
   const ingName = (id) => ingredients.find(i=>i.id===id)?.name || "—";
 
+  // Allergen label check (scan label → compare to stored → confirm)
+  const [allergenCheck, setAllergenCheck] = useState(null); // { ingredient, stored, detected, mayContain, diff, source, busy }
+  const openAllergenCheck = (ingredient) => setAllergenCheck({ ingredient, stored: ingredient.allergens || [], detected: null, mayContain: [], diff: null, source: "", busy: false });
+  const runAllergenScan = async (file) => {
+    if (!file || !allergenCheck) return;
+    setAllergenCheck(c => ({ ...c, busy: true })); setErr("");
+    try {
+      const { text, source } = await scanLabelText(file, { uploadInvoiceFile, extractInvoice, getInvoiceWithLines, entity: "central_kitchen", userId: currentUser?.id });
+      const det = detectAllergensInText(text);
+      const stored = allergenCheck.ingredient.allergens || [];
+      const diff = diffAllergens(stored, det.contains);
+      setAllergenCheck(c => ({ ...c, detected: det.contains, mayContain: det.mayContain, empty: det.empty, diff, source, busy: false, rawLen: (text||"").length }));
+    } catch (e) { setErr(e?.message || String(e)); setAllergenCheck(c => ({ ...c, busy: false })); }
+  };
+  const applyAllergenUpdate = async () => {
+    if (!allergenCheck?.detected) return;
+    try {
+      await upsertCkIngredient({ ...allergenCheck.ingredient, allergens: allergenCheck.detected, siteId });
+      const fresh = await fetchCkIngredients(siteId); setIngredients(fresh);
+      setAllergenCheck(null); load();
+    } catch (e) { setErr(e?.message || String(e)); }
+  };
+
   // Category builder
   const [catName, setCatName] = useState("");
   const addCat = async () => { if (!catName.trim()) return; try { await upsertCkCategory({ siteId, name: catName.trim() }); setCatName(""); load(); } catch (e) { setErr(e?.message||String(e)); } };
@@ -3833,6 +3856,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <div className="text-right"><div className={`text-sm font-bold ${s.low?"text-amber-300":"text-white"}`}>{s.stock} {s.unit}</div></div>
                   <button onClick={()=>openIng(s)} className="text-slate-500 hover:text-white"><Edit size={13}/></button>
+                  <button onClick={()=>openAllergenCheck(s)} title="Scan label & check allergens" className="text-slate-500 hover:text-amber-300"><ShieldCheck size={14}/></button>
                   <button onClick={()=>removeIng(s)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
                 </div>
               </div>
@@ -4433,6 +4457,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                           {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
                         </select>
                       )}
+                      {!l.needsCreate && l.ingredientId && <button onClick={()=>{ const ing=ingredients.find(i=>String(i.id)===String(l.ingredientId)); if(ing) openAllergenCheck(ing); }} title="Scan label & check allergens" className="text-slate-500 hover:text-amber-300 flex-shrink-0"><ShieldCheck size={14}/></button>}
                       <button onClick={()=>rmGinLine(idx)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
                     </div>
                     {l.raw && l.needsCreate && <div className="text-[10px] text-amber-400/70">From invoice: “{l.raw}” — unmatched, create or pick an ingredient.</div>}
@@ -4448,6 +4473,71 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
               </div>
             </div>
             <div className="text-[11px] text-slate-600">Batch number + expiry come from the physical packaging — add them per line. They're what make full traceability possible.</div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+
+      {/* Allergen label check modal */}
+      {allergenCheck && (
+        <Modal title={`Allergen check — ${allergenCheck.ingredient.name}`} onClose={()=>setAllergenCheck(null)} maxW="max-w-lg"
+          footer={allergenCheck.detected ? <>
+            <button onClick={()=>setAllergenCheck(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Close</button>
+            {allergenCheck.diff && (allergenCheck.diff.added.length>0 || allergenCheck.diff.removed.length>0) &&
+              <button onClick={applyAllergenUpdate} className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold">Update to scanned</button>}
+          </> : <button onClick={()=>setAllergenCheck(null)} className="w-full py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>}>
+          <div className="space-y-3">
+            {/* Stored */}
+            <div>
+              <div className="text-[10px] uppercase text-slate-500 tracking-widest mb-1">Currently stored</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(allergenCheck.stored||[]).length===0 ? <span className="text-xs text-slate-600">none recorded</span> :
+                  allergenCheck.stored.map(a=><span key={a} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] capitalize">{a}</span>)}
+              </div>
+            </div>
+
+            {/* Scan trigger */}
+            {!allergenCheck.detected && (
+              <label className={`block text-center py-4 rounded-xl border-2 border-dashed cursor-pointer ${allergenCheck.busy?"border-slate-700 text-slate-500":"border-indigo-500/40 text-indigo-300 hover:bg-indigo-950/20"}`}>
+                <ShieldCheck size={20} className="mx-auto mb-1"/>
+                <div className="text-sm font-semibold">{allergenCheck.busy ? "Reading label…" : "Scan / upload the product label"}</div>
+                <div className="text-[10px] text-slate-600 mt-0.5">Photograph the allergen panel clearly</div>
+                <input type="file" accept="image/*,application/pdf" disabled={allergenCheck.busy} onChange={e=>runAllergenScan(e.target.files?.[0])} className="hidden"/>
+              </label>
+            )}
+
+            {/* Result + diff */}
+            {allergenCheck.detected && (
+              <>
+                <div>
+                  <div className="text-[10px] uppercase text-slate-500 tracking-widest mb-1">Detected on label</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {allergenCheck.detected.length===0 ? <span className="text-xs text-amber-400">none detected — read the label manually to confirm</span> :
+                      allergenCheck.detected.map(a=>{ const isNew=allergenCheck.diff.added.includes(a); return <span key={a} className={`px-2 py-1 rounded-lg text-[11px] capitalize ${isNew?"bg-red-600/30 text-red-200 border border-red-500/40":"bg-slate-800 text-slate-300"}`}>{a}{isNew?" +":""}</span>; })}
+                  </div>
+                  {allergenCheck.mayContain.length>0 && <div className="text-[10px] text-amber-400/80 mt-1.5">“May contain”: {allergenCheck.mayContain.join(", ")}</div>}
+                </div>
+
+                {/* Verdict */}
+                {(() => {
+                  const { added, removed } = allergenCheck.diff;
+                  if (added.length===0 && removed.length===0) return <div className="text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-500/30 rounded-xl px-3 py-2">✓ No change — the label matches what's stored.</div>;
+                  return (
+                    <div className="text-xs bg-amber-950/30 border border-amber-500/40 rounded-xl px-3 py-2 space-y-1">
+                      <div className="font-bold text-amber-200">⚠ Allergen change detected</div>
+                      {added.length>0 && <div className="text-red-200">Added on label: <span className="capitalize">{added.join(", ")}</span></div>}
+                      {removed.length>0 && <div className="text-slate-300">No longer on label: <span className="capitalize">{removed.join(", ")}</span></div>}
+                      <div className="text-[10px] text-slate-400 pt-1">Review against the physical label, then update if correct. This affects every prep & product using this ingredient.</div>
+                    </div>
+                  );
+                })()}
+
+                <div className="text-[10px] text-slate-600">
+                  Read via {allergenCheck.source==="label_ocr"?"label scanner":"invoice scanner (fallback)"}. This is a scan aid, not a substitute for reading the label — always verify, especially if nothing was detected.
+                  <button onClick={()=>setAllergenCheck(c=>({...c, detected:null, diff:null}))} className="ml-2 text-indigo-400 hover:text-indigo-300 font-semibold">Re-scan</button>
+                </div>
+              </>
+            )}
             {err && <div className="text-xs text-red-400">{err}</div>}
           </div>
         </Modal>

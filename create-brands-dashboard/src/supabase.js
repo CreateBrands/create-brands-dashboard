@@ -6274,3 +6274,85 @@ export async function saveScheduleJobs(planId, jobs) {
   if (rows.length) { const { error } = await supabase.from("ck_schedule_jobs").insert(rows); if (error) throw error; }
   return rows.length;
 }
+
+// ── Allergen label scanning (food-safety): read a label, compare to stored ───
+// The 14 UK allergens + keyword aliases used to detect them in OCR'd label text.
+const ALLERGEN_KEYWORDS = {
+  gluten: ["gluten","wheat","barley","rye","oats","spelt","kamut","malt","flour"],
+  milk: ["milk","dairy","lactose","butter","cheese","cream","whey","casein","yoghurt","yogurt"],
+  egg: ["egg","eggs","albumen","ovalbumin"],
+  soya: ["soya","soy","soybean","soja","edamame","tofu"],
+  nuts: ["nut","nuts","almond","hazelnut","walnut","cashew","pecan","pistachio","macadamia","brazil nut"],
+  peanuts: ["peanut","peanuts","groundnut","arachis"],
+  sesame: ["sesame","tahini","sesamum"],
+  fish: ["fish","cod","salmon","tuna","anchovy","haddock","mackerel"],
+  crustaceans: ["crustacean","prawn","shrimp","crab","lobster","crayfish","langoustine"],
+  molluscs: ["mollusc","mollusk","mussel","oyster","clam","squid","octopus","snail","scallop","cuttlefish"],
+  celery: ["celery","celeriac"],
+  mustard: ["mustard"],
+  lupin: ["lupin","lupine"],
+  sulphites: ["sulphite","sulfite","sulphur dioxide","sulfur dioxide","so2","e220","e221","e222","e223","e224","e226","e227","e228"],
+};
+
+// Detect allergens in OCR'd label text. Returns { contains:[], mayContain:[] }.
+// "May contain"/"traces" lines are classified separately from declared allergens.
+export function detectAllergensInText(text) {
+  const lc = (text || "").toLowerCase();
+  if (!lc.trim()) return { contains: [], mayContain: [], empty: true };
+  // Split into "may contain / traces" region vs the rest.
+  const mayIdx = lc.search(/may contain|may also contain|not suitable for|traces of|made in a factory|made on equipment/);
+  const declaredText = mayIdx >= 0 ? lc.slice(0, mayIdx) : lc;
+  const mayText = mayIdx >= 0 ? lc.slice(mayIdx) : "";
+  const find = (hay) => {
+    const found = new Set();
+    Object.entries(ALLERGEN_KEYWORDS).forEach(([allergen, words]) => {
+      if (words.some(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b`).test(hay))) found.add(allergen);
+    });
+    return [...found];
+  };
+  const contains = find(declaredText);
+  const mayRaw = find(mayText);
+  // Anything in "may contain" that's already a declared allergen stays declared.
+  const mayContain = mayRaw.filter(a => !contains.includes(a));
+  return { contains: contains.sort(), mayContain: mayContain.sort(), empty: false };
+}
+
+// Compare detected allergens against what's stored. Returns added/removed.
+export function diffAllergens(stored = [], detected = []) {
+  const s = new Set(stored), d = new Set(detected);
+  return {
+    added: [...d].filter(a => !s.has(a)).sort(),     // on label, not in our records
+    removed: [...s].filter(a => !d.has(a)).sort(),   // in our records, not on label
+    unchanged: [...d].filter(a => s.has(a)).sort(),
+  };
+}
+
+// OCR a label image/PDF to raw text. Tries the dedicated LABEL_OCR Edge Function
+// first (best for labels); if it isn't deployed, falls back to reusing the
+// invoice extractor and concatenating its line text. Returns { text, source }.
+export async function scanLabelText(file, { uploadInvoiceFile, extractInvoice, getInvoiceWithLines, entity = "central_kitchen", userId } = {}) {
+  // 1) Try dedicated label OCR (Option B), if deployed.
+  try {
+    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+    const headers = {};
+    if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+    const { data, error } = await supabase.functions.invoke("LABEL_OCR", { body: { image_base64: b64, mime: file.type || "image/jpeg" }, headers });
+    if (!error && data?.ok && (data.text || "").trim()) return { text: data.text, source: "label_ocr" };
+  } catch (_) { /* not deployed or failed → fall back */ }
+
+  // 2) Fallback (Option A): reuse the invoice extractor pipeline.
+  if (uploadInvoiceFile && extractInvoice && getInvoiceWithLines) {
+    const inv = await uploadInvoiceFile(file, entity, userId);
+    await extractInvoice(inv.id);
+    let text = "";
+    for (let i = 0; i < 10; i++) {
+      const { invoice, lines } = await getInvoiceWithLines(inv.id);
+      const parts = (lines || []).map(l => l.raw_description || "").filter(Boolean);
+      if (invoice?.extracted_text) parts.unshift(invoice.extracted_text);
+      if (parts.length) { text = parts.join("\n"); break; }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    return { text, source: "invoice_fallback" };
+  }
+  return { text: "", source: "none" };
+}
