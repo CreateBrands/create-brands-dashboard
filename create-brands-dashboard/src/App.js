@@ -11033,7 +11033,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
   );
   const storesByBrand = useMemo(() => {
     const m = {};
-    activeStores.forEach(s => { (m[s.brandId] = m[s.brandId] || []).push(s); });
+    activeStores.forEach(s => { const k = s.brandId || "__no_brand__"; (m[k] = m[k] || []).push(s); });
     Object.values(m).forEach(arr => arr.sort((a, b) => (a.shortName || a.name).localeCompare(b.shortName || b.name)));
     return m;
   }, [activeStores]);
@@ -11128,6 +11128,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
               <div className="space-y-3 max-h-72 overflow-y-auto">
                 {Object.entries(storesByBrand).map(([brandId, brandStores]) => {
                   const brand = brands.find(b => b.id === brandId);
+                  const brandName = brand?.name || (brandId === "__no_brand__" ? "Other sites" : brandId);
                   const filtered = brandStores.filter(matchesSearch);
                   if (filtered.length === 0) return null;
                   const selectedInBrand = filtered.filter(s => storeIds.includes(s.id)).length;
@@ -11138,7 +11139,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
                           {brand && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{background: brand.color}}/>}
-                          <span className="text-[11px] uppercase tracking-widest font-bold text-slate-500">{brand?.name || brandId}</span>
+                          <span className="text-[11px] uppercase tracking-widest font-bold text-slate-500">{brandName}</span>
                           <span className="text-[10px] text-slate-600">{selectedInBrand}/{filtered.length}{partial ? " (partial)" : ""}</span>
                         </div>
                         <button onClick={() => toggleAllInBrand(brandId, allSelected)} className="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300">
