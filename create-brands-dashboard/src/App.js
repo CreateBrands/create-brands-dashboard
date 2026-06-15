@@ -3503,8 +3503,6 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [planDirty, setPlanDirty] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [planActuals, setPlanActuals] = useState({}); // productId -> actual qty
-  const [expandedProd, setExpandedProd] = useState({}); // productId -> show day detail
-  const [planView, setPlanView] = useState("plan"); // plan | shopping | charts | actual
 
   const refreshTemplates = useCallback(() => { if (siteId) fetchProductionPlans(siteId, { templates: true }).then(setTemplates).catch(()=>{}); }, [siteId]);
   useEffect(() => { refreshTemplates(); }, [refreshTemplates]);
@@ -3526,7 +3524,6 @@ function CentralKitchenView({ stores = [], currentUser }) {
     setPlanGrid(g => { const n = { ...g }; for (let d=0;d<7;d++) n[`${productId}:${d}`] = per + (d===0?rem:0); return n; });
     setPlanDirty(true);
   };
-  const bumpWeek = (productId, delta) => { const cur = plannedByProduct[productId]||0; setWeekTotal(productId, Math.max(0, cur+delta)); };
   const newPlan = async (asTemplate=false) => {
     const name = window.prompt(asTemplate?"Name this template:":"Name this plan (e.g. 'Week of 16 Jun'):"); if (!name) return;
     try { const p = await upsertProductionPlan({ siteId, name, weekStart: planWeek || null, isTemplate: asTemplate }); const fresh = await fetchProductionPlans(siteId); setPlans(fresh); refreshTemplates(); if (!asTemplate){ setPlanId(p.id); setPlanName(p.name); setPlanGrid({}); setPlanDirty(false); } }
@@ -3901,178 +3898,183 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
       {!loading && tab === "planner" && (
         <div className="space-y-4">
-          {/* Plan toolbar */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <select value={planId} onChange={e=>loadPlan(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white">
-              <option value="">— select a plan —</option>
-              {plans.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button onClick={()=>newPlan(false)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New plan</button>
-            {planId && <>
-              <input type="date" value={planWeek||""} onChange={e=>{setPlanWeek(e.target.value);setPlanDirty(true);}} className="px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white" title="Week starting"/>
-              <button onClick={savePlan} disabled={planBusy||!planDirty} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{planBusy?"Saving…":planDirty?"Save":"Saved"}</button>
-              <button onClick={saveAsTemplate} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold">Save as template</button>
-              <button onClick={deletePlan} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 text-sm font-semibold">Delete</button>
-            </>}
+          {/* ── Header: plan picker + live totals ───────────────────────────── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <select value={planId} onChange={e=>loadPlan(e.target.value)} className="px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white font-semibold">
+                <option value="">— select a plan —</option>
+                {plans.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <button onClick={()=>newPlan(false)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New plan</button>
+              {planId && <>
+                <input type="date" value={planWeek||""} onChange={e=>{setPlanWeek(e.target.value);setPlanDirty(true);}} className="px-2 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white" title="Week starting"/>
+                <div className="flex-1"/>
+                <button onClick={saveAsTemplate} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold">Save as template</button>
+                <button onClick={deletePlan} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 text-sm font-semibold">Delete</button>
+                <button onClick={savePlan} disabled={planBusy||!planDirty} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{planBusy?"Saving…":planDirty?"Save plan":"Saved"}</button>
+              </>}
+            </div>
+            {planId && (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Output / week</div><div className="text-xl font-black text-white">{Object.values(plannedByProduct).reduce((s,n)=>s+(Number(n)||0),0)}<span className="text-xs font-normal text-slate-500"> units</span></div></div>
+                <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredient cost</div><div className="text-xl font-black text-white">{money(planEcon.totalCost)}</div></div>
+                <div className={`rounded-xl p-2.5 ${planEcon.buyCost>0?"bg-amber-950/40":"bg-slate-950"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">To buy</div><div className={`text-xl font-black ${planEcon.buyCost>0?"text-amber-300":"text-white"}`}>{money(planEcon.buyCost)}</div></div>
+              </div>
+            )}
           </div>
 
-          {!planId ? <div className="text-xs text-slate-600">Select a plan or create a new one to start planning the week.</div> :
-           !ckProducts.length ? <div className="text-xs text-slate-600">Create kitchen products first.</div> : (
+          {!planId ? <div className="text-sm text-slate-500 text-center py-10">Select a plan above, or create a new one to start planning your week.</div> :
+           !ckProducts.length ? <div className="text-sm text-slate-500 text-center py-10">Create kitchen products first (Products tab).</div> : (
             <>
-              {/* Smart start */}
-              <div className="flex items-center gap-2 flex-wrap bg-slate-900/50 border border-slate-800 rounded-xl px-3 py-2">
-                <span className="text-[11px] text-slate-500 font-semibold">Start from:</span>
-                <button onClick={()=>startFrom("production")} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold">Last week's production</button>
-                <button onClick={()=>startFrom("dispatch")} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold">Last week's dispatches</button>
+              {/* ── Smart start ─────────────────────────────────────────────── */}
+              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                <span className="text-slate-500 font-semibold">Quick start:</span>
+                <button onClick={()=>startFrom("production")} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold">↻ Last week's production</button>
+                <button onClick={()=>startFrom("dispatch")} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold">↻ Last week's dispatches</button>
                 {templates.length>0 && (
-                  <select onChange={e=>{ applyTemplate(e.target.value); e.target.value=""; }} defaultValue="" className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-[11px] text-slate-200">
-                    <option value="">From template…</option>
+                  <select onChange={e=>{ applyTemplate(e.target.value); e.target.value=""; }} defaultValue="" className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 font-semibold">
+                    <option value="">Use a template…</option>
                     {templates.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
                 )}
-                <button onClick={()=>{ setPlanGrid({}); setPlanDirty(true); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-[11px] font-semibold">Clear</button>
+                <button onClick={()=>{ setPlanGrid({}); setPlanDirty(true); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 font-semibold">Clear all</button>
               </div>
 
-              {/* Day capacity bars */}
-              <div>
-                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Daily load {dayLoad.mins.some(m=>m>0) ? "(prep minutes)" : "(units)"}</div>
+              {/* ── THE PLAN: products × days table ─────────────────────────── */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-800">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
+                      <th className="text-left px-3 py-2.5 font-bold sticky left-0 bg-slate-900 z-10">Product</th>
+                      {DOW.map(d=><th key={d} className="px-1 py-2.5 font-bold w-[52px] text-center">{d}</th>)}
+                      <th className="px-3 py-2.5 font-bold text-center bg-slate-900/80">Week</th>
+                      <th className="px-3 py-2.5 font-bold text-right">Cost</th>
+                      <th className="px-2 py-2.5"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ckProducts.map(p => {
+                      const wk = plannedByProduct[p.id]||0;
+                      const pe = planEcon.perProduct.find(x=>x.productId===p.id);
+                      return (
+                        <tr key={p.id} className="border-t border-slate-800 hover:bg-slate-900/40">
+                          <td className="px-3 py-2 sticky left-0 bg-slate-950 z-10">
+                            <div className="font-semibold text-slate-200 whitespace-nowrap">{p.name}</div>
+                            <div className="text-[10px] text-slate-600">{p.outputUnit}{p.minutesPerUnit?` · ${p.minutesPerUnit}m/unit`:""}</div>
+                          </td>
+                          {DOW.map((d,dow)=>(
+                            <td key={dow} className="px-1 py-1.5 text-center">
+                              <input type="number" value={planGrid[`${p.id}:${dow}`]||""} onChange={e=>setCell(p.id,dow,e.target.value)} placeholder="·"
+                                className="w-11 px-1 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white text-center focus:border-indigo-500 focus:bg-slate-950 placeholder:text-slate-700"/>
+                            </td>
+                          ))}
+                          <td className="px-3 py-2 text-center bg-slate-900/40">
+                            <input type="number" value={wk||""} onChange={e=>setWeekTotal(p.id, e.target.value)} placeholder="0"
+                              className="w-16 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-sm font-bold text-white text-center focus:border-indigo-500"/>
+                          </td>
+                          <td className="px-3 py-2 text-right text-slate-300 whitespace-nowrap">{pe?money(pe.cost):"—"}</td>
+                          <td className="px-2 py-2">{wk>0 && <button onClick={()=>planToRun(p.id)} className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-bold whitespace-nowrap">→ Run</button>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-slate-700 bg-slate-900 text-slate-300 font-bold text-xs">
+                      <td className="px-3 py-2 sticky left-0 bg-slate-900">Daily total</td>
+                      {DOW.map((d,i)=>(<td key={i} className="px-1 py-2 text-center">{dayLoad.units[i]||""}</td>))}
+                      <td className="px-3 py-2 text-center bg-slate-900">{Object.values(plannedByProduct).reduce((s,n)=>s+(Number(n)||0),0)||""}</td>
+                      <td className="px-3 py-2 text-right">{money(planEcon.totalCost)}</td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div className="text-[10px] text-slate-600">Type per-day quantities, or set a weekly total and it spreads across the week. Cost is ingredients only (excludes labour, utilities, packaging, overheads).</div>
+
+              {/* ── Daily load ──────────────────────────────────────────────── */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2">Daily load {dayLoad.mins.some(m=>m>0) ? "(prep time)" : "(units)"}</div>
                 <div className="grid grid-cols-7 gap-1.5">
                   {DOW.map((d,i)=>{
                     const useMin = dayLoad.mins.some(m=>m>0);
                     const val = useMin ? dayLoad.mins[i] : dayLoad.units[i];
                     const max = useMin ? dayLoad.maxMin : Math.max(1, ...dayLoad.units);
-                    const pct = Math.round((val/max)*100);
-                    const hot = pct >= 85;
+                    const pct = Math.round((val/max)*100); const hot = pct >= 85;
                     return (
                       <div key={d} className="text-center">
-                        <div className="h-20 bg-slate-900 border border-slate-800 rounded-lg flex flex-col justify-end overflow-hidden">
-                          <div className={`${hot?"bg-amber-500/60":"bg-indigo-500/50"}`} style={{height:`${pct}%`}}/>
+                        <div className="h-24 bg-slate-950 rounded-lg flex flex-col justify-end overflow-hidden">
+                          <div className={hot?"bg-amber-500/70":"bg-indigo-500/60"} style={{height:`${pct}%`}}/>
                         </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">{d}</div>
-                        <div className="text-[10px] text-slate-400">{useMin ? (val>=60?`${(val/60).toFixed(1)}h`:`${Math.round(val)}m`) : Math.round(val)}</div>
+                        <div className="text-[10px] text-slate-500 mt-1">{d}</div>
+                        <div className="text-[10px] text-slate-400 font-semibold">{useMin ? (val>=60?`${(val/60).toFixed(1)}h`:`${Math.round(val)}m`) : Math.round(val)||""}</div>
                       </div>
                     );
                   })}
                 </div>
+                {!ckProducts.some(p=>p.minutesPerUnit) && <div className="text-[10px] text-slate-600 mt-2">Tip: set “minutes per unit” on products to see prep-time load instead of unit counts.</div>}
               </div>
 
-              {/* Sub-view tabs */}
-              <div className="flex gap-1 border-b border-slate-800">
-                {[["plan","Plan"],["shopping","Shopping list"],["charts","Charts"],["actual","Plan vs actual"]].map(([k,l])=>(
-                  <button key={k} onClick={()=>setPlanView(k)} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${planView===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
-                ))}
-              </div>
-
-              {/* Cost strip (always visible) */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredient cost</div><div className="text-xl font-black text-white">{money(planEcon.totalCost)}</div></div>
-                <div className={`rounded-xl p-3 border ${planEcon.buyCost>0?"bg-amber-950/30 border-amber-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Still to buy</div><div className={`text-xl font-black ${planEcon.buyCost>0?"text-amber-300":"text-white"}`}>{money(planEcon.buyCost)}</div></div>
-              </div>
-
-              {planView === "plan" && (
-                <div className="space-y-2">
-                  {ckProducts.map(p => {
-                    const wk = plannedByProduct[p.id]||0; const exp = expandedProd[p.id];
-                    return (
-                      <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-                        <div className="flex items-center gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-semibold text-slate-200">{p.name} <span className="text-[11px] text-slate-600 font-normal">{p.outputUnit}{p.minutesPerUnit?` · ${p.minutesPerUnit}m/unit`:""}</span></div>
-                          </div>
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
-                            <button onClick={()=>bumpWeek(p.id,-Math.max(1,Math.round((wk||7)/7)))} className="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 font-bold">−</button>
-                            <input type="number" value={wk||""} onChange={e=>setWeekTotal(p.id, e.target.value)} placeholder="0" className="w-16 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white text-center"/>
-                            <button onClick={()=>bumpWeek(p.id, Math.max(1,Math.round((wk||7)/7)))} className="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 font-bold">+</button>
-                            <button onClick={()=>setExpandedProd(s=>({...s,[p.id]:!s[p.id]}))} className="ml-1 text-slate-500 hover:text-white"><ChevronRight size={15} className={`transition-transform ${exp?"rotate-90":""}`}/></button>
-                            {wk>0 && <button onClick={()=>planToRun(p.id)} className="text-[10px] px-2 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 font-semibold whitespace-nowrap">→ Run</button>}
-                          </div>
+              {/* ── Shopping list (live) ────────────────────────────────────── */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Shopping list — what to buy</div>
+                  {planEcon.buyCost>0 && <div className="text-sm font-black text-amber-300">{money(planEcon.buyCost)}</div>}
+                </div>
+                {shoppingBySupplier.length === 0 ? <div className="text-xs text-slate-600">Stock covers this plan — nothing to buy (or no quantities entered yet).</div> : (
+                  <div className="grid md:grid-cols-2 gap-2">
+                    {shoppingBySupplier.map(g => (
+                      <div key={g.supplier} className="bg-slate-950 rounded-xl p-2.5">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="text-xs font-bold text-slate-200">{g.supplier}</div>
+                          <div className="text-xs font-bold text-amber-300">{money(g.cost)}</div>
                         </div>
-                        {exp && (
-                          <div className="grid grid-cols-7 gap-1.5 mt-2 pt-2 border-t border-slate-800/60">
-                            {DOW.map((d,dow)=>(
-                              <div key={dow} className="text-center">
-                                <div className="text-[9px] text-slate-600 uppercase">{d}</div>
-                                <input type="number" value={planGrid[`${p.id}:${dow}`]||""} onChange={e=>setCell(p.id,dow,e.target.value)} className="w-full px-1 py-1 bg-slate-950 border border-slate-800 rounded text-xs text-white text-center mt-0.5"/>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        <div className="space-y-1">
+                          {g.lines.map(r=>(
+                            <div key={r.ingredientId} className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-300">{r.name}</span>
+                              <span className="text-slate-400 whitespace-nowrap ml-2">{r.toBuy} {r.unit}{r.buyCost!=null?` · ${money(r.buyCost)}`:""}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
 
-              {planView === "shopping" && (
-                <div className="space-y-3">
-                  {shoppingBySupplier.length === 0 ? <div className="text-xs text-slate-600">Nothing to buy — stock covers this plan, or no quantities entered.</div> : shoppingBySupplier.map(g => (
-                    <div key={g.supplier} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="text-sm font-bold text-slate-200">{g.supplier}</div>
-                        <div className="text-sm font-bold text-amber-300">{money(g.cost)}</div>
-                      </div>
-                      <div className="space-y-1">
-                        {g.lines.map(r=>(
-                          <div key={r.ingredientId} className="flex items-center justify-between text-[11px]">
-                            <span className="text-slate-300">{r.name}</span>
-                            <span className="text-slate-400">{r.toBuy} {r.unit}{r.buyCost!=null?` · ${money(r.buyCost)}`:""}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {planView === "charts" && (
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Output by day (units)</div>
-                    <div className="flex items-end gap-2 h-32 bg-slate-900 border border-slate-800 rounded-xl p-3">
-                      {DOW.map((d,i)=>{ const v=dayLoad.units[i]; const max=Math.max(1,...dayLoad.units); return (
-                        <div key={d} className="flex-1 flex flex-col items-center justify-end h-full gap-1">
-                          <div className="text-[10px] text-slate-400">{v||""}</div>
-                          <div className="w-full bg-indigo-500/50 rounded-t" style={{height:`${(v/max)*100}%`}}/>
-                          <div className="text-[10px] text-slate-500">{d}</div>
+              {/* ── Insight: cost by product + plan vs actual ───────────────── */}
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2">Where the cost goes</div>
+                  {planEcon.perProduct.length===0 ? <div className="text-xs text-slate-600">No planned products yet.</div> :
+                    <div className="space-y-1.5">
+                      {planEcon.perProduct.slice().sort((a,b)=>b.cost-a.cost).map(pp=>{ const max=Math.max(1,...planEcon.perProduct.map(x=>x.cost)); return (
+                        <div key={pp.productId} className="flex items-center gap-2">
+                          <div className="w-24 text-[11px] text-slate-300 truncate">{pp.name}</div>
+                          <div className="flex-1 h-4 bg-slate-950 rounded overflow-hidden"><div className="h-full bg-emerald-500/50" style={{width:`${(pp.cost/max)*100}%`}}/></div>
+                          <div className="w-14 text-right text-[11px] text-slate-400">{money(pp.cost)}</div>
                         </div>
                       ); })}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Cost by product</div>
+                    </div>}
+                </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2">Plan vs actual</div>
+                  {ckProducts.filter(p=>(plannedByProduct[p.id]||0)>0 || (planActuals[p.id]||0)>0).length===0 ?
+                    <div className="text-xs text-slate-600">Use “→ Run” on a product to record production against this plan, then progress shows here.</div> :
                     <div className="space-y-1.5">
-                      {planEcon.perProduct.length===0 ? <div className="text-xs text-slate-600">No planned products.</div> :
-                        planEcon.perProduct.slice().sort((a,b)=>b.cost-a.cost).map(pp=>{ const max=Math.max(1,...planEcon.perProduct.map(x=>x.cost)); return (
-                          <div key={pp.productId} className="flex items-center gap-2">
-                            <div className="w-28 text-[11px] text-slate-300 truncate">{pp.name}</div>
-                            <div className="flex-1 h-5 bg-slate-900 rounded overflow-hidden"><div className="h-full bg-emerald-500/50" style={{width:`${(pp.cost/max)*100}%`}}/></div>
-                            <div className="w-16 text-right text-[11px] text-slate-400">{money(pp.cost)}</div>
+                      {ckProducts.filter(p=>(plannedByProduct[p.id]||0)>0 || (planActuals[p.id]||0)>0).map(p=>{
+                        const planned = plannedByProduct[p.id]||0; const actual = planActuals[p.id]||0;
+                        const pct = planned>0 ? Math.round((actual/planned)*100) : (actual>0?100:0);
+                        return (
+                          <div key={p.id}>
+                            <div className="flex items-center justify-between text-[11px]"><span className="text-slate-300">{p.name}</span><span className={pct>=100?"text-emerald-300":"text-slate-400"}>{actual}/{planned}</span></div>
+                            <div className="h-1.5 bg-slate-950 rounded mt-0.5 overflow-hidden"><div className={pct>=100?"bg-emerald-500/60":"bg-indigo-500/50"} style={{width:`${Math.min(100,pct)}%`}}/></div>
                           </div>
-                        ); })}
-                    </div>
-                  </div>
+                        );
+                      })}
+                    </div>}
                 </div>
-              )}
-
-              {planView === "actual" && (
-                <div className="space-y-2">
-                  <div className="text-[11px] text-slate-500">Actual = production runs recorded against this plan (use “→ Run” so they link).</div>
-                  {ckProducts.filter(p=>(plannedByProduct[p.id]||0)>0 || (planActuals[p.id]||0)>0).length===0 ? <div className="text-xs text-slate-600">No planned or produced items yet.</div> :
-                    ckProducts.filter(p=>(plannedByProduct[p.id]||0)>0 || (planActuals[p.id]||0)>0).map(p=>{
-                      const planned = plannedByProduct[p.id]||0; const actual = planActuals[p.id]||0;
-                      const pct = planned>0 ? Math.round((actual/planned)*100) : (actual>0?100:0);
-                      return (
-                        <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-200 font-semibold">{p.name}</span>
-                            <span className={`${pct>=100?"text-emerald-300":pct>=70?"text-slate-300":"text-amber-300"}`}>{actual} / {planned} {p.outputUnit} · {pct}%</span>
-                          </div>
-                          <div className="h-2 bg-slate-950 rounded mt-1.5 overflow-hidden"><div className={`h-full ${pct>=100?"bg-emerald-500/60":"bg-indigo-500/50"}`} style={{width:`${Math.min(100,pct)}%`}}/></div>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
+              </div>
             </>
           )}
         </div>
