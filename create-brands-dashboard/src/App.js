@@ -24785,8 +24785,21 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   const [hiddenMemberIds, setHiddenMemberIds] = useState(() => new Set());
   const [staffPicker, setStaffPicker] = useState(false);
   // Manual row ordering within a section (memberId -> rank). Drag to reorder.
+  // Persisted per store so it survives reloads.
+  const orderStorageKey = `cbd_sched_order_${storeId || "none"}`;
   const [memberOrder, setMemberOrder] = useState({});
   const [dragId, setDragId] = useState(null);
+  // Load saved order when the store changes.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(orderStorageKey);
+      setMemberOrder(raw ? JSON.parse(raw) : {});
+    } catch { setMemberOrder({}); }
+  }, [orderStorageKey]);
+  // Save whenever it changes.
+  useEffect(() => {
+    try { window.localStorage.setItem(orderStorageKey, JSON.stringify(memberOrder)); } catch { /* ignore */ }
+  }, [memberOrder, orderStorageKey]);
   const roster = useMemo(() => [...opsTeam, ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
   const isStoreMember = (m) => {
     const ids = m.storeIds || [];
@@ -25418,7 +25431,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
               const canRemove = section.removable;
               return (
                 <div key={member.id}
-                  draggable={!editLocked}
+                  draggable={true}
                   onDragStart={()=>setDragId(member.id)}
                   onDragOver={(e)=>{ if(dragId && dragId!==member.id) e.preventDefault(); }}
                   onDrop={(e)=>{ e.preventDefault(); reorderRows(section, dragId, member.id); setDragId(null); }}
@@ -25426,11 +25439,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                   className={`grid border-b border-slate-800/50 hover:bg-slate-900/30 transition-colors ${dragId===member.id?"opacity-40":""}`} style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
                   {/* Left: avatar + name + role + running total */}
                   <div className="group/row flex items-center gap-2 px-2 py-2.5">
-                    {!editLocked && (
-                      <span className="cursor-grab active:cursor-grabbing text-slate-700 hover:text-slate-400 flex-shrink-0" title="Drag to reorder">
-                        <GripVertical size={14}/>
-                      </span>
-                    )}
+                    <span className="cursor-grab active:cursor-grabbing text-slate-500 hover:text-indigo-400 flex-shrink-0" title="Drag to reorder">
+                      <GripVertical size={16}/>
+                    </span>
                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
                       {member.firstName[0]}{member.lastName?.[0]||""}
