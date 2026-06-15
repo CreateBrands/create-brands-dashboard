@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3501,18 +3501,35 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [planGrid, setPlanGrid] = useState({});    // `${productId}:${dow}` -> qty
   const [planBusy, setPlanBusy] = useState(false);
   const [planDirty, setPlanDirty] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [planActuals, setPlanActuals] = useState({}); // productId -> actual qty
+  const [expandedProd, setExpandedProd] = useState({}); // productId -> show day detail
+  const [planView, setPlanView] = useState("plan"); // plan | shopping | charts | actual
+
+  const refreshTemplates = useCallback(() => { if (siteId) fetchProductionPlans(siteId, { templates: true }).then(setTemplates).catch(()=>{}); }, [siteId]);
+  useEffect(() => { refreshTemplates(); }, [refreshTemplates]);
+
   const loadPlan = async (id) => {
-    setPlanId(id); setErr("");
+    setPlanId(id); setErr(""); setPlanActuals({});
     if (!id) { setPlanName(""); setPlanWeek(""); setPlanGrid({}); setPlanDirty(false); return; }
     const p = plans.find(x=>x.id===id);
     setPlanName(p?.name||""); setPlanWeek(p?.weekStart||"");
-    try { const lines = await fetchPlanLines(id); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(false); }
-    catch (e) { setErr(e?.message||String(e)); }
+    try {
+      const lines = await fetchPlanLines(id); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(false);
+      fetchPlanActuals(id).then(setPlanActuals).catch(()=>{});
+    } catch (e) { setErr(e?.message||String(e)); }
   };
   const setCell = (productId, dow, qty) => { setPlanGrid(g => ({ ...g, [`${productId}:${dow}`]: qty })); setPlanDirty(true); };
-  const newPlan = async () => {
-    const name = window.prompt("Name this plan (e.g. 'Week of 16 Jun'):"); if (!name) return;
-    try { const p = await upsertProductionPlan({ siteId, name, weekStart: planWeek || null }); const fresh = await fetchProductionPlans(siteId); setPlans(fresh); setPlanId(p.id); setPlanName(p.name); setPlanGrid({}); setPlanDirty(false); }
+  const setWeekTotal = (productId, total) => {
+    // Distribute a week total evenly across 7 days (remainder on Mon).
+    const t = Number(total) || 0; const per = Math.floor(t/7); const rem = t - per*7;
+    setPlanGrid(g => { const n = { ...g }; for (let d=0;d<7;d++) n[`${productId}:${d}`] = per + (d===0?rem:0); return n; });
+    setPlanDirty(true);
+  };
+  const bumpWeek = (productId, delta) => { const cur = plannedByProduct[productId]||0; setWeekTotal(productId, Math.max(0, cur+delta)); };
+  const newPlan = async (asTemplate=false) => {
+    const name = window.prompt(asTemplate?"Name this template:":"Name this plan (e.g. 'Week of 16 Jun'):"); if (!name) return;
+    try { const p = await upsertProductionPlan({ siteId, name, weekStart: planWeek || null, isTemplate: asTemplate }); const fresh = await fetchProductionPlans(siteId); setPlans(fresh); refreshTemplates(); if (!asTemplate){ setPlanId(p.id); setPlanName(p.name); setPlanGrid({}); setPlanDirty(false); } }
     catch (e) { setErr(e?.message||String(e)); }
   };
   const savePlan = async () => {
@@ -3527,9 +3544,35 @@ function CentralKitchenView({ stores = [], currentUser }) {
     } catch (e) { setErr(e?.message||String(e)); }
     setPlanBusy(false);
   };
+  const saveAsTemplate = async () => {
+    const name = window.prompt("Save current plan as template named:"); if (!name) return;
+    try {
+      const t = await upsertProductionPlan({ siteId, name, isTemplate: true });
+      const lines = []; Object.entries(planGrid).forEach(([k,v]) => { const [productId, dow] = k.split(":"); if (Number(v)>0) lines.push({ productId, dow: Number(dow), qty: Number(v) }); });
+      await savePlanLines(t.id, lines); refreshTemplates();
+      alert(`Saved template "${name}".`);
+    } catch (e) { setErr(e?.message||String(e)); }
+  };
   const deletePlan = async () => {
     if (!planId || !window.confirm("Delete this plan?")) return;
     try { await archiveProductionPlan(planId); const fresh = await fetchProductionPlans(siteId); setPlans(fresh); loadPlan(""); }
+    catch (e) { setErr(e?.message||String(e)); }
+  };
+  // Smart start: fill the grid from history or a template (spread evenly).
+  const startFrom = async (source) => {
+    if (!planId) { setErr("Create or pick a plan first."); return; }
+    try {
+      if (source === "template-pick") return; // handled by dropdown below
+      let totals = {};
+      if (source === "production" || source === "dispatch") totals = await suggestPlanFromHistory(siteId, source);
+      const g = {};
+      Object.entries(totals).forEach(([pid, total]) => { const t=Number(total)||0; const per=Math.floor(t/7); const rem=t-per*7; for (let d=0;d<7;d++) g[`${pid}:${d}`] = per + (d===0?rem:0); });
+      setPlanGrid(g); setPlanDirty(true);
+    } catch (e) { setErr(e?.message||String(e)); }
+  };
+  const applyTemplate = async (templateId) => {
+    if (!templateId || !planId) return;
+    try { const lines = await fetchPlanLines(templateId); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(true); }
     catch (e) { setErr(e?.message||String(e)); }
   };
   // Weekly total per product from the grid
@@ -3538,14 +3581,37 @@ function CentralKitchenView({ stores = [], currentUser }) {
     Object.entries(planGrid).forEach(([k,v]) => { const [pid] = k.split(":"); m[pid] = (m[pid]||0) + (Number(v)||0); });
     return m;
   }, [planGrid]);
+  // Per-day load (minutes) from minutes_per_unit
+  const dayLoad = useMemo(() => {
+    const mins = Array(7).fill(0); const units = Array(7).fill(0);
+    Object.entries(planGrid).forEach(([k,v]) => {
+      const [pid, dow] = k.split(":"); const q = Number(v)||0; if (!q) return;
+      const prod = ckProducts.find(p=>String(p.id)===pid);
+      units[Number(dow)] += q;
+      mins[Number(dow)] += q * (prod?.minutesPerUnit || 0);
+    });
+    return { mins, units, maxMin: Math.max(1, ...mins) };
+  }, [planGrid, ckProducts]);
   const planEcon = useMemo(() => computePlanEconomics({ products: ckProducts, compsByProduct, preps: ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct }),
     [ckProducts, compsByProduct, ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct]);
-  // Turn a planned product (its weekly total) into a production run
+  // Shopping list grouped by supplier
+  const shoppingBySupplier = useMemo(() => {
+    const groups = {};
+    planEcon.requirements.filter(r=>r.toBuy>0).forEach(r => {
+      const ing = ingredients.find(i=>String(i.id)===String(r.ingredientId));
+      const sup = ing?.defaultSupplier || "Unassigned";
+      (groups[sup] = groups[sup] || { lines: [], cost: 0 }).lines.push(r);
+      groups[sup].cost += r.buyCost || 0;
+    });
+    return Object.entries(groups).map(([supplier, g]) => ({ supplier, lines: g.lines, cost: +g.cost.toFixed(2) })).sort((a,b)=>b.cost-a.cost);
+  }, [planEcon, ingredients]);
+  // Turn a planned product (its weekly total) into a production run, linked to the plan
   const planToRun = (productId) => {
     const p = ckProducts.find(x=>x.id===productId); const qty = plannedByProduct[productId];
     if (!p || !(qty>0)) return;
-    setRunProductId(String(productId)); setRunQty(String(qty)); setRunModal(true); setTab("production");
+    setRunProductId(String(productId)); setRunQty(String(qty)); setRunPlanId(planId); setRunModal(true); setTab("production");
   };
+
   // Live allergen preview while editing a product's recipe
   const editingDerived = useMemo(() => {
     const map = new Map(ingredients.map(i=>[String(i.id), i.allergens||[]]));
@@ -3563,6 +3629,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
   // Production runs
   const [runModal, setRunModal] = useState(false);
   const [runProductId, setRunProductId] = useState("");
+  const [runPlanId, setRunPlanId] = useState("");
   const [runQty, setRunQty] = useState("");
   const [runDate, setRunDate] = useState(()=>new Date().toISOString().slice(0,10));
   const [runUseBy, setRunUseBy] = useState("");
@@ -3577,7 +3644,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
   useEffect(() => {
     if (runProduct?.shelfLifeDays && runDate) { const d = new Date(runDate); d.setDate(d.getDate()+runProduct.shelfLifeDays); setRunUseBy(d.toISOString().slice(0,10)); }
   }, [runProductId, runDate, runProduct]);
-  const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunModal(true); setErr(""); };
+  const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunPlanId(""); setRunModal(true); setErr(""); };
   const shortfalls = (runAlloc||[]).filter(a => a.shortfall);
   const doCreateRun = async () => {
     if (!runProduct) { setErr("Pick a product."); return; }
@@ -3587,8 +3654,9 @@ function CentralKitchenView({ stores = [], currentUser }) {
       const al = productAllergens(runProduct);
       await createProductionRun({ siteId, product: runProduct, producedQty: Number(runQty),
         runDate, useByDate: runUseBy || null, allocations: runAlloc.filter(a=>!a.shortfall),
-        allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)], runBy: currentUser?.name });
-      setRunModal(false); load();
+        allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)], runBy: currentUser?.name,
+        planId: runPlanId || null });
+      setRunModal(false); setRunPlanId(""); load();
     } catch (e) { setErr(e?.message||String(e)); }
     setRunBusy(false);
   };
@@ -3833,16 +3901,17 @@ function CentralKitchenView({ stores = [], currentUser }) {
 
       {!loading && tab === "planner" && (
         <div className="space-y-4">
-          {/* Plan selector */}
+          {/* Plan toolbar */}
           <div className="flex items-center gap-2 flex-wrap">
             <select value={planId} onChange={e=>loadPlan(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white">
               <option value="">— select a plan —</option>
               {plans.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
-            <button onClick={newPlan} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New plan</button>
+            <button onClick={()=>newPlan(false)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New plan</button>
             {planId && <>
               <input type="date" value={planWeek||""} onChange={e=>{setPlanWeek(e.target.value);setPlanDirty(true);}} className="px-2 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white" title="Week starting"/>
-              <button onClick={savePlan} disabled={planBusy||!planDirty} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{planBusy?"Saving…":planDirty?"Save plan":"Saved"}</button>
+              <button onClick={savePlan} disabled={planBusy||!planDirty} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{planBusy?"Saving…":planDirty?"Save":"Saved"}</button>
+              <button onClick={saveAsTemplate} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold">Save as template</button>
               <button onClick={deletePlan} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-400 hover:text-red-400 text-sm font-semibold">Delete</button>
             </>}
           </div>
@@ -3850,70 +3919,165 @@ function CentralKitchenView({ stores = [], currentUser }) {
           {!planId ? <div className="text-xs text-slate-600">Select a plan or create a new one to start planning the week.</div> :
            !ckProducts.length ? <div className="text-xs text-slate-600">Create kitchen products first.</div> : (
             <>
-              {/* Weekly grid */}
-              <div className="overflow-x-auto border border-slate-800 rounded-xl">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-slate-900 text-slate-500">
-                      <th className="text-left px-3 py-2 font-semibold sticky left-0 bg-slate-900">Product</th>
-                      {DOW.map(d=><th key={d} className="px-2 py-2 font-semibold w-16">{d}</th>)}
-                      <th className="px-3 py-2 font-semibold">Week</th>
-                      <th className="px-3 py-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ckProducts.map(p => {
-                      const wk = plannedByProduct[p.id] || 0;
+              {/* Smart start */}
+              <div className="flex items-center gap-2 flex-wrap bg-slate-900/50 border border-slate-800 rounded-xl px-3 py-2">
+                <span className="text-[11px] text-slate-500 font-semibold">Start from:</span>
+                <button onClick={()=>startFrom("production")} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold">Last week's production</button>
+                <button onClick={()=>startFrom("dispatch")} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold">Last week's dispatches</button>
+                {templates.length>0 && (
+                  <select onChange={e=>{ applyTemplate(e.target.value); e.target.value=""; }} defaultValue="" className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-[11px] text-slate-200">
+                    <option value="">From template…</option>
+                    {templates.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                )}
+                <button onClick={()=>{ setPlanGrid({}); setPlanDirty(true); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-[11px] font-semibold">Clear</button>
+              </div>
+
+              {/* Day capacity bars */}
+              <div>
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Daily load {dayLoad.mins.some(m=>m>0) ? "(prep minutes)" : "(units)"}</div>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {DOW.map((d,i)=>{
+                    const useMin = dayLoad.mins.some(m=>m>0);
+                    const val = useMin ? dayLoad.mins[i] : dayLoad.units[i];
+                    const max = useMin ? dayLoad.maxMin : Math.max(1, ...dayLoad.units);
+                    const pct = Math.round((val/max)*100);
+                    const hot = pct >= 85;
+                    return (
+                      <div key={d} className="text-center">
+                        <div className="h-20 bg-slate-900 border border-slate-800 rounded-lg flex flex-col justify-end overflow-hidden">
+                          <div className={`${hot?"bg-amber-500/60":"bg-indigo-500/50"}`} style={{height:`${pct}%`}}/>
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">{d}</div>
+                        <div className="text-[10px] text-slate-400">{useMin ? (val>=60?`${(val/60).toFixed(1)}h`:`${Math.round(val)}m`) : Math.round(val)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Sub-view tabs */}
+              <div className="flex gap-1 border-b border-slate-800">
+                {[["plan","Plan"],["shopping","Shopping list"],["charts","Charts"],["actual","Plan vs actual"]].map(([k,l])=>(
+                  <button key={k} onClick={()=>setPlanView(k)} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${planView===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
+                ))}
+              </div>
+
+              {/* Cost strip (always visible) */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredient cost</div><div className="text-xl font-black text-white">{money(planEcon.totalCost)}</div></div>
+                <div className={`rounded-xl p-3 border ${planEcon.buyCost>0?"bg-amber-950/30 border-amber-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Still to buy</div><div className={`text-xl font-black ${planEcon.buyCost>0?"text-amber-300":"text-white"}`}>{money(planEcon.buyCost)}</div></div>
+              </div>
+
+              {planView === "plan" && (
+                <div className="space-y-2">
+                  {ckProducts.map(p => {
+                    const wk = plannedByProduct[p.id]||0; const exp = expandedProd[p.id];
+                    return (
+                      <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                        <div className="flex items-center gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-semibold text-slate-200">{p.name} <span className="text-[11px] text-slate-600 font-normal">{p.outputUnit}{p.minutesPerUnit?` · ${p.minutesPerUnit}m/unit`:""}</span></div>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button onClick={()=>bumpWeek(p.id,-Math.max(1,Math.round((wk||7)/7)))} className="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 font-bold">−</button>
+                            <input type="number" value={wk||""} onChange={e=>setWeekTotal(p.id, e.target.value)} placeholder="0" className="w-16 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white text-center"/>
+                            <button onClick={()=>bumpWeek(p.id, Math.max(1,Math.round((wk||7)/7)))} className="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 font-bold">+</button>
+                            <button onClick={()=>setExpandedProd(s=>({...s,[p.id]:!s[p.id]}))} className="ml-1 text-slate-500 hover:text-white"><ChevronRight size={15} className={`transition-transform ${exp?"rotate-90":""}`}/></button>
+                            {wk>0 && <button onClick={()=>planToRun(p.id)} className="text-[10px] px-2 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 font-semibold whitespace-nowrap">→ Run</button>}
+                          </div>
+                        </div>
+                        {exp && (
+                          <div className="grid grid-cols-7 gap-1.5 mt-2 pt-2 border-t border-slate-800/60">
+                            {DOW.map((d,dow)=>(
+                              <div key={dow} className="text-center">
+                                <div className="text-[9px] text-slate-600 uppercase">{d}</div>
+                                <input type="number" value={planGrid[`${p.id}:${dow}`]||""} onChange={e=>setCell(p.id,dow,e.target.value)} className="w-full px-1 py-1 bg-slate-950 border border-slate-800 rounded text-xs text-white text-center mt-0.5"/>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {planView === "shopping" && (
+                <div className="space-y-3">
+                  {shoppingBySupplier.length === 0 ? <div className="text-xs text-slate-600">Nothing to buy — stock covers this plan, or no quantities entered.</div> : shoppingBySupplier.map(g => (
+                    <div key={g.supplier} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="text-sm font-bold text-slate-200">{g.supplier}</div>
+                        <div className="text-sm font-bold text-amber-300">{money(g.cost)}</div>
+                      </div>
+                      <div className="space-y-1">
+                        {g.lines.map(r=>(
+                          <div key={r.ingredientId} className="flex items-center justify-between text-[11px]">
+                            <span className="text-slate-300">{r.name}</span>
+                            <span className="text-slate-400">{r.toBuy} {r.unit}{r.buyCost!=null?` · ${money(r.buyCost)}`:""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {planView === "charts" && (
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Output by day (units)</div>
+                    <div className="flex items-end gap-2 h-32 bg-slate-900 border border-slate-800 rounded-xl p-3">
+                      {DOW.map((d,i)=>{ const v=dayLoad.units[i]; const max=Math.max(1,...dayLoad.units); return (
+                        <div key={d} className="flex-1 flex flex-col items-center justify-end h-full gap-1">
+                          <div className="text-[10px] text-slate-400">{v||""}</div>
+                          <div className="w-full bg-indigo-500/50 rounded-t" style={{height:`${(v/max)*100}%`}}/>
+                          <div className="text-[10px] text-slate-500">{d}</div>
+                        </div>
+                      ); })}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Cost by product</div>
+                    <div className="space-y-1.5">
+                      {planEcon.perProduct.length===0 ? <div className="text-xs text-slate-600">No planned products.</div> :
+                        planEcon.perProduct.slice().sort((a,b)=>b.cost-a.cost).map(pp=>{ const max=Math.max(1,...planEcon.perProduct.map(x=>x.cost)); return (
+                          <div key={pp.productId} className="flex items-center gap-2">
+                            <div className="w-28 text-[11px] text-slate-300 truncate">{pp.name}</div>
+                            <div className="flex-1 h-5 bg-slate-900 rounded overflow-hidden"><div className="h-full bg-emerald-500/50" style={{width:`${(pp.cost/max)*100}%`}}/></div>
+                            <div className="w-16 text-right text-[11px] text-slate-400">{money(pp.cost)}</div>
+                          </div>
+                        ); })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {planView === "actual" && (
+                <div className="space-y-2">
+                  <div className="text-[11px] text-slate-500">Actual = production runs recorded against this plan (use “→ Run” so they link).</div>
+                  {ckProducts.filter(p=>(plannedByProduct[p.id]||0)>0 || (planActuals[p.id]||0)>0).length===0 ? <div className="text-xs text-slate-600">No planned or produced items yet.</div> :
+                    ckProducts.filter(p=>(plannedByProduct[p.id]||0)>0 || (planActuals[p.id]||0)>0).map(p=>{
+                      const planned = plannedByProduct[p.id]||0; const actual = planActuals[p.id]||0;
+                      const pct = planned>0 ? Math.round((actual/planned)*100) : (actual>0?100:0);
                       return (
-                        <tr key={p.id} className="border-t border-slate-800/60">
-                          <td className="px-3 py-1.5 text-slate-200 sticky left-0 bg-slate-950 whitespace-nowrap">{p.name} <span className="text-slate-600">{p.outputUnit}</span></td>
-                          {DOW.map((d,dow)=>(
-                            <td key={dow} className="px-1 py-1">
-                              <input type="number" value={planGrid[`${p.id}:${dow}`]||""} onChange={e=>setCell(p.id, dow, e.target.value)} className="w-14 px-1.5 py-1 bg-slate-900 border border-slate-800 rounded text-xs text-white text-center focus:border-indigo-500"/>
-                            </td>
-                          ))}
-                          <td className="px-3 py-1.5 text-center font-bold text-white">{wk||"—"}</td>
-                          <td className="px-2 py-1.5">{wk>0 && <button onClick={()=>planToRun(p.id)} className="text-[10px] px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-300 font-semibold whitespace-nowrap" title="Create a production run for the weekly total">→ Run</button>}</td>
-                        </tr>
+                        <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-200 font-semibold">{p.name}</span>
+                            <span className={`${pct>=100?"text-emerald-300":pct>=70?"text-slate-300":"text-amber-300"}`}>{actual} / {planned} {p.outputUnit} · {pct}%</span>
+                          </div>
+                          <div className="h-2 bg-slate-950 rounded mt-1.5 overflow-hidden"><div className={`h-full ${pct>=100?"bg-emerald-500/60":"bg-indigo-500/50"}`} style={{width:`${Math.min(100,pct)}%`}}/></div>
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Economics summary */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredient cost (plan)</div><div className="text-2xl font-black text-white">{money(planEcon.totalCost)}</div></div>
-                <div className={`rounded-xl p-3 border ${planEcon.buyCost>0?"bg-amber-950/30 border-amber-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Still to buy</div><div className={`text-2xl font-black ${planEcon.buyCost>0?"text-amber-300":"text-white"}`}>{money(planEcon.buyCost)}</div></div>
-              </div>
-              <div className="text-[10px] text-slate-600">Ingredient cost only — excludes labour, utilities, packaging and overheads.</div>
-
-              {/* Ingredient requirements vs stock */}
-              <div>
-                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Ingredients needed for this plan</div>
-                {planEcon.requirements.length === 0 ? <div className="text-xs text-slate-600">Enter planned quantities to see requirements.</div> : (
-                  <div className="overflow-x-auto border border-slate-800 rounded-xl">
-                    <table className="w-full text-xs">
-                      <thead><tr className="bg-slate-900 text-slate-500"><th className="text-left px-3 py-2">Ingredient</th><th className="px-2 py-2">Needed</th><th className="px-2 py-2">In stock</th><th className="px-2 py-2">To buy</th><th className="px-2 py-2">Buy cost</th></tr></thead>
-                      <tbody>
-                        {planEcon.requirements.map(r => (
-                          <tr key={r.ingredientId} className={`border-t border-slate-800/60 ${r.toBuy>0?"":"opacity-60"}`}>
-                            <td className="px-3 py-1.5 text-slate-200">{r.name}</td>
-                            <td className="px-2 py-1.5 text-center text-slate-300">{r.needed} {r.unit}</td>
-                            <td className="px-2 py-1.5 text-center text-slate-400">{r.inStock} {r.unit}</td>
-                            <td className={`px-2 py-1.5 text-center font-semibold ${r.toBuy>0?"text-amber-300":"text-emerald-400"}`}>{r.toBuy>0?`${r.toBuy} ${r.unit}`:"✓"}</td>
-                            <td className="px-2 py-1.5 text-center text-slate-300">{r.buyCost!=null?money(r.buyCost):"—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
             </>
           )}
         </div>
       )}
+
 
       {!loading && tab === "production" && (
         <div className="space-y-3">
@@ -4189,10 +4353,13 @@ function CentralKitchenView({ stores = [], currentUser }) {
           </>}>
           <div className="space-y-3">
             <div><label className={labelCls}>Name *</label><input value={prodForm.name||""} onChange={e=>setProdForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Brownie batter" className={inputCls}/></div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Makes (yield)</label><input type="number" value={prodForm.yieldQty??""} onChange={e=>setProdForm(f=>({...f,yieldQty:e.target.value}))} className={inputCls}/></div>
               <div><label className={labelCls}>Output unit</label><select value={prodForm.outputUnit||"each"} onChange={e=>setProdForm(f=>({...f,outputUnit:e.target.value}))} className={inputCls}>{["each","kg","g","L","ml","tray","batch"].map(u=><option key={u} value={u}>{u}</option>)}</select></div>
-              <div><label className={labelCls}>Shelf life (d)</label><input type="number" value={prodForm.shelfLifeDays??""} onChange={e=>setProdForm(f=>({...f,shelfLifeDays:e.target.value}))} className={inputCls}/></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Shelf life (days)</label><input type="number" value={prodForm.shelfLifeDays??""} onChange={e=>setProdForm(f=>({...f,shelfLifeDays:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Minutes per unit</label><input type="number" value={prodForm.minutesPerUnit??""} onChange={e=>setProdForm(f=>({...f,minutesPerUnit:e.target.value}))} placeholder="prep time" className={inputCls}/></div>
             </div>
 
             {/* Recipe: kitchen ingredients + preps */}

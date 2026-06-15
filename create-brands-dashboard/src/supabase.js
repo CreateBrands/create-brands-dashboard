@@ -5740,6 +5740,7 @@ const mapCkProduct = (p) => ({
   id: p.id, siteId: p.site_id || null, name: p.name, category: p.category || "",
   outputUnit: p.output_unit || "each", yieldQty: p.yield_qty != null ? Number(p.yield_qty) : null,
   shelfLifeDays: p.shelf_life_days != null ? Number(p.shelf_life_days) : null,
+  minutesPerUnit: p.minutes_per_unit != null ? Number(p.minutes_per_unit) : null,
   mayContainAllergens: p.may_contain_allergens || [], note: p.note || "",
   archivedAt: p.archived_at || null,
 });
@@ -5770,6 +5771,7 @@ export async function upsertCkProduct(p) {
     site_id: p.siteId || null, name: p.name, category: p.category || null,
     output_unit: p.outputUnit || "each", yield_qty: p.yieldQty === "" || p.yieldQty == null ? null : Number(p.yieldQty),
     shelf_life_days: p.shelfLifeDays === "" || p.shelfLifeDays == null ? null : Number(p.shelfLifeDays),
+    minutes_per_unit: p.minutesPerUnit === "" || p.minutesPerUnit == null ? null : Number(p.minutesPerUnit),
     may_contain_allergens: p.mayContainAllergens || [], note: p.note || null,
     updated_at: new Date().toISOString(),
   };
@@ -5938,7 +5940,7 @@ export function planRunConsumption({ product, components, preps = [], prepCompsB
 // Create a production run: writes the run, the consumption rows, and decrements
 // goods-in qty_remaining for each allocated batch. `allocations` is the final
 // (possibly overridden) list from planRunConsumption.
-export async function createProductionRun({ siteId, product, producedQty, runDate, useByDate, allocations, allergens, note, runBy }) {
+export async function createProductionRun({ siteId, product, producedQty, runDate, useByDate, allocations, allergens, note, runBy, planId, planLineId }) {
   const batchCode = `${(product.name||"PRD").replace(/[^A-Za-z0-9]/g,"").slice(0,6).toUpperCase()}-${(runDate||new Date().toISOString().slice(0,10)).replace(/-/g,"")}-${Math.random().toString(36).slice(2,5).toUpperCase()}`;
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
   const { error: rErr } = await supabase.from("ck_production_runs").insert({
@@ -5946,7 +5948,7 @@ export async function createProductionRun({ siteId, product, producedQty, runDat
     produced_qty: producedQty, output_unit: product.outputUnit || null,
     run_date: runDate || new Date().toISOString().slice(0,10), use_by_date: useByDate || null,
     finished_batch_no: batchCode, allergens: allergens || [], status: "completed",
-    note: note || null, run_by: runBy || null,
+    note: note || null, run_by: runBy || null, plan_id: planId || null, plan_line_id: planLineId || null,
   });
   if (rErr) throw rErr;
 
@@ -6097,15 +6099,15 @@ export async function fetchDistributionStock(siteId) {
 // ============================================================================
 const mapPlan = (p) => ({
   id: p.id, siteId: p.site_id || null, name: p.name, weekStart: p.week_start || null,
-  note: p.note || "", archivedAt: p.archived_at || null, createdAt: p.created_at,
+  note: p.note || "", isTemplate: !!p.is_template, archivedAt: p.archived_at || null, createdAt: p.created_at,
 });
 const mapPlanLine = (l) => ({
   id: l.id, planId: l.plan_id, productId: l.product_id, dow: l.dow, qty: Number(l.qty) || 0,
   producedRunId: l.produced_run_id || null,
 });
 
-export async function fetchProductionPlans(siteId) {
-  let q = supabase.from("ck_production_plans").select("*").is("archived_at", null).order("week_start", { ascending: false });
+export async function fetchProductionPlans(siteId, { templates = false } = {}) {
+  let q = supabase.from("ck_production_plans").select("*").is("archived_at", null).eq("is_template", templates).order("week_start", { ascending: false });
   if (siteId) q = q.eq("site_id", siteId);
   const { data, error } = await q;
   if (error) throw error;
@@ -6120,6 +6122,7 @@ export async function fetchPlanLines(planId) {
 
 export async function upsertProductionPlan(p) {
   const row = { site_id: p.siteId || null, name: p.name, week_start: p.weekStart || null, note: p.note || null, updated_at: new Date().toISOString() };
+  if ("isTemplate" in p) row.is_template = !!p.isTemplate;
   if (p.id) {
     const { data, error } = await supabase.from("ck_production_plans").update(row).eq("id", p.id).select().maybeSingle();
     if (error) throw error;
@@ -6202,4 +6205,40 @@ export function computePlanEconomics({ products, compsByProduct, preps, prepComp
 
   const buyCost = requirements.reduce((s,r)=> s + (r.buyCost || 0), 0);
   return { totalCost: +totalCost.toFixed(2), buyCost: +buyCost.toFixed(2), perProduct, requirements };
+}
+
+// ── Planner: suggestions + planned-vs-actual ─────────────────────────────────
+
+// Suggest weekly per-product totals from history. source: 'production' uses
+// production runs in the last 7 days; 'dispatch' uses dispatch lines. Returns
+// map productId -> suggested weekly qty.
+export async function suggestPlanFromHistory(siteId, source = "production") {
+  const since = new Date(); since.setDate(since.getDate() - 7);
+  const sinceStr = since.toISOString().slice(0,10);
+  const m = {};
+  if (source === "dispatch") {
+    const { data: disp } = await supabase.from("ck_dispatches").select("id").gte("sent_date", sinceStr).neq("status","cancelled");
+    const ids = (disp||[]).map(d=>d.id);
+    if (ids.length) {
+      const { data: lines } = await supabase.from("ck_dispatch_lines").select("product_id, qty_sent").in("dispatch_id", ids);
+      (lines||[]).forEach(l => { if (l.product_id) m[l.product_id] = (m[l.product_id]||0) + (Number(l.qty_sent)||0); });
+    }
+  } else {
+    let q = supabase.from("ck_production_runs").select("product_id, produced_qty, run_date").gte("run_date", sinceStr).neq("status","cancelled");
+    if (siteId) q = q.eq("site_id", siteId);
+    const { data: rns } = await q;
+    (rns||[]).forEach(r => { if (r.product_id) m[r.product_id] = (m[r.product_id]||0) + (Number(r.produced_qty)||0); });
+  }
+  return m;
+}
+
+// Planned vs actual for a plan: actual = production runs linked to this plan.
+// Returns map productId -> actual produced qty.
+export async function fetchPlanActuals(planId) {
+  if (!planId) return {};
+  const { data, error } = await supabase.from("ck_production_runs").select("product_id, produced_qty").eq("plan_id", planId).neq("status","cancelled");
+  if (error) throw error;
+  const m = {};
+  (data||[]).forEach(r => { if (r.product_id) m[r.product_id] = (m[r.product_id]||0) + (Number(r.produced_qty)||0); });
+  return m;
 }
