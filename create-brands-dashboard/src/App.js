@@ -2100,6 +2100,32 @@ function PayslipsSection({ employeeId, currentUser, canUpload = false }) {
   }, [employeeId]);
   useEffect(() => { load(); }, [load]);
 
+  // Group payslips by month so each pay period stays separate. Sort key is the
+  // pay date when present, else parsed from the period label; newest month first.
+  const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+  const monthKey = (s) => {
+    if (s.payDate) return String(s.payDate).slice(0, 7);            // "2026-05"
+    const lbl = (s.payPeriodLabel || "").toLowerCase();
+    const ym = lbl.match(/(\d{4})[-/\s](\d{1,2})/);                  // "2026-05"
+    if (ym) return `${ym[1]}-${String(ym[2]).padStart(2,"0")}`;
+    const mn = lbl.match(/([a-z]+)[-\s]*(\d{4})/);                   // "may 2026" / "may-2026"
+    if (mn) { const i = MONTHS.findIndex(m => m.startsWith(mn[1].slice(0,3))); if (i>=0) return `${mn[2]}-${String(i+1).padStart(2,"0")}`; }
+    return "0000-00"; // undated → bottom
+  };
+  const monthLabel = (key) => {
+    if (key === "0000-00") return "Undated";
+    const [y, m] = key.split("-");
+    const i = parseInt(m,10) - 1;
+    return `${MONTHS[i] ? MONTHS[i][0].toUpperCase()+MONTHS[i].slice(1) : m} ${y}`;
+  };
+  const groups = useMemo(() => {
+    const by = {};
+    slips.forEach(s => { const k = monthKey(s); (by[k] = by[k] || []).push(s); });
+    return Object.keys(by).sort((a,b)=> b.localeCompare(a)).map(k => ({ key: k, label: monthLabel(k), slips: by[k] }));
+  }, [slips]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [collapsed, setCollapsed] = useState({});
+  const toggleMonth = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+
   const reset = () => { setFile(null); setPeriod(""); setPayDate(""); setGross(""); setNet(""); setTax(""); setNi(""); setErr(""); };
 
   const submit = async () => {
@@ -2154,23 +2180,41 @@ function PayslipsSection({ employeeId, currentUser, canUpload = false }) {
       {slips.length === 0 ? (
         <div className="text-xs text-slate-600">{canUpload ? "No payslips yet. Add one above." : "No payslips available yet."}</div>
       ) : (
-        <div className="space-y-2">
-          {slips.map(s => (
-            <div key={s.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-slate-200">{s.payPeriodLabel || s.fileName || "Payslip"}</div>
-                <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
-                  {s.payDate && <span>{s.payDate}</span>}
-                  {s.grossPay != null && <span>Gross {money(s.grossPay)}</span>}
-                  {s.netPay   != null && <span>Net {money(s.netPay)}</span>}
-                </div>
+        <div className="space-y-3">
+          {groups.map((g, gi) => {
+            const isCollapsed = collapsed[g.key] ?? (gi > 0); // newest month open, rest closed
+            return (
+              <div key={g.key}>
+                <button onClick={()=>toggleMonth(g.key)} className="w-full flex items-center justify-between gap-2 px-1 py-1.5 text-left group">
+                  <span className="flex items-center gap-2">
+                    <ChevronRight size={14} className={`text-slate-500 transition-transform ${isCollapsed?"":"rotate-90"}`}/>
+                    <span className="text-xs font-bold text-slate-300 uppercase tracking-widest">{g.label}</span>
+                    <span className="text-[10px] text-slate-600">· {g.slips.length}</span>
+                  </span>
+                </button>
+                {!isCollapsed && (
+                  <div className="space-y-2 mt-1">
+                    {g.slips.map(s => (
+                      <div key={s.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-200">{s.payPeriodLabel || s.fileName || "Payslip"}</div>
+                          <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
+                            {s.payDate && <span>{s.payDate}</span>}
+                            {s.grossPay != null && <span>Gross {money(s.grossPay)}</span>}
+                            {s.netPay   != null && <span>Net {money(s.netPay)}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <a href={s.fileUrl} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">View</a>
+                          {canUpload && <button onClick={()=>remove(s)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <a href={s.fileUrl} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700">View</a>
-                {canUpload && <button onClick={()=>remove(s)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
