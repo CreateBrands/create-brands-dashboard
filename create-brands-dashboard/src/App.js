@@ -3439,6 +3439,11 @@ function CentralKitchenView({ stores = [], currentUser }) {
   // Dispatch (Kitchen → Distribution), two-step
   const runRemaining = (r) => Math.max(0, (r.producedQty || 0) - (dispatchedByRun[r.id] || 0));
   const dispatchableRuns = runs.filter(r => runRemaining(r) > 0.00001);
+  // Finished goods held at the kitchen = each run's produced minus dispatched.
+  const finishedGoods = runs.map(r => ({ ...r, dispatched: dispatchedByRun[r.id] || 0, onHand: runRemaining(r) }));
+  const finishedOnHand = finishedGoods.filter(f => f.onHand > 0.00001);
+  const fgSoon = new Date(); fgSoon.setDate(fgSoon.getDate() + 3);
+  const fgExpiring = finishedOnHand.filter(f => f.useByDate && new Date(f.useByDate) <= fgSoon);
   const [dispModal, setDispModal] = useState(false);
   const [dispDest, setDispDest] = useState("");
   const [dispDate, setDispDate] = useState(()=>new Date().toISOString().slice(0,10));
@@ -3446,6 +3451,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [dispBusy, setDispBusy] = useState(false);
   const openDisp = () => { setDispDest(distributionSites[0]?.id || ""); setDispDate(new Date().toISOString().slice(0,10)); setDispLines(dispatchableRuns.map(r=>({ runId:r.id, qty:"" }))); setDispModal(true); setErr(""); };
   const setDispQty = (runId, qty) => setDispLines(ls => ls.map(l => l.runId===runId ? {...l, qty} : l));
+  const removeDispLine = (runId) => setDispLines(ls => ls.filter(l => l.runId !== runId));
+  const addDispLine = (runId) => { if (runId && !dispLines.some(l=>l.runId===runId)) setDispLines(ls => [...ls, { runId, qty:"" }]); };
   const doCreateDisp = async () => {
     const dest = distributionSites.find(s=>s.id===dispDest);
     if (!dest) { setErr("Pick a distribution destination."); return; }
@@ -3512,7 +3519,7 @@ function CentralKitchenView({ stores = [], currentUser }) {
       </div>
 
       <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"],["products","Products"],["production","Production"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
+        {[["stock","Stock"],["goods","Goods in log"],["products","Products"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -3661,6 +3668,51 @@ function CentralKitchenView({ stores = [], currentUser }) {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "finished" && (
+        <div className="space-y-3">
+          {fgExpiring.length > 0 && (
+            <div className="text-xs text-red-300 bg-red-950/30 border border-red-500/30 rounded-xl px-3 py-2">
+              {fgExpiring.length} finished batch{fgExpiring.length!==1?"es":""} expiring within 3 days — dispatch or use soon.
+            </div>
+          )}
+          {finishedOnHand.length === 0 ? <div className="text-xs text-slate-600">No finished goods on hand. Record a production run first.</div> : (
+            <div className="space-y-2">
+              {finishedOnHand.map(f => {
+                const expiringSoon = f.useByDate && new Date(f.useByDate) <= fgSoon;
+                const expired = f.useByDate && new Date(f.useByDate) < new Date(new Date().toISOString().slice(0,10));
+                return (
+                  <div key={f.id} className={`bg-slate-900 border rounded-xl p-3 ${expired?"border-red-500/40":expiringSoon?"border-amber-500/30":"border-slate-800"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-200 flex items-center gap-2 flex-wrap">
+                          {f.productName}
+                          <span className="text-indigo-300 text-[11px]">{f.finishedBatchNo}</span>
+                          {expired ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-600/30 text-red-200 uppercase">expired</span>
+                            : expiringSoon ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">use soon</span> : null}
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex flex-wrap gap-2 mt-0.5">
+                          <span>made {f.runDate}</span>
+                          {f.useByDate && <span>· use by {f.useByDate}</span>}
+                          {(f.allergens||[]).length>0 && <span className="text-red-400/80">· {f.allergens.join(", ")}</span>}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-sm font-bold text-white">{f.onHand} {f.outputUnit}</div>
+                        <div className="text-[10px] text-slate-600">on hand</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-3 text-[10px] text-slate-600 mt-1.5 pt-1.5 border-t border-slate-800/60">
+                      <span>produced {f.producedQty} {f.outputUnit}</span>
+                      <span>· dispatched {f.dispatched} {f.outputUnit}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -3951,18 +4003,30 @@ function CentralKitchenView({ stores = [], currentUser }) {
             </div>
             <div>
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">Finished batches to send</div>
-              <div className="space-y-1.5">
-                {dispatchableRuns.map(r => { const line = dispLines.find(l=>l.runId===r.id); return (
-                  <div key={r.id} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs text-slate-200 truncate">{r.productName} <span className="text-indigo-300">· {r.finishedBatchNo}</span></div>
-                      <div className="text-[10px] text-slate-500">{runRemaining(r)} {r.outputUnit} available{r.useByDate?` · use by ${r.useByDate}`:""}</div>
+              {dispLines.length === 0 ? <div className="text-[11px] text-slate-600">No batches selected — add one below.</div> : (
+                <div className="space-y-1.5">
+                  {dispLines.map(line => { const r = dispatchableRuns.find(x=>x.id===line.runId); if (!r) return null; return (
+                    <div key={r.id} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs text-slate-200 truncate">{r.productName} <span className="text-indigo-300">· {r.finishedBatchNo}</span></div>
+                        <div className="text-[10px] text-slate-500">{runRemaining(r)} {r.outputUnit} available{r.useByDate?` · use by ${r.useByDate}`:""}</div>
+                      </div>
+                      <input type="number" value={line?.qty||""} onChange={e=>setDispQty(r.id, e.target.value)} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                      <span className="text-[11px] text-slate-500 w-8">{r.outputUnit}</span>
+                      <button onClick={()=>removeDispLine(r.id)} className="text-slate-600 hover:text-red-400" title="Remove from dispatch"><X size={14}/></button>
                     </div>
-                    <input type="number" value={line?.qty||""} onChange={e=>setDispQty(r.id, e.target.value)} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
-                    <span className="text-[11px] text-slate-500 w-8">{r.outputUnit}</span>
-                  </div>
-                ); })}
-              </div>
+                  ); })}
+                </div>
+              )}
+              {/* Add a batch that was removed / not yet included */}
+              {dispatchableRuns.some(r => !dispLines.some(l=>l.runId===r.id)) && (
+                <select value="" onChange={e=>{ addDispLine(e.target.value); e.target.value=""; }} className="mt-2 w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-300">
+                  <option value="">+ Add a batch…</option>
+                  {dispatchableRuns.filter(r => !dispLines.some(l=>l.runId===r.id)).map(r => (
+                    <option key={r.id} value={r.id}>{r.productName} · {r.finishedBatchNo} ({runRemaining(r)} {r.outputUnit})</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div className="text-[11px] text-slate-600">Distribution will confirm received quantities — any discrepancy is captured there.</div>
             {err && <div className="text-xs text-red-400">{err}</div>}
