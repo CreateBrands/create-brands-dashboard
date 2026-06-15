@@ -32915,7 +32915,7 @@ export default function App() {
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
-      { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
+      { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"] },
       { key: "payslip-inbox", label: "Payslips Inbox", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
