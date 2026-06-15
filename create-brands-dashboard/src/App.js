@@ -6783,6 +6783,18 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // their ops_team record lists. TodaysTasks needs this to scope assignments —
   // without it, nothing shows (every store-scoped assignment fails the filter).
   const myOpsMember = (opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+  // Soft prompt: nudge staff with no profile photo to add one (skippable).
+  const [photoPromptDismissed, setPhotoPromptDismissed] = useState(false);
+  const [photoUploadBusy, setPhotoUploadBusy] = useState(false);
+  const [photoUploadErr, setPhotoUploadErr] = useState("");
+  const needsPhoto = myOpsMember && !myOpsMember.photoUrl;
+  const onUploadMyPhoto = async (file) => {
+    if (!file || !myOpsMember) return;
+    setPhotoUploadBusy(true); setPhotoUploadErr("");
+    try { const { url } = await uploadApplicantPhoto(file); await updateOpsTeamMember(myOpsMember.id, { photoUrl: url }); myOpsMember.photoUrl = url; setPhotoPromptDismissed(true); }
+    catch (e) { setPhotoUploadErr(e?.message || "Could not upload photo."); }
+    finally { setPhotoUploadBusy(false); }
+  };
   // FIX_STAFF_STORE_SCOPE_V1: previously ANY user whose brand matched a store
   // saw EVERY store in that brand (e.g. a single-store till operator saw all 23
   // Chocoberry shops). Now: HQ/owner see the whole brand; everyone else is
@@ -7022,6 +7034,24 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <NotificationBell recipientType="ops" recipientId={currentUser.opsTeamMemberId || currentUser.id} panelClass="top-full right-0 mt-2" onNavigate={setActiveView}/>
           </div>
         </header>
+
+        {/* Soft prompt: add a profile photo (skippable) */}
+        {needsPhoto && !photoPromptDismissed && (
+          <div className="bg-indigo-950/40 border-b border-indigo-500/30 px-4 py-3">
+            <div className="flex items-center gap-3 max-w-3xl mx-auto">
+              <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center flex-shrink-0 text-slate-500">📷</div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-white">Add your profile photo</div>
+                <div className="text-[11px] text-slate-400">Please upload a clear photo of yourself for your staff profile.{photoUploadErr?` — ${photoUploadErr}`:""}</div>
+              </div>
+              <label className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0 cursor-pointer ${photoUploadBusy?"bg-slate-700 text-slate-400":"bg-indigo-600 hover:bg-indigo-500 text-white"}`}>
+                {photoUploadBusy ? "Uploading…" : "Upload photo"}
+                <input type="file" accept="image/jpeg,image/png,image/webp" disabled={photoUploadBusy} onChange={e=>onUploadMyPhoto(e.target.files?.[0])} className="hidden"/>
+              </label>
+              <button onClick={()=>setPhotoPromptDismissed(true)} className="text-slate-500 hover:text-slate-300 text-xs font-semibold flex-shrink-0">Later</button>
+            </div>
+          </div>
+        )}
 
         {/* Content (bottom padding clears the fixed bottom nav + iPhone safe area) */}
         <main className="flex-1 overflow-auto p-4 lg:p-6" style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}>
@@ -22198,6 +22228,7 @@ function OpsTeamView({
   const [filterDept, setFilterDept] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [showOnlyPending, setShowOnlyPending] = useState(false);
+  const [showNoPhoto, setShowNoPhoto] = useState(false);
 
   const isHq = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
 
@@ -22226,6 +22257,7 @@ function OpsTeamView({
     const q = search.trim().toLowerCase();
     return base.filter(m => {
       if (showOnlyPending && m.status !== "pending_setup") return false;
+      if (showNoPhoto && m.photoUrl) return false;
       const { roleLabel, deptLabel, storeIds, roleIds } = memberMeta(m);
       if (filterStore && !storeIds.includes(filterStore)) return false;
       if (filterDept && (m.departmentId || "") !== filterDept && deptLabel !== filterDept) return false;
@@ -22236,7 +22268,7 @@ function OpsTeamView({
       }
       return true;
     });
-  }, [base, search, filterStore, filterDept, filterRole, showOnlyPending, storeRoles, storeDepartments]);
+  }, [base, search, filterStore, filterDept, filterRole, showOnlyPending, showNoPhoto, storeRoles, storeDepartments]);
 
   // Group filtered members by their primary store (first storeId). Members with
   // no store go in an "Unassigned" group at the end.
@@ -22261,7 +22293,8 @@ function OpsTeamView({
   const roleOpts = useMemo(() => storeRoles.filter(r => !r.archivedAt), [storeRoles]);
 
   const selCls = "px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
-  const anyFilter = search || filterStore || filterDept || filterRole || showOnlyPending;
+  const anyFilter = search || filterStore || filterDept || filterRole || showOnlyPending || showNoPhoto;
+  const noPhotoCount = useMemo(() => (base || []).filter(m => !m.photoUrl).length, [base]);
 
   return (
     <div className="space-y-5">
@@ -22289,6 +22322,7 @@ function OpsTeamView({
           {roleOpts.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select>
         <button onClick={() => setShowOnlyPending(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showOnlyPending ? "bg-amber-700 text-amber-100" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showOnlyPending ? "Showing pending" : "Pending only"}</button>
+        <button onClick={() => setShowNoPhoto(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showNoPhoto ? "bg-indigo-700 text-indigo-100" : "bg-slate-900 text-indigo-300 border border-indigo-900/60 hover:bg-indigo-950/40"}`}>{showNoPhoto ? "Showing no photo" : `No photo${noPhotoCount?` (${noPhotoCount})`:""}`}</button>
         {anyFilter && <button onClick={() => { setSearch(""); setFilterStore(""); setFilterDept(""); setFilterRole(""); setShowOnlyPending(false); }} className="px-3 py-2 rounded-xl text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">Clear</button>}
       </div>
 
@@ -22311,7 +22345,7 @@ function OpsTeamView({
                       <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#844429") + "30", color: m.color || "#844429" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}</div>
+                          <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}{!m.photoUrl && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-300 uppercase font-bold align-middle">no photo</span>}</div>
                           {m.status === "pending_setup" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">⚠ Pending setup</span>}
                           {m.isManager && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-700 text-purple-300 font-semibold">Manager</span>}
                         </div>
@@ -32027,6 +32061,7 @@ function SelfFillShell() {
           emergencyContactName: emp.emergencyContactName,
           emergencyContactPhone: emp.emergencyContactPhone,
           emergencyContactRelationship: emp.emergencyContactRelationship,
+          photoUrl: emp.photoUrl || "",
           pin: emp.pin || "",
         });
         if (emp.completedAt) setSaved(false); // allow re-edit; show form pre-filled
@@ -32037,9 +32072,19 @@ function SelfFillShell() {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const onPhotoPick = async (file) => {
+    if (!file) return;
+    setPhotoBusy(true); setErr("");
+    try { const { url } = await uploadApplicantPhoto(file); set("photoUrl", url); }
+    catch (e) { setErr(e?.message || "Could not upload photo."); }
+    finally { setPhotoBusy(false); }
+  };
+
   const submit = async () => {
     setErr("");
     if (!form.firstName?.trim() || !form.lastName?.trim()) { setErr("Please enter your first and last name."); return; }
+    if (!form.photoUrl) { setErr("Please add a profile photo before submitting."); return; }
     if (form.pin && !/^\d{4}$/.test(form.pin)) { setErr("Your PIN must be exactly 4 digits."); return; }
     setSaving(true);
     try {
@@ -32080,6 +32125,17 @@ function SelfFillShell() {
           <p style={{ color: "#94a3b8", fontSize: 13, margin: 0 }}>Please fill in your personal details. Your manager will handle the rest.</p>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Profile photo (required) */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, paddingBottom: 6 }}>
+            <div style={{ width: 96, height: 96, borderRadius: "50%", overflow: "hidden", background: "#1e293b", border: "2px solid #334155", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {form.photoUrl ? <img src={form.photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}/> : <span style={{ fontSize: 32, color: "#475569" }}>📷</span>}
+            </div>
+            <label style={{ padding: "8px 16px", borderRadius: 10, background: photoBusy ? "#1e293b" : "#4f46e5", color: "white", fontWeight: 600, fontSize: 13, cursor: photoBusy ? "default" : "pointer" }}>
+              {photoBusy ? "Uploading…" : form.photoUrl ? "Change photo" : "Add profile photo *"}
+              <input type="file" accept="image/jpeg,image/png,image/webp" disabled={photoBusy} onChange={e => onPhotoPick(e.target.files?.[0])} style={{ display: "none" }}/>
+            </label>
+            <div style={{ color: "#64748b", fontSize: 11 }}>A clear photo of your face. Required. JPG/PNG/WEBP, max 5 MB.</div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <ApplyField label="First name *"><input style={applyInputStyle} value={form.firstName} onChange={e => set("firstName", e.target.value)}/></ApplyField>
             <ApplyField label="Last name *"><input style={applyInputStyle} value={form.lastName} onChange={e => set("lastName", e.target.value)}/></ApplyField>
