@@ -3266,7 +3266,7 @@ function findSimilar(name, candidates, getName = (x) => x.name) {
 const CK_ALLERGENS = ["gluten","milk","egg","soya","nuts","peanuts","sesame","fish","crustaceans","molluscs","celery","mustard","lupin","sulphites"];
 const CK_UNITS = ["kg","g","L","ml","each"];
 
-function CentralKitchenView({ stores = [], currentUser }) {
+function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   // The central kitchen site.
   const kitchen = useMemo(() => (stores || []).find(s => s.siteType === "central_kitchen" && !s.archivedAt), [stores]);
   const siteId = kitchen?.id || null;
@@ -3503,6 +3503,17 @@ function CentralKitchenView({ stores = [], currentUser }) {
   const [planDirty, setPlanDirty] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [planActuals, setPlanActuals] = useState({}); // productId -> actual qty
+  // Labour planning settings (persisted on the plan)
+  const [labourRate, setLabourRate] = useState("");      // £/hr (blank = use auto kitchen avg)
+  const [shiftHours, setShiftHours] = useState(8);
+  const [efficiency, setEfficiency] = useState(0.8);     // 0–1
+  // Average hourly rate of staff assigned to this kitchen site (data-driven default)
+  const kitchenAvgRate = useMemo(() => {
+    const staff = (opsTeam || []).filter(m => !m.archivedAt && (m.storeIds || []).includes(siteId) && Number(m.hourlyRate) > 0);
+    if (!staff.length) return null;
+    return staff.reduce((s,m)=>s+Number(m.hourlyRate),0) / staff.length;
+  }, [opsTeam, siteId]);
+  const effRate = (labourRate !== "" && labourRate != null) ? Number(labourRate) : (kitchenAvgRate || 0);
 
   const refreshTemplates = useCallback(() => { if (siteId) fetchProductionPlans(siteId, { templates: true }).then(setTemplates).catch(()=>{}); }, [siteId]);
   useEffect(() => { refreshTemplates(); }, [refreshTemplates]);
@@ -3512,6 +3523,9 @@ function CentralKitchenView({ stores = [], currentUser }) {
     if (!id) { setPlanName(""); setPlanWeek(""); setPlanGrid({}); setPlanDirty(false); return; }
     const p = plans.find(x=>x.id===id);
     setPlanName(p?.name||""); setPlanWeek(p?.weekStart||"");
+    setLabourRate(p?.labourRate != null ? String(p.labourRate) : "");
+    setShiftHours(p?.shiftHours != null ? p.shiftHours : 8);
+    setEfficiency(p?.efficiency != null ? p.efficiency : 0.8);
     try {
       const lines = await fetchPlanLines(id); const g = {}; lines.forEach(l => { g[`${l.productId}:${l.dow}`] = l.qty; }); setPlanGrid(g); setPlanDirty(false);
       fetchPlanActuals(id).then(setPlanActuals).catch(()=>{});
@@ -3533,7 +3547,8 @@ function CentralKitchenView({ stores = [], currentUser }) {
     if (!planId) { setErr("Create or pick a plan first."); return; }
     setPlanBusy(true); setErr("");
     try {
-      await upsertProductionPlan({ id: planId, siteId, name: planName, weekStart: planWeek || null });
+      await upsertProductionPlan({ id: planId, siteId, name: planName, weekStart: planWeek || null,
+        labourRate: labourRate === "" ? null : Number(labourRate), shiftHours: Number(shiftHours), efficiency: Number(efficiency) });
       const lines = [];
       Object.entries(planGrid).forEach(([k,v]) => { const [productId, dow] = k.split(":"); if (Number(v)>0) lines.push({ productId, dow: Number(dow), qty: Number(v) }); });
       await savePlanLines(planId, lines);
@@ -3589,6 +3604,23 @@ function CentralKitchenView({ stores = [], currentUser }) {
     });
     return { mins, units, maxMin: Math.max(1, ...mins) };
   }, [planGrid, ckProducts]);
+  // Labour planning: hours/people/cost per day + week, from minutes-per-unit.
+  const labourPlan = useMemo(() => {
+    const eff = Math.max(0.01, Number(efficiency) || 0.8);       // productive fraction
+    const shift = Math.max(0.1, Number(shiftHours) || 8);        // hrs per person/day
+    const capPerPerson = shift * eff;                            // effective productive hrs/person
+    const perDay = dayLoad.mins.map(m => {
+      const hours = m / 60;
+      const people = hours > 0 ? Math.ceil(hours / capPerPerson) : 0;
+      const cost = hours * effRate;
+      return { hours: +hours.toFixed(2), people, cost: +cost.toFixed(2) };
+    });
+    const totalHours = perDay.reduce((s,d)=>s+d.hours,0);
+    const totalCost = +(totalHours * effRate).toFixed(2);
+    const peakPeople = Math.max(0, ...perDay.map(d=>d.people));
+    const anyTime = dayLoad.mins.some(m=>m>0);
+    return { perDay, totalHours: +totalHours.toFixed(2), totalCost, peakPeople, capPerPerson: +capPerPerson.toFixed(2), anyTime };
+  }, [dayLoad, efficiency, shiftHours, effRate]);
   const planEcon = useMemo(() => computePlanEconomics({ products: ckProducts, compsByProduct, preps: ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct }),
     [ckProducts, compsByProduct, ckPreps, prepCompsByPrep, ingredients, stockByIngredient, plannedByProduct]);
   // Shopping list grouped by supplier
@@ -3915,9 +3947,10 @@ function CentralKitchenView({ stores = [], currentUser }) {
               </>}
             </div>
             {planId && (
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Output / week</div><div className="text-xl font-black text-white">{Object.values(plannedByProduct).reduce((s,n)=>s+(Number(n)||0),0)}<span className="text-xs font-normal text-slate-500"> units</span></div></div>
-                <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredient cost</div><div className="text-xl font-black text-white">{money(planEcon.totalCost)}</div></div>
+                <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Ingredients</div><div className="text-xl font-black text-white">{money(planEcon.totalCost)}</div></div>
+                <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Labour</div><div className="text-xl font-black text-white">{labourPlan.anyTime?money(labourPlan.totalCost):"—"}</div></div>
                 <div className={`rounded-xl p-2.5 ${planEcon.buyCost>0?"bg-amber-950/40":"bg-slate-950"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">To buy</div><div className={`text-xl font-black ${planEcon.buyCost>0?"text-amber-300":"text-white"}`}>{money(planEcon.buyCost)}</div></div>
               </div>
             )}
@@ -4007,11 +4040,65 @@ function CentralKitchenView({ stores = [], currentUser }) {
                         </div>
                         <div className="text-[10px] text-slate-500 mt-1">{d}</div>
                         <div className="text-[10px] text-slate-400 font-semibold">{useMin ? (val>=60?`${(val/60).toFixed(1)}h`:`${Math.round(val)}m`) : Math.round(val)||""}</div>
+                        {labourPlan.anyTime && labourPlan.perDay[i].people>0 && <div className="text-[10px] text-indigo-300 font-bold">{labourPlan.perDay[i].people}👤</div>}
                       </div>
                     );
                   })}
                 </div>
                 {!ckProducts.some(p=>p.minutesPerUnit) && <div className="text-[10px] text-slate-600 mt-2">Tip: set “minutes per unit” on products to see prep-time load instead of unit counts.</div>}
+              </div>
+
+              {/* ── Labour: settings + optimal staffing + wage cost ──────────── */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Labour</div>
+                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                    <label className="flex items-center gap-1 text-slate-500">Rate £/hr
+                      <input type="number" step="0.01" value={labourRate} onChange={e=>{setLabourRate(e.target.value);setPlanDirty(true);}} placeholder={kitchenAvgRate?kitchenAvgRate.toFixed(2):"set"} className="w-16 px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-white"/>
+                    </label>
+                    <label className="flex items-center gap-1 text-slate-500">Shift h
+                      <input type="number" step="0.5" value={shiftHours} onChange={e=>{setShiftHours(e.target.value);setPlanDirty(true);}} className="w-14 px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-white"/>
+                    </label>
+                    <label className="flex items-center gap-1 text-slate-500">Efficiency
+                      <select value={efficiency} onChange={e=>{setEfficiency(Number(e.target.value));setPlanDirty(true);}} className="px-1.5 py-1 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                        {[1,0.9,0.85,0.8,0.75,0.7,0.6].map(x=><option key={x} value={x}>{Math.round(x*100)}%</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                {!labourPlan.anyTime ? (
+                  <div className="text-xs text-slate-600">Set “minutes per unit” on your products (Products tab) to plan labour — that’s what drives hours, staffing and wage cost.</div>
+                ) : (
+                  <>
+                    <div className="text-[10px] text-slate-500">
+                      Rate {effRate?`£${effRate.toFixed(2)}/hr`:"—"}{labourRate===""&&kitchenAvgRate?` (avg of kitchen staff)`:labourRate!==""?` (manual)`:""} · one person ≈ {labourPlan.capPerPerson}h productive/day ({shiftHours}h × {Math.round(efficiency*100)}%)
+                    </div>
+                    {/* Optimal staffing per day */}
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {DOW.map((d,i)=>{ const dd=labourPlan.perDay[i]; return (
+                        <div key={d} className="bg-slate-950 rounded-lg p-1.5 text-center">
+                          <div className="text-[9px] text-slate-600 uppercase">{d}</div>
+                          <div className="text-base font-black text-indigo-300">{dd.people||"—"}</div>
+                          <div className="text-[9px] text-slate-500">{dd.people?"staff":""}</div>
+                          <div className="text-[9px] text-slate-600">{dd.hours?`${dd.hours}h`:""}</div>
+                        </div>
+                      ); })}
+                    </div>
+                    {/* Totals */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Labour hours</div><div className="text-lg font-black text-white">{labourPlan.totalHours}h</div></div>
+                      <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Peak staff/day</div><div className="text-lg font-black text-white">{labourPlan.peakPeople}</div></div>
+                      <div className="bg-slate-950 rounded-xl p-2.5"><div className="text-[10px] uppercase text-slate-500 tracking-widest">Wage cost</div><div className="text-lg font-black text-white">{money(labourPlan.totalCost)}</div></div>
+                    </div>
+                    {/* Combined cost */}
+                    <div className="flex items-center justify-between bg-slate-950 rounded-xl px-3 py-2">
+                      <div className="text-[11px] text-slate-400">Ingredients {money(planEcon.totalCost)} + Labour {money(labourPlan.totalCost)}</div>
+                      <div className="text-sm font-black text-white">Total {money(planEcon.totalCost + labourPlan.totalCost)}</div>
+                    </div>
+                    {effRate===0 && <div className="text-[10px] text-amber-400/80">No labour rate — set one above, or assign staff with hourly rates to this kitchen.</div>}
+                    <div className="text-[10px] text-slate-600">Planning estimate from per-product time estimates — not payroll-accurate (actual wages come from clock-ins in Time &amp; Attendance).</div>
+                  </>
+                )}
               </div>
 
               {/* ── Shopping list (live) ────────────────────────────────────── */}
@@ -33897,7 +33984,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
-            {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser}/>}
+            {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}

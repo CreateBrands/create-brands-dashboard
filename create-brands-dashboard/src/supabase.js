@@ -6099,7 +6099,11 @@ export async function fetchDistributionStock(siteId) {
 // ============================================================================
 const mapPlan = (p) => ({
   id: p.id, siteId: p.site_id || null, name: p.name, weekStart: p.week_start || null,
-  note: p.note || "", isTemplate: !!p.is_template, archivedAt: p.archived_at || null, createdAt: p.created_at,
+  note: p.note || "", isTemplate: !!p.is_template,
+  labourRate: p.labour_rate != null ? Number(p.labour_rate) : null,
+  shiftHours: p.shift_hours != null ? Number(p.shift_hours) : 8,
+  efficiency: p.efficiency != null ? Number(p.efficiency) : 0.8,
+  archivedAt: p.archived_at || null, createdAt: p.created_at,
 });
 const mapPlanLine = (l) => ({
   id: l.id, planId: l.plan_id, productId: l.product_id, dow: l.dow, qty: Number(l.qty) || 0,
@@ -6123,6 +6127,9 @@ export async function fetchPlanLines(planId) {
 export async function upsertProductionPlan(p) {
   const row = { site_id: p.siteId || null, name: p.name, week_start: p.weekStart || null, note: p.note || null, updated_at: new Date().toISOString() };
   if ("isTemplate" in p) row.is_template = !!p.isTemplate;
+  if ("labourRate" in p) row.labour_rate = p.labourRate === "" || p.labourRate == null ? null : Number(p.labourRate);
+  if ("shiftHours" in p) row.shift_hours = p.shiftHours === "" || p.shiftHours == null ? null : Number(p.shiftHours);
+  if ("efficiency" in p) row.efficiency = p.efficiency === "" || p.efficiency == null ? null : Number(p.efficiency);
   if (p.id) {
     const { data, error } = await supabase.from("ck_production_plans").update(row).eq("id", p.id).select().maybeSingle();
     if (error) throw error;
