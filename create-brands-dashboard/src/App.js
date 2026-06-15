@@ -47,7 +47,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -1933,6 +1933,96 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
 
 // Contracts sent to an employee — read, sign, and print. Shown in their portal.
 // Also reused (read-only-ish) on the manager profile via ContractsForEmployee.
+function PayslipInboxView({ currentUser, opsTeam = [] }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
+  const [assignFor, setAssignFor] = useState(null);
+  const [assignEmp, setAssignEmp] = useState("");
+  const [assignPeriod, setAssignPeriod] = useState("");
+  const [assignDate, setAssignDate] = useState("");
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchPayslipInbox("unmatched").then(setItems).catch(e=>setErr(e?.message||String(e))).finally(()=>setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const sortedEmp = [...opsTeam].sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
+
+  const doAssign = async () => {
+    if (!assignEmp) { setErr("Pick an employee."); return; }
+    setBusy(assignFor.id); setErr("");
+    try {
+      await assignPayslip({ inboxId: assignFor.id, employeeId: assignEmp, fileUrl: assignFor.fileUrl,
+        filePath: assignFor.filePath, fileName: assignFor.fileName, payPeriodLabel: assignPeriod, payDate: assignDate || null,
+        filedBy: currentUser?.name });
+      setAssignFor(null); setAssignEmp(""); setAssignPeriod(""); setAssignDate(""); load();
+    } catch (e) { setErr(e?.message || String(e)); }
+    setBusy("");
+  };
+  const doIgnore = async (it) => {
+    if (!window.confirm("Ignore this payslip? It won't be filed to anyone.")) return;
+    setBusy(it.id);
+    try { await ignorePayslipInbox(it.id); load(); } catch (e) { setErr(e?.message || String(e)); }
+    setBusy("");
+  };
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <div>
+        <h2 className="text-base font-bold text-white flex items-center gap-2"><FileText size={18}/> Unmatched payslips</h2>
+        <p className="text-xs text-slate-500 mt-0.5">Payslips that arrived by email but couldn't be auto-matched. Assign each to the right employee.</p>
+      </div>
+      {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : items.length === 0 ? (
+        <div className="text-center py-12 text-sm text-slate-500">Nothing waiting — all payslips have been filed.</div>
+      ) : (
+        <div className="space-y-2">
+          {items.map(it => (
+            <div key={it.id} className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-white truncate">{it.fileName || "Payslip"}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {it.extractedName ? `Read name: "${it.extractedName}"` : "No name read from PDF"}
+                    {it.matchConfidence === "ambiguous" && " · matched more than one employee"}
+                    {it.fromEmail && ` · from ${it.fromEmail}`}
+                  </div>
+                </div>
+                <a href={it.fileUrl} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-[11px] font-semibold hover:bg-slate-700 flex-shrink-0">View PDF</a>
+              </div>
+              {assignFor?.id === it.id ? (
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-2">
+                  <select value={assignEmp} onChange={e=>setAssignEmp(e.target.value)} className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                    <option value="">— choose employee —</option>
+                    {sortedEmp.map(m => <option key={m.id} value={m.id}>{m.firstName} {m.lastName}</option>)}
+                  </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={assignPeriod} onChange={e=>setAssignPeriod(e.target.value)} placeholder="Pay period (e.g. May 2026)" className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                    <input type="date" value={assignDate} onChange={e=>setAssignDate(e.target.value)} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={()=>setAssignFor(null)} className="flex-1 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+                    <button onClick={doAssign} disabled={busy===it.id} className="flex-1 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold disabled:opacity-40">File to employee</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button onClick={()=>{setAssignFor(it);setAssignEmp("");setAssignPeriod("");setAssignDate("");}} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Assign to employee</button>
+                  <button onClick={()=>doIgnore(it)} disabled={busy===it.id} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 text-xs font-semibold">Ignore</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PayslipsSection({ employeeId, currentUser, canUpload = false }) {
   const [slips, setSlips] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -32125,6 +32215,7 @@ export default function App() {
       { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"] },
+      { key: "payslip-inbox", label: "Unmatched Payslips", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       { key: "ops-network", label: "Ops Overview",  icon: Activity },
@@ -32376,6 +32467,7 @@ export default function App() {
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

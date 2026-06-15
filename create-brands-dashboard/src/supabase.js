@@ -3439,6 +3439,56 @@ export async function archivePayslip(id) {
   if (error) throw error;
   return id;
 }
+
+// ── Payslip inbox (email-ingested, awaiting manual assignment) ───────────────
+const mapInbox = (r) => ({
+  id: r.id, fileUrl: r.file_url, filePath: r.file_path, fileName: r.file_name || null,
+  extractedName: r.extracted_name || "", extractedText: r.extracted_text || "",
+  payPeriodLabel: r.pay_period_label || "", payDate: r.pay_date || null,
+  matchedEmployeeId: r.matched_employee_id || null, matchConfidence: r.match_confidence || "none",
+  status: r.status, fromEmail: r.from_email || "", emailSubject: r.email_subject || "",
+  receivedAt: r.received_at,
+});
+
+export async function fetchPayslipInbox(status = "unmatched") {
+  let q = supabase.from("payslip_inbox").select("*").order("received_at", { ascending: false });
+  if (status) q = q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapInbox);
+}
+
+export async function countUnmatchedPayslips() {
+  const { count, error } = await supabase.from("payslip_inbox")
+    .select("id", { count: "exact", head: true }).eq("status", "unmatched");
+  if (error) return 0;
+  return count || 0;
+}
+
+// Assign a queued payslip to an employee: files it as a payslip document and
+// marks the inbox row 'filed'.
+export async function assignPayslip({ inboxId, employeeId, fileUrl, filePath, fileName, payPeriodLabel, payDate, filedBy }) {
+  if (!inboxId || !employeeId) throw new Error("inboxId and employeeId required");
+  const docId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const { error: dErr } = await supabase.from("employee_documents").insert({
+    id: docId, employee_id: employeeId, doc_type: "payslip", file_url: fileUrl, file_path: filePath,
+    file_name: fileName || "payslip.pdf", pay_period_label: payPeriodLabel || null, pay_date: payDate || null,
+    review_stage: "hr_approved", status: "accepted", uploaded_by_name: filedBy || "Manual assign",
+  });
+  if (dErr) throw dErr;
+  const { error } = await supabase.from("payslip_inbox").update({
+    matched_employee_id: employeeId, status: "filed", filed_doc_id: docId, filed_by: filedBy || null,
+    filed_at: new Date().toISOString(),
+  }).eq("id", inboxId);
+  if (error) throw error;
+  return docId;
+}
+
+export async function ignorePayslipInbox(inboxId) {
+  const { error } = await supabase.from("payslip_inbox").update({ status: "ignored" }).eq("id", inboxId);
+  if (error) throw error;
+  return inboxId;
+}
 // — never hard-delete from app; manual SQL only for compliance.
 //
 // Note: the file in Storage is NOT deleted automatically. Use
