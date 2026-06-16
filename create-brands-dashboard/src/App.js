@@ -183,6 +183,45 @@ if (typeof document !== "undefined" && !document.getElementById("cb-global-style
 const AuthContext = createContext(null);
 const useAuth = () => useContext(AuthContext);
 
+// ── Feature registry (Level 2 access) ────────────────────────────────────────
+// Controllable features within sections. Each: key, label, section (parent nav
+// key, for grouping in the matrix), defaultRoles (built-in access until an
+// admin overrides). Feature keys share the access_permissions table with
+// sections, so no schema change is needed.
+const FEATURE_REGISTRY = [
+  // Reports tabs
+  { key: "feat.reports.timesheets", label: "Timesheets & Sales", section: "reports", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.reports.weekly",     label: "Weekly Reports",     section: "reports", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.reports.reviews",    label: "Google Reviews",     section: "reports", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.reports.scans",      label: "Review Scans",       section: "reports", defaultRoles: ["owner","hq_staff","manager"] },
+  // Central Kitchen tabs
+  { key: "feat.ck.stock",      label: "CK · Stock",         section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.goods",      label: "CK · Goods in log",  section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.preps",      label: "CK · Preps",         section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.products",   label: "CK · Products",      section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.planner",    label: "CK · Planner",       section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.production", label: "CK · Production",    section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.finished",   label: "CK · Finished goods",section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.dispatch",   label: "CK · Dispatch",      section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.categories", label: "CK · Categories",    section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.suppliers",  label: "CK · Suppliers",     section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  // Team / employee profile actions
+  { key: "feat.team.editPay", label: "Edit pay / rates",   section: "team", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.team.editHR",  label: "Edit HR details",    section: "team", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.team.delete",  label: "Delete staff",       section: "team", defaultRoles: ["owner","hq_staff"] },
+  // Time & Attendance
+  { key: "feat.time.approve", label: "Approve hours",      section: "time-attend", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.time.editPunch", label: "Edit punches",     section: "time-attend", defaultRoles: ["owner","hq_staff","manager"] },
+  // Accounts / Finance
+  { key: "feat.accounts.pnl",  label: "View P&L",          section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.bank", label: "Bank transactions", section: "accounts", defaultRoles: ["owner","hq_staff"] },
+];
+const FEATURES_BY_SECTION = FEATURE_REGISTRY.reduce((m,f)=>{ (m[f.section]=m[f.section]||[]).push(f); return m; }, {});
+
+// Context exposes canFeature(featureKey) for the current user.
+const AccessContext = createContext({ canFeature: () => true });
+const useAccess = () => useContext(AccessContext);
+
 // ─── Icon Map ─────────────────────────────────────────────────────────────────
 const ICON_MAP = { Utensils, Moon, Coffee, Building2 };
 
@@ -3268,6 +3307,7 @@ const CK_ALLERGENS = ["gluten","milk","egg","soya","nuts","peanuts","sesame","fi
 const CK_UNITS = ["kg","g","L","ml","each"];
 
 function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
+  const { canFeature: ckCanFeature } = useAccess();
   // The central kitchen site.
   const kitchen = useMemo(() => (stores || []).find(s => s.siteType === "central_kitchen" && !s.archivedAt), [stores]);
   const siteId = kitchen?.id || null;
@@ -3836,7 +3876,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
       </div>
 
       <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"],["preps","Preps"],["products","Products"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].map(([k,l])=>(
+        {[["stock","Stock"],["goods","Goods in log"],["preps","Preps"],["products","Products"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].filter(([k])=>ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`)).map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -8431,12 +8471,13 @@ function OnboardingBoard({ stores, opsTeam }) {
 // Google Reviews, Weekly Reports and Review Scans views (moved here from nav).
 function ReportsView({ stores, brands, opsTeam, currentUser }) {
   const role = currentUser?.role;
+  const { canFeature } = useAccess();
   const TABS = [
-    { key: "timesheets", label: "Timesheets & Sales", roles: ["owner","hq_staff","manager"] },
-    { key: "weekly",     label: "Weekly Reports",     roles: ["owner","hq_staff"] },
-    { key: "reviews",    label: "Google Reviews",     roles: ["owner","hq_staff","manager"] },
-    { key: "scans",      label: "Review Scans",       roles: ["owner","hq_staff","manager"] },
-  ].filter(t => t.roles.includes(role));
+    { key: "timesheets", label: "Timesheets & Sales", feat: "feat.reports.timesheets" },
+    { key: "weekly",     label: "Weekly Reports",     feat: "feat.reports.weekly" },
+    { key: "reviews",    label: "Google Reviews",     feat: "feat.reports.reviews" },
+    { key: "scans",      label: "Review Scans",       feat: "feat.reports.scans" },
+  ].filter(t => canFeature(t.feat));
   const [tab, setTab] = useState(TABS[0]?.key || "timesheets");
   return (
     <div className="space-y-4">
@@ -8449,7 +8490,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
         ))}
       </div>
       {tab === "timesheets" && <TimesheetReportsView stores={stores} brands={brands} opsTeam={opsTeam} currentUser={currentUser}/>}
-      {tab === "weekly"  && ["owner","hq_staff"].includes(role) && <WeeklyReportsView/>}
+      {tab === "weekly"  && canFeature("feat.reports.weekly") && <WeeklyReportsView/>}
       {tab === "reviews" && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
       {tab === "scans"   && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
     </div>
@@ -13329,6 +13370,13 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
         const override = accessPerms?.[r.key]?.[item.key];
         m[r.key][item.key] = override !== undefined ? override : (!item.roles || item.roles.includes(r.key));
       });
+      // features within this section
+      (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
+        ROLES.forEach(r => {
+          const ov = accessPerms?.[r.key]?.[feat.key];
+          m[r.key][feat.key] = ov !== undefined ? ov : feat.defaultRoles.includes(r.key);
+        });
+      });
     }));
     return m;
   }, [navGroups, accessPerms]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -13349,6 +13397,9 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
       const entries = [];
       navGroups.forEach(g => g.items.forEach(item => {
         ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: item.key, allowed: !!grid[r.key]?.[item.key] }); });
+        (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
+          ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: feat.key, allowed: !!grid[r.key]?.[feat.key] }); });
+        });
       }));
       await setAccessPermissionsBulk(entries);
       onReload?.(); setDirty(false); setMsg("Saved. Changes apply immediately.");
@@ -13361,6 +13412,9 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
     ROLES.forEach(r => { m[r.key] = {}; });
     navGroups.forEach(g => g.items.forEach(item => {
       ROLES.forEach(r => { m[r.key][item.key] = (!item.roles || item.roles.includes(r.key)); });
+      (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
+        ROLES.forEach(r => { m[r.key][feat.key] = feat.defaultRoles.includes(r.key); });
+      });
     }));
     setGrid(m); setDirty(true);
   };
@@ -13392,8 +13446,9 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
               <Fragment key={g.group}>
                 <tr className="bg-slate-900/50"><td colSpan={ROLES.length+1} className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-900/50">{g.group}</td></tr>
                 {g.items.map(item => (
-                  <tr key={item.key} className="border-t border-slate-800/60 hover:bg-slate-900/30">
-                    <td className="px-4 py-2.5 text-slate-200 sticky left-0 bg-slate-950 z-10 whitespace-nowrap">{item.label}</td>
+                  <Fragment key={item.key}>
+                  <tr className="border-t border-slate-800/60 hover:bg-slate-900/30">
+                    <td className="px-4 py-2.5 text-slate-200 sticky left-0 bg-slate-950 z-10 whitespace-nowrap font-semibold">{item.label}</td>
                     {ROLES.map(r => {
                       const on = !!grid[r.key]?.[item.key];
                       const locked = r.key === "owner";
@@ -13407,6 +13462,25 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
                       );
                     })}
                   </tr>
+                  {(FEATURES_BY_SECTION[item.key] || []).map(feat => (
+                    <tr key={feat.key} className="border-t border-slate-800/40 hover:bg-slate-900/20">
+                      <td className="pl-8 pr-4 py-2 text-slate-400 text-[13px] sticky left-0 bg-slate-950 z-10 whitespace-nowrap">↳ {feat.label}</td>
+                      {ROLES.map(r => {
+                        const sectionOn = !!grid[r.key]?.[item.key];
+                        const on = !!grid[r.key]?.[feat.key] && sectionOn;
+                        const locked = r.key === "owner";
+                        return (
+                          <td key={r.key} className="px-3 py-2 text-center">
+                            <button onClick={()=>toggle(r.key, feat.key)} disabled={locked || !sectionOn} title={!sectionOn?"Enable the section first":locked?"Owner always has full access":""}
+                              className={`w-9 h-5 rounded-full relative transition-colors ${on?"bg-emerald-600/80":"bg-slate-700"} ${(locked||!sectionOn)?"opacity-40 cursor-not-allowed":""}`}>
+                              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  </Fragment>
                 ))}
               </Fragment>
             ))}
@@ -22677,6 +22751,7 @@ function AccountsHubView(props) {
   // If a Tide statement was shared in, jump straight to the Bank tab.
   useEffect(() => { if (sharedFile) setTab("bank"); }, [sharedFile]);
 
+  const { canFeature: acctCanFeature } = useAccess();
   const TABS = [
     ["pnl", "P&L"],
     ["bank", "Bank"],
@@ -22684,7 +22759,7 @@ function AccountsHubView(props) {
     ["suppliers", "Suppliers"],
     ["reconcile", "Reconcile"],
     ["export", "Export"],
-  ];
+  ].filter(([k]) => k==="pnl" ? acctCanFeature("feat.accounts.pnl") : k==="bank" ? acctCanFeature("feat.accounts.bank") : true);
 
   return (
     <div className="space-y-4">
@@ -22695,8 +22770,8 @@ function AccountsHubView(props) {
         ))}
       </div>
 
-      {tab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
-      {tab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
+      {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
+      {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
       {tab === "suppliers" && <SuppliersView stores={stores}/>}
       {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
@@ -33273,6 +33348,16 @@ export default function App() {
     if (override !== undefined) return override;
     return !item.roles || item.roles.includes(role);
   }, [accessPerms]);
+  // Feature-level check for the current user (Level 2). Owner always allowed.
+  const canFeature = useCallback((featureKey) => {
+    const role = currentUser?.role;
+    if (role === "owner") return true;
+    const override = accessPerms?.[role]?.[featureKey];
+    if (override !== undefined) return override;
+    const feat = FEATURE_REGISTRY.find(f => f.key === featureKey);
+    if (!feat) return true; // unknown key → don't block
+    return feat.defaultRoles.includes(role);
+  }, [accessPerms, currentUser]);
 
   // Slice 6 — employee profile view. When a manager clicks an employee in
   // Ops Team, we set selectedEmployeeId and switch activeView to
@@ -34180,6 +34265,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user: currentUser_ctx }}>
+      <AccessContext.Provider value={{ canFeature }}>
       <div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
         <EmpThemeStyle/>
         <GlobalMobileStyle/>
@@ -34360,6 +34446,7 @@ export default function App() {
           </div>
         )}
       </div>
+      </AccessContext.Provider>
     </AuthContext.Provider>
   );
 }
