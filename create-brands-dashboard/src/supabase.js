@@ -6448,3 +6448,142 @@ export async function setMemberCustomRole(memberId, roleId) {
   if (error) throw error;
   return { memberId, roleId: roleId || null };
 }
+
+// ── CASH ACCOUNTS (double-entry cash ledger, Finance entity) ─────────────────
+const mapCashAccount = (a) => ({ id: a.id, name: a.name, kind: a.kind, storeId: a.store_id || null, description: a.description || "", archivedAt: a.archived_at || null });
+const mapCashSource = (s) => ({ id: s.id, name: s.name, categoryId: s.category_id || null });
+const mapCashExpenseType = (e) => ({ id: e.id, name: e.name, categoryId: e.category_id || null });
+const mapCashLedger = (t) => ({
+  id: t.id, txnDate: t.txn_date, type: t.type, amount: Number(t.amount) || 0,
+  fromAccountId: t.from_account_id || null, toAccountId: t.to_account_id || null,
+  sourceId: t.source_id || null, expenseTypeId: t.expense_type_id || null,
+  storeId: t.store_id || null, reference: t.reference || "", createdBy: t.created_by || null,
+  createdAt: t.created_at,
+});
+
+export async function fetchCashAccounts() {
+  const { data, error } = await supabase.from("cash_accounts").select("*").is("archived_at", null).order("name");
+  if (error) throw error;
+  return (data || []).map(mapCashAccount);
+}
+export async function upsertCashAccount(acc) {
+  const row = { name: (acc.name||"").trim(), kind: acc.kind, store_id: acc.storeId || null, description: acc.description || null, updated_at: new Date().toISOString() };
+  if (acc.id) row.id = acc.id;
+  const { data, error } = await supabase.from("cash_accounts").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCashAccount(data) : null;
+}
+// Block archive if the account has any ledger activity (protect traceability).
+export async function archiveCashAccount(id) {
+  const { data: used, error: e1 } = await supabase.from("cash_ledger").select("id").or(`from_account_id.eq.${id},to_account_id.eq.${id}`).limit(1);
+  if (e1) throw e1;
+  if ((used || []).length) throw new Error("This account has transactions and can't be deleted (traceability). Archive it instead once you've reconciled.");
+  const { error } = await supabase.from("cash_accounts").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function fetchCashSources() {
+  const { data, error } = await supabase.from("cash_sources").select("*").is("archived_at", null).order("name");
+  if (error) throw error;
+  return (data || []).map(mapCashSource);
+}
+export async function upsertCashSource(s) {
+  const row = { name: (s.name||"").trim(), category_id: s.categoryId || null };
+  if (s.id) row.id = s.id;
+  const { data, error } = await supabase.from("cash_sources").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCashSource(data) : null;
+}
+export async function archiveCashSource(id) {
+  const { error } = await supabase.from("cash_sources").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function fetchCashExpenseTypes() {
+  const { data, error } = await supabase.from("cash_expense_types").select("*").is("archived_at", null).order("name");
+  if (error) throw error;
+  return (data || []).map(mapCashExpenseType);
+}
+export async function upsertCashExpenseType(e) {
+  const row = { name: (e.name||"").trim(), category_id: e.categoryId || null };
+  if (e.id) row.id = e.id;
+  const { data, error } = await supabase.from("cash_expense_types").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCashExpenseType(data) : null;
+}
+export async function archiveCashExpenseType(id) {
+  const { error } = await supabase.from("cash_expense_types").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function fetchCashLedger({ from, to } = {}) {
+  let q = supabase.from("cash_ledger").select("*").order("txn_date", { ascending: false }).order("created_at", { ascending: false });
+  if (from) q = q.gte("txn_date", from);
+  if (to) q = q.lte("txn_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapCashLedger);
+}
+
+// Record a movement. Validates the type's required accounts so the ledger
+// stays consistent (every row reconciles).
+export async function addCashLedgerEntry(tx) {
+  const t = tx.type;
+  const amt = Number(tx.amount);
+  if (!t) throw new Error("Movement type required.");
+  if (!(amt > 0)) throw new Error("Amount must be greater than zero.");
+  if (t === "income" || t === "opening") { if (!tx.toAccountId) throw new Error("Choose the account receiving the money."); }
+  if (t === "expense") { if (!tx.fromAccountId) throw new Error("Choose the account the money comes from."); }
+  if (t === "transfer") {
+    if (!tx.fromAccountId || !tx.toAccountId) throw new Error("Transfers need both a from and a to account.");
+    if (tx.fromAccountId === tx.toAccountId) throw new Error("From and to accounts must be different.");
+  }
+  if (t === "adjustment" && !tx.fromAccountId && !tx.toAccountId) throw new Error("Adjustment needs an account.");
+  const row = {
+    txn_date: tx.txnDate || new Date().toISOString().slice(0,10),
+    type: t, amount: amt,
+    from_account_id: tx.fromAccountId || null,
+    to_account_id: tx.toAccountId || null,
+    source_id: tx.sourceId || null,
+    expense_type_id: tx.expenseTypeId || null,
+    store_id: tx.storeId || null,
+    reference: tx.reference || null,
+    created_by: tx.createdBy || null,
+  };
+  const { data, error } = await supabase.from("cash_ledger").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCashLedger(data) : null;
+}
+
+export async function deleteCashLedgerEntry(id) {
+  const { error } = await supabase.from("cash_ledger").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Compute balances from the ledger: credit to_account, debit from_account.
+export function computeCashBalances(accounts = [], ledger = []) {
+  const bal = {}; accounts.forEach(a => { bal[a.id] = 0; });
+  ledger.forEach(t => {
+    if (t.toAccountId   && bal[t.toAccountId]   !== undefined) bal[t.toAccountId]   += t.amount;
+    if (t.fromAccountId && bal[t.fromAccountId] !== undefined) bal[t.fromAccountId] -= t.amount;
+  });
+  return bal;
+}
+
+// Idempotently create one revenue cash account per own (non-archived) store.
+// Returns the number created. Uses store_id uniqueness to avoid duplicates.
+export async function ensureStoreCashAccounts(stores = []) {
+  const { data: existing, error } = await supabase.from("cash_accounts").select("store_id").not("store_id", "is", null);
+  if (error) throw error;
+  const have = new Set((existing || []).map(r => r.store_id));
+  const toCreate = (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && !have.has(s.id));
+  if (!toCreate.length) return 0;
+  const rows = toCreate.map(s => ({ name: `${s.shortName || s.name} — Cash`, kind: "revenue", store_id: s.id, description: "Store cash sales" }));
+  const { error: insErr } = await supabase.from("cash_accounts").insert(rows);
+  if (insErr) throw insErr;
+  return rows.length;
+}

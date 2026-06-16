@@ -14,6 +14,11 @@ import {
   fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
   fetchEntityOverrides, setEntityOverride,
   fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
+  fetchCashAccounts, upsertCashAccount, archiveCashAccount,
+  fetchCashSources, upsertCashSource, archiveCashSource,
+  fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
+  fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
+  computeCashBalances, ensureStoreCashAccounts,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -128,7 +133,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2
+  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -22982,6 +22987,286 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   );
 }
 
+function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledger = [], stores = [], categories = [], handlers = {} }) {
+  const money = (n) => `${n<0?"−":""}£${Math.abs(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const [tab, setTab] = useState("accounts"); // accounts | ledger | manage
+  const [moveModal, setMoveModal] = useState(null); // movement form
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [selAccount, setSelAccount] = useState(null); // account statement filter
+
+  const balances = useMemo(() => computeCashBalances(accounts, ledger), [accounts, ledger]);
+  const accName = (id) => accounts.find(a => a.id === id)?.name || "—";
+  const srcName = (id) => sources.find(s => s.id === id)?.name || "—";
+  const expName = (id) => expenseTypes.find(e => e.id === id)?.name || "—";
+  const revenueAccts = accounts.filter(a => a.kind === "revenue");
+  const expenseAccts = accounts.filter(a => a.kind === "expense");
+  const totalRevenue = revenueAccts.reduce((s,a)=>s+(balances[a.id]||0),0);
+  const totalExpense = expenseAccts.reduce((s,a)=>s+(balances[a.id]||0),0);
+
+  const openMove = (type, presetAccount) => {
+    setErr("");
+    setMoveModal({
+      type,
+      txnDate: new Date().toISOString().slice(0,10),
+      amount: "",
+      fromAccountId: (type==="expense"||type==="transfer") ? (presetAccount||"") : "",
+      toAccountId: (type==="income"||type==="opening"||type==="transfer") ? (type==="transfer"?"":(presetAccount||"")) : "",
+      sourceId: "", expenseTypeId: "", storeId: "", reference: "",
+    });
+  };
+  const setM = (k,v) => setMoveModal(m => ({ ...m, [k]: v }));
+  const saveMove = async () => {
+    setBusy(true); setErr("");
+    try { await handlers.addEntry?.({ ...moveModal, amount: Number(moveModal.amount) }); setMoveModal(null); }
+    catch (e) { setErr(e?.message || "Could not save."); }
+    setBusy(false);
+  };
+
+  const TYPE_LABEL = { income:"Money in", transfer:"Transfer", expense:"Money out", opening:"Opening balance", adjustment:"Adjustment" };
+  const TYPE_COLOR = { income:"text-emerald-300", transfer:"text-indigo-300", expense:"text-red-300", opening:"text-slate-300", adjustment:"text-amber-300" };
+
+  const ledgerFor = (accId) => ledger.filter(t => t.fromAccountId===accId || t.toAccountId===accId);
+  const shownLedger = selAccount ? ledgerFor(selAccount) : ledger;
+
+  const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white">Cash Accounts</h2>
+          <p className="text-sm text-slate-500">Track cash from source to spend. Every movement is recorded both sides for full traceability.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>openMove("income")} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">+ Money in</button>
+          <button onClick={()=>openMove("transfer")} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Transfer</button>
+          <button onClick={()=>openMove("expense")} className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-semibold">− Money out</button>
+        </div>
+      </div>
+
+      {/* summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4"><div className="text-[11px] text-slate-500 uppercase">Revenue accounts</div><div className="text-xl font-bold text-emerald-300">{money(totalRevenue)}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4"><div className="text-[11px] text-slate-500 uppercase">Expense accounts</div><div className="text-xl font-bold text-indigo-300">{money(totalExpense)}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4"><div className="text-[11px] text-slate-500 uppercase">Total cash held</div><div className="text-xl font-bold text-white">{money(totalRevenue+totalExpense)}</div></div>
+      </div>
+
+      <div className="flex gap-1 border-b border-slate-800">
+        {[["accounts","Accounts"],["ledger","All movements"],["manage","Manage"]].map(([k,l])=>(
+          <button key={k} onClick={()=>{setTab(k); setSelAccount(null);}} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab === "accounts" && (
+        <div className="space-y-4">
+          {[["revenue","Revenue accounts",revenueAccts],["expense","Expense accounts",expenseAccts]].map(([kind,label,list]) => (
+            <div key={kind}>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2">{label}</div>
+              {list.length===0 ? <div className="text-xs text-slate-600 mb-2">None yet.</div> : (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {list.map(a => (
+                    <div key={a.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-white truncate">{a.name}</div>
+                          {a.description && <div className="text-[11px] text-slate-500">{a.description}</div>}
+                        </div>
+                        <div className={`text-lg font-bold ${(balances[a.id]||0)<0?"text-red-400":"text-white"}`}>{money(balances[a.id]||0)}</div>
+                      </div>
+                      <div className="flex gap-1.5 mt-3 flex-wrap">
+                        {kind==="revenue" && <button onClick={()=>openMove("income", a.id)} className="px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-300 text-[11px] font-semibold">+ In</button>}
+                        <button onClick={()=>openMove("transfer", a.id)} className="px-2 py-1 rounded-lg bg-indigo-600/20 text-indigo-300 text-[11px] font-semibold">Transfer</button>
+                        <button onClick={()=>openMove("expense", a.id)} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-300 text-[11px] font-semibold">− Out</button>
+                        <button onClick={()=>{setSelAccount(a.id); setTab("ledger");}} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Statement</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "ledger" && (
+        <div className="space-y-2">
+          {selAccount && <div className="flex items-center gap-2 text-sm"><span className="text-slate-400">Statement:</span><span className="font-bold text-white">{accName(selAccount)}</span><button onClick={()=>setSelAccount(null)} className="text-indigo-400 text-xs font-semibold">show all</button></div>}
+          {shownLedger.length===0 ? <div className="text-center py-10 text-sm text-slate-500">No movements yet.</div> : (
+            <div className="space-y-1.5">
+              {shownLedger.map(t => {
+                const signForAcc = selAccount ? (t.toAccountId===selAccount ? 1 : -1) : null;
+                return (
+                  <div key={t.id} className="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-sm text-slate-200 flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-bold uppercase ${TYPE_COLOR[t.type]}`}>{TYPE_LABEL[t.type]}</span>
+                        {t.type==="income" && <span>{srcName(t.sourceId)} → {accName(t.toAccountId)}</span>}
+                        {t.type==="transfer" && <span>{accName(t.fromAccountId)} → {accName(t.toAccountId)}</span>}
+                        {t.type==="expense" && <span>{accName(t.fromAccountId)} → {expName(t.expenseTypeId)}</span>}
+                        {t.type==="opening" && <span>{accName(t.toAccountId)}</span>}
+                        {t.type==="adjustment" && <span>{t.toAccountId?accName(t.toAccountId):accName(t.fromAccountId)}</span>}
+                      </div>
+                      <div className="text-[11px] text-slate-500">{t.txnDate}{t.reference?` · ${t.reference}`:""}{t.createdBy?` · ${t.createdBy}`:""}</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <div className={`text-sm font-bold ${signForAcc===1?"text-emerald-300":signForAcc===-1?"text-red-300":"text-white"}`}>{signForAcc===-1?"−":signForAcc===1?"+":""}{money(t.amount)}</div>
+                      <button onClick={async()=>{ if(window.confirm("Delete this movement? This affects account balances.")){ try{await handlers.deleteEntry?.(t.id);}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "manage" && (
+        <CashManage accounts={accounts} sources={sources} expenseTypes={expenseTypes} categories={categories} handlers={handlers} money={money} balances={balances}/>
+      )}
+
+      {/* Movement modal */}
+      {moveModal && (
+        <Modal title={TYPE_LABEL[moveModal.type]} onClose={()=>setMoveModal(null)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setMoveModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={saveMove} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Saving…":"Record"}</button>
+          </>}>
+          <div className="space-y-3">
+            {/* type switch */}
+            <div className="flex flex-wrap gap-1">
+              {["income","transfer","expense","opening","adjustment"].map(tp => (
+                <button key={tp} onClick={()=>openMove(tp, moveModal.fromAccountId||moveModal.toAccountId)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${moveModal.type===tp?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{TYPE_LABEL[tp]}</button>
+              ))}
+            </div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={moveModal.txnDate} onChange={e=>setM("txnDate",e.target.value)} className={ec}/></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Amount (£)</label><input type="number" step="0.01" value={moveModal.amount} onChange={e=>setM("amount",e.target.value)} className={ec}/></div>
+
+            {/* income: source → to account */}
+            {(moveModal.type==="income") && <>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">From source</label>
+                <select value={moveModal.sourceId} onChange={e=>setM("sourceId",e.target.value)} className={ec}><option value="">— optional —</option>{sources.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Into account</label>
+                <select value={moveModal.toAccountId} onChange={e=>setM("toAccountId",e.target.value)} className={ec}><option value="">— select —</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></div>
+            </>}
+
+            {/* transfer: from → to */}
+            {moveModal.type==="transfer" && <>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">From account</label>
+                <select value={moveModal.fromAccountId} onChange={e=>setM("fromAccountId",e.target.value)} className={ec}><option value="">— select —</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></div>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">To account</label>
+                <select value={moveModal.toAccountId} onChange={e=>setM("toAccountId",e.target.value)} className={ec}><option value="">— select —</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></div>
+            </>}
+
+            {/* expense: from account → expense type */}
+            {moveModal.type==="expense" && <>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">From account</label>
+                <select value={moveModal.fromAccountId} onChange={e=>setM("fromAccountId",e.target.value)} className={ec}><option value="">— select —</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></div>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label>
+                <select value={moveModal.expenseTypeId} onChange={e=>setM("expenseTypeId",e.target.value)} className={ec}><option value="">— optional —</option>{expenseTypes.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+            </>}
+
+            {/* opening / adjustment */}
+            {(moveModal.type==="opening") && (
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Account</label>
+                <select value={moveModal.toAccountId} onChange={e=>setM("toAccountId",e.target.value)} className={ec}><option value="">— select —</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></div>
+            )}
+            {moveModal.type==="adjustment" && <>
+              <div className="text-[11px] text-slate-500">Use "Into account" to add, or "From account" to reduce.</div>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Into account (+)</label>
+                <select value={moveModal.toAccountId} onChange={e=>setM("toAccountId",e.target.value)} className={ec}><option value="">—</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+              <div><label className="text-[11px] text-slate-500 uppercase font-semibold">From account (−)</label>
+                <select value={moveModal.fromAccountId} onChange={e=>setM("fromAccountId",e.target.value)} className={ec}><option value="">—</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+            </>}
+
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Reference (optional)</label><input value={moveModal.reference} onChange={e=>setM("reference",e.target.value)} placeholder="note / ref" className={ec}/></div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function CashManage({ accounts = [], sources = [], expenseTypes = [], categories = [], handlers = {}, money, balances = {} }) {
+  const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white";
+  const [accModal, setAccModal] = useState(null);
+  const [srcName, setSrcName] = useState(""); const [srcCat, setSrcCat] = useState("");
+  const [expName, setExpName] = useState(""); const [expCat, setExpCat] = useState("");
+  const [aName, setAName] = useState(""); const [aKind, setAKind] = useState("expense"); const [aDesc, setADesc] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
+
+  const ensureStores = async () => { setBusy(true); setMsg(""); try { const n = await handlers.ensureStoreAccounts?.(); setMsg(n>0?`Created ${n} store cash account(s).`:"All stores already have a cash account."); } catch(e){ setMsg(e?.message||"Failed."); } setBusy(false); setTimeout(()=>setMsg(""),4000); };
+  const addAccount = async () => { if(!aName.trim()) return; try { await handlers.saveAccount?.({ name:aName, kind:aKind, description:aDesc }); setAName(""); setADesc(""); setAccModal(null); } catch(e){ alert(e?.message||"Failed"); } };
+  const addSource = async () => { if(!srcName.trim()) return; try { await handlers.saveSource?.({ name:srcName, categoryId:srcCat||null }); setSrcName(""); setSrcCat(""); } catch(e){ alert(e?.message||"Failed"); } };
+  const addExp = async () => { if(!expName.trim()) return; try { await handlers.saveExpenseType?.({ name:expName, categoryId:expCat||null }); setExpName(""); setExpCat(""); } catch(e){ alert(e?.message||"Failed"); } };
+
+  return (
+    <div className="space-y-5">
+      {/* Accounts */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Accounts</div>
+          <div className="flex gap-2">
+            <button onClick={ensureStores} disabled={busy} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold disabled:opacity-50">{busy?"…":"Auto-create store accounts"}</button>
+            <button onClick={()=>setAccModal("new")} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">+ Account</button>
+          </div>
+        </div>
+        {msg && <div className="text-[11px] text-emerald-400">{msg}</div>}
+        <div className="space-y-1">
+          {accounts.map(a => (
+            <div key={a.id} className="flex items-center justify-between gap-2 text-sm py-1">
+              <div className="text-slate-200">{a.name} <span className="text-[10px] text-slate-500 uppercase">· {a.kind}</span></div>
+              <div className="flex items-center gap-3">
+                <span className="text-slate-400 text-xs">{money(balances[a.id]||0)}</span>
+                <button onClick={async()=>{ if(window.confirm(`Delete "${a.name}"?`)){ try{await handlers.archiveAccount?.(a.id);}catch(e){alert(e?.message||"Failed");} } }} className="text-slate-600 hover:text-red-400"><X size={13}/></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Sources */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+        <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Income sources</div>
+        <div className="flex gap-2 flex-wrap">
+          <input value={srcName} onChange={e=>setSrcName(e.target.value)} placeholder="e.g. Cash sale, Online, Catering" className={`${ec} flex-1 min-w-[140px]`}/>
+          <select value={srcCat} onChange={e=>setSrcCat(e.target.value)} className={ec}><option value="">No category</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <button onClick={addSource} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {sources.map(s => <span key={s.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px]">{s.name}<button onClick={async()=>{try{await handlers.archiveSource?.(s.id);}catch(e){alert(e?.message);}}} className="text-slate-500 hover:text-red-400"><X size={11}/></button></span>)}
+        </div>
+      </div>
+
+      {/* Expense types */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+        <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Expense types</div>
+        <div className="flex gap-2 flex-wrap">
+          <input value={expName} onChange={e=>setExpName(e.target.value)} placeholder="e.g. Wages, Contractors, Purchases" className={`${ec} flex-1 min-w-[140px]`}/>
+          <select value={expCat} onChange={e=>setExpCat(e.target.value)} className={ec}><option value="">No category</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <button onClick={addExp} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {expenseTypes.map(x => <span key={x.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px]">{x.name}<button onClick={async()=>{try{await handlers.archiveExpenseType?.(x.id);}catch(e){alert(e?.message);}}} className="text-slate-500 hover:text-red-400"><X size={11}/></button></span>)}
+        </div>
+      </div>
+
+      {accModal && (
+        <Modal title="New account" onClose={()=>setAccModal(null)} maxW="max-w-sm"
+          footer={<><button onClick={()=>setAccModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button><button onClick={addAccount} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Create</button></>}>
+          <div className="space-y-3">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Name</label><input value={aName} onChange={e=>setAName(e.target.value)} placeholder="Account name" className={`${ec} w-full`}/></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Kind</label>
+              <select value={aKind} onChange={e=>setAKind(e.target.value)} className={`${ec} w-full`}><option value="revenue">Revenue (receives income)</option><option value="expense">Expense (spends)</option></select></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Description (optional)</label><input value={aDesc} onChange={e=>setADesc(e.target.value)} className={`${ec} w-full`}/></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function AccountsHubView(props) {
   const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser,
     onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
@@ -33517,6 +33802,21 @@ export default function App() {
     await deleteBankAccount(id);
     setBankAccounts(list => list.filter(a => a.id !== id));
   }, []);
+
+  // ── Cash accounts (double-entry cash ledger, Finance) ──────────────────────
+  const [cashAccounts, setCashAccounts] = useState([]);
+  const [cashSources, setCashSources] = useState([]);
+  const [cashExpenseTypes, setCashExpenseTypes] = useState([]);
+  const [cashLedger, setCashLedger] = useState([]);
+  const reloadCash = useCallback(async () => {
+    try {
+      const [accs, srcs, exps, led] = await Promise.all([fetchCashAccounts(), fetchCashSources(), fetchCashExpenseTypes(), fetchCashLedger()]);
+      setCashAccounts(accs); setCashSources(srcs); setCashExpenseTypes(exps); setCashLedger(led);
+    } catch (e) { /* surfaced in view */ }
+  }, []);
+  useEffect(() => { reloadCash(); }, [reloadCash]);
+
+  // ── Categories (bank txn categorisation) ───────────────────────────────────
   const [categories, setCategories] = useState([]);
   const [categoryRules, setCategoryRules] = useState([]);
   const saveCategory = useCallback(async (cat) => {
@@ -33890,6 +34190,19 @@ export default function App() {
   }, [currentUser, opsTeam, customRoleById]);
   // The role app-logic should use everywhere (custom role inherits its base).
   const effectiveRole = currentUserRole.baseRole;
+
+  // Cash-ledger handlers (defined after currentUser/stores to avoid TDZ).
+  const cashHandlers = useMemo(() => ({
+    saveAccount: async (a) => { await upsertCashAccount(a); await reloadCash(); },
+    archiveAccount: async (id) => { await archiveCashAccount(id); await reloadCash(); },
+    saveSource: async (s) => { await upsertCashSource(s); await reloadCash(); },
+    archiveSource: async (id) => { await archiveCashSource(id); await reloadCash(); },
+    saveExpenseType: async (e) => { await upsertCashExpenseType(e); await reloadCash(); },
+    archiveExpenseType: async (id) => { await archiveCashExpenseType(id); await reloadCash(); },
+    addEntry: async (tx) => { await addCashLedgerEntry({ ...tx, createdBy: currentUser?.name || null }); await reloadCash(); },
+    deleteEntry: async (id) => { await deleteCashLedgerEntry(id); await reloadCash(); },
+    ensureStoreAccounts: async () => { const n = await ensureStoreCashAccounts(stores); await reloadCash(); return n; },
+  }), [reloadCash, currentUser, stores]);
 
   // Feature-level access check for the current user (Level 2). Owner always
   // allowed. Defined here, after currentUser, to avoid a TDZ reference.
@@ -34517,6 +34830,7 @@ export default function App() {
   const FINANCE_NAV = [
     { group: "FINANCE", items: [
       { key: "accounts", label: "Accounts", icon: BarChart2 },
+      { key: "cash-accounts", label: "Cash Accounts", icon: Wallet },
     ]},
   ];
   const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : NAV_GROUPS;
@@ -34722,6 +35036,7 @@ export default function App() {
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
             {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "cash-accounts" && ["owner","hq_staff"].includes(effectiveRole) && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
