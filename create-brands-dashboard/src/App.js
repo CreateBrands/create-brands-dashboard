@@ -21,6 +21,8 @@ import {
   computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit,
   fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
   reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
+  fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts,
+  fetchExpenseExcludedStores, setExpenseStoreExcluded,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -22992,7 +22994,115 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   );
 }
 
-function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categories = [], bankTransactions = [], stores = [], currentUser, canReconcile = false, handlers = {} }) {
+function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], bankAccounts = [], stores = [], opsTeam = [], typeAccounts = {}, memberAccounts = {}, excludedStores = [], handlers = {}, money }) {
+  const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white";
+  const [section, setSection] = useState("types"); // types | categories | stores | people
+  const [newType, setNewType] = useState(""); const [newCat, setNewCat] = useState("");
+  const [editType, setEditType] = useState(null); // expense type whose accounts are being edited
+  const [editMember, setEditMember] = useState(""); // member id
+  const exSet = new Set(excludedStores || []);
+
+  // Account multi-select used for both type and member assignment.
+  const AccountPicker = ({ value = [], onChange }) => {
+    const has = (kind,id) => value.some(a=>a.accountKind===kind && a.accountId===id);
+    const toggle = (kind,id) => { onChange(has(kind,id) ? value.filter(a=>!(a.accountKind===kind&&a.accountId===id)) : [...value, {accountKind:kind, accountId:id}]); };
+    return (
+      <div className="space-y-2">
+        <div>
+          <div className="text-[10px] uppercase text-slate-500 font-bold mb-1">Cash accounts</div>
+          <div className="flex flex-wrap gap-1.5">
+            {cashAccounts.length===0 ? <span className="text-[11px] text-slate-600">none</span> : cashAccounts.map(a=>(
+              <button key={a.id} onClick={()=>toggle("cash",a.id)} className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${has("cash",a.id)?"bg-emerald-600 text-white":"bg-slate-800 text-slate-400"}`}>{a.name}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-500 font-bold mb-1">Bank accounts</div>
+          <div className="flex flex-wrap gap-1.5">
+            {bankAccounts.filter(a=>!a.archived).length===0 ? <span className="text-[11px] text-slate-600">none</span> : bankAccounts.filter(a=>!a.archived).map(a=>(
+              <button key={a.id} onClick={()=>toggle("bank",a.id)} className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${has("bank",a.id)?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{a.name}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const people = (opsTeam||[]).filter(m=>!m.archivedAt).sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 flex-wrap">
+        {[["types","Expense types"],["categories","Categories"],["stores","Stores"],["people","Employee accounts"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setSection(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${section===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
+        ))}
+      </div>
+
+      {section==="types" && (
+        <div className="space-y-2">
+          <div className="flex gap-2"><input value={newType} onChange={e=>setNewType(e.target.value)} placeholder="New expense type" className={`${ec} flex-1`}/><button onClick={async()=>{ if(newType.trim()){ await handlers.saveExpenseType?.({name:newType}); setNewType(""); } }} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button></div>
+          {expenseTypes.map(x=>(
+            <div key={x.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-white">{x.name}</div>
+                <div className="flex gap-2">
+                  <button onClick={()=>setEditType(editType?.id===x.id?null:x)} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">{editType?.id===x.id?"Close":"Accounts"}</button>
+                  <button onClick={async()=>{ if(window.confirm(`Delete "${x.name}"?`)) await handlers.archiveExpenseType?.(x.id); }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{(typeAccounts[x.id]||[]).length} account(s) assigned</div>
+              {editType?.id===x.id && (
+                <div className="mt-2 pt-2 border-t border-slate-800">
+                  <AccountPicker value={typeAccounts[x.id]||[]} onChange={(v)=>handlers.setTypeAccounts?.(x.id, v)}/>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {section==="categories" && (
+        <div className="space-y-2">
+          <div className="flex gap-2"><input value={newCat} onChange={e=>setNewCat(e.target.value)} placeholder="New category" className={`${ec} flex-1`}/><button onClick={async()=>{ if(newCat.trim()){ await handlers.saveCategory?.({ name:newCat, type:"expense" }); setNewCat(""); } }} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button></div>
+          <div className="flex flex-wrap gap-1.5">
+            {categories.map(c=><span key={c.id} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px]">{c.name}</span>)}
+          </div>
+          <div className="text-[11px] text-slate-600">Categories are shared with the accounts module. Manage/remove them in Accounts → categories.</div>
+        </div>
+      )}
+
+      {section==="stores" && (
+        <div className="space-y-2">
+          <div className="text-[11px] text-slate-500">Toggle which stores appear on the expense form.</div>
+          {stores.filter(s=>!s.archivedAt).map(s=>(
+            <div key={s.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+              <div className="text-sm text-slate-200">{s.shortName||s.name}</div>
+              <button onClick={()=>handlers.setStoreExcluded?.(s.id, !exSet.has(s.id))} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${exSet.has(s.id)?"bg-slate-800 text-slate-500":"bg-emerald-600/30 text-emerald-200"}`}>{exSet.has(s.id)?"Hidden":"Shown"}</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {section==="people" && (
+        <div className="space-y-2">
+          <div className="text-[11px] text-slate-500">Assign the cash/bank accounts each person may reconcile expenses against.</div>
+          <select value={editMember} onChange={e=>setEditMember(e.target.value)} className={ec}>
+            <option value="">— select a person —</option>
+            {people.map(m=><option key={m.id} value={m.id}>{m.firstName} {m.lastName}{m.nickname?` (${m.nickname})`:""}</option>)}
+          </select>
+          {editMember && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="text-[11px] text-slate-500 mb-2">{(memberAccounts[editMember]||[]).length} account(s) assigned</div>
+              <AccountPicker value={memberAccounts[editMember]||[]} onChange={(v)=>handlers.setMemberAccounts?.(editMember, v)}/>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], handlers = {} }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
   const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
@@ -23017,6 +23127,28 @@ function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categ
     setBusy(false);
   };
 
+  // Store options = real stores minus those excluded from expenses.
+  const expenseStores = useMemo(() => {
+    const ex = new Set(excludedStores || []);
+    return (stores || []).filter(s => !s.archivedAt && !ex.has(s.id));
+  }, [stores, excludedStores]);
+
+  // Allowed accounts for reconciling a claim = intersection of the expense
+  // type's assigned accounts and the submitter's assigned accounts. If either
+  // side has no assignments, that side is treated as "no restriction".
+  const allowedAccountsFor = (claim) => {
+    const keyOf = (a) => `${a.accountKind}:${a.accountId}`;
+    const typeList = (typeAccounts?.[claim?.expenseTypeId] || []);
+    const memberId = claim?.submittedById || null;
+    const memberList = memberId ? (memberAccounts?.[memberId] || []) : [];
+    const typeSet = new Set(typeList.map(keyOf));
+    const memberSet = new Set(memberList.map(keyOf));
+    const both = (a) => (typeList.length===0 || typeSet.has(keyOf(a))) && (memberList.length===0 || memberSet.has(keyOf(a)));
+    const cash = cashAccounts.filter(a => both({ accountKind:"cash", accountId:a.id }));
+    const bank = bankAccounts.filter(a => both({ accountKind:"bank", accountId:a.id }) && !a.archived);
+    return { cash, bank, unrestricted: typeList.length===0 && memberList.length===0 };
+  };
+
   // Reconcile modal state
   const [reconMode, setReconMode] = useState("cash");
   const [reconCashAcc, setReconCashAcc] = useState("");
@@ -23035,8 +23167,11 @@ function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categ
   // Bank candidates: debit transactions near the amount, not already linked.
   const bankCandidates = useMemo(() => {
     if (!recon) return [];
+    const allowed = allowedAccountsFor(recon);
+    const allowedBankIds = new Set(allowed.bank.map(a=>a.id));
     return (bankTransactions||[])
       .filter(t => !linkedBankIds.has(t.id))
+      .filter(t => allowed.unrestricted || allowed.bank.length===0 ? true : allowedBankIds.has(t.accountId))
       .map(t => ({ ...t, amt: Math.abs(Number(t.amount)||0) }))
       .sort((a,b) => Math.abs(a.amt-recon.amount) - Math.abs(b.amt-recon.amount))
       .slice(0, 30);
@@ -23095,7 +23230,7 @@ function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categ
       </div>
 
       <div className="flex gap-1 border-b border-slate-800 flex-wrap">
-        {[["submitted",`Submitted${counts.submitted?` (${counts.submitted})`:""}`],["approved",`Approved${counts.approved?` (${counts.approved})`:""}`],["reconciled","Reconciled"],["rejected","Rejected"]].map(([k,l])=>(
+        {[["submitted",`Submitted${counts.submitted?` (${counts.submitted})`:""}`],["approved",`Approved${counts.approved?` (${counts.approved})`:""}`],["reconciled","Reconciled"],["rejected","Rejected"],...(canReconcile?[["manage","Manage lists"]]:[])].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
@@ -23103,26 +23238,24 @@ function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categ
       {tab==="new" ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-w-lg">
           <div className="text-sm font-bold text-white">New expense</div>
-          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Description *</label><input value={form.description} onChange={e=>setF("description",e.target.value)} placeholder="What was it for?" className={ec}/></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{expenseTypes.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{expenseStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-2">
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Amount (£) *</label><input type="number" step="0.01" value={form.amount} onChange={e=>setF("amount",e.target.value)} className={ec}/></div>
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={form.expenseDate} onChange={e=>setF("expenseDate",e.target.value)} className={ec}/></div>
           </div>
-          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} className={ec}/></div>
-          <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{expenseTypes.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
-            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store (optional)</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{stores.filter(s=>!s.archivedAt).map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
-            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Reference</label><input value={form.reference} onChange={e=>setF("reference",e.target.value)} className={ec}/></div>
-          </div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Reference</label><input value={form.reference} onChange={e=>setF("reference",e.target.value)} className={ec}/></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Description *</label><textarea value={form.description} onChange={e=>setF("description",e.target.value)} placeholder="What was it for?" className={`${ec} min-h-[64px] resize-y`}/></div>
           {err && <div className="text-xs text-red-400">{err}</div>}
           <div className="flex gap-2 pt-1">
             <button onClick={()=>{setForm(null);setTab("submitted");}} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
             <button onClick={submit} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Submitting…":"Submit expense"}</button>
           </div>
         </div>
+      ) : tab==="manage" ? (
+        <ExpenseManage expenseTypes={expenseTypes} categories={categories} cashAccounts={cashAccounts} bankAccounts={bankAccounts} stores={stores} opsTeam={opsTeam} typeAccounts={typeAccounts} memberAccounts={memberAccounts} excludedStores={excludedStores} handlers={handlers} money={money}/>
       ) : (
         <div className="space-y-2">
           {byStatus(tab).length===0 ? <div className="text-center py-10 text-sm text-slate-500">Nothing here.</div> : byStatus(tab).map(c => <Row key={c.id} c={c}/>)}
@@ -23148,7 +23281,7 @@ function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categ
                 <label className="text-[11px] text-slate-500 uppercase font-semibold">Cash account</label>
                 <select value={reconCashAcc} onChange={e=>setReconCashAcc(e.target.value)} className={ec}>
                   <option value="">— select account —</option>
-                  {cashAccounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}
+                  {(allowedAccountsFor(recon).cash).map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}
                 </select>
                 <div className="text-[11px] text-slate-600 mt-1">Posts a money-out movement from this account for {money(recon.amount)}.</div>
               </div>
@@ -34001,7 +34134,15 @@ export default function App() {
 
   // ── Expense claims (submit → approve → reconcile vs cash/bank) ──────────────
   const [expenseClaims, setExpenseClaims] = useState([]);
-  const reloadExpenses = useCallback(async () => { try { setExpenseClaims(await fetchExpenseClaims()); } catch (e) {} }, []);
+  const [expTypeAccounts, setExpTypeAccounts] = useState({}); // {typeId:[{accountKind,accountId}]}
+  const [memberExpAccounts, setMemberExpAccounts] = useState({}); // {memberId:[...]}
+  const [expExcludedStores, setExpExcludedStores] = useState([]); // [storeId]
+  const reloadExpenses = useCallback(async () => {
+    try {
+      const [cl, eta, mea, exc] = await Promise.all([fetchExpenseClaims(), fetchExpenseTypeAccounts(), fetchMemberExpenseAccounts(), fetchExpenseExcludedStores()]);
+      setExpenseClaims(cl); setExpTypeAccounts(eta); setMemberExpAccounts(mea); setExpExcludedStores(exc);
+    } catch (e) {}
+  }, []);
   useEffect(() => { reloadExpenses(); }, [reloadExpenses]);
 
   // ── Categories (bank txn categorisation) ───────────────────────────────────
@@ -34400,7 +34541,13 @@ export default function App() {
     reconcileBank: async (claim, txnId) => { await reconcileExpenseBank(claim, txnId, currentUser?.name || null); await reloadExpenses(); },
     unreconcile: async (claim) => { await unreconcileExpenseClaim(claim, currentUser?.name || null); await Promise.all([reloadExpenses(), reloadCash()]); },
     remove: async (claim) => { await deleteExpenseClaim(claim); await Promise.all([reloadExpenses(), reloadCash()]); },
-  }), [reloadExpenses, reloadCash, currentUser]);
+    setTypeAccounts: async (typeId, accts) => { await setExpenseTypeAccounts(typeId, accts); await reloadExpenses(); },
+    setMemberAccounts: async (memberId, accts) => { await setMemberExpenseAccounts(memberId, accts); await reloadExpenses(); },
+    setStoreExcluded: async (storeId, excluded) => { await setExpenseStoreExcluded(storeId, excluded); await reloadExpenses(); },
+    saveExpenseType: async (e) => { await upsertCashExpenseType(e); await Promise.all([reloadExpenses(), reloadCash()]); },
+    archiveExpenseType: async (id) => { await archiveCashExpenseType(id); await Promise.all([reloadExpenses(), reloadCash()]); },
+    saveCategory: async (c) => { await saveCategory(c); },
+  }), [reloadExpenses, reloadCash, currentUser, saveCategory]);
 
   // Feature-level access check for the current user (Level 2). Owner always
   // allowed. Defined here, after currentUser, to avoid a TDZ reference.
@@ -35258,7 +35405,7 @@ export default function App() {
             {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && ["owner","hq_staff"].includes(effectiveRole) && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
-            {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} currentUser={currentUser} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} handlers={expenseHandlers}/>}
+            {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

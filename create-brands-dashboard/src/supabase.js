@@ -6764,3 +6764,49 @@ export async function deleteExpenseClaim(claim) {
   if (error) throw error;
   return claim.id;
 }
+
+// ── EXPENSE ACCOUNT ASSIGNMENTS (type ∩ employee → reconcile options) ─────────
+// Each assignment is { accountKind:'cash'|'bank', accountId }.
+export async function fetchExpenseTypeAccounts() {
+  const { data, error } = await supabase.from("expense_type_accounts").select("*");
+  if (error) throw error;
+  const m = {}; // { expenseTypeId: [{accountKind, accountId}] }
+  (data || []).forEach(r => { (m[r.expense_type_id] = m[r.expense_type_id] || []).push({ accountKind: r.account_kind, accountId: r.account_id }); });
+  return m;
+}
+export async function setExpenseTypeAccounts(expenseTypeId, accounts = []) {
+  await supabase.from("expense_type_accounts").delete().eq("expense_type_id", expenseTypeId);
+  const rows = (accounts || []).map(a => ({ expense_type_id: expenseTypeId, account_kind: a.accountKind, account_id: a.accountId }));
+  if (rows.length) { const { error } = await supabase.from("expense_type_accounts").insert(rows); if (error) throw error; }
+  return true;
+}
+
+export async function fetchMemberExpenseAccounts() {
+  const { data, error } = await supabase.from("member_expense_accounts").select("*");
+  if (error) throw error;
+  const m = {}; // { memberId: [{accountKind, accountId}] }
+  (data || []).forEach(r => { (m[r.member_id] = m[r.member_id] || []).push({ accountKind: r.account_kind, accountId: r.account_id }); });
+  return m;
+}
+export async function setMemberExpenseAccounts(memberId, accounts = []) {
+  await supabase.from("member_expense_accounts").delete().eq("member_id", memberId);
+  const rows = (accounts || []).map(a => ({ member_id: memberId, account_kind: a.accountKind, account_id: a.accountId }));
+  if (rows.length) { const { error } = await supabase.from("member_expense_accounts").insert(rows); if (error) throw error; }
+  return true;
+}
+
+export async function fetchExpenseExcludedStores() {
+  const { data, error } = await supabase.from("expense_excluded_stores").select("store_id");
+  if (error) throw error;
+  return (data || []).map(r => r.store_id);
+}
+export async function setExpenseStoreExcluded(storeId, excluded) {
+  if (excluded) {
+    const { error } = await supabase.from("expense_excluded_stores").upsert({ store_id: storeId }, { onConflict: "store_id" });
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("expense_excluded_stores").delete().eq("store_id", storeId);
+    if (error) throw error;
+  }
+  return true;
+}
