@@ -23524,6 +23524,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
 function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledger = [], stores = [], categories = [], handlers = {} }) {
   const money = (n) => `${n<0?"−":""}£${Math.abs(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const [tab, setTab] = useState("accounts"); // accounts | ledger | manage
+  const [cashStoreFilter, setCashStoreFilter] = useState("all");
   const [moveModal, setMoveModal] = useState(null); // movement form
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -23533,8 +23534,9 @@ function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledg
   const accName = (id) => accounts.find(a => a.id === id)?.name || "—";
   const srcName = (id) => sources.find(s => s.id === id)?.name || "—";
   const expName = (id) => expenseTypes.find(e => e.id === id)?.name || "—";
-  const revenueAccts = accounts.filter(a => a.kind === "revenue");
-  const expenseAccts = accounts.filter(a => a.kind === "expense");
+  const storeAccts = cashStoreFilter === "all" ? accounts : accounts.filter(a => (a.storeId || "") === cashStoreFilter);
+  const revenueAccts = storeAccts.filter(a => a.kind === "revenue");
+  const expenseAccts = storeAccts.filter(a => a.kind === "expense");
   const totalRevenue = revenueAccts.reduce((s,a)=>s+(balances[a.id]||0),0);
   const totalExpense = expenseAccts.reduce((s,a)=>s+(balances[a.id]||0),0);
 
@@ -23594,6 +23596,10 @@ function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledg
 
       {tab === "accounts" && (
         <div className="space-y-4">
+          <select value={cashStoreFilter} onChange={e=>setCashStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+            <option value="all">All stores</option>
+            {stores.filter(s=>!s.archivedAt).map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+          </select>
           {[["revenue","Revenue accounts",revenueAccts],["expense","Expense accounts",expenseAccts]].map(([kind,label,list]) => (
             <div key={kind}>
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2">{label}</div>
@@ -23830,7 +23836,7 @@ function AccountsHubView(props) {
       </div>
 
       {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
-      {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
+      {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
       {tab === "suppliers" && <SuppliersView stores={stores}/>}
       {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
@@ -24099,6 +24105,17 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
   const [loading, setLoading] = useState(true);
   const [storeFilter, setStoreFilter] = useState("all");
 
+  // Resolve a bank transaction's store: its own storeId if tagged, else the
+  // store of the bank account it belongs to. Used so per-store P&L/Bank
+  // attribute spend by the account's store.
+  const bankAcctStore = useMemo(() => {
+    const m = {};
+    (bankAccounts || []).forEach(a => { m[a.id] = a.storeId || ""; });
+    return m;
+  }, [bankAccounts]);
+  const txnStore = (t) => t.storeId || bankAcctStore[t.accountId] || "";
+  const txnInStore = (t) => storeFilter === "all" || txnStore(t) === storeFilter;
+
   // Period bounds.
   const bounds = useMemo(() => {
     const d = new Date(anchor);
@@ -24192,7 +24209,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     let inflow = 0, outflow = 0;
     bankTransactions.forEach(t => {
       if (!inRange(t.txnDate)) return;
-      if (storeFilter !== "all" && t.storeId !== storeFilter) return;
+      if (!txnInStore(t)) return;
       if (t.amount >= 0) inflow += t.amount; else outflow += Math.abs(t.amount);
     });
     return { inflow, outflow, net: inflow - outflow };
@@ -24203,7 +24220,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     const inc = {}, exp = {};
     bankTransactions.forEach(t => {
       if (!inRange(t.txnDate)) return;
-      if (storeFilter !== "all" && t.storeId !== storeFilter) return;
+      if (!txnInStore(t)) return;
       const name = t.category || "Uncategorised";
       const bucket = t.amount >= 0 ? inc : exp;
       bucket[name] = (bucket[name] || 0) + Math.abs(t.amount);
@@ -24218,7 +24235,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
       exp[name] = (exp[name] || 0) + (Number(inv.totalExVat) || 0);
     });
     const toArr = (o) => Object.entries(o).map(([name, amount]) => ({ name, amount })).sort((a,b)=>b.amount-a.amount);
-    const uncatCount = bankTransactions.filter(t => inRange(t.txnDate) && (storeFilter==="all"||t.storeId===storeFilter) && !t.category).length + invoices.filter(i => !i.category).length;
+    const uncatCount = bankTransactions.filter(t => inRange(t.txnDate) && txnInStore(t) && !t.category).length + invoices.filter(i => !i.category).length;
     return { income: toArr(inc), expense: toArr(exp), uncatCount };
   }, [bankTransactions, invoices, bounds.from, bounds.to, storeFilter, stores]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -24505,7 +24522,7 @@ const FNB_CATEGORY_PACK = [
   ["Transfer between accounts","expense","transfer"],
 ];
 
-function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categories = [], categoryRules = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule, sharedFile, onConsumeSharedFile }) {
+function BankView({ bankTransactions = [], bankAccounts = [], stores = [], storeFilter = "all", categories = [], categoryRules = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
   const [errors, setErrors] = useState([]);
@@ -24663,7 +24680,11 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
   };
 
   const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toFixed(2)}`;
+  // When a specific store is selected, restrict to that store's bank accounts.
+  const storeAccountIds = storeFilter === "all" ? null : new Set((bankAccounts || []).filter(a => a.storeId === storeFilter).map(a => a.id));
+  const visibleAccounts = storeFilter === "all" ? bankAccounts : (bankAccounts || []).filter(a => a.storeId === storeFilter);
   const txns = bankTransactions.filter(t => {
+    if (storeAccountIds && !storeAccountIds.has(t.accountId)) return false;
     if (accountFilter !== "all" && t.accountId !== accountFilter) return false;
     if (filter === "in") return t.amount > 0;
     if (filter === "out") return t.amount < 0;
@@ -24832,9 +24853,9 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
                 <span className="text-xs text-slate-400">Import to:</span>
                 <select value={selectedAccountId} onChange={e=>setSelectedAccountId(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white min-w-[200px]">
                   <option value="">— Choose account —</option>
-                  {bankAccounts.filter(a=>!a.archived).map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
+                  {visibleAccounts.filter(a=>!a.archived).map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
                 </select>
-                <button onClick={()=>setNewAcct({ name:"", bank:"Tide", storeId:"" })} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold">+ New account</button>
+                <button onClick={()=>setNewAcct({ name:"", bank:"Tide", storeId: storeFilter !== "all" ? storeFilter : "" })} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold">+ New account</button>
               </div>
             )}
           </div>
@@ -24875,7 +24896,7 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], categ
             {bankAccounts.length > 0 && (
               <select value={accountFilter} onChange={e=>setAccountFilter(e.target.value)} className="ml-auto px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200">
                 <option value="all">All accounts</option>
-                {bankAccounts.filter(a=>!a.archived).map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
+                {visibleAccounts.filter(a=>!a.archived).map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
               </select>
             )}
           </div>
