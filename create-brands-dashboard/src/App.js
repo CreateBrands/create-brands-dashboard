@@ -34663,10 +34663,18 @@ export default function App() {
       customRoleId: crole ? crole.id : null,
       matrixRole: crole ? crole.id : builtIn,
       baseRole: crole ? crole.baseRole : builtIn,
+      scope: crole ? (crole.scope || null) : null,
     };
   }, [currentUser, opsTeam, customRoleById]);
   // The role app-logic should use everywhere (custom role inherits its base).
   const effectiveRole = currentUserRole.baseRole;
+  // Finance-only role: routes to dashboard (base hq_staff) but is scoped to the
+  // Finance entity only — no brands/stores/team/ops, lands straight in Finance.
+  const financeOnly = currentUserRole.scope === "finance_only";
+  // Finance-only users have no other entity — enter Finance automatically.
+  useEffect(() => {
+    if (financeOnly && !selectedEntityBrand) setSelectedEntityBrand("finance");
+  }, [financeOnly, selectedEntityBrand]);
 
   // Cash-ledger handlers (defined after currentUser/stores to avoid TDZ).
   const cashHandlers = useMemo(() => ({
@@ -34734,6 +34742,7 @@ export default function App() {
   // (per-person override = true, or their role's Finance permission = true).
   // Unlike other entities, Finance is deny-by-default for non-HQ.
   const financeGranted = useCallback(() => {
+    if (currentUserRole.scope === "finance_only") return true;
     const baseRole = currentUserRole.baseRole;
     if (baseRole === "owner" || baseRole === "hq_staff") return true;
     const memberId = currentUser?.opsTeamMemberId || currentUser?.id;
@@ -34810,6 +34819,7 @@ export default function App() {
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
   const entityBrands = useMemo(() => {
     if (!currentUser) return [];
+    if (financeOnly) return []; // finance-only: no brand/store entities at all
     const nonArchived = stores.filter(s => !s.archivedAt);
     const mine = isHQ ? nonArchived.filter(s => canAccessStore(s)) : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
     const ids = new Set(mine.map(s => s.brandId));
@@ -35250,7 +35260,7 @@ export default function App() {
     );
   }
 
-  if (currentUser.role === "employee") {
+  if (currentUser.role === "employee" && !financeOnly) {
     const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
     return (
       <AuthContext.Provider value={{ user: currentUser }}>
@@ -35419,7 +35429,7 @@ export default function App() {
   // ── Entity landing screen ────────────────────────────────────────────────
   // Show the picker when no entity chosen yet and there's a real choice to make.
   const financeAvailable = financeGranted();
-  if (!selectedEntityBrand && (entityBrands.length > 1 || financeAvailable)) {
+  if (!selectedEntityBrand && !financeOnly && (entityBrands.length > 1 || financeAvailable)) {
     return (
       <AuthContext.Provider value={{ user: currentUser_ctx }}>
         <EntityPicker brands={entityBrands} stores={stores} user={currentUser} onPick={chooseEntity} onLogout={handleLogout} financeAvailable={financeAvailable}/>
@@ -35438,7 +35448,7 @@ export default function App() {
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
-          onSwitchEntity={(entityBrands.length > 1 || financeAvailable) ? (() => chooseEntity(null)) : null}
+          onSwitchEntity={(!financeOnly && (entityBrands.length > 1 || financeAvailable)) ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
           actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}

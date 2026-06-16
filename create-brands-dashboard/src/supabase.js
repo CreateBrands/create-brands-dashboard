@@ -6418,7 +6418,7 @@ export async function setEntityOverride(memberId, entityKey, allowed) {
 export async function fetchCustomRoles() {
   const { data, error } = await supabase.from("custom_roles").select("*").is("archived_at", null).order("name");
   if (error) throw error;
-  return (data || []).map(r => ({ id: r.id, name: r.name, baseRole: r.base_role, description: r.description || "" }));
+  return (data || []).map(r => ({ id: r.id, name: r.name, baseRole: r.base_role, description: r.description || "", scope: r.scope || null }));
 }
 
 export async function upsertCustomRole(role) {
@@ -6426,12 +6426,13 @@ export async function upsertCustomRole(role) {
     name: (role.name || "").trim(),
     base_role: role.baseRole || "staff",
     description: role.description || null,
+    scope: role.scope || null,
     updated_at: new Date().toISOString(),
   };
   if (role.id) row.id = role.id;
   const { data, error } = await supabase.from("custom_roles").upsert(row).select().maybeSingle();
   if (error) throw error;
-  return data ? { id: data.id, name: data.name, baseRole: data.base_role, description: data.description || "" } : null;
+  return data ? { id: data.id, name: data.name, baseRole: data.base_role, description: data.description || "", scope: data.scope || null } : null;
 }
 
 export async function archiveCustomRole(id) {
