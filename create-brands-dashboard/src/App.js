@@ -13430,6 +13430,8 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
   // Entities = brands (key entity.<id>) + Finance. Facilities are brands too.
   const ENTITIES = useMemo(() => {
     const list = (brands || []).filter(b => !b.archivedAt).map(b => ({ key: `entity.${b.id}`, label: b.name, id: b.id }));
+    list.push({ key: "entity.ownership.jv", label: "JV stores", id: "own_jv" });
+    list.push({ key: "entity.ownership.franchise", label: "Franchise stores", id: "own_fr" });
     list.push({ key: "entity.finance", label: "Finance", id: "finance" });
     return list;
   }, [brands]);
@@ -34629,6 +34631,17 @@ export default function App() {
     return true;
   }, [accessPerms, entityOverrides, currentUser, currentUserRole]);
 
+  // Ownership entity gate: a store of ownership 'joint_venture'/'franchise' is
+  // only accessible if the user can access that ownership entity. Owned stores
+  // (and anything else) are unaffected.
+  const canAccessStore = useCallback((store) => {
+    if (!store) return false;
+    const om = store.ownershipModel || "";
+    if (om === "joint_venture") return canAccessEntity("entity.ownership.jv");
+    if (om === "franchise") return canAccessEntity("entity.ownership.franchise");
+    return true;
+  }, [canAccessEntity]);
+
   const approvePayPeriod = useCallback(async (pp) => {
     const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
     setPayPeriods(list => list.some(x => x.id === saved.id) ? list.map(x => x.id === saved.id ? saved : x) : [saved, ...list]);
@@ -34662,7 +34675,7 @@ export default function App() {
   //   Manager & Staff  → only stores listed in their store_ids
   const visibleStores = useMemo(() => {
     if (!currentUser) return [];
-    const active = stores.filter(s => !s.archivedAt);
+    const active = stores.filter(s => !s.archivedAt && canAccessStore(s));
     let scoped = isHQ ? active : (() => {
       const ids = currentUser.storeIds || [];
       if (ids.length === 0) return [];
@@ -34671,7 +34684,7 @@ export default function App() {
     // Entity landing: once an entity is chosen, scope everything to its brand.
     if (selectedEntityBrand && selectedEntityBrand !== "finance") scoped = scoped.filter(s => s.brandId === selectedEntityBrand);
     return scoped;
-  }, [currentUser, stores, isHQ, selectedEntityBrand]);
+  }, [currentUser, stores, isHQ, selectedEntityBrand, canAccessStore]);
 
   const visibleStoreIds = useMemo(() => visibleStores.map(s => s.id), [visibleStores]);
 
@@ -34679,12 +34692,12 @@ export default function App() {
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
   const entityBrands = useMemo(() => {
     if (!currentUser) return [];
-    const active = stores.filter(s => !s.archivedAt);
+    const active = stores.filter(s => !s.archivedAt && canAccessStore(s));
     const mine = isHQ ? active : active.filter(s => (currentUser.storeIds || []).includes(s.id));
     const ids = new Set(mine.map(s => s.brandId));
     // base = store-derived; then restrict by role/person entity access.
     return brands.filter(b => ids.has(b.id) && canAccessEntity(`entity.${b.id}`));
-  }, [brands, stores, isHQ, currentUser, canAccessEntity]);
+  }, [brands, stores, isHQ, currentUser, canAccessEntity, canAccessStore]);
 
   const addAudit = useCallback(async (action, detail, who, brandId, storeId) => {
     try {
