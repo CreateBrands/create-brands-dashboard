@@ -527,6 +527,7 @@ function appOpsTeamToDb(m) {
   if (m.selffillToken !== undefined) row.selffill_token = m.selffillToken || null;
   if (m.selffillCompletedAt !== undefined) row.selffill_completed_at = m.selffillCompletedAt || null;
   if (m.photoUrl      !== undefined) row.photo_url     = m.photoUrl || null;
+  if (m.roleId        !== undefined) row.role_id       = m.roleId || null;
   if (m.hrNotes       !== undefined) row.hr_notes      = m.hrNotes || null;
   if (m.status        !== undefined) row.status        = m.status || "active";
   if (m.archivedAt    !== undefined) row.archived_at   = m.archivedAt;
@@ -593,6 +594,7 @@ function dbOpsTeamToApp(m) {
     selffillToken: m.selffill_token || null,
     selffillCompletedAt: m.selffill_completed_at || null,
     photoUrl:    m.photo_url || null,
+    roleId:      m.role_id || null,
     hrNotes:     m.hr_notes || "",
     status:      m.status || "active",
     archivedAt:  m.archived_at || null,
@@ -6410,4 +6412,39 @@ export async function setEntityOverride(memberId, entityKey, allowed) {
     .upsert({ member_id: memberId, entity_key: entityKey, allowed: !!allowed, updated_at: new Date().toISOString() }, { onConflict: "member_id,entity_key" });
   if (error) throw error;
   return { memberId, entityKey, allowed: !!allowed };
+}
+
+// ── Custom roles (Level 3 access) ────────────────────────────────────────────
+export async function fetchCustomRoles() {
+  const { data, error } = await supabase.from("custom_roles").select("*").is("archived_at", null).order("name");
+  if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, name: r.name, baseRole: r.base_role, description: r.description || "" }));
+}
+
+export async function upsertCustomRole(role) {
+  const row = {
+    name: (role.name || "").trim(),
+    base_role: role.baseRole || "staff",
+    description: role.description || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (role.id) row.id = role.id;
+  const { data, error } = await supabase.from("custom_roles").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? { id: data.id, name: data.name, baseRole: data.base_role, description: data.description || "" } : null;
+}
+
+export async function archiveCustomRole(id) {
+  // Unassign anyone holding it, then soft-archive the role.
+  await supabase.from("ops_team").update({ role_id: null }).eq("role_id", id);
+  const { error } = await supabase.from("custom_roles").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Assign (or clear) a person's custom role. roleId=null clears it.
+export async function setMemberCustomRole(memberId, roleId) {
+  const { error } = await supabase.from("ops_team").update({ role_id: roleId || null }).eq("id", memberId);
+  if (error) throw error;
+  return { memberId, roleId: roleId || null };
 }

@@ -13,6 +13,7 @@ import {
   fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember, updateOpsTeamMember,
   fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
   fetchEntityOverrides, setEntityOverride,
+  fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -13398,13 +13399,19 @@ function PersonEntityAccess({ opsTeam = [], entities = [], entityOverrides = {},
   );
 }
 
-function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {} }) {
-  const ROLES = [
+function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {}, customRoles = [] }) {
+  const BUILTIN_ROLES = [
     { key: "owner", label: "Owner" },
     { key: "hq_staff", label: "HQ Staff" },
     { key: "manager", label: "Manager" },
     { key: "staff", label: "Staff" },
   ];
+  // Custom roles appear as extra columns. They default to their base role's
+  // permissions until overridden here.
+  const ROLES = useMemo(() => [
+    ...BUILTIN_ROLES,
+    ...(customRoles || []).map(c => ({ key: c.id, label: c.name, custom: true, baseRole: c.baseRole })),
+  ], [customRoles]); // eslint-disable-line react-hooks/exhaustive-deps
   // Entities = brands (key entity.<id>) + Finance. Facilities are brands too.
   const ENTITIES = useMemo(() => {
     const list = (brands || []).filter(b => !b.archivedAt).map(b => ({ key: `entity.${b.id}`, label: b.name, id: b.id }));
@@ -13412,19 +13419,20 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
     return list;
   }, [brands]);
   // Local editable copy of effective permissions, seeded from overrides+defaults.
+  const baseOf = (r) => r.custom ? r.baseRole : r.key;
   const seed = useMemo(() => {
     const m = {};
     ROLES.forEach(r => { m[r.key] = {}; });
     navGroups.forEach(g => g.items.forEach(item => {
       ROLES.forEach(r => {
         const override = accessPerms?.[r.key]?.[item.key];
-        m[r.key][item.key] = override !== undefined ? override : (!item.roles || item.roles.includes(r.key));
+        m[r.key][item.key] = override !== undefined ? override : (!item.roles || item.roles.includes(baseOf(r)));
       });
       // features within this section
       (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
         ROLES.forEach(r => {
           const ov = accessPerms?.[r.key]?.[feat.key];
-          m[r.key][feat.key] = ov !== undefined ? ov : feat.defaultRoles.includes(r.key);
+          m[r.key][feat.key] = ov !== undefined ? ov : feat.defaultRoles.includes(baseOf(r));
         });
       });
     }));
@@ -13436,7 +13444,7 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
       });
     });
     return m;
-  }, [navGroups, accessPerms, ENTITIES]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [navGroups, accessPerms, ENTITIES, ROLES]); // eslint-disable-line react-hooks/exhaustive-deps
   const [grid, setGrid] = useState(seed);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -13474,9 +13482,9 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
     const m = {};
     ROLES.forEach(r => { m[r.key] = {}; });
     navGroups.forEach(g => g.items.forEach(item => {
-      ROLES.forEach(r => { m[r.key][item.key] = (!item.roles || item.roles.includes(r.key)); });
+      ROLES.forEach(r => { m[r.key][item.key] = (!item.roles || item.roles.includes(baseOf(r))); });
       (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
-        ROLES.forEach(r => { m[r.key][feat.key] = feat.defaultRoles.includes(r.key); });
+        ROLES.forEach(r => { m[r.key][feat.key] = feat.defaultRoles.includes(baseOf(r)); });
       });
     }));
     ENTITIES.forEach(ent => { ROLES.forEach(r => { m[r.key][ent.key] = true; }); });
@@ -13607,6 +13615,120 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
   );
 }
 
+function RolesManager({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRole, onAssignMemberRole }) {
+  const BASE_ROLES = [
+    { key: "hq_staff", label: "HQ Staff" },
+    { key: "manager", label: "Manager" },
+    { key: "staff", label: "Staff" },
+    { key: "owner", label: "Owner" },
+  ];
+  const [modal, setModal] = useState(null); // null | "new" | role object
+  const [name, setName] = useState("");
+  const [baseRole, setBaseRole] = useState("staff");
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const open = (role) => {
+    if (role === "new") { setName(""); setBaseRole("staff"); setDesc(""); }
+    else { setName(role.name); setBaseRole(role.baseRole); setDesc(role.description || ""); }
+    setErr(""); setModal(role);
+  };
+  const save = async () => {
+    if (!name.trim()) { setErr("Give the role a name."); return; }
+    setBusy(true); setErr("");
+    try {
+      await onSaveRole?.({ id: modal === "new" ? undefined : modal.id, name: name.trim(), baseRole, description: desc.trim() });
+      setModal(null);
+    } catch (e) { setErr(e?.message || "Could not save."); }
+    setBusy(false);
+  };
+  const archive = async (role) => {
+    if (!window.confirm(`Delete the role "${role.name}"? Anyone assigned to it will fall back to their built-in role.`)) return;
+    try { await onArchiveRole?.(role.id); } catch (e) { alert(e?.message || "Could not delete."); }
+  };
+  const baseLabel = (k) => BASE_ROLES.find(b => b.key === k)?.label || k;
+  const countFor = (roleId) => (opsTeam || []).filter(m => m.roleId === roleId && !m.archivedAt).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-sm text-slate-500">Create custom roles based on a built-in role. They inherit the base role's behaviour; fine-tune what each can access in Access Control.</p>
+        <button onClick={()=>open("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/>New role</button>
+      </div>
+
+      {customRoles.length === 0 ? (
+        <div className="text-center py-10 text-sm text-slate-500 border border-dashed border-slate-800 rounded-2xl">No custom roles yet. Create one to tailor access beyond the four built-in roles.</div>
+      ) : (
+        <div className="space-y-2">
+          {customRoles.map(role => (
+            <div key={role.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
+              <div className="w-9 h-9 rounded-xl bg-fuchsia-600/20 text-fuchsia-300 flex items-center justify-center flex-shrink-0"><Lock size={15}/></div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-bold text-white">{role.name}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">based on {baseLabel(role.baseRole)}</span>
+                  <span className="text-[10px] text-slate-500">{countFor(role.id)} assigned</span>
+                </div>
+                {role.description && <div className="text-[12px] text-slate-500 mt-0.5">{role.description}</div>}
+              </div>
+              <button onClick={()=>open(role)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white"><Edit size={13}/></button>
+              <button onClick={()=>archive(role)} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Assign people */}
+      {customRoles.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+          <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Assign people</div>
+          <div className="text-[11px] text-slate-500 mb-1">Set each person's role. "Built-in" keeps their original role with no custom overrides.</div>
+          <div className="space-y-1.5 max-h-80 overflow-auto">
+            {(opsTeam||[]).filter(m=>!m.archivedAt).sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)).map(m => (
+              <div key={m.id} className="flex items-center justify-between gap-2">
+                <div className="text-sm text-slate-200 min-w-0 truncate">{m.firstName} {m.lastName}{m.nickname?` (${m.nickname})`:""} <span className="text-slate-600 text-[11px]">· {m.role||"staff"}</span></div>
+                <select value={m.roleId || ""} onChange={e=>onAssignMemberRole?.(m.id, e.target.value || null)}
+                  className="px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white flex-shrink-0">
+                  <option value="">Built-in ({m.role||"staff"})</option>
+                  {customRoles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {modal && (
+        <Modal title={modal==="new"?"New role":`Edit — ${modal.name}`} onClose={()=>setModal(null)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setModal(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={save} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Saving…":"Save"}</button>
+          </>}>
+          <div className="space-y-3">
+            <div>
+              <label className="text-[11px] text-slate-500 uppercase font-semibold">Role name</label>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Kitchen Manager" className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white"/>
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500 uppercase font-semibold">Based on (built-in role)</label>
+              <select value={baseRole} onChange={e=>setBaseRole(e.target.value)} className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white">
+                {BASE_ROLES.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
+              </select>
+              <div className="text-[11px] text-slate-600 mt-1">Inherits this role's core behaviour and store-visibility rules. Access Control can further restrict it.</div>
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500 uppercase font-semibold">Description (optional)</label>
+              <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="What this role is for" className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white"/>
+            </div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
@@ -13615,7 +13737,8 @@ function AdminPanelView({
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
   onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
-  onUpdateKPITargets, onBulkImport
+  onUpdateKPITargets, onBulkImport,
+  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole
 }) {
   const [tab, setTab] = useState("locations");
   const [locModal, setLocModal] = useState(null);
@@ -13627,6 +13750,7 @@ function AdminPanelView({
     {key:"brands",   label:"Brands"},
     {key:"stores",   label:"Stores"},
     {key:"managers", label:"Managers & Access"},
+    {key:"roles",    label:"Roles"},
     {key:"kpis",     label:"KPI Targets"},
     {key:"minwage",  label:"Minimum Wage"},
     {key:"payroll",  label:"Payroll"},
@@ -13685,6 +13809,9 @@ function AdminPanelView({
         />
       )}
 
+      {tab==="roles"&&(
+        <RolesManager customRoles={customRoles} opsTeam={opsTeam} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole}/>
+      )}
       {tab==="managers"&&(
         <div className="space-y-4">
           <div className="flex justify-end"><button onClick={()=>setUserModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/>Add Manager</button></div>
@@ -33453,18 +33580,27 @@ export default function App() {
   // Shape: { [role]: { [sectionKey]: allowed } }. Missing → use section default.
   const [accessPerms, setAccessPerms] = useState({});
   const [entityOverrides, setEntityOverrides] = useState({}); // { memberId: { entityKey: allowed } }
+  const [customRoles, setCustomRoles] = useState([]); // [{id,name,baseRole,description}]
+  const customRoleById = useMemo(() => {
+    const m = {}; (customRoles || []).forEach(r => { m[r.id] = r; }); return m;
+  }, [customRoles]);
   const reloadAccessPerms = useCallback(() => {
     fetchAccessPermissions().then(setAccessPerms).catch(()=>{});
     fetchEntityOverrides().then(setEntityOverrides).catch(()=>{});
+    fetchCustomRoles().then(setCustomRoles).catch(()=>{});
   }, []);
   useEffect(() => { reloadAccessPerms(); }, [reloadAccessPerms]);
   // Can `role` see `section`? Override wins; otherwise the section's built-in
   // `roles` default (undefined roles array = everyone).
-  const canRoleSeeSection = useCallback((role, item) => {
-    const override = accessPerms?.[role]?.[item.key];
+  const canRoleSeeSection = useCallback((roleKey, item) => {
+    // roleKey may be a built-in role or a custom role id. Override lookup uses
+    // the key as-is; the built-in default uses the base role.
+    const override = accessPerms?.[roleKey]?.[item.key];
     if (override !== undefined) return override;
-    return !item.roles || item.roles.includes(role);
-  }, [accessPerms]);
+    const crole = customRoleById[roleKey];
+    const baseRole = crole ? crole.baseRole : roleKey;
+    return !item.roles || item.roles.includes(baseRole);
+  }, [accessPerms, customRoleById]);
 
   // Slice 6 — employee profile view. When a manager clicks an employee in
   // Ops Team, we set selectedEmployeeId and switch activeView to
@@ -33733,33 +33869,57 @@ export default function App() {
 
   const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
 
+  // Custom-role resolution. A person may hold a custom role (ops_team.role_id).
+  // - matrixRole: the key the access matrix uses (custom role id if assigned,
+  //   else the built-in role string).
+  // - effectiveBaseRole: the built-in role the app's hardcoded checks should
+  //   treat them as (the custom role's base_role, else their own role).
+  const currentUserRole = useMemo(() => {
+    const builtIn = currentUser?.role || null;
+    if (!currentUser) return { builtIn: null, matrixRole: null, baseRole: null, customRoleId: null };
+    const memberId = currentUser.opsTeamMemberId || currentUser.id;
+    const member = (opsTeam || []).find(mm => mm.id === memberId);
+    const roleId = member?.roleId || null;
+    const crole = roleId ? customRoleById[roleId] : null;
+    return {
+      builtIn,
+      customRoleId: crole ? crole.id : null,
+      matrixRole: crole ? crole.id : builtIn,
+      baseRole: crole ? crole.baseRole : builtIn,
+    };
+  }, [currentUser, opsTeam, customRoleById]);
+  // The role app-logic should use everywhere (custom role inherits its base).
+  const effectiveRole = currentUserRole.baseRole;
+
   // Feature-level access check for the current user (Level 2). Owner always
   // allowed. Defined here, after currentUser, to avoid a TDZ reference.
   const canFeature = useCallback((featureKey) => {
-    const role = currentUser?.role;
-    if (role === "owner") return true;
-    const override = accessPerms?.[role]?.[featureKey];
+    const matrixRole = currentUserRole.matrixRole;
+    const baseRole = currentUserRole.baseRole;
+    if (baseRole === "owner") return true;
+    const override = accessPerms?.[matrixRole]?.[featureKey];
     if (override !== undefined) return override;
     const feat = FEATURE_REGISTRY.find(f => f.key === featureKey);
     if (!feat) return true; // unknown key → don't block
-    return feat.defaultRoles.includes(role);
-  }, [accessPerms, currentUser]);
+    return feat.defaultRoles.includes(baseRole);
+  }, [accessPerms, currentUserRole]);
 
   // Entity access: role default + per-person override (restrict-only — the
   // store-assignment base is applied separately at the call site). Owner
   // always allowed. entityKey = 'entity.<brandId>' | 'entity.finance'.
   const canAccessEntity = useCallback((entityKey, member) => {
-    const role = currentUser?.role;
-    if (role === "owner") return true;
+    const matrixRole = currentUserRole.matrixRole;
+    const baseRole = currentUserRole.baseRole;
+    if (baseRole === "owner") return true;
     // person-level override wins if present
     const memberId = member?.id || currentUser?.opsTeamMemberId || currentUser?.id;
     const personOverride = entityOverrides?.[memberId]?.[entityKey];
     if (personOverride !== undefined) return personOverride;
     // role-level entity permission; default allow (base store-assignment still gates)
-    const roleOverride = accessPerms?.[role]?.[entityKey];
+    const roleOverride = accessPerms?.[matrixRole]?.[entityKey];
     if (roleOverride !== undefined) return roleOverride;
     return true;
-  }, [accessPerms, entityOverrides, currentUser]);
+  }, [accessPerms, entityOverrides, currentUser, currentUserRole]);
 
   const approvePayPeriod = useCallback(async (pp) => {
     const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
@@ -33784,10 +33944,10 @@ export default function App() {
   }, [actualUser]);
 
   // ── Role / access helpers (used by sidebar gating and view filters) ────────
-  const isOwner    = currentUser?.role === "owner";
-  const isHQ       = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
-  const isManager  = currentUser?.role === "manager";
-  const isStaff    = currentUser?.role === "staff";
+  const isOwner    = effectiveRole === "owner";
+  const isHQ       = effectiveRole === "owner" || effectiveRole === "hq_staff";
+  const isManager  = effectiveRole === "manager";
+  const isStaff    = effectiveRole === "staff";
 
   // visibleStores: which stores can the current user see?
   //   Owner & HQ Staff → all non-archived stores
@@ -34030,6 +34190,9 @@ export default function App() {
   const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved"); return s;}, [showToast]);
   const updateOpsTeam = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
+  const handleSaveRole = useCallback(async (role) => { await upsertCustomRole(role); await fetchCustomRoles().then(setCustomRoles); showToast("Role saved"); }, [showToast]);
+  const handleArchiveRole = useCallback(async (id) => { await archiveCustomRole(id); await Promise.all([fetchCustomRoles().then(setCustomRoles), fetchOpsTeam().then(setOpsTeam)]); showToast("Role deleted"); }, [showToast]);
+  const handleAssignMemberRole = useCallback(async (memberId, roleId) => { await setMemberCustomRole(memberId, roleId); setOpsTeam(ts=>ts.map(x=>x.id===memberId?{...x, roleId:roleId||null}:x)); showToast("Role assigned"); }, [showToast]);
   // Slice 6 follow-up — true partial update for the profile-page tabs.
   // The profile passes only the fields it wants to change; this preserves
   // everything else (brand_id, role, storeIds, etc.) instead of failing
@@ -34343,7 +34506,7 @@ export default function App() {
   const ckOnly = visibleStores.length > 0 && visibleStores.every(s => s.siteType === "central_kitchen");
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
-      canRoleSeeSection(currentUser?.role, item) &&
+      canRoleSeeSection(currentUserRole.matrixRole, item) &&
       !(ckOnly && item.hideForCK)
     ) }))
     .filter(g => g.items.length > 0);
@@ -34388,7 +34551,7 @@ export default function App() {
 
   // ── Entity landing screen ────────────────────────────────────────────────
   // Show the picker when no entity chosen yet and there's a real choice to make.
-  const financeAvailable = ["owner", "hq_staff"].includes(currentUser?.role) && canAccessEntity("entity.finance");
+  const financeAvailable = ["owner", "hq_staff"].includes(effectiveRole) && canAccessEntity("entity.finance");
   if (!selectedEntityBrand && (entityBrands.length > 1 || financeAvailable)) {
     return (
       <AuthContext.Provider value={{ user: currentUser_ctx }}>
@@ -34550,9 +34713,10 @@ export default function App() {
               onLinkFlipdish={linkFlipdishToStore} onUnlinkFlipdish={unlinkFlipdishFromStore}
               onBackfillStoreSales={backfillStoreSales}
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
+              customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides}/>}
+            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
