@@ -11,6 +11,7 @@ import {
   fetchCleaningTasks, upsertCleaningTask, removeCleaningTask,
   fetchAssignments, upsertAssignment, removeAssignment,
   fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember, updateOpsTeamMember,
+  fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -13312,6 +13313,113 @@ function MinimumWageAdmin() {
 }
 
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
+function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
+  const ROLES = [
+    { key: "owner", label: "Owner" },
+    { key: "hq_staff", label: "HQ Staff" },
+    { key: "manager", label: "Manager" },
+    { key: "staff", label: "Staff" },
+  ];
+  // Local editable copy of effective permissions, seeded from overrides+defaults.
+  const seed = useMemo(() => {
+    const m = {};
+    ROLES.forEach(r => { m[r.key] = {}; });
+    navGroups.forEach(g => g.items.forEach(item => {
+      ROLES.forEach(r => {
+        const override = accessPerms?.[r.key]?.[item.key];
+        m[r.key][item.key] = override !== undefined ? override : (!item.roles || item.roles.includes(r.key));
+      });
+    }));
+    return m;
+  }, [navGroups, accessPerms]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [grid, setGrid] = useState(seed);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { setGrid(seed); setDirty(false); }, [seed]);
+
+  const toggle = (role, key) => {
+    if (role === "owner") return; // owner always retains full access
+    setGrid(g => ({ ...g, [role]: { ...g[role], [key]: !g[role][key] } }));
+    setDirty(true);
+  };
+  const save = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const entries = [];
+      navGroups.forEach(g => g.items.forEach(item => {
+        ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: item.key, allowed: !!grid[r.key]?.[item.key] }); });
+      }));
+      await setAccessPermissionsBulk(entries);
+      onReload?.(); setDirty(false); setMsg("Saved. Changes apply immediately.");
+      setTimeout(()=>setMsg(""), 3000);
+    } catch (e) { setMsg(e?.message || "Could not save."); }
+    setBusy(false);
+  };
+  const resetToDefaults = () => {
+    const m = {};
+    ROLES.forEach(r => { m[r.key] = {}; });
+    navGroups.forEach(g => g.items.forEach(item => {
+      ROLES.forEach(r => { m[r.key][item.key] = (!item.roles || item.roles.includes(r.key)); });
+    }));
+    setGrid(m); setDirty(true);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white">Access Control</h2>
+          <p className="text-sm text-slate-500">Choose which sections each role can see. Changes apply immediately — no redeploy.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {msg && <span className="text-xs text-emerald-400">{msg}</span>}
+          <button onClick={resetToDefaults} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-semibold">Reset to defaults</button>
+          <button onClick={save} disabled={busy||!dirty} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Saving…":dirty?"Save changes":"Saved"}</button>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-2xl border border-slate-800">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
+              <th className="text-left px-4 py-3 font-bold sticky left-0 bg-slate-900 z-10">Section</th>
+              {ROLES.map(r => <th key={r.key} className="px-3 py-3 font-bold text-center w-28">{r.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {navGroups.map(g => (
+              <Fragment key={g.group}>
+                <tr className="bg-slate-900/50"><td colSpan={ROLES.length+1} className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-900/50">{g.group}</td></tr>
+                {g.items.map(item => (
+                  <tr key={item.key} className="border-t border-slate-800/60 hover:bg-slate-900/30">
+                    <td className="px-4 py-2.5 text-slate-200 sticky left-0 bg-slate-950 z-10 whitespace-nowrap">{item.label}</td>
+                    {ROLES.map(r => {
+                      const on = !!grid[r.key]?.[item.key];
+                      const locked = r.key === "owner";
+                      return (
+                        <td key={r.key} className="px-3 py-2.5 text-center">
+                          <button onClick={()=>toggle(r.key, item.key)} disabled={locked} title={locked?"Owner always has full access":""}
+                            className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"} ${locked?"opacity-50 cursor-not-allowed":""}`}>
+                            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[11px] text-slate-600">
+        Owner always retains full access (can't be locked out). This controls the main navigation sections; finer in-section controls can be added later.
+      </div>
+    </div>
+  );
+}
+
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
@@ -33153,6 +33261,19 @@ export default function App() {
   }, []);
   const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
 
+  // Access control (Level 1): role × section permission overrides from DB.
+  // Shape: { [role]: { [sectionKey]: allowed } }. Missing → use section default.
+  const [accessPerms, setAccessPerms] = useState({});
+  const reloadAccessPerms = useCallback(() => { fetchAccessPermissions().then(setAccessPerms).catch(()=>{}); }, []);
+  useEffect(() => { reloadAccessPerms(); }, [reloadAccessPerms]);
+  // Can `role` see `section`? Override wins; otherwise the section's built-in
+  // `roles` default (undefined roles array = everyone).
+  const canRoleSeeSection = useCallback((role, item) => {
+    const override = accessPerms?.[role]?.[item.key];
+    if (override !== undefined) return override;
+    return !item.roles || item.roles.includes(role);
+  }, [accessPerms]);
+
   // Slice 6 — employee profile view. When a manager clicks an employee in
   // Ops Team, we set selectedEmployeeId and switch activeView to
   // "employee-profile". URL hash (#employee/emp-id) is synced for back-button
@@ -33992,6 +34113,7 @@ export default function App() {
     { group: "SETUP", items: [
       { key: "ops-settings", label: "Ops Setup", icon: Settings, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
       { key: "admin",        label: "Admin",     icon: Users, roles: ["owner"] },
+      { key: "access-control", label: "Access Control", icon: Lock, roles: ["owner"] },
     ]},
   ];
 
@@ -34000,7 +34122,7 @@ export default function App() {
   const ckOnly = visibleStores.length > 0 && visibleStores.every(s => s.siteType === "central_kitchen");
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
-      (!item.roles || item.roles.includes(currentUser?.role)) &&
+      canRoleSeeSection(currentUser?.role, item) &&
       !(ckOnly && item.hideForCK)
     ) }))
     .filter(g => g.items.length > 0);
@@ -34208,6 +34330,7 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}

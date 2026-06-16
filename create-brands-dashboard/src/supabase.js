@@ -5650,6 +5650,9 @@ export async function addCkGoodsIn(g) {
 }
 
 export async function deleteCkGoodsIn(id) {
+  // Remove any production-consumption rows referencing this batch first
+  // (the FK would otherwise block the delete).
+  await supabase.from("ck_run_consumption").delete().eq("goods_in_id", id);
   const { error } = await supabase.from("ck_goods_in").delete().eq("id", id);
   if (error) throw error;
   return id;
@@ -6355,4 +6358,32 @@ export async function scanLabelText(file, { uploadInvoiceFile, extractInvoice, g
     return { text, source: "invoice_fallback" };
   }
   return { text: "", source: "none" };
+}
+
+// ── Access control (Level 1): role × section permission matrix ───────────────
+// Returns a nested map: { [role]: { [sectionKey]: allowed } }. Missing entries
+// mean "use the section's built-in default" — the app handles the fallback.
+export async function fetchAccessPermissions() {
+  const { data, error } = await supabase.from("access_permissions").select("role, section_key, allowed");
+  if (error) throw error;
+  const m = {};
+  (data || []).forEach(r => { (m[r.role] = m[r.role] || {})[r.section_key] = !!r.allowed; });
+  return m;
+}
+
+// Set one (role, section) permission. allowed=true/false.
+export async function setAccessPermission(role, sectionKey, allowed) {
+  const { error } = await supabase.from("access_permissions")
+    .upsert({ role, section_key: sectionKey, allowed: !!allowed, updated_at: new Date().toISOString() }, { onConflict: "role,section_key" });
+  if (error) throw error;
+  return { role, sectionKey, allowed: !!allowed };
+}
+
+// Bulk-set permissions. entries = [{ role, sectionKey, allowed }].
+export async function setAccessPermissionsBulk(entries) {
+  const rows = (entries || []).map(e => ({ role: e.role, section_key: e.sectionKey, allowed: !!e.allowed, updated_at: new Date().toISOString() }));
+  if (!rows.length) return 0;
+  const { error } = await supabase.from("access_permissions").upsert(rows, { onConflict: "role,section_key" });
+  if (error) throw error;
+  return rows.length;
 }
