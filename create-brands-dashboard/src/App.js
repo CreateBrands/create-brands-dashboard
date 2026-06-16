@@ -21733,7 +21733,7 @@ function OpsTeamMemberFormModal({
     // Derive brandId from the primary store so legacy brand-keyed code keeps
     // working during transition.
     const primaryStore = allowedStores.find(s => s.id === form.primaryStoreId);
-    const brandId = primaryStore?.brandId || item?.brandId || prefillApplication?.brandId || "";
+    const brandId = noStoreRole ? null : (primaryStore?.brandId || item?.brandId || prefillApplication?.brandId || "");
 
     // Combine primary + also stores into a single array, primary first.
     const storeIds = noStoreRole ? [] : [form.primaryStoreId, ...form.alsoStoreIds.filter(Boolean)].filter(Boolean);

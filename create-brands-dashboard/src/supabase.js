@@ -496,7 +496,7 @@ function appOpsTeamToDb(m) {
   // updated_at is always set — that's a server-side concern, not user data.
   const row = { updated_at: new Date().toISOString() };
   if (m.id            !== undefined) row.id            = m.id;
-  if (m.brandId       !== undefined) row.brand_id      = m.brandId;
+  if (m.brandId       !== undefined) row.brand_id      = m.brandId || null;
   if (m.firstName     !== undefined) row.first_name    = m.firstName;
   if (m.lastName      !== undefined) row.last_name     = m.lastName || "";
   if (m.nickname      !== undefined) row.nickname      = m.nickname || "";
