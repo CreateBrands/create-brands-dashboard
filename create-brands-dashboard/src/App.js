@@ -6824,6 +6824,81 @@ function EmpThemeStyle() {
 }
 
 
+function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit }) {
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
+  const [mode, setMode] = useState("new"); // new | mine
+  const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [ok, setOk] = useState("");
+  const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setErr(""); setOk("");
+    if (!form.description.trim()) { setErr("Please describe the expense."); return; }
+    if (!(Number(form.amount) > 0)) { setErr("Enter an amount greater than zero."); return; }
+    setBusy(true);
+    try {
+      await onSubmit?.({ ...form, amount: Number(form.amount) });
+      setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
+      setOk("Expense submitted for approval."); setMode("mine");
+      setTimeout(()=>setOk(""), 4000);
+    } catch (e) { setErr(e?.message || "Could not submit."); }
+    setBusy(false);
+  };
+
+  const StatusBadge = ({ s }) => {
+    const m = { submitted:["bg-amber-600/20 text-amber-300","Submitted"], approved:["bg-indigo-600/20 text-indigo-300","Approved"], reconciled:["bg-emerald-600/20 text-emerald-300","Paid / reconciled"], rejected:["bg-red-600/20 text-red-300","Rejected"] };
+    const [cls,lab] = m[s] || ["bg-slate-700 text-slate-300", s];
+    return <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${cls}`}>{lab}</span>;
+  };
+  const typeName = (id) => myTypes.find(t=>t.id===id)?.name || "";
+
+  return (
+    <div className="space-y-4 max-w-lg">
+      <div className="flex gap-1 bg-slate-800 rounded-xl p-1">
+        {[["new","New expense"],["mine",`My expenses${myClaims.length?` (${myClaims.length})`:""}`]].map(([k,l])=>(
+          <button key={k} onClick={()=>setMode(k)} className={`flex-1 py-2 rounded-lg text-xs font-semibold ${mode===k?"bg-indigo-600 text-white":"text-slate-400"}`}>{l}</button>
+        ))}
+      </div>
+
+      {ok && <div className="text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-500/30 rounded-xl px-3 py-2">{ok}</div>}
+
+      {mode==="new" ? (
+        <div className="space-y-3">
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{myTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{myCategories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{myStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Amount (£)</label><input type="number" step="0.01" inputMode="decimal" value={form.amount} onChange={e=>setF("amount",e.target.value)} className={ec}/></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={form.expenseDate} onChange={e=>setF("expenseDate",e.target.value)} className={ec}/></div>
+          </div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Reference</label><input value={form.reference} onChange={e=>setF("reference",e.target.value)} className={ec}/></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Description</label><textarea value={form.description} onChange={e=>setF("description",e.target.value)} placeholder="What was it for?" className={`${ec} min-h-[64px] resize-y`}/></div>
+          {err && <div className="text-xs text-red-400">{err}</div>}
+          <button onClick={submit} disabled={busy} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Submitting…":"Submit for approval"}</button>
+          <div className="text-[11px] text-slate-600 text-center">Submitted expenses go to your manager / HQ for approval and payment.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {myClaims.length===0 ? <div className="text-center py-10 text-sm text-slate-500">You haven't submitted any expenses yet.</div> : myClaims.map(c=>(
+            <div key={c.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">{c.expenseDate}{c.vendor?` · ${c.vendor}`:""}{c.expenseTypeId?` · ${typeName(c.expenseTypeId)}`:""}</div>
+                  {c.status==="rejected" && c.rejectedReason && <div className="text-[11px] text-red-400/80 mt-1">Reason: {c.rejectedReason}</div>}
+                </div>
+                <div className="text-sm font-bold text-white flex-shrink-0">{money(c.amount)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -6831,6 +6906,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   availability, onAddAvailability, onUpdateAvailability,
   schedules, punchRecords, onAmendPunch, onAddPunchComment,
   onEmpPunchIn, onEmpPunchOut,
+  expenseClaims = [], expenseTypes = [], expenseCategories = [], cashAccounts = [], bankAccounts = [],
+  memberExpTypes = {}, memberExpCategories = {}, memberExpStores = {}, memberExpAccounts = {}, onSubmitExpense,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -6838,6 +6915,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // their ops_team record lists. TodaysTasks needs this to scope assignments —
   // without it, nothing shows (every store-scoped assignment fails the filter).
   const myOpsMember = (opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id));
+
+  // Expense submission scope for this employee (from their assignments).
+  const myExpMemberId = currentUser.opsTeamMemberId || currentUser.id;
+  const myExpTypes = (expenseTypes || []).filter(t => (memberExpTypes[myExpMemberId] || []).includes(t.id));
+  const myExpCategories = (expenseCategories || []).filter(c => (memberExpCategories[myExpMemberId] || []).includes(c.id));
+  const myExpStores = (stores || []).filter(s => !s.archivedAt && (memberExpStores[myExpMemberId] || []).includes(s.id));
+  const myExpClaims = (expenseClaims || []).filter(c => c.submittedById === myExpMemberId);
+  const hasExpenseAccess = myExpTypes.length > 0 || myExpStores.length > 0;
   // Soft prompt: nudge staff with no profile photo to add one (skippable).
   const [photoPromptDismissed, setPhotoPromptDismissed] = useState(false);
   const [photoUploadBusy, setPhotoUploadBusy] = useState(false);
@@ -6950,6 +7035,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
     { key: "review-qr",      label: "Review QR",       icon: QrCode },
     { key: "my-review",      label: "Review Impact",   icon: Star },
+    ...(hasExpenseAccess ? [{ key: "my-expenses", label: "Submit Expense", icon: Receipt }] : []),
   ];
 
   const titles = {
@@ -6965,6 +7051,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-contracts":  "Contracts",
     "review-qr":      "Review QR",
     "my-review":      "Review Impact",
+    "my-expenses":    "Submit Expense",
   };
 
   // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
@@ -7226,6 +7313,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
           {activeView === "my-review" && (
             <MyReviewImpact currentUser={currentUser} opsTeam={opsTeam} stores={stores}/>
+          )}
+          {activeView === "my-expenses" && (
+            <EmployeeExpenseSubmit
+              myTypes={myExpTypes} myCategories={myExpCategories} myStores={myExpStores}
+              myClaims={myExpClaims} onSubmit={onSubmitExpense}
+            />
           )}
         </main>
 
@@ -35158,6 +35251,10 @@ export default function App() {
           availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
           schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch} onAddPunchComment={handleAddPunchComment}
           onEmpPunchIn={handlePunchIn} onEmpPunchOut={handlePunchOut}
+          expenseClaims={expenseClaims} expenseTypes={cashExpenseTypes} expenseCategories={categories}
+          cashAccounts={cashAccounts} bankAccounts={bankAccounts}
+          memberExpTypes={memberExpTypes} memberExpCategories={memberExpCategories} memberExpStores={memberExpStores} memberExpAccounts={memberExpAccounts}
+          onSubmitExpense={expenseHandlers.submit}
           onLogout={handleLogout}
         />
       </AuthContext.Provider>
