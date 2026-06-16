@@ -21691,7 +21691,9 @@ function OpsTeamMemberFormModal({
   const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
   const storeLabel = (s) => {
     const b = brands.find(br => br.id === s.brandId);
-    return showBrandPrefix && b ? `${b.name} · ${s.shortName || s.name}` : (s.shortName || s.name);
+    const base = showBrandPrefix && b ? `${b.name} · ${s.shortName || s.name}` : (s.shortName || s.name);
+    const facility = s.siteType === "distribution" ? " (Distribution)" : s.siteType === "central_kitchen" ? " (Central Kitchen)" : s.siteType === "franchise_ops" ? " (Franchise Ops)" : "";
+    return base + facility;
   };
 
   const handleSave = () => {
@@ -34728,6 +34730,20 @@ export default function App() {
     return true;
   }, [accessPerms, entityOverrides, currentUser, currentUserRole]);
 
+  // Finance access: owner/HQ always; any other person only if EXPLICITLY granted
+  // (per-person override = true, or their role's Finance permission = true).
+  // Unlike other entities, Finance is deny-by-default for non-HQ.
+  const financeGranted = useCallback(() => {
+    const baseRole = currentUserRole.baseRole;
+    if (baseRole === "owner" || baseRole === "hq_staff") return true;
+    const memberId = currentUser?.opsTeamMemberId || currentUser?.id;
+    const personOverride = entityOverrides?.[memberId]?.["entity.finance"];
+    if (personOverride !== undefined) return personOverride;
+    const roleOverride = accessPerms?.[currentUserRole.matrixRole]?.["entity.finance"];
+    if (roleOverride === true) return true;
+    return false;
+  }, [accessPerms, entityOverrides, currentUser, currentUserRole]);
+
   // Ownership entity gate: a store of ownership 'joint_venture'/'franchise' is
   // only accessible if the user can access that ownership entity. Owned stores
   // (and anything else) are unaffected.
@@ -35402,7 +35418,7 @@ export default function App() {
 
   // ── Entity landing screen ────────────────────────────────────────────────
   // Show the picker when no entity chosen yet and there's a real choice to make.
-  const financeAvailable = ["owner", "hq_staff"].includes(effectiveRole) && canAccessEntity("entity.finance");
+  const financeAvailable = financeGranted();
   if (!selectedEntityBrand && (entityBrands.length > 1 || financeAvailable)) {
     return (
       <AuthContext.Provider value={{ user: currentUser_ctx }}>
@@ -35573,9 +35589,9 @@ export default function App() {
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
             {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "cash-accounts" && ["owner","hq_staff"].includes(effectiveRole) && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
+            {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
