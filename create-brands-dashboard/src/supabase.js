@@ -6458,6 +6458,7 @@ const mapCashLedger = (t) => ({
   fromAccountId: t.from_account_id || null, toAccountId: t.to_account_id || null,
   sourceId: t.source_id || null, expenseTypeId: t.expense_type_id || null,
   storeId: t.store_id || null, reference: t.reference || "", createdBy: t.created_by || null,
+  sourceRef: t.source_ref || null,
   createdAt: t.created_at,
 });
 
@@ -6552,6 +6553,7 @@ export async function addCashLedgerEntry(tx) {
     store_id: tx.storeId || null,
     reference: tx.reference || null,
     created_by: tx.createdBy || null,
+    source_ref: tx.sourceRef || null,
   };
   const { data, error } = await supabase.from("cash_ledger").insert(row).select().maybeSingle();
   if (error) throw error;
@@ -6586,4 +6588,58 @@ export async function ensureStoreCashAccounts(stores = []) {
   const { error: insErr } = await supabase.from("cash_accounts").insert(rows);
   if (insErr) throw insErr;
   return rows.length;
+}
+
+// ── EOD cash → store cash account (idempotent, on approval) ──────────────────
+// Posts the physical cash counted in an approved EOD into the store's revenue
+// cash account, exactly once. Tagged with source_ref = 'eod:<entryId>' so it
+// can never double-post (enforced by a unique index too). Auto-creates the
+// store's cash account if missing. Returns { posted, skipped, reason? }.
+export async function postEodCashDeposit(eodEntry, stores = [], createdBy = null) {
+  if (!eodEntry?.id) return { posted: false, skipped: true, reason: "no entry" };
+  const storeId = eodEntry.storeId || null;
+  const cash = Number(eodEntry.physicalCash);
+  if (!storeId) return { posted: false, skipped: true, reason: "EOD has no store" };
+  if (!(cash > 0)) return { posted: false, skipped: true, reason: "no cash to deposit" };
+
+  const ref = `eod:${eodEntry.id}`;
+  // Already posted? (idempotent)
+  const { data: existing, error: exErr } = await supabase.from("cash_ledger").select("id").eq("source_ref", ref).limit(1);
+  if (exErr) throw exErr;
+  if ((existing || []).length) return { posted: false, skipped: true, reason: "already posted" };
+
+  // Find the store's cash account; create it if missing.
+  let { data: accs, error: aErr } = await supabase.from("cash_accounts").select("id").eq("store_id", storeId).is("archived_at", null).limit(1);
+  if (aErr) throw aErr;
+  let accountId = (accs || [])[0]?.id;
+  if (!accountId) {
+    const st = (stores || []).find(s => s.id === storeId);
+    const nm = st ? `${st.shortName || st.name} — Cash` : "Store — Cash";
+    const { data: created, error: cErr } = await supabase.from("cash_accounts")
+      .insert({ name: nm, kind: "revenue", store_id: storeId, description: "Store cash sales" })
+      .select("id").maybeSingle();
+    if (cErr) {
+      // Race / pre-existing: re-query rather than fail.
+      const { data: re } = await supabase.from("cash_accounts").select("id").eq("store_id", storeId).limit(1);
+      accountId = (re || [])[0]?.id;
+      if (!accountId) throw cErr;
+    } else { accountId = created.id; }
+  }
+
+  // Post the deposit (income). Tagged + dated to the EOD's business date.
+  const row = {
+    txn_date: eodEntry.date || new Date().toISOString().slice(0,10),
+    type: "income", amount: cash,
+    to_account_id: accountId, store_id: storeId,
+    reference: `EOD cash ${eodEntry.date || ""}`.trim(),
+    created_by: createdBy || null,
+    source_ref: ref,
+  };
+  const { error: insErr } = await supabase.from("cash_ledger").insert(row);
+  if (insErr) {
+    // Unique index caught a concurrent post — treat as already posted.
+    if (String(insErr.message || "").toLowerCase().includes("duplicate") || insErr.code === "23505") return { posted: false, skipped: true, reason: "already posted" };
+    throw insErr;
+  }
+  return { posted: true, skipped: false, accountId };
 }

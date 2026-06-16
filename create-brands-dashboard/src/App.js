@@ -18,7 +18,7 @@ import {
   fetchCashSources, upsertCashSource, archiveCashSource,
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
   fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
-  computeCashBalances, ensureStoreCashAccounts,
+  computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -23101,7 +23101,7 @@ function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledg
                     <div className="min-w-0">
                       <div className="text-sm text-slate-200 flex items-center gap-2 flex-wrap">
                         <span className={`text-[10px] font-bold uppercase ${TYPE_COLOR[t.type]}`}>{TYPE_LABEL[t.type]}</span>
-                        {t.type==="income" && <span>{srcName(t.sourceId)} → {accName(t.toAccountId)}</span>}
+                        {t.type==="income" && <span>{t.sourceId ? srcName(t.sourceId) : (t.sourceRef ? "EOD cash" : "Income")} → {accName(t.toAccountId)}</span>}
                         {t.type==="transfer" && <span>{accName(t.fromAccountId)} → {accName(t.toAccountId)}</span>}
                         {t.type==="expense" && <span>{accName(t.fromAccountId)} → {expName(t.expenseTypeId)}</span>}
                         {t.type==="opening" && <span>{accName(t.toAccountId)}</span>}
@@ -34309,7 +34309,18 @@ export default function App() {
     } catch {}
   }, []);
 
-  const addEntry     = useCallback(async e=>{const s=await upsertEntry(e);setEntries(es=>{const idx=es.findIndex(x=>x.id===s.id);return idx>=0?es.map((x,i)=>i===idx?s:x):[s,...es];});}, []);
+  const addEntry     = useCallback(async e=>{
+    const s=await upsertEntry(e);
+    setEntries(es=>{const idx=es.findIndex(x=>x.id===s.id);return idx>=0?es.map((x,i)=>i===idx?s:x):[s,...es];});
+    // On approval (reconStatus = resolved), deposit the counted cash into the
+    // store's cash account. Idempotent — safe to call on every resolved save.
+    if ((s.reconStatus || "") === "resolved") {
+      try {
+        const res = await postEodCashDeposit(s, stores, currentUser?.name || null);
+        if (res?.posted) { reloadCash(); showToast("Cash deposited to store account"); }
+      } catch (err) { showToast(err?.message || "Cash deposit failed", "error"); }
+    }
+  }, [stores, currentUser, reloadCash, showToast]);
   const delEntry     = useCallback(async id=>{await deleteEntry(id);setEntries(es=>es.filter(x=>x.id!==id));}, []);
   const addIssue     = useCallback(async i=>{const s=await insertIssue(i);setIssues(is=>[s,...is]);}, []);
   const updateIssue  = useCallback(async i=>{const s=await upsertIssue(i);setIssues(is=>is.map(x=>x.id===s.id?s:x));}, []);
