@@ -6810,3 +6810,43 @@ export async function setExpenseStoreExcluded(storeId, excluded) {
   }
   return true;
 }
+
+// ── EMPLOYEE EXPENSE GRANTS (types / categories / stores) ────────────────────
+export async function fetchMemberExpenseTypes() {
+  const { data, error } = await supabase.from("member_expense_types").select("member_id, expense_type_id");
+  if (error) throw error;
+  const m = {}; (data || []).forEach(r => { (m[r.member_id] = m[r.member_id] || []).push(r.expense_type_id); });
+  return m;
+}
+export async function setMemberExpenseTypes(memberId, typeIds = []) {
+  await supabase.from("member_expense_types").delete().eq("member_id", memberId);
+  const rows = (typeIds || []).map(id => ({ member_id: memberId, expense_type_id: id }));
+  if (rows.length) { const { error } = await supabase.from("member_expense_types").insert(rows); if (error) throw error; }
+  return true;
+}
+
+export async function fetchMemberExpenseCategories() {
+  const { data, error } = await supabase.from("member_expense_categories").select("member_id, category_id");
+  if (error) throw error;
+  const m = {}; (data || []).forEach(r => { (m[r.member_id] = m[r.member_id] || []).push(r.category_id); });
+  return m;
+}
+export async function setMemberExpenseCategories(memberId, categoryIds = []) {
+  await supabase.from("member_expense_categories").delete().eq("member_id", memberId);
+  const rows = (categoryIds || []).map(id => ({ member_id: memberId, category_id: id }));
+  if (rows.length) { const { error } = await supabase.from("member_expense_categories").insert(rows); if (error) throw error; }
+  return true;
+}
+
+export async function fetchMemberExpenseStores() {
+  const { data, error } = await supabase.from("member_expense_stores").select("member_id, store_id");
+  if (error) throw error;
+  const m = {}; (data || []).forEach(r => { (m[r.member_id] = m[r.member_id] || []).push(r.store_id); });
+  return m;
+}
+export async function setMemberExpenseStores(memberId, storeIds = []) {
+  await supabase.from("member_expense_stores").delete().eq("member_id", memberId);
+  const rows = (storeIds || []).map(id => ({ member_id: memberId, store_id: id }));
+  if (rows.length) { const { error } = await supabase.from("member_expense_stores").insert(rows); if (error) throw error; }
+  return true;
+}
