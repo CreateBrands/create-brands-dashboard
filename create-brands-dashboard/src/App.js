@@ -13798,7 +13798,7 @@ function RolesManager({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRol
             {(opsTeam||[]).filter(m=>!m.archivedAt).sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)).map(m => (
               <div key={m.id} className="flex items-center justify-between gap-2">
                 <div className="text-sm text-slate-200 min-w-0 truncate">{m.firstName} {m.lastName}{m.nickname?` (${m.nickname})`:""} <span className="text-slate-600 text-[11px]">· {m.role||"staff"}</span></div>
-                <select value={m.roleId || ""} onChange={e=>onAssignMemberRole?.(m.id, e.target.value || null)}
+                <select value={m.accessRoleId || ""} onChange={e=>onAssignMemberRole?.(m.id, e.target.value || null)}
                   className="px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white flex-shrink-0">
                   <option value="">Built-in ({m.role||"staff"})</option>
                   {customRoles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -21558,6 +21558,7 @@ function OpsTeamMemberFormModal({
   // entry AND archives the application atomically. When null/undefined, the
   // modal behaves like the existing add/edit flow.
   prefillApplication = null,
+  customRoles = [],
   onSave, onClose,
 }) {
   const COLORS = ["#844429","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
@@ -21598,6 +21599,7 @@ function OpsTeamMemberFormModal({
     primaryStoreId: initialPrimary,
     alsoStoreIds:   initialAlsoAt,
     roleId:       item?.roleId       || "",
+    accessRoleId: item?.accessRoleId || "",
     roleIds:      (item?.roleIds && item.roleIds.length) ? item.roleIds : (item?.roleId ? [item.roleId] : []),
     // Legacy free-text fields kept so old rows still render — once a roleId
     // is picked these become derived from the role/department records.
@@ -21696,10 +21698,15 @@ function OpsTeamMemberFormModal({
     return base + facility;
   };
 
+  // A no-store access role (e.g. finance-only) means Primary Store isn't
+  // required — back-office people have no store.
+  const selectedAccessRole = (customRoles || []).find(r => r.id === form.accessRoleId) || null;
+  const noStoreRole = selectedAccessRole?.scope === "finance_only";
+
   const handleSave = () => {
     if (!form.firstName.trim()) return;
-    if (!form.primaryStoreId)   { alert("Please pick a primary store."); return; }
-    if (rolesInStore.length > 0 && (form.roleIds || []).length === 0) {
+    if (!noStoreRole && !form.primaryStoreId)   { alert("Please pick a primary store."); return; }
+    if (!noStoreRole && rolesInStore.length > 0 && (form.roleIds || []).length === 0) {
       alert("Please pick at least one role. (If this store has no roles defined yet, add one under Ops Setup → Structure first.)");
       return;
     }
@@ -21729,7 +21736,7 @@ function OpsTeamMemberFormModal({
     const brandId = primaryStore?.brandId || item?.brandId || prefillApplication?.brandId || "";
 
     // Combine primary + also stores into a single array, primary first.
-    const storeIds = [form.primaryStoreId, ...form.alsoStoreIds.filter(Boolean)].filter(Boolean);
+    const storeIds = noStoreRole ? [] : [form.primaryStoreId, ...form.alsoStoreIds.filter(Boolean)].filter(Boolean);
 
     // Per Q3 (lenient): a hire-flow save with role+dept STILL blank is OK.
     // We mark the record pending_setup so the warning badge appears in Ops
@@ -21754,6 +21761,7 @@ function OpsTeamMemberFormModal({
       storeIds,
       roleIds:       (form.roleIds || []).filter(Boolean),
       roleId:        selectedRole?.id || null,
+      accessRoleId:  form.accessRoleId || null,
       departmentId:  derivedDept?.id   || null,
       // Mirror the text fields too — keeps old reports/badges working until
       // they migrate to FK-based lookups. role text = first role's name.
@@ -21871,7 +21879,20 @@ function OpsTeamMemberFormModal({
           </div>
         </div>
 
-        {/* Store assignment */}
+        {/* Access role (Finance, JV-Manager, etc.) — separate from job role */}
+        {(customRoles || []).length > 0 && (
+          <div>
+            <label className={labelCls}>Access role</label>
+            <select value={form.accessRoleId} onChange={e => set("accessRoleId", e.target.value)} className={inputCls}>
+              <option value="">— Default (by login role) —</option>
+              {customRoles.map(r => <option key={r.id} value={r.id}>{r.name}{r.scope === "finance_only" ? " (finance only, no store)" : ""}</option>)}
+            </select>
+            {noStoreRole && <div className="text-[10px] text-emerald-400 mt-1">Back-office role — no store needed.</div>}
+          </div>
+        )}
+
+        {/* Store assignment — hidden for no-store (back-office) roles */}
+        {!noStoreRole && (
         <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-3 space-y-3">
           <div>
             <label className={labelCls}>Primary Store *</label>
@@ -21907,9 +21928,10 @@ function OpsTeamMemberFormModal({
             </div>
           )}
         </div>
+        )}
 
         {/* Role + auto-derived department */}
-        {form.primaryStoreId && (
+        {!noStoreRole && form.primaryStoreId && (
           <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-3 space-y-3">
             <div>
               <label className={labelCls}>Roles * <span className="text-slate-600 normal-case font-normal">(pick one or more)</span></label>
@@ -22753,6 +22775,7 @@ function OpsTeamView({
   brands, stores = [], visibleStoreIds = [],
   storeDepartments = [], storeRoles = [],
   opsTeam = [], users = [],
+  customRoles = [],
   onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam,
   onOpenEmployeeProfile, currentUser,
 }) {
@@ -22911,7 +22934,7 @@ function OpsTeamView({
           item={tmModal === "new" ? null : tmModal}
           brands={brands} stores={stores} visibleStoreIds={visibleStoreIds}
           storeDepartments={storeDepartments} storeRoles={storeRoles}
-          opsTeam={opsTeam}
+          opsTeam={opsTeam} customRoles={customRoles}
           onSave={async (data) => {
             try {
               if (tmModal === "new") await onAddOpsTeam(data);
@@ -34656,7 +34679,7 @@ export default function App() {
     if (!currentUser) return { builtIn: null, matrixRole: null, baseRole: null, customRoleId: null };
     const memberId = currentUser.opsTeamMemberId || currentUser.id;
     const member = (opsTeam || []).find(mm => mm.id === memberId);
-    const roleId = member?.roleId || null;
+    const roleId = member?.accessRoleId || null;
     const crole = roleId ? customRoleById[roleId] : null;
     return {
       builtIn,
@@ -35550,6 +35573,7 @@ export default function App() {
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
               opsTeam={opsTeam} users={users}
+              customRoles={customRoles}
               onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
               onOpenEmployeeProfile={openEmployeeProfile}
               currentUser={currentUser}

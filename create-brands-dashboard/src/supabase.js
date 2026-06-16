@@ -508,6 +508,9 @@ function appOpsTeamToDb(m) {
   if (m.hourlyRate    !== undefined) row.hourly_rate   = m.hourlyRate || 0;
   if (m.storeIds      !== undefined) row.store_ids     = m.storeIds || [];
   if (m.roleId        !== undefined) row.role_id       = m.roleId || null;
+  // Access/custom role lives in its own column so it never collides with job
+  // roles (role_id/role_ids).
+  if (m.accessRoleId  !== undefined) row.access_role_id = m.accessRoleId || null;
   // Multiple job roles. role_ids is the source of truth; role_id mirrors the
   // first element for backward compatibility with single-role readers.
   if (m.roleIds       !== undefined) {
@@ -581,6 +584,7 @@ function dbOpsTeamToApp(m) {
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,
     storeIds: m.store_ids || [],
     roleId: m.role_id || null,
+    accessRoleId: m.access_role_id || null,
     roleIds: (m.role_ids && m.role_ids.length) ? m.role_ids : (m.role_id ? [m.role_id] : []),
     departmentId: m.department_id || null,
     // Slice 5 — HR fields
@@ -595,6 +599,7 @@ function dbOpsTeamToApp(m) {
     selffillCompletedAt: m.selffill_completed_at || null,
     photoUrl:    m.photo_url || null,
     roleId:      m.role_id || null,
+    accessRoleId: m.access_role_id || null,
     hrNotes:     m.hr_notes || "",
     status:      m.status || "active",
     archivedAt:  m.archived_at || null,
@@ -6437,7 +6442,7 @@ export async function upsertCustomRole(role) {
 
 export async function archiveCustomRole(id) {
   // Unassign anyone holding it, then soft-archive the role.
-  await supabase.from("ops_team").update({ role_id: null }).eq("role_id", id);
+  await supabase.from("ops_team").update({ access_role_id: null }).eq("access_role_id", id);
   const { error } = await supabase.from("custom_roles").update({ archived_at: new Date().toISOString() }).eq("id", id);
   if (error) throw error;
   return id;
@@ -6445,7 +6450,7 @@ export async function archiveCustomRole(id) {
 
 // Assign (or clear) a person's custom role. roleId=null clears it.
 export async function setMemberCustomRole(memberId, roleId) {
-  const { error } = await supabase.from("ops_team").update({ role_id: roleId || null }).eq("id", memberId);
+  const { error } = await supabase.from("ops_team").update({ access_role_id: roleId || null }).eq("id", memberId);
   if (error) throw error;
   return { memberId, roleId: roleId || null };
 }
