@@ -22685,8 +22685,15 @@ function OpsTeamView({
     return { roleLabel, deptLabel, storeIds, roleIds: ids };
   };
 
-  // Active employees (not archived), with optional pending filter.
-  const base = useMemo(() => [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)], [opsTeam, users]);
+  // Active employees (not archived). Non-HQ users (managers, incl. JV/franchise)
+  // only see members assigned to a store they can see; HQ/owner see everyone.
+  const base = useMemo(() => {
+    const all = [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)];
+    if (isHq) return all;
+    const visible = new Set(visibleStoreIds || []);
+    if (visible.size === 0) return [];
+    return all.filter(m => (m.storeIds || []).some(sid => visible.has(sid)));
+  }, [opsTeam, users, isHq, visibleStoreIds]);
 
   const pendingCount = useMemo(() => base.filter(m => {
     if (m.status !== "pending_setup") return false;
@@ -34675,12 +34682,17 @@ export default function App() {
   //   Manager & Staff  → only stores listed in their store_ids
   const visibleStores = useMemo(() => {
     if (!currentUser) return [];
-    const active = stores.filter(s => !s.archivedAt && canAccessStore(s));
-    let scoped = isHQ ? active : (() => {
-      const ids = currentUser.storeIds || [];
-      if (ids.length === 0) return [];
-      return active.filter(s => ids.includes(s.id));
-    })();
+    const nonArchived = stores.filter(s => !s.archivedAt);
+    let scoped = isHQ
+      // HQ/owner see all stores, restricted by the ownership entity gate.
+      ? nonArchived.filter(s => canAccessStore(s))
+      // Managers/staff see exactly their assigned stores (their explicit
+      // assignment is authoritative — not re-gated by ownership).
+      : (() => {
+          const ids = currentUser.storeIds || [];
+          if (ids.length === 0) return [];
+          return nonArchived.filter(s => ids.includes(s.id));
+        })();
     // Entity landing: once an entity is chosen, scope everything to its brand.
     if (selectedEntityBrand && selectedEntityBrand !== "finance") scoped = scoped.filter(s => s.brandId === selectedEntityBrand);
     return scoped;
@@ -34692,8 +34704,8 @@ export default function App() {
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
   const entityBrands = useMemo(() => {
     if (!currentUser) return [];
-    const active = stores.filter(s => !s.archivedAt && canAccessStore(s));
-    const mine = isHQ ? active : active.filter(s => (currentUser.storeIds || []).includes(s.id));
+    const nonArchived = stores.filter(s => !s.archivedAt);
+    const mine = isHQ ? nonArchived.filter(s => canAccessStore(s)) : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
     const ids = new Set(mine.map(s => s.brandId));
     // base = store-derived; then restrict by role/person entity access.
     return brands.filter(b => ids.has(b.id) && canAccessEntity(`entity.${b.id}`));
