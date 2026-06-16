@@ -23813,6 +23813,7 @@ function AccountsHubView(props) {
     onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
     sharedFile, onConsumeSharedFile, initialTab } = props;
   const [tab, setTab] = useState(initialTab || "pnl");
+  const [storeFilter, setStoreFilter] = useState("all");
   // If a Tide statement was shared in, jump straight to the Bank tab.
   useEffect(() => { if (sharedFile) setTab("bank"); }, [sharedFile]);
 
@@ -23835,7 +23836,12 @@ function AccountsHubView(props) {
         ))}
       </div>
 
-      {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories}/>}
+      <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+        <option value="all">All stores (group)</option>
+        {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+      </select>
+
+      {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
       {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
       {tab === "suppliers" && <SuppliersView stores={stores}/>}
@@ -24096,14 +24102,14 @@ function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn, o
   );
 }
 
-function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [] }) {
+function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [], storeFilter: storeFilterProp }) {
   const [period, setPeriod] = useState("month");   // month | week
   const [vatMode, setVatMode] = useState("ex");     // ex | inc
   const [anchor, setAnchor] = useState(() => new Date());
   const [eod, setEod] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [storeFilter, setStoreFilter] = useState("all");
+  const storeFilter = storeFilterProp ?? "all";
 
   // Resolve a bank transaction's store: its own storeId if tagged, else the
   // store of the bank account it belongs to. Used so per-store P&L/Bank
@@ -24274,11 +24280,6 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
         <div className="text-sm font-bold text-white">{bounds.label}</div>
         <button onClick={()=>shiftPeriod(1)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-sm font-semibold">→</button>
       </div>
-
-      <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
-        <option value="all">All stores (group)</option>
-        {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-      </select>
 
       {loading ? (
         <div className="text-center py-12 text-sm text-slate-500">Loading accounts…</div>
