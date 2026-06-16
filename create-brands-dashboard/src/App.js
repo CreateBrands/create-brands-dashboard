@@ -21469,23 +21469,20 @@ function OpsTeamMemberFormModal({
 }) {
   const COLORS = ["#844429","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
 
-  // Stores a manager (or owner/HQ) can assign staff to.
-  //
-  // IMPORTANT: This is intentionally NOT the same as the user's "scope" of
-  // stores they can manage. A manager only manages 2 stores, but a staff
-  // member they're adding might be a floater who works across several owned
-  // stores company-wide. The dropdown therefore shows ALL owned stores
-  // (excluding archived), regardless of who's adding the team member.
-  //
-  // Franchise / joint-venture stores are excluded — those are managed by
-  // their own teams, not company HQ. If you ever need to add staff at a JV
-  // or franchise store, that's a separate workflow.
-  const allowedStores = useMemo(
-    // Include facility sites (central kitchen, distribution) — staff work there
-    // and need a primary/also assignment. Owned sites only.
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned"),
-    [stores]
-  );
+  // Stores a user can assign staff to = the stores in their scope
+  // (visibleStoreIds). For HQ/owner that's the whole estate; for a manager
+  // it's their assigned stores — which now correctly includes any JV or
+  // franchise store HQ has assigned them, so JV/franchise managers can add
+  // their own staff. Facility sites (kitchen/depot) included. Falls back to
+  // owned stores only if no scope is provided.
+  const allowedStores = useMemo(() => {
+    const nonArchived = (stores || []).filter(s => !s.archivedAt);
+    if (visibleStoreIds && visibleStoreIds.length) {
+      const set = new Set(visibleStoreIds);
+      return nonArchived.filter(s => set.has(s.id));
+    }
+    return nonArchived.filter(s => s.ownershipModel === "owned");
+  }, [stores, visibleStoreIds]);
 
   // Initial form. Three sources of seed data, in priority order:
   //   1. Existing item (edit mode)
