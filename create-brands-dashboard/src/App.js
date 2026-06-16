@@ -33348,16 +33348,6 @@ export default function App() {
     if (override !== undefined) return override;
     return !item.roles || item.roles.includes(role);
   }, [accessPerms]);
-  // Feature-level check for the current user (Level 2). Owner always allowed.
-  const canFeature = useCallback((featureKey) => {
-    const role = currentUser?.role;
-    if (role === "owner") return true;
-    const override = accessPerms?.[role]?.[featureKey];
-    if (override !== undefined) return override;
-    const feat = FEATURE_REGISTRY.find(f => f.key === featureKey);
-    if (!feat) return true; // unknown key → don't block
-    return feat.defaultRoles.includes(role);
-  }, [accessPerms, currentUser]);
 
   // Slice 6 — employee profile view. When a manager clicks an employee in
   // Ops Team, we set selectedEmployeeId and switch activeView to
@@ -33625,6 +33615,18 @@ export default function App() {
   }, [actualUser, impersonatedUserId, users]);
 
   const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
+
+  // Feature-level access check for the current user (Level 2). Owner always
+  // allowed. Defined here, after currentUser, to avoid a TDZ reference.
+  const canFeature = useCallback((featureKey) => {
+    const role = currentUser?.role;
+    if (role === "owner") return true;
+    const override = accessPerms?.[role]?.[featureKey];
+    if (override !== undefined) return override;
+    const feat = FEATURE_REGISTRY.find(f => f.key === featureKey);
+    if (!feat) return true; // unknown key → don't block
+    return feat.defaultRoles.includes(role);
+  }, [accessPerms, currentUser]);
 
   const approvePayPeriod = useCallback(async (pp) => {
     const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
