@@ -6643,3 +6643,124 @@ export async function postEodCashDeposit(eodEntry, stores = [], createdBy = null
   }
   return { posted: true, skipped: false, accountId };
 }
+
+// ── EXPENSE CLAIMS (submit → approve → reconcile vs cash or bank) ─────────────
+const mapExpenseClaim = (e) => ({
+  id: e.id, description: e.description, amount: Number(e.amount)||0, expenseDate: e.expense_date,
+  expenseTypeId: e.expense_type_id || null, categoryId: e.category_id || null, storeId: e.store_id || null,
+  vendor: e.vendor || "", reference: e.reference || "",
+  status: e.status || "submitted", submittedBy: e.submitted_by || "", submittedById: e.submitted_by_id || null,
+  approvedBy: e.approved_by || null, approvedAt: e.approved_at || null, rejectedReason: e.rejected_reason || null,
+  reconcileType: e.reconcile_type || null, cashAccountId: e.cash_account_id || null, cashLedgerId: e.cash_ledger_id || null,
+  bankTxnId: e.bank_txn_id || null, reconciledBy: e.reconciled_by || null, reconciledAt: e.reconciled_at || null,
+  createdAt: e.created_at, updatedAt: e.updated_at,
+});
+
+export async function fetchExpenseClaims({ status } = {}) {
+  let q = supabase.from("expense_claims").select("*").order("expense_date", { ascending: false }).order("created_at", { ascending: false });
+  if (status) q = q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapExpenseClaim);
+}
+
+export async function submitExpenseClaim(claim) {
+  const amt = Number(claim.amount);
+  if (!(amt > 0)) throw new Error("Amount must be greater than zero.");
+  if (!(claim.description || "").trim()) throw new Error("Describe the expense.");
+  const row = {
+    description: claim.description.trim(), amount: amt,
+    expense_date: claim.expenseDate || new Date().toISOString().slice(0,10),
+    expense_type_id: claim.expenseTypeId || null, category_id: claim.categoryId || null,
+    store_id: claim.storeId || null, vendor: claim.vendor || null, reference: claim.reference || null,
+    status: "submitted", submitted_by: claim.submittedBy || null, submitted_by_id: claim.submittedById || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (claim.id) row.id = claim.id;
+  const { data, error } = await supabase.from("expense_claims").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapExpenseClaim(data) : null;
+}
+
+export async function approveExpenseClaim(id, approvedBy) {
+  const { data, error } = await supabase.from("expense_claims")
+    .update({ status: "approved", approved_by: approvedBy || null, approved_at: new Date().toISOString(), rejected_reason: null, updated_at: new Date().toISOString() })
+    .eq("id", id).eq("status", "submitted").select().maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Only a submitted expense can be approved.");
+  return mapExpenseClaim(data);
+}
+
+export async function rejectExpenseClaim(id, reason, by) {
+  const { data, error } = await supabase.from("expense_claims")
+    .update({ status: "rejected", rejected_reason: reason || null, approved_by: by || null, updated_at: new Date().toISOString() })
+    .eq("id", id).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapExpenseClaim(data) : null;
+}
+
+// Reconcile against CASH: post a cash_ledger debit from the chosen account and
+// link it back to the claim. Idempotent via source_ref = 'exp:<id>'.
+export async function reconcileExpenseCash(claim, cashAccountId, reconciledBy) {
+  if (!claim?.id) throw new Error("Missing expense.");
+  if (claim.status !== "approved") throw new Error("Approve the expense before reconciling.");
+  if (!cashAccountId) throw new Error("Choose the cash account it was paid from.");
+  const ref = `exp:${claim.id}`;
+  // Reuse an existing ledger row if this expense was already posted.
+  let ledgerId;
+  const { data: existing } = await supabase.from("cash_ledger").select("id").eq("source_ref", ref).limit(1);
+  if ((existing || []).length) { ledgerId = existing[0].id; }
+  else {
+    const { data: led, error: lErr } = await supabase.from("cash_ledger").insert({
+      txn_date: claim.expenseDate || new Date().toISOString().slice(0,10),
+      type: "expense", amount: Number(claim.amount),
+      from_account_id: cashAccountId, expense_type_id: claim.expenseTypeId || null,
+      store_id: claim.storeId || null, reference: `Expense: ${claim.description}`,
+      created_by: reconciledBy || null, source_ref: ref,
+    }).select("id").maybeSingle();
+    if (lErr) throw lErr;
+    ledgerId = led.id;
+  }
+  const { data, error } = await supabase.from("expense_claims")
+    .update({ status: "reconciled", reconcile_type: "cash", cash_account_id: cashAccountId, cash_ledger_id: ledgerId, bank_txn_id: null, reconciled_by: reconciledBy || null, reconciled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", claim.id).select().maybeSingle();
+  if (error) throw error;
+  return mapExpenseClaim(data);
+}
+
+// Reconcile against BANK: link to an existing imported bank transaction.
+export async function reconcileExpenseBank(claim, bankTxnId, reconciledBy) {
+  if (!claim?.id) throw new Error("Missing expense.");
+  if (claim.status !== "approved") throw new Error("Approve the expense before reconciling.");
+  if (!bankTxnId) throw new Error("Choose the bank transaction.");
+  const { data, error } = await supabase.from("expense_claims")
+    .update({ status: "reconciled", reconcile_type: "bank", bank_txn_id: bankTxnId, cash_account_id: null, cash_ledger_id: null, reconciled_by: reconciledBy || null, reconciled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", claim.id).select().maybeSingle();
+  if (error) {
+    if (String(error.message||"").toLowerCase().includes("duplicate") || error.code === "23505") throw new Error("That bank transaction is already linked to another expense.");
+    throw error;
+  }
+  return mapExpenseClaim(data);
+}
+
+// Undo reconciliation. Removes the cash_ledger debit if it created one.
+export async function unreconcileExpenseClaim(claim, by) {
+  if (!claim?.id) throw new Error("Missing expense.");
+  if (claim.reconcileType === "cash" && claim.cashLedgerId) {
+    await supabase.from("cash_ledger").delete().eq("id", claim.cashLedgerId);
+  }
+  const { data, error } = await supabase.from("expense_claims")
+    .update({ status: "approved", reconcile_type: null, cash_account_id: null, cash_ledger_id: null, bank_txn_id: null, reconciled_by: null, reconciled_at: null, updated_at: new Date().toISOString() })
+    .eq("id", claim.id).select().maybeSingle();
+  if (error) throw error;
+  return mapExpenseClaim(data);
+}
+
+export async function deleteExpenseClaim(claim) {
+  if (claim?.reconcileType === "cash" && claim?.cashLedgerId) {
+    await supabase.from("cash_ledger").delete().eq("id", claim.cashLedgerId);
+  }
+  const { error } = await supabase.from("expense_claims").delete().eq("id", claim.id);
+  if (error) throw error;
+  return claim.id;
+}

@@ -19,6 +19,8 @@ import {
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
   fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
   computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit,
+  fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
+  reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -133,7 +135,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet
+  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -22990,6 +22992,184 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   );
 }
 
+function ExpensesView({ claims = [], cashAccounts = [], expenseTypes = [], categories = [], bankTransactions = [], stores = [], currentUser, canReconcile = false, handlers = {} }) {
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
+  const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
+  const [form, setForm] = useState(null);
+  const [recon, setRecon] = useState(null); // claim being reconciled
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+
+  const expName = (id) => expenseTypes.find(e=>e.id===id)?.name || "";
+  const catName = (id) => categories.find(c=>c.id===id)?.name || "";
+  const storeName = (id) => stores.find(s=>s.id===id)?.shortName || stores.find(s=>s.id===id)?.name || "";
+  const acctName = (id) => cashAccounts.find(a=>a.id===id)?.name || "";
+
+  const byStatus = (st) => claims.filter(c => c.status === st);
+  const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
+
+  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", categoryId:"", storeId:"", vendor:"", reference:"" }); setTab("new"); };
+  const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
+  const submit = async () => {
+    setBusy(true); setErr("");
+    try { await handlers.submit?.({ ...form, amount: Number(form.amount) }); setForm(null); setTab("submitted"); }
+    catch (e) { setErr(e?.message || "Could not submit."); }
+    setBusy(false);
+  };
+
+  // Reconcile modal state
+  const [reconMode, setReconMode] = useState("cash");
+  const [reconCashAcc, setReconCashAcc] = useState("");
+  const [reconBankTxn, setReconBankTxn] = useState("");
+  const linkedBankIds = new Set(claims.filter(c=>c.bankTxnId).map(c=>c.bankTxnId));
+  const openRecon = (claim) => { setErr(""); setReconMode("cash"); setReconCashAcc(""); setReconBankTxn(""); setRecon(claim); };
+  const doRecon = async () => {
+    setBusy(true); setErr("");
+    try {
+      if (reconMode === "cash") await handlers.reconcileCash?.(recon, reconCashAcc);
+      else await handlers.reconcileBank?.(recon, reconBankTxn);
+      setRecon(null);
+    } catch (e) { setErr(e?.message || "Could not reconcile."); }
+    setBusy(false);
+  };
+  // Bank candidates: debit transactions near the amount, not already linked.
+  const bankCandidates = useMemo(() => {
+    if (!recon) return [];
+    return (bankTransactions||[])
+      .filter(t => !linkedBankIds.has(t.id))
+      .map(t => ({ ...t, amt: Math.abs(Number(t.amount)||0) }))
+      .sort((a,b) => Math.abs(a.amt-recon.amount) - Math.abs(b.amt-recon.amount))
+      .slice(0, 30);
+  }, [recon, bankTransactions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const StatusBadge = ({ s }) => {
+    const m = { submitted:["bg-amber-600/20 text-amber-300","Submitted"], approved:["bg-indigo-600/20 text-indigo-300","Approved"], reconciled:["bg-emerald-600/20 text-emerald-300","Reconciled"], rejected:["bg-red-600/20 text-red-300","Rejected"] };
+    const [cls,lab] = m[s] || ["bg-slate-700 text-slate-300", s];
+    return <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${cls}`}>{lab}</span>;
+  };
+
+  const Row = ({ c }) => (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
+          <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap mt-0.5">
+            <span>{c.expenseDate}</span>
+            {c.vendor && <span>· {c.vendor}</span>}
+            {c.expenseTypeId && <span>· {expName(c.expenseTypeId)}</span>}
+            {c.categoryId && <span>· {catName(c.categoryId)}</span>}
+            {c.storeId && <span>· {storeName(c.storeId)}</span>}
+            {c.submittedBy && <span>· by {c.submittedBy}</span>}
+          </div>
+          {c.status==="reconciled" && <div className="text-[11px] text-emerald-400/80 mt-1">{c.reconcileType==="cash" ? `Paid from ${acctName(c.cashAccountId)} (cash)` : "Matched to bank transaction"}{c.reconciledBy?` · ${c.reconciledBy}`:""}</div>}
+          {c.status==="rejected" && c.rejectedReason && <div className="text-[11px] text-red-400/80 mt-1">Reason: {c.rejectedReason}</div>}
+        </div>
+        <div className="text-right flex-shrink-0">
+          <div className="text-sm font-bold text-white">{money(c.amount)}</div>
+        </div>
+      </div>
+      {canReconcile && (
+        <div className="flex gap-1.5 mt-2 flex-wrap">
+          {c.status==="submitted" && <>
+            <button onClick={()=>handlers.approve?.(c.id)} className="px-2.5 py-1 rounded-lg bg-indigo-600/30 text-indigo-200 text-[11px] font-semibold">Approve</button>
+            <button onClick={()=>{ const r = window.prompt("Reason for rejection?"); if(r!==null) handlers.reject?.(c.id, r); }} className="px-2.5 py-1 rounded-lg bg-red-600/20 text-red-300 text-[11px] font-semibold">Reject</button>
+          </>}
+          {c.status==="approved" && <>
+            <button onClick={()=>openRecon(c)} className="px-2.5 py-1 rounded-lg bg-emerald-600/30 text-emerald-200 text-[11px] font-semibold">Reconcile</button>
+          </>}
+          {c.status==="reconciled" && <button onClick={()=>{ if(window.confirm("Undo reconciliation? If paid by cash, the cash movement is removed.")) handlers.unreconcile?.(c); }} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Un-reconcile</button>}
+          <button onClick={()=>{ if(window.confirm("Delete this expense?")) handlers.remove?.(c); }} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-500 hover:text-red-400 text-[11px] font-semibold">Delete</button>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white">Expenses</h2>
+          <p className="text-sm text-slate-500">Submit any payment or expense, then approve and reconcile it against a cash account or a bank transaction.</p>
+        </div>
+        <button onClick={openNew} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">+ New expense</button>
+      </div>
+
+      <div className="flex gap-1 border-b border-slate-800 flex-wrap">
+        {[["submitted",`Submitted${counts.submitted?` (${counts.submitted})`:""}`],["approved",`Approved${counts.approved?` (${counts.approved})`:""}`],["reconciled","Reconciled"],["rejected","Rejected"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab==="new" ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-w-lg">
+          <div className="text-sm font-bold text-white">New expense</div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Description *</label><input value={form.description} onChange={e=>setF("description",e.target.value)} placeholder="What was it for?" className={ec}/></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Amount (£) *</label><input type="number" step="0.01" value={form.amount} onChange={e=>setF("amount",e.target.value)} className={ec}/></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={form.expenseDate} onChange={e=>setF("expenseDate",e.target.value)} className={ec}/></div>
+          </div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} className={ec}/></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{expenseTypes.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store (optional)</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{stores.filter(s=>!s.archivedAt).map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Reference</label><input value={form.reference} onChange={e=>setF("reference",e.target.value)} className={ec}/></div>
+          </div>
+          {err && <div className="text-xs text-red-400">{err}</div>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={()=>{setForm(null);setTab("submitted");}} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={submit} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Submitting…":"Submit expense"}</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {byStatus(tab).length===0 ? <div className="text-center py-10 text-sm text-slate-500">Nothing here.</div> : byStatus(tab).map(c => <Row key={c.id} c={c}/>)}
+        </div>
+      )}
+
+      {/* Reconcile modal */}
+      {recon && (
+        <Modal title={`Reconcile — ${recon.description}`} onClose={()=>setRecon(null)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setRecon(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doRecon} disabled={busy || (reconMode==="cash"?!reconCashAcc:!reconBankTxn)} className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Saving…":"Reconcile"}</button>
+          </>}>
+          <div className="space-y-3">
+            <div className="text-sm text-slate-300">Amount: <span className="font-bold text-white">{money(recon.amount)}</span></div>
+            <div className="flex gap-1 bg-slate-800 rounded-xl p-1">
+              {[["cash","Pay from cash"],["bank","Match bank transaction"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setReconMode(k)} className={`flex-1 py-1.5 rounded-lg text-xs font-semibold ${reconMode===k?"bg-indigo-600 text-white":"text-slate-400"}`}>{l}</button>
+              ))}
+            </div>
+            {reconMode==="cash" ? (
+              <div>
+                <label className="text-[11px] text-slate-500 uppercase font-semibold">Cash account</label>
+                <select value={reconCashAcc} onChange={e=>setReconCashAcc(e.target.value)} className={ec}>
+                  <option value="">— select account —</option>
+                  {cashAccounts.map(a=><option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}
+                </select>
+                <div className="text-[11px] text-slate-600 mt-1">Posts a money-out movement from this account for {money(recon.amount)}.</div>
+              </div>
+            ) : (
+              <div>
+                <label className="text-[11px] text-slate-500 uppercase font-semibold">Bank transaction (closest amounts first)</label>
+                <select value={reconBankTxn} onChange={e=>setReconBankTxn(e.target.value)} className={ec}>
+                  <option value="">— select transaction —</option>
+                  {bankCandidates.map(t=><option key={t.id} value={t.id}>{t.txnDate} · {money(t.amt)} · {(t.description||t.reference||"").slice(0,40)}</option>)}
+                </select>
+                {bankCandidates.length===0 && <div className="text-[11px] text-amber-400/80 mt-1">No unlinked bank transactions found. Import a statement in Accounts → Bank.</div>}
+              </div>
+            )}
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledger = [], stores = [], categories = [], handlers = {} }) {
   const money = (n) => `${n<0?"−":""}£${Math.abs(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const [tab, setTab] = useState("accounts"); // accounts | ledger | manage
@@ -33819,6 +33999,11 @@ export default function App() {
   }, []);
   useEffect(() => { reloadCash(); }, [reloadCash]);
 
+  // ── Expense claims (submit → approve → reconcile vs cash/bank) ──────────────
+  const [expenseClaims, setExpenseClaims] = useState([]);
+  const reloadExpenses = useCallback(async () => { try { setExpenseClaims(await fetchExpenseClaims()); } catch (e) {} }, []);
+  useEffect(() => { reloadExpenses(); }, [reloadExpenses]);
+
   // ── Categories (bank txn categorisation) ───────────────────────────────────
   const [categories, setCategories] = useState([]);
   const [categoryRules, setCategoryRules] = useState([]);
@@ -34206,6 +34391,16 @@ export default function App() {
     deleteEntry: async (id) => { await deleteCashLedgerEntry(id); await reloadCash(); },
     ensureStoreAccounts: async () => { const n = await ensureStoreCashAccounts(stores); await reloadCash(); return n; },
   }), [reloadCash, currentUser, stores]);
+
+  const expenseHandlers = useMemo(() => ({
+    submit: async (c) => { await submitExpenseClaim({ ...c, submittedBy: c.submittedBy || currentUser?.name || null, submittedById: currentUser?.opsTeamMemberId || currentUser?.id || null }); await reloadExpenses(); },
+    approve: async (id) => { await approveExpenseClaim(id, currentUser?.name || null); await reloadExpenses(); },
+    reject: async (id, reason) => { await rejectExpenseClaim(id, reason, currentUser?.name || null); await reloadExpenses(); },
+    reconcileCash: async (claim, accId) => { await reconcileExpenseCash(claim, accId, currentUser?.name || null); await Promise.all([reloadExpenses(), reloadCash()]); },
+    reconcileBank: async (claim, txnId) => { await reconcileExpenseBank(claim, txnId, currentUser?.name || null); await reloadExpenses(); },
+    unreconcile: async (claim) => { await unreconcileExpenseClaim(claim, currentUser?.name || null); await Promise.all([reloadExpenses(), reloadCash()]); },
+    remove: async (claim) => { await deleteExpenseClaim(claim); await Promise.all([reloadExpenses(), reloadCash()]); },
+  }), [reloadExpenses, reloadCash, currentUser]);
 
   // Feature-level access check for the current user (Level 2). Owner always
   // allowed. Defined here, after currentUser, to avoid a TDZ reference.
@@ -34856,6 +35051,7 @@ export default function App() {
     { group: "FINANCE", items: [
       { key: "accounts", label: "Accounts", icon: BarChart2 },
       { key: "cash-accounts", label: "Cash Accounts", icon: Wallet },
+      { key: "expenses", label: "Expenses", icon: Receipt },
     ]},
   ];
   const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : NAV_GROUPS;
@@ -35062,6 +35258,7 @@ export default function App() {
             {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && ["owner","hq_staff"].includes(effectiveRole) && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
+            {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} currentUser={currentUser} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && ["owner","hq_staff"].includes(currentUser.role))) && ["owner","hq_staff"].includes(currentUser.role) && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
