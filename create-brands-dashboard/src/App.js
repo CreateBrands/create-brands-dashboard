@@ -11866,7 +11866,7 @@ function EodReconBadge({ status }) {
   return <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase font-semibold ${map[status] || map.open}`}>{label}</span>;
 }
 
-function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [], currentUser, onUpdateEntry, onDeleteEntry }) {
+function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [], currentUser, onUpdateEntry, onDeleteEntry, onDepositCash }) {
   const isHq = isHqOrAbove(currentUser.role);
   const myStoreIds = currentUser.storeIds || [];
   const fmtMoney = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -12153,6 +12153,9 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                           </button>
                         )}
                         {selected.reconStatus === "resolved" && <span className="text-[11px] text-emerald-400 font-semibold">✓ Approved</span>}
+                        {selected.reconStatus === "resolved" && selected.storeId && Number(selected.physicalCash) > 0 && onDepositCash && (
+                          <button onClick={() => onDepositCash(selected)} className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-indigo-200 bg-indigo-600/30 hover:bg-indigo-600/50">Deposit cash to account</button>
+                        )}
                       </div>
 
                       {/* Side-by-side table */}
@@ -12263,7 +12266,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
 // ===== end EOD_AMEND_RECON_V1 =====
 
 // EOD hub — the EOD Report form plus the Reconciliation view as a second tab.
-function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddEntry, onDeleteEntry }) {
+function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddEntry, onDeleteEntry, onDepositCash }) {
   const canRecon = ["owner","hq_staff","manager"].includes(currentUser?.role);
   const [tab, setTab] = useState("report");
   return (
@@ -12277,7 +12280,7 @@ function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddE
         )}
       </div>
       {tab === "report" && <EODFormView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} onAddEntry={onAddEntry}/>}
-      {tab === "recon" && canRecon && <EodReconView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={onAddEntry} onDeleteEntry={onDeleteEntry}/>}
+      {tab === "recon" && canRecon && <EodReconView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onUpdateEntry={onAddEntry} onDeleteEntry={onDeleteEntry} onDepositCash={onDepositCash}/>}
     </div>
   );
 }
@@ -34318,8 +34321,19 @@ export default function App() {
       try {
         const res = await postEodCashDeposit(s, stores, currentUser?.name || null);
         if (res?.posted) { reloadCash(); showToast("Cash deposited to store account"); }
+        else if (res?.reason === "already posted") { /* silent: expected on re-save */ }
+        else if (res?.reason) { showToast(`Cash not deposited: ${res.reason}`, "error"); }
       } catch (err) { showToast(err?.message || "Cash deposit failed", "error"); }
     }
+  }, [stores, currentUser, reloadCash, showToast]);
+  // Manually post (or backfill) an approved EOD's cash to its store account.
+  const depositEodCash = useCallback(async (entry)=>{
+    try {
+      const res = await postEodCashDeposit(entry, stores, currentUser?.name || null);
+      if (res?.posted) { reloadCash(); showToast("Cash deposited to store account"); }
+      else if (res?.reason === "already posted") { showToast("Already deposited for this EOD"); }
+      else { showToast(`Not deposited: ${res?.reason || "unknown"}`, "error"); }
+    } catch (err) { showToast(err?.message || "Cash deposit failed", "error"); }
   }, [stores, currentUser, reloadCash, showToast]);
   const delEntry     = useCallback(async id=>{await deleteEntry(id);setEntries(es=>es.filter(x=>x.id!==id));}, []);
   const addIssue     = useCallback(async i=>{const s=await insertIssue(i);setIssues(is=>[s,...is]);}, []);
@@ -34960,7 +34974,7 @@ export default function App() {
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
             {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
-            {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry}/>}
+            {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
