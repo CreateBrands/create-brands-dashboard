@@ -13507,7 +13507,7 @@ function PersonEntityAccess({ opsTeam = [], entities = [], entityOverrides = {},
   );
 }
 
-function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {}, customRoles = [] }) {
+function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {}, customRoles = [], onSaveRole, onArchiveRole }) {
   const BUILTIN_ROLES = [
     { key: "owner", label: "Owner" },
     { key: "hq_staff", label: "HQ Staff" },
@@ -13559,7 +13559,9 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const [acView, setAcView] = useState("sections"); // sections | entities | people
+  const [acView, setAcView] = useState("roles"); // roles | people
+  const [selRole, setSelRole] = useState("manager"); // currently-selected role key
+  const [roleModal, setRoleModal] = useState(null); // null | "new" | role object
   const [personId, setPersonId] = useState("");
   const [personBusy, setPersonBusy] = useState("");
   useEffect(() => { setGrid(seed); setDirty(false); }, [seed]);
@@ -13605,8 +13607,8 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
-          <h2 className="text-lg font-bold text-white">Access Control</h2>
-          <p className="text-sm text-slate-500">Choose which sections each role can see. Changes apply immediately — no redeploy.</p>
+          <h2 className="text-lg font-bold text-white">Access &amp; Roles</h2>
+          <p className="text-sm text-slate-500">Pick a role to set what it can see and do. Per-person exceptions are for one-off overrides. Changes apply immediately — no redeploy.</p>
         </div>
         <div className="flex items-center gap-2">
           {msg && <span className="text-xs text-emerald-400">{msg}</span>}
@@ -13615,113 +13617,161 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
         </div>
       </div>
 
-      {/* Sub-tabs */}
+      {/* Top tabs */}
       <div className="flex gap-1 border-b border-slate-800">
-        {[["sections","Sections & Features"],["entities","Entities (by role)"],["people","Entities (per person)"]].map(([k,l])=>(
+        {[["roles","Roles"],["people","Per-person exceptions"]].map(([k,l])=>(
           <button key={k} onClick={()=>setAcView(k)} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${acView===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
         ))}
       </div>
 
-      {acView === "sections" && (
-      <div className="overflow-x-auto rounded-2xl border border-slate-800">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
-              <th className="text-left px-4 py-3 font-bold sticky left-0 bg-slate-900 z-10">Section</th>
-              {ROLES.map(r => <th key={r.key} className="px-3 py-3 font-bold text-center w-28">{r.label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {navGroups.map(g => (
-              <Fragment key={g.group}>
-                <tr className="bg-slate-900/50"><td colSpan={ROLES.length+1} className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-900/50">{g.group}</td></tr>
-                {g.items.map(item => (
-                  <Fragment key={item.key}>
-                  <tr className="border-t border-slate-800/60 hover:bg-slate-900/30">
-                    <td className="px-4 py-2.5 text-slate-200 sticky left-0 bg-slate-950 z-10 whitespace-nowrap font-semibold">{item.label}</td>
-                    {ROLES.map(r => {
-                      const on = !!grid[r.key]?.[item.key];
-                      const locked = r.key === "owner";
-                      return (
-                        <td key={r.key} className="px-3 py-2.5 text-center">
-                          <button onClick={()=>toggle(r.key, item.key)} disabled={locked} title={locked?"Owner always has full access":""}
-                            className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"} ${locked?"opacity-50 cursor-not-allowed":""}`}>
-                            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
-                          </button>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                  {(FEATURES_BY_SECTION[item.key] || []).map(feat => (
-                    <tr key={feat.key} className="border-t border-slate-800/40 hover:bg-slate-900/20">
-                      <td className="pl-8 pr-4 py-2 text-slate-400 text-[13px] sticky left-0 bg-slate-950 z-10 whitespace-nowrap">↳ {feat.label}</td>
-                      {ROLES.map(r => {
-                        const sectionOn = !!grid[r.key]?.[item.key];
-                        const on = !!grid[r.key]?.[feat.key] && sectionOn;
-                        const locked = r.key === "owner";
-                        return (
-                          <td key={r.key} className="px-3 py-2 text-center">
-                            <button onClick={()=>toggle(r.key, feat.key)} disabled={locked || !sectionOn} title={!sectionOn?"Enable the section first":locked?"Owner always has full access":""}
-                              className={`w-9 h-5 rounded-full relative transition-colors ${on?"bg-emerald-600/80":"bg-slate-700"} ${(locked||!sectionOn)?"opacity-40 cursor-not-allowed":""}`}>
-                              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
-                            </button>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                  </Fragment>
-                ))}
-              </Fragment>
+      {acView === "roles" && (() => {
+        const selRoleObj = ROLES.find(r => r.key === selRole) || ROLES[0];
+        const isOwnerSel = (selRoleObj?.key) === "owner";
+        return (
+        <div className="flex gap-4 items-start">
+          <div className="w-52 flex-shrink-0 space-y-1">
+            {ROLES.map(r => (
+              <button key={r.key} onClick={()=>setSelRole(r.key)}
+                className={`w-full text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center justify-between ${selRole===r.key?"bg-indigo-600 text-white":"bg-slate-900 text-slate-300 hover:bg-slate-800"}`}>
+                <span className="truncate">{r.label}</span>
+                {r.custom && <span className="text-[9px] uppercase opacity-70">custom</span>}
+              </button>
             ))}
-          </tbody>
-        </table>
-      </div>
-      )}
+            <button onClick={()=>setRoleModal("new")} className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold bg-slate-900 text-indigo-400 hover:bg-slate-800 border border-dashed border-slate-700">+ New role</button>
+          </div>
 
-      {acView === "entities" && (
-        <div className="space-y-2">
-          <div className="text-[11px] text-slate-500">Which entities each role can open. Restrict-only — a role still needs a store in that entity (store assignment is the base). Finance has no stores, so it's purely role/person-driven.</div>
-          <div className="overflow-x-auto rounded-2xl border border-slate-800">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
-                  <th className="text-left px-4 py-3 font-bold sticky left-0 bg-slate-900 z-10">Entity</th>
-                  {ROLES.map(r => <th key={r.key} className="px-3 py-3 font-bold text-center w-28">{r.label}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {ENTITIES.map(ent => (
-                  <tr key={ent.key} className="border-t border-slate-800/60 hover:bg-slate-900/30">
-                    <td className="px-4 py-2.5 text-slate-200 sticky left-0 bg-slate-950 z-10 whitespace-nowrap font-semibold">{ent.label}</td>
-                    {ROLES.map(r => {
-                      const on = !!grid[r.key]?.[ent.key];
-                      const locked = r.key === "owner";
+          <div className="flex-1 min-w-0 space-y-4">
+            <div className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+              <div>
+                <div className="text-sm font-bold text-white">{selRoleObj?.label}{isOwnerSel && <span className="ml-2 text-[10px] uppercase text-amber-400">full access — locked</span>}</div>
+                {selRoleObj?.custom && <div className="text-[11px] text-slate-500">Custom role · behaves like {BUILTIN_ROLES.find(b=>b.key===selRoleObj.baseRole)?.label || selRoleObj.baseRole}</div>}
+              </div>
+              {selRoleObj?.custom && (
+                <div className="flex gap-2">
+                  <button onClick={()=>setRoleModal(selRoleObj)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Edit</button>
+                  <button onClick={async()=>{ if(window.confirm(`Delete role "${selRoleObj.label}"? People holding it revert to their built-in role.`)){ await onArchiveRole?.(selRoleObj.key); setSelRole("manager"); onReload?.(); } }} className="px-2.5 py-1 rounded-lg bg-red-600/20 text-red-300 text-[11px] font-semibold">Delete</button>
+                </div>
+              )}
+            </div>
+
+            {isOwnerSel ? (
+              <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">Owner always has full access and can't be restricted.</div>
+            ) : (
+              <>
+                <div className="rounded-2xl border border-slate-800 overflow-hidden">
+                  <div className="px-4 py-2 bg-slate-900 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Entities — what this role can open</div>
+                  <div className="divide-y divide-slate-800/60">
+                    {ENTITIES.map(ent => {
+                      const on = !!grid[selRole]?.[ent.key];
                       return (
-                        <td key={r.key} className="px-3 py-2.5 text-center">
-                          <button onClick={()=>toggle(r.key, ent.key)} disabled={locked} title={locked?"Owner always has full access":""}
-                            className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"} ${locked?"opacity-50 cursor-not-allowed":""}`}>
+                        <div key={ent.key} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-900/30">
+                          <span className="text-sm text-slate-200">{ent.label}</span>
+                          <button onClick={()=>toggle(selRole, ent.key)} className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"}`}>
                             <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
                           </button>
-                        </td>
+                        </div>
                       );
                     })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  </div>
+                  <div className="px-4 py-1.5 text-[10px] text-slate-600">Restrict-only — a role still needs a store in that entity (store assignment is the base). Finance has no stores.</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800 overflow-hidden">
+                  <div className="px-4 py-2 bg-slate-900 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Sections &amp; features — what this role can see</div>
+                  <div>
+                    {navGroups.map(g => (
+                      <Fragment key={g.group}>
+                        <div className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900/50">{g.group}</div>
+                        {g.items.map(item => {
+                          const on = !!grid[selRole]?.[item.key];
+                          return (
+                            <Fragment key={item.key}>
+                              <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-800/60 hover:bg-slate-900/30">
+                                <span className="text-sm text-slate-200 font-semibold">{item.label}</span>
+                                <button onClick={()=>toggle(selRole, item.key)} className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"}`}>
+                                  <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
+                                </button>
+                              </div>
+                              {(FEATURES_BY_SECTION[item.key] || []).map(feat => {
+                                const fon = !!grid[selRole]?.[feat.key] && on;
+                                return (
+                                  <div key={feat.key} className="flex items-center justify-between pl-8 pr-4 py-2 border-t border-slate-800/40 hover:bg-slate-900/20">
+                                    <span className="text-[13px] text-slate-400">↳ {feat.label}</span>
+                                    <button onClick={()=>toggle(selRole, feat.key)} disabled={!on} title={!on?"Enable the section first":""}
+                                      className={`w-9 h-5 rounded-full relative transition-colors ${fon?"bg-emerald-600/80":"bg-slate-700"} ${!on?"opacity-40 cursor-not-allowed":""}`}>
+                                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${fon?"left-[18px]":"left-0.5"}`}/>
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </Fragment>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {acView === "people" && (
         <PersonEntityAccess opsTeam={opsTeam} entities={ENTITIES} entityOverrides={entityOverrides} personId={personId} setPersonId={setPersonId} onReload={onReload}/>
       )}
 
+      {roleModal && (
+        <RoleEditModal role={roleModal === "new" ? null : roleModal} onClose={()=>setRoleModal(null)}
+          onSave={async (data)=>{ const saved = await onSaveRole?.(data); setRoleModal(null); onReload?.(); if (saved?.id) setSelRole(saved.id); }}/>
+      )}
+
       <div className="text-[11px] text-slate-600">
-        Owner always retains full access (can't be locked out). Entity access layers on top of store assignment — it can restrict, not grant beyond a person's stores.
+        Owner always retains full access (can't be locked out). Assign a person's role on their Team profile. Entity access layers on top of store assignment — it can restrict, not grant beyond a person's stores.
       </div>
     </div>
+  );
+}
+
+// Create/edit a custom role (name + base role + finance-only scope).
+function RoleEditModal({ role, onClose, onSave }) {
+  const [name, setName] = useState(role?.label || role?.name || "");
+  const [baseRole, setBaseRole] = useState(role?.baseRole || "manager");
+  const [financeOnly, setFinanceOnly] = useState(role?.scope === "finance_only");
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white";
+  const save = async () => {
+    if (!name.trim()) { setErr("Name the role."); return; }
+    setBusy(true); setErr("");
+    try {
+      await onSave?.({ id: role?.key || role?.id || undefined, name: name.trim(), baseRole: financeOnly ? "hq_staff" : baseRole, scope: financeOnly ? "finance_only" : null });
+    } catch (e) { setErr(e?.message || "Could not save."); setBusy(false); }
+  };
+  return (
+    <Modal title={role ? "Edit role" : "New role"} onClose={onClose} maxW="max-w-sm"
+      footer={<>
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+        <button onClick={save} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Saving…":"Save"}</button>
+      </>}>
+      <div className="space-y-3">
+        <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Role name</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. JV-Manager" className={ec}/></div>
+        <div>
+          <label className="text-[11px] text-slate-500 uppercase font-semibold">Behaves like</label>
+          <select value={baseRole} onChange={e=>setBaseRole(e.target.value)} disabled={financeOnly} className={`${ec} ${financeOnly?"opacity-50":""}`}>
+            <option value="manager">Manager</option>
+            <option value="hq_staff">HQ Staff</option>
+            <option value="staff">Staff</option>
+          </select>
+          <div className="text-[10px] text-slate-600 mt-1">Inherits this built-in role's behaviour; tweak its access on the role page.</div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input type="checkbox" checked={financeOnly} onChange={e=>setFinanceOnly(e.target.checked)} className="rounded"/>
+          Finance-only (back-office, no store — lands straight in Finance)
+        </label>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+      </div>
+    </Modal>
   );
 }
 
@@ -13920,7 +13970,11 @@ function AdminPanelView({
       )}
 
       {tab==="roles"&&(
-        <RolesManager customRoles={customRoles} opsTeam={opsTeam} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole}/>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl px-5 py-6 text-sm text-slate-400 space-y-2">
+          <div className="text-white font-bold text-base">Roles have moved</div>
+          <p>Create, edit and configure roles — and set what each role can see and do — in one place: <strong className="text-slate-200">Access &amp; Roles</strong> (in the sidebar).</p>
+          <p className="text-[12px] text-slate-500">Assign a person's role on their <strong className="text-slate-400">Team profile</strong> (Add/Edit team member → Access role).</p>
+        </div>
       )}
       {tab==="managers"&&(
         <div className="space-y-4">
@@ -35084,7 +35138,7 @@ export default function App() {
   const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved"); return s;}, [showToast]);
   const updateOpsTeam = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
-  const handleSaveRole = useCallback(async (role) => { await upsertCustomRole(role); await fetchCustomRoles().then(setCustomRoles); showToast("Role saved"); }, [showToast]);
+  const handleSaveRole = useCallback(async (role) => { const saved = await upsertCustomRole(role); await fetchCustomRoles().then(setCustomRoles); showToast("Role saved"); return saved; }, [showToast]);
   const handleArchiveRole = useCallback(async (id) => { await archiveCustomRole(id); await Promise.all([fetchCustomRoles().then(setCustomRoles), fetchOpsTeam().then(setOpsTeam)]); showToast("Role deleted"); }, [showToast]);
   const handleAssignMemberRole = useCallback(async (memberId, roleId) => { await setMemberCustomRole(memberId, roleId); setOpsTeam(ts=>ts.map(x=>x.id===memberId?{...x, roleId:roleId||null}:x)); showToast("Role assigned"); }, [showToast]);
   // Slice 6 follow-up — true partial update for the profile-page tabs.
@@ -35617,7 +35671,7 @@ export default function App() {
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles}/>}
+            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
