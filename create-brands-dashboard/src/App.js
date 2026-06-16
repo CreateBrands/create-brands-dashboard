@@ -12,6 +12,7 @@ import {
   fetchAssignments, upsertAssignment, removeAssignment,
   fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember, updateOpsTeamMember,
   fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
+  fetchEntityOverrides, setEntityOverride,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
   fetchChecklistStates, upsertChecklistState,
@@ -13354,13 +13355,62 @@ function MinimumWageAdmin() {
 }
 
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
-function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
+function PersonEntityAccess({ opsTeam = [], entities = [], entityOverrides = {}, personId, setPersonId, onReload }) {
+  const people = (opsTeam || []).filter(m => !m.archivedAt).sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
+  const member = people.find(m => m.id === personId);
+  const ov = entityOverrides?.[personId] || {};
+  const [busy, setBusy] = useState("");
+  const setOverride = async (entityKey, val) => {
+    setBusy(entityKey);
+    try { await setEntityOverride(personId, entityKey, val); onReload?.(); }
+    catch (e) { /* surface via console; modal-free here */ console.error(e); }
+    setBusy("");
+  };
+  return (
+    <div className="space-y-3">
+      <div className="text-[11px] text-slate-500">Override entity access for one person — for exceptions to the role rule. “Allow” still respects their store assignment; “Deny” blocks the entity for them. “Default” clears the override (falls back to their role).</div>
+      <select value={personId} onChange={e=>setPersonId(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white">
+        <option value="">— select a person —</option>
+        {people.map(m => <option key={m.id} value={m.id}>{m.firstName} {m.lastName}{m.nickname?` (${m.nickname})`:""} · {m.role||"staff"}</option>)}
+      </select>
+      {!personId ? <div className="text-xs text-slate-600">Pick someone to set per-entity overrides.</div> : (
+        <div className="space-y-1.5">
+          {entities.map(ent => {
+            const cur = ov[ent.key]; // true | false | undefined
+            return (
+              <div key={ent.key} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+                <div className="text-sm text-slate-200 font-semibold">{ent.label}</div>
+                <div className="flex gap-1">
+                  {[["default", undefined, "Default"],["allow", true, "Allow"],["deny", false, "Deny"]].map(([k,val,lab])=>{
+                    const active = (k==="default" && cur===undefined) || (k==="allow" && cur===true) || (k==="deny" && cur===false);
+                    return (
+                      <button key={k} onClick={()=>setOverride(ent.key, val)} disabled={busy===ent.key}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${active ? (k==="deny"?"bg-red-600 text-white":k==="allow"?"bg-emerald-600 text-white":"bg-slate-600 text-white") : "bg-slate-800 text-slate-400 hover:text-white"}`}>{lab}</button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {} }) {
   const ROLES = [
     { key: "owner", label: "Owner" },
     { key: "hq_staff", label: "HQ Staff" },
     { key: "manager", label: "Manager" },
     { key: "staff", label: "Staff" },
   ];
+  // Entities = brands (key entity.<id>) + Finance. Facilities are brands too.
+  const ENTITIES = useMemo(() => {
+    const list = (brands || []).filter(b => !b.archivedAt).map(b => ({ key: `entity.${b.id}`, label: b.name, id: b.id }));
+    list.push({ key: "entity.finance", label: "Finance", id: "finance" });
+    return list;
+  }, [brands]);
   // Local editable copy of effective permissions, seeded from overrides+defaults.
   const seed = useMemo(() => {
     const m = {};
@@ -13378,12 +13428,22 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
         });
       });
     }));
+    // Entity role-permissions (default: allowed; store-assignment base still gates)
+    ENTITIES.forEach(ent => {
+      ROLES.forEach(r => {
+        const ov = accessPerms?.[r.key]?.[ent.key];
+        m[r.key][ent.key] = ov !== undefined ? ov : true;
+      });
+    });
     return m;
-  }, [navGroups, accessPerms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [navGroups, accessPerms, ENTITIES]); // eslint-disable-line react-hooks/exhaustive-deps
   const [grid, setGrid] = useState(seed);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [acView, setAcView] = useState("sections"); // sections | entities | people
+  const [personId, setPersonId] = useState("");
+  const [personBusy, setPersonBusy] = useState("");
   useEffect(() => { setGrid(seed); setDirty(false); }, [seed]);
 
   const toggle = (role, key) => {
@@ -13401,6 +13461,9 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
           ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: feat.key, allowed: !!grid[r.key]?.[feat.key] }); });
         });
       }));
+      ENTITIES.forEach(ent => {
+        ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: ent.key, allowed: !!grid[r.key]?.[ent.key] }); });
+      });
       await setAccessPermissionsBulk(entries);
       onReload?.(); setDirty(false); setMsg("Saved. Changes apply immediately.");
       setTimeout(()=>setMsg(""), 3000);
@@ -13416,6 +13479,7 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
         ROLES.forEach(r => { m[r.key][feat.key] = feat.defaultRoles.includes(r.key); });
       });
     }));
+    ENTITIES.forEach(ent => { ROLES.forEach(r => { m[r.key][ent.key] = true; }); });
     setGrid(m); setDirty(true);
   };
 
@@ -13433,6 +13497,14 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
         </div>
       </div>
 
+      {/* Sub-tabs */}
+      <div className="flex gap-1 border-b border-slate-800">
+        {[["sections","Sections & Features"],["entities","Entities (by role)"],["people","Entities (per person)"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setAcView(k)} className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${acView===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
+        ))}
+      </div>
+
+      {acView === "sections" && (
       <div className="overflow-x-auto rounded-2xl border border-slate-800">
         <table className="w-full text-sm border-collapse">
           <thead>
@@ -13487,8 +13559,49 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload }) {
           </tbody>
         </table>
       </div>
+      )}
+
+      {acView === "entities" && (
+        <div className="space-y-2">
+          <div className="text-[11px] text-slate-500">Which entities each role can open. Restrict-only — a role still needs a store in that entity (store assignment is the base). Finance has no stores, so it's purely role/person-driven.</div>
+          <div className="overflow-x-auto rounded-2xl border border-slate-800">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
+                  <th className="text-left px-4 py-3 font-bold sticky left-0 bg-slate-900 z-10">Entity</th>
+                  {ROLES.map(r => <th key={r.key} className="px-3 py-3 font-bold text-center w-28">{r.label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {ENTITIES.map(ent => (
+                  <tr key={ent.key} className="border-t border-slate-800/60 hover:bg-slate-900/30">
+                    <td className="px-4 py-2.5 text-slate-200 sticky left-0 bg-slate-950 z-10 whitespace-nowrap font-semibold">{ent.label}</td>
+                    {ROLES.map(r => {
+                      const on = !!grid[r.key]?.[ent.key];
+                      const locked = r.key === "owner";
+                      return (
+                        <td key={r.key} className="px-3 py-2.5 text-center">
+                          <button onClick={()=>toggle(r.key, ent.key)} disabled={locked} title={locked?"Owner always has full access":""}
+                            className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"} ${locked?"opacity-50 cursor-not-allowed":""}`}>
+                            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {acView === "people" && (
+        <PersonEntityAccess opsTeam={opsTeam} entities={ENTITIES} entityOverrides={entityOverrides} personId={personId} setPersonId={setPersonId} onReload={onReload}/>
+      )}
+
       <div className="text-[11px] text-slate-600">
-        Owner always retains full access (can't be locked out). This controls the main navigation sections; finer in-section controls can be added later.
+        Owner always retains full access (can't be locked out). Entity access layers on top of store assignment — it can restrict, not grant beyond a person's stores.
       </div>
     </div>
   );
@@ -33077,7 +33190,7 @@ function WhosWorkingModal({ open, onClose, punchRecords = [], schedules = [], op
   );
 }
 
-function EntityPicker({ brands, stores, user, onPick, onLogout }) {
+function EntityPicker({ brands, stores, user, onPick, onLogout, financeAvailable }) {
   // Classify each brand by the site types of its stores. A brand whose stores
   // are production/distribution/franchise facilities is an "Operations" entity.
   const opsTypes = new Set(["central_kitchen", "distribution", "franchise_ops"]);
@@ -33103,7 +33216,7 @@ function EntityPicker({ brands, stores, user, onPick, onLogout }) {
   ].filter(cs => !opsGroup.some(b => b.name.toLowerCase() === cs.name.toLowerCase()));
 
   // Live special (non-brand) entities — Finance opens the accounts hub.
-  const financeAllowed = ["owner", "hq_staff"].includes(user?.role);
+  const financeAllowed = financeAvailable !== undefined ? financeAvailable : ["owner", "hq_staff"].includes(user?.role);
   const specialLive = financeAllowed
     ? [{ id: "finance", name: "Finance", icon: PoundSterling, color: "#10b981" }]
     : [];
@@ -33339,7 +33452,11 @@ export default function App() {
   // Access control (Level 1): role × section permission overrides from DB.
   // Shape: { [role]: { [sectionKey]: allowed } }. Missing → use section default.
   const [accessPerms, setAccessPerms] = useState({});
-  const reloadAccessPerms = useCallback(() => { fetchAccessPermissions().then(setAccessPerms).catch(()=>{}); }, []);
+  const [entityOverrides, setEntityOverrides] = useState({}); // { memberId: { entityKey: allowed } }
+  const reloadAccessPerms = useCallback(() => {
+    fetchAccessPermissions().then(setAccessPerms).catch(()=>{});
+    fetchEntityOverrides().then(setEntityOverrides).catch(()=>{});
+  }, []);
   useEffect(() => { reloadAccessPerms(); }, [reloadAccessPerms]);
   // Can `role` see `section`? Override wins; otherwise the section's built-in
   // `roles` default (undefined roles array = everyone).
@@ -33628,6 +33745,22 @@ export default function App() {
     return feat.defaultRoles.includes(role);
   }, [accessPerms, currentUser]);
 
+  // Entity access: role default + per-person override (restrict-only — the
+  // store-assignment base is applied separately at the call site). Owner
+  // always allowed. entityKey = 'entity.<brandId>' | 'entity.finance'.
+  const canAccessEntity = useCallback((entityKey, member) => {
+    const role = currentUser?.role;
+    if (role === "owner") return true;
+    // person-level override wins if present
+    const memberId = member?.id || currentUser?.opsTeamMemberId || currentUser?.id;
+    const personOverride = entityOverrides?.[memberId]?.[entityKey];
+    if (personOverride !== undefined) return personOverride;
+    // role-level entity permission; default allow (base store-assignment still gates)
+    const roleOverride = accessPerms?.[role]?.[entityKey];
+    if (roleOverride !== undefined) return roleOverride;
+    return true;
+  }, [accessPerms, entityOverrides, currentUser]);
+
   const approvePayPeriod = useCallback(async (pp) => {
     const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
     setPayPeriods(list => list.some(x => x.id === saved.id) ? list.map(x => x.id === saved.id ? saved : x) : [saved, ...list]);
@@ -33681,8 +33814,9 @@ export default function App() {
     const active = stores.filter(s => !s.archivedAt);
     const mine = isHQ ? active : active.filter(s => (currentUser.storeIds || []).includes(s.id));
     const ids = new Set(mine.map(s => s.brandId));
-    return brands.filter(b => ids.has(b.id));
-  }, [brands, stores, isHQ, currentUser]);
+    // base = store-derived; then restrict by role/person entity access.
+    return brands.filter(b => ids.has(b.id) && canAccessEntity(`entity.${b.id}`));
+  }, [brands, stores, isHQ, currentUser, canAccessEntity]);
 
   const addAudit = useCallback(async (action, detail, who, brandId, storeId) => {
     try {
@@ -34254,11 +34388,11 @@ export default function App() {
 
   // ── Entity landing screen ────────────────────────────────────────────────
   // Show the picker when no entity chosen yet and there's a real choice to make.
-  const financeAvailable = ["owner", "hq_staff"].includes(currentUser?.role);
+  const financeAvailable = ["owner", "hq_staff"].includes(currentUser?.role) && canAccessEntity("entity.finance");
   if (!selectedEntityBrand && (entityBrands.length > 1 || financeAvailable)) {
     return (
       <AuthContext.Provider value={{ user: currentUser_ctx }}>
-        <EntityPicker brands={entityBrands} stores={stores} user={currentUser} onPick={chooseEntity} onLogout={handleLogout}/>
+        <EntityPicker brands={entityBrands} stores={stores} user={currentUser} onPick={chooseEntity} onLogout={handleLogout} financeAvailable={financeAvailable}/>
       </AuthContext.Provider>
     );
   }
@@ -34418,7 +34552,7 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms}/>}
+            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides}/>}
             {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}

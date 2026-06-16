@@ -6387,3 +6387,27 @@ export async function setAccessPermissionsBulk(entries) {
   if (error) throw error;
   return rows.length;
 }
+
+// ── Entity access: per-person overrides ──────────────────────────────────────
+// Returns { [memberId]: { [entityKey]: allowed } }.
+export async function fetchEntityOverrides() {
+  const { data, error } = await supabase.from("entity_access_overrides").select("member_id, entity_key, allowed");
+  if (error) throw error;
+  const m = {};
+  (data || []).forEach(r => { (m[r.member_id] = m[r.member_id] || {})[r.entity_key] = !!r.allowed; });
+  return m;
+}
+
+// Set or clear one person's override for an entity. Pass allowed=null to clear
+// (fall back to role default).
+export async function setEntityOverride(memberId, entityKey, allowed) {
+  if (allowed === null || allowed === undefined) {
+    const { error } = await supabase.from("entity_access_overrides").delete().eq("member_id", memberId).eq("entity_key", entityKey);
+    if (error) throw error;
+    return { memberId, entityKey, cleared: true };
+  }
+  const { error } = await supabase.from("entity_access_overrides")
+    .upsert({ member_id: memberId, entity_key: entityKey, allowed: !!allowed, updated_at: new Date().toISOString() }, { onConflict: "member_id,entity_key" });
+  if (error) throw error;
+  return { memberId, entityKey, allowed: !!allowed };
+}
