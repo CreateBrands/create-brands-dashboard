@@ -5398,7 +5398,7 @@ export async function fetchRecipes() {
   return {
     preps: (preps.data||[]).map(p => ({ id:p.id, name:p.name, yieldQty:p.yield_qty, yieldUnit:p.yield_unit, notes:p.notes })),
     prepComponents: (prepComps.data||[]).map(c => ({ id:c.id, prepId:c.prep_id, itemScope:c.item_scope, itemId:c.item_id, itemName:c.item_name, portionQty:c.portion_qty, unit:c.unit })),
-    modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit })),
+    modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit, sourceType:m.source_type||"item", prepId:m.prep_id, prepPortion:m.prep_portion })),
     products: (prods.data||[]).map(p => ({ id:p.id, name:p.name, category:p.category, posName:p.pos_name, notes:p.notes })),
     productVariants: (variants.data||[]).map(v => ({ id:v.id, productId:v.product_id, name:v.name, sortOrder:v.sort_order })),
     productComponents: (prodComps.data||[]).map(c => ({ id:c.id, productId:c.product_id, variantId:c.variant_id, kind:c.kind, itemScope:c.item_scope, itemId:c.item_id, prepId:c.prep_id, label:c.label, portionQty:c.portion_qty, unit:c.unit })),
@@ -5491,8 +5491,10 @@ export async function addModifier(patch) {
   if (error) throw error;
 }
 export async function updateModifier(id, patch) {
-  const b = {}; ["name","groupLabel","itemScope","itemId","itemName","unit"].forEach(k => { if (k in patch) b[{name:"name",groupLabel:"group_label",itemScope:"item_scope",itemId:"item_id",itemName:"item_name",unit:"unit"}[k]] = patch[k]; });
+  const b = {}; ["name","groupLabel","itemScope","itemId","itemName","unit","sourceType"].forEach(k => { if (k in patch) b[{name:"name",groupLabel:"group_label",itemScope:"item_scope",itemId:"item_id",itemName:"item_name",unit:"unit",sourceType:"source_type"}[k]] = patch[k]; });
   if ("portionQty" in patch) b.portion_qty = patch.portionQty===""?null:Number(patch.portionQty);
+  if ("prepId" in patch) b.prep_id = patch.prepId===""||patch.prepId==null?null:Number(patch.prepId);
+  if ("prepPortion" in patch) b.prep_portion = patch.prepPortion===""||patch.prepPortion==null?null:Number(patch.prepPortion);
   const { error } = await supabase.from("cogs_modifiers").update(b).eq("id", id); if (error) throw error;
 }
 export async function deleteModifier(id) { const { error } = await supabase.from("cogs_modifiers").delete().eq("id", id); if (error) throw error; }

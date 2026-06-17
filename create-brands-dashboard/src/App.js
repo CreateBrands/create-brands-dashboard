@@ -5381,7 +5381,13 @@ function RecipeBuilder({ mode }) {
     return ok ? total / Number(prep.yieldQty) : null;
   };
   const prepCostPerUnit = (prepId) => { const p = rec?.preps.find(x => x.id === prepId); return p ? prepCost(p) : null; };
-  const modifierCost = (m) => { const u = itemCost(m.itemScope, m.itemId); return (u != null && m.portionQty != null) ? u * Number(m.portionQty) : null; };
+  const modifierCost = (m) => {
+    if (m.sourceType === "prep") {
+      const u = prepCostPerUnit(m.prepId);
+      return (u != null && m.prepPortion != null && m.prepPortion !== "") ? u * Number(m.prepPortion) : null;
+    }
+    const u = itemCost(m.itemScope, m.itemId); return (u != null && m.portionQty != null) ? u * Number(m.portionQty) : null;
+  };
   const productBaseCost = (prod, variantId = undefined) => {
     const comps = rec.productComponents.filter(c => c.productId === prod.id && (variantId === undefined || c.variantId === variantId));
     let total = 0, missing = 0;
@@ -5424,13 +5430,14 @@ function RecipeBuilder({ mode }) {
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
               <th className="text-left px-2 py-2">Modifier</th><th className="text-left px-2 py-2">Group</th>
-              <th className="text-left px-2 py-2">Inventory item</th><th className="text-right px-2 py-2">Portion</th>
+              <th className="text-left px-2 py-2">Source</th>
+              <th className="text-left px-2 py-2">Item / Prep</th><th className="text-right px-2 py-2">Portion</th>
               <th className="text-left px-2 py-2">Unit</th><th className="text-right px-2 py-2">Cost</th><th></th>
             </tr></thead>
             <tbody>
-              {shown.length===0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500 text-sm">No modifiers yet.</td></tr>}
+              {shown.length===0 && <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500 text-sm">No modifiers yet.</td></tr>}
               {shown.map(m => (
-                <ModifierRow key={m.id} m={m} inv={inv} cost={modifierCost(m)} onSave={async(p)=>{await updateModifier(m.id,p); await load();}} onDelete={async()=>{if(window.confirm("Delete modifier?")){await deleteModifier(m.id); await load();}}}/>
+                <ModifierRow key={m.id} m={m} inv={inv} preps={rec.preps} cost={modifierCost(m)} onSave={async(p)=>{await updateModifier(m.id,p); await load();}} onDelete={async()=>{if(window.confirm("Delete modifier?")){await deleteModifier(m.id); await load();}}}/>
               ))}
             </tbody>
           </table>
@@ -5607,18 +5614,33 @@ function ItemPicker({ inv, value, onChange, highlight }) {
   );
 }
 
-function ModifierRow({ m, inv, cost, onSave, onDelete }) {
+function ModifierRow({ m, inv, preps, cost, onSave, onDelete }) {
   const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
-  const [f, setF] = useState({ name: m.name||"", groupLabel: m.groupLabel||"", portionQty: m.portionQty??"", unit: m.unit||"" });
+  const [f, setF] = useState({ name: m.name||"", groupLabel: m.groupLabel||"", portionQty: m.portionQty??"", unit: m.unit||"", prepPortion: m.prepPortion??"" });
   const set = (k,v)=>setF(s=>({...s,[k]:v}));
   const blur = (k)=>{ if(String(f[k]??"")!==String(m[k]??"")) onSave({[k]:f[k]}); };
+  const src = m.sourceType || "item";
+  const prep = src === "prep" && m.prepId ? (preps||[]).find(p=>p.id===m.prepId) : null;
   return (
     <tr className="border-t border-slate-800/60">
       <td className="px-2 py-1.5"><input value={f.name} onChange={e=>set("name",e.target.value)} onBlur={()=>blur("name")} className={cell+" w-28"}/></td>
       <td className="px-2 py-1.5"><input value={f.groupLabel} onChange={e=>set("groupLabel",e.target.value)} onBlur={()=>blur("groupLabel")} className={cell+" w-24"} placeholder="Chocolate"/></td>
-      <td className="px-2 py-1.5"><ItemPicker inv={inv} value={m.itemScope?m.itemScope+":"+m.itemId:""} onChange={o=>onSave({itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null})}/></td>
-      <td className="px-2 py-1.5 text-right"><input value={f.portionQty} onChange={e=>set("portionQty",e.target.value)} onBlur={()=>blur("portionQty")} className={cell+" w-14 text-right"}/></td>
-      <td className="px-2 py-1.5"><input value={f.unit} onChange={e=>set("unit",e.target.value)} onBlur={()=>blur("unit")} className={cell+" w-12"} placeholder="g"/></td>
+      <td className="px-2 py-1.5"><select value={src} onChange={e=>onSave({sourceType:e.target.value})} className={cell+" w-16"}><option value="item">Item</option><option value="prep">Prep</option></select></td>
+      {src === "prep" ? (
+        <td className="px-2 py-1.5"><select value={m.prepId||""} onChange={e=>onSave({prepId:e.target.value})} className={cell+" w-full max-w-[220px]"}><option value="">Select prep…</option>{(preps||[]).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></td>
+      ) : (
+        <td className="px-2 py-1.5"><ItemPicker inv={inv} value={m.itemScope?m.itemScope+":"+m.itemId:""} onChange={o=>onSave({itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null})}/></td>
+      )}
+      {src === "prep" ? (
+        <td className="px-2 py-1.5 text-right"><input value={f.prepPortion} onChange={e=>set("prepPortion",e.target.value)} onBlur={()=>blur("prepPortion")} className={cell+" w-14 text-right"} placeholder="0"/></td>
+      ) : (
+        <td className="px-2 py-1.5 text-right"><input value={f.portionQty} onChange={e=>set("portionQty",e.target.value)} onBlur={()=>blur("portionQty")} className={cell+" w-14 text-right"}/></td>
+      )}
+      {src === "prep" ? (
+        <td className="px-2 py-1.5 text-xs text-slate-400">{prep?.yieldUnit||"—"}</td>
+      ) : (
+        <td className="px-2 py-1.5"><input value={f.unit} onChange={e=>set("unit",e.target.value)} onBlur={()=>blur("unit")} className={cell+" w-12"} placeholder="g"/></td>
+      )}
       <td className="px-2 py-1.5 text-right font-mono text-slate-300 text-xs">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
       <td className="px-2 py-1.5 text-right"><button onClick={onDelete} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
     </tr>
