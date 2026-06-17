@@ -126,6 +126,7 @@ import {
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
   fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
   discoverModifierCandidates, createModifierFromCaption,
+  computeStoreCogsV2,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4907,6 +4908,7 @@ function CogsView({ stores = [] }) {
     { key: "products",  label: "Products" },
     { key: "mapping",   label: "Mapping" },
     { key: "discover",  label: "Discover Modifiers" },
+    { key: "reconcile", label: "COGS Reconcile" },
     { key: "simulator", label: "Order Simulator" },
     { key: "inspector", label: "Order Inspector" },
   ];
@@ -4928,6 +4930,7 @@ function CogsView({ stores = [] }) {
       {tab === "products"  && <RecipeBuilder mode="products"/>}
       {tab === "mapping"   && <PosMapper stores={stores}/>}
       {tab === "discover"  && <ModifierDiscovery stores={stores}/>}
+      {tab === "reconcile" && <CogsReconciliation stores={stores}/>}
       {tab === "simulator" && <OrderSimulator stores={stores}/>}
       {tab === "inspector" && <OrderInspector stores={stores}/>}
     </div>
@@ -6044,6 +6047,115 @@ function OrderInspector({ stores = [] }) {
             )}
           </>
         )
+      )}
+    </div>
+  );
+}
+
+function CogsReconciliation({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const today = new Date().toISOString().slice(0,10);
+  const monthAgo = new Date(Date.now() - 30*24*3600*1000).toISOString().slice(0,10);
+  const [from, setFrom] = useState(monthAgo);
+  const [to, setTo] = useState(today);
+  const [oldR, setOldR] = useState(null);
+  const [newR, setNewR] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
+
+  const run = async () => {
+    if (!storeId) return;
+    setLoading(true); setErr(null); setOldR(null); setNewR(null);
+    try {
+      const [o, n] = await Promise.all([
+        computeStoreTheoreticalCogs({ storeId, from, to }).catch(e => ({ _err: e.message })),
+        computeStoreCogsV2({ storeId, from, to }).catch(e => ({ _err: e.message })),
+      ]);
+      setOldR(o); setNewR(n);
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { if (storeId) run(); /* eslint-disable-next-line */ }, [storeId]);
+
+  const Row = ({ k, v, strong, muted }) => (
+    <div className="flex justify-between">
+      <span className={muted?"text-slate-500":"text-slate-400"}>{k}</span>
+      <span className={`font-mono ${strong?"text-white font-bold":muted?"text-slate-500":"text-slate-200"}`}>{v}</span>
+    </div>
+  );
+  const Col = ({ title, sub, r }) => (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex-1 min-w-[260px]">
+      <div className="text-sm font-bold text-white">{title}</div>
+      <div className="text-[11px] text-slate-500 mb-3">{sub}</div>
+      {r?._err && <div className="text-xs text-red-400">{r._err}</div>}
+      {r && !r._err && (
+        <div className="space-y-1.5 text-sm">
+          <Row k="COGS" v={money(r.cogs)} strong/>
+          {r.modifierCogs != null && <Row k="… of which modifiers" v={money(r.modifierCogs)} muted/>}
+          <Row k="Total revenue" v={money(r.totalRevenue)}/>
+          <Row k="Costed revenue" v={money(r.costedRevenue)}/>
+          <Row k="Unmapped revenue" v={money(r.unmappedRevenue)}/>
+          <Row k="Mapped but uncosted" v={money(r.mappedButUncostedRevenue)}/>
+          <Row k="Coverage" v={pct(r.coverage)}/>
+          <Row k="COGS % of costed" v={pct(r.cogsPctOfCosted)}/>
+          {r.uncostedModifierHits != null && <Row k="Uncosted modifier hits" v={String(r.uncostedModifierHits)} muted/>}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-[11px] text-slate-500 mb-1">Store</label>
+          <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+          </select>
+        </div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">From</label>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">To</label>
+          <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{loading?"Computing…":"Compare"}</button>
+      </div>
+      <p className="text-xs text-slate-500">Old engine (aggregates, base recipe only) vs new engine (per-sale from flipdish_sales, base + matched modifiers). Validate the new figure before switching the P&L. The P&L still uses the old engine.</p>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="flex flex-wrap gap-3">
+        <Col title="Current (P&L)" sub="item_day_aggregates · base recipe only" r={oldR}/>
+        <Col title="New (exact)" sub="flipdish_sales · base + modifiers" r={newR}/>
+      </div>
+      {newR && !newR._err && newR.byProduct && (
+        <div className="overflow-x-auto">
+          <div className="text-xs text-slate-400 mb-1">New engine — per product</div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+              <th className="text-left px-3 py-2">Product</th>
+              <th className="text-right px-3 py-2">Revenue</th>
+              <th className="text-right px-3 py-2">Qty</th>
+              <th className="text-right px-3 py-2">COGS</th>
+              <th className="text-left px-3 py-2">Flags</th>
+            </tr></thead>
+            <tbody>
+              {newR.byProduct.slice(0,60).map((p,i) => (
+                <tr key={i} className="border-t border-slate-800/60">
+                  <td className="px-3 py-2 text-white">{p.productName}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300">{money(p.revenue)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-500">{p.qty}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300">{money(p.cogs)}</td>
+                  <td className="px-3 py-2 text-[11px]">
+                    {p.baseUncosted && <span className="px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300 mr-1">base uncosted</span>}
+                    {p.modUncosted && <span className="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400">modifier uncosted</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

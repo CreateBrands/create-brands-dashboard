@@ -5398,7 +5398,7 @@ export async function fetchRecipes() {
   return {
     preps: (preps.data||[]).map(p => ({ id:p.id, name:p.name, yieldQty:p.yield_qty, yieldUnit:p.yield_unit, notes:p.notes })),
     prepComponents: (prepComps.data||[]).map(c => ({ id:c.id, prepId:c.prep_id, itemScope:c.item_scope, itemId:c.item_id, itemName:c.item_name, portionQty:c.portion_qty, unit:c.unit })),
-    modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit, sourceType:m.source_type||"item", prepId:m.prep_id, prepPortion:m.prep_portion })),
+    modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit, sourceType:m.source_type||"item", prepId:m.prep_id, prepPortion:m.prep_portion, isGlobal:m.is_global||false, tillCaption:m.till_caption })),
     products: (prods.data||[]).map(p => ({ id:p.id, name:p.name, category:p.category, posName:p.pos_name, notes:p.notes })),
     productVariants: (variants.data||[]).map(v => ({ id:v.id, productId:v.product_id, name:v.name, sortOrder:v.sort_order })),
     productComponents: (prodComps.data||[]).map(c => ({ id:c.id, productId:c.product_id, variantId:c.variant_id, kind:c.kind, itemScope:c.item_scope, itemId:c.item_id, prepId:c.prep_id, label:c.label, portionQty:c.portion_qty, unit:c.unit })),
@@ -7110,6 +7110,136 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
     coverage,                          // 0..1 share of revenue that is costed
     cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
     lines: lines.sort((a, b) => b.revenue - a.revenue),
+  };
+}
+
+// ── COGS V2 — exact, from flipdish_sales.sale_items (base + modifiers) ───────
+// Costs each sold line = product base recipe + matched modifiers. Modifier match
+// precedence: product-scoped (attached to that product) first, then global add-on,
+// matched by normalised caption (till_caption or name). Flags lines where a
+// modifier matched a record but that record has no cost yet. Excludes refunded /
+// comped / cancelled. Runs alongside computeStoreTheoreticalCogs for reconciliation.
+export async function computeStoreCogsV2({ storeId, from, to } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const fromD = from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const toD   = to   || new Date().toISOString().slice(0, 10);
+  const [inv, rec, mapsRaw, sales] = await Promise.all([
+    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
+    (async () => {
+      const { data, error } = await supabase.from("flipdish_sales")
+        .select("sale_items, is_cancelled")
+        .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD);
+      if (error) throw error; return data || [];
+    })(),
+  ]);
+
+  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+
+  // cost rollup (same as theoretical)
+  const itemById = new Map();
+  (inv.store || []).forEach(x => itemById.set("store:" + x.id, x));
+  (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
+  const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+  const prepCost = (prep) => {
+    if (!prep) return null;
+    const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
+    if (!comps.length || !prep.yieldQty) return null;
+    let total = 0, ok = true;
+    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
+    return ok ? total / Number(prep.yieldQty) : null;
+  };
+  const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
+  const productBaseCost = (productId) => {
+    const comps = (rec.productComponents || []).filter(c => c.productId === productId && (c.variantId == null));
+    if (!comps.length) return { cost: 0, missing: 0, count: 0 }; // empty base = 0 (recipe may be all modifiers)
+    let total = 0, missing = 0;
+    comps.forEach(c => {
+      const unit = c.kind === "prep" ? prepCostPerUnit(c.prepId) : itemCost(c.itemScope, c.itemId);
+      if (unit == null || c.portionQty == null) missing++; else total += unit * Number(c.portionQty);
+    });
+    return { cost: total, missing, count: comps.length };
+  };
+  const modCostOf = (m) => {
+    if (!m) return null;
+    if (m.sourceType === "prep") { const u = prepCostPerUnit(m.prepId); return (u != null && m.prepPortion != null) ? u * Number(m.prepPortion) : null; }
+    const u = itemCost(m.itemScope, m.itemId); return (u != null && m.portionQty != null) ? u * Number(m.portionQty) : null;
+  };
+
+  // modifier lookups
+  const modById = new Map((rec.modifiers || []).map(m => [m.id, m]));
+  // product-scoped: productId -> Map(captionNorm -> modifier)
+  const scopedByProduct = new Map();
+  (rec.productModifiers || []).forEach(pm => {
+    const m = modById.get(pm.modifierId); if (!m || m.isGlobal) return;
+    if (!scopedByProduct.has(pm.productId)) scopedByProduct.set(pm.productId, new Map());
+    // match key: explicit till_caption, else the modifier name with group_label stripped, else name
+    const key = m.tillCaption ? norm(m.tillCaption)
+      : (m.groupLabel ? norm((m.name || "").replace(new RegExp(m.groupLabel, "i"), "")) : norm(m.name));
+    scopedByProduct.get(pm.productId).set(key, m);
+  });
+  // global: captionNorm -> modifier
+  const globalByCaption = new Map();
+  (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
+
+  // POS name -> productId
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(norm(m.posName), m.productId); });
+  const productName = (id) => (rec.products || []).find(p => p.id === id)?.name || "—";
+
+  let cogs = 0, costedRevenue = 0, totalRevenue = 0, unmappedRevenue = 0, mappedUncosted = 0;
+  let modifierCogs = 0, uncostedModifierHits = 0;
+  const lineAgg = {}; // productName -> rollup
+
+  sales.forEach(s => {
+    if (s.is_cancelled) return;
+    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+    items.forEach(li => {
+      if (!li || li.isRefunded || li.isComplimented) return;
+      const qty = Number(li.quantity) || 1;
+      const rev = Number(li.retailPrice != null ? li.retailPrice : li.unitPrice) || 0;
+      totalRevenue += rev;
+      const pid = mapByName.get(norm(li.caption));
+      if (!pid) { unmappedRevenue += rev; return; }
+      const base = productBaseCost(pid);
+      // modifiers on this line
+      const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
+      let lineModCost = 0, lineUncostedMod = false;
+      kids.forEach(ch => {
+        const cn = norm(ch && ch.caption);
+        if (!cn || cn === "none") return;
+        const m = (scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn)) || globalByCaption.get(cn);
+        if (!m) return; // unmatched modifier — not costed (shows in discovery)
+        const c = modCostOf(m);
+        if (c == null) { lineUncostedMod = true; uncostedModifierHits++; }
+        else { lineModCost += c; }
+      });
+      const baseCosted = base.missing === 0;
+      const lineCost = (baseCosted ? base.cost : 0) + lineModCost;
+      const pn = productName(pid);
+      const k = pn;
+      lineAgg[k] = lineAgg[k] || { productName: pn, revenue: 0, qty: 0, cogs: 0, baseUncosted: false, modUncosted: false };
+      lineAgg[k].revenue += rev; lineAgg[k].qty += qty;
+      if (!baseCosted) { mappedUncosted += rev; lineAgg[k].baseUncosted = true; }
+      else { cogs += base.cost * qty; costedRevenue += rev; }
+      cogs += lineModCost * qty; modifierCogs += lineModCost * qty;
+      lineAgg[k].cogs += lineCost * qty;
+      if (lineUncostedMod) lineAgg[k].modUncosted = true;
+    });
+  });
+
+  return {
+    storeId, from: fromD, to: toD, source: "flipdish_sales",
+    cogs: +cogs.toFixed(2),
+    modifierCogs: +modifierCogs.toFixed(2),
+    totalRevenue: +totalRevenue.toFixed(2),
+    costedRevenue: +costedRevenue.toFixed(2),
+    unmappedRevenue: +unmappedRevenue.toFixed(2),
+    mappedButUncostedRevenue: +mappedUncosted.toFixed(2),
+    uncostedModifierHits,
+    coverage: totalRevenue > 0 ? costedRevenue / totalRevenue : 0,
+    cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
+    byProduct: Object.values(lineAgg).sort((a, b) => b.revenue - a.revenue),
   };
 }
 
