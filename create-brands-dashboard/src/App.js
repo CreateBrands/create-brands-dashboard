@@ -126,7 +126,7 @@ import {
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
   fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
   discoverModifierCandidates, createModifierFromCaption,
-  computeStoreCogsV2,
+  computeStoreCogsV2, auditTillOrders,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4916,6 +4916,7 @@ function CogsView({ stores = [] }) {
     { key: "mapping",   label: "Mapping" },
     { key: "discover",  label: "Discover Modifiers" },
     { key: "reconcile", label: "COGS Reconcile" },
+    { key: "tillaudit", label: "Till Audit" },
     { key: "simulator", label: "Order Simulator" },
     { key: "inspector", label: "Order Inspector" },
   ];
@@ -4938,6 +4939,7 @@ function CogsView({ stores = [] }) {
       {tab === "mapping"   && <PosMapper stores={stores}/>}
       {tab === "discover"  && <ModifierDiscovery stores={stores}/>}
       {tab === "reconcile" && <CogsReconciliation stores={stores}/>}
+      {tab === "tillaudit" && <TillAudit stores={stores}/>}
       {tab === "simulator" && <OrderSimulator stores={stores}/>}
       {tab === "inspector" && <OrderInspector stores={stores}/>}
     </div>
@@ -6065,6 +6067,116 @@ function OrderInspector({ stores = [] }) {
           </>
         )
       )}
+    </div>
+  );
+}
+
+function TillAudit({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const [date, setDate] = useState(new Date().toISOString().slice(0,10));
+  const [channel, setChannel] = useState("POS");
+  const [res, setRes] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [openId, setOpenId] = useState(null);
+
+  const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money4 = (n) => n==null ? "—" : `£${Number(n).toFixed(4)}`;
+  const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
+
+  const run = async () => {
+    if (!storeId || !date) return;
+    setLoading(true); setErr(null); setRes(null); setOpenId(null);
+    try { setRes(await auditTillOrders({ storeId, date, channel })); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+
+  const open = res && res.orders.find(o => o.saleId === openId);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-[11px] text-slate-500 mb-1">Store</label>
+          <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+          </select>
+        </div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">Date</label>
+          <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">Channel</label>
+          <select value={channel} onChange={e=>setChannel(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            <option value="POS">POS (till)</option>
+            <option value="UberEats">UberEats</option>
+            <option value="Deliveroo">Deliveroo</option>
+            <option value="JustEats">JustEat</option>
+            <option value="all">All channels</option>
+          </select></div>
+        <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{loading?"Loading…":"Load orders"}</button>
+      </div>
+      <p className="text-xs text-slate-500">Real orders from flipdish_sales, costed by the same engine as COGS Reconcile. Click an order to see its line-by-line cost build-up (base + each matched modifier; chocolate groups shown collapsed to max). Verify the maths against your recipes.</p>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {res && <div className="text-xs text-slate-500">{res.orderCount} orders on {res.date}.</div>}
+      {res && res.orderCount > 0 && (
+        <div className="flex flex-wrap gap-4">
+          <div className="flex-1 min-w-[280px]">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+                <th className="text-left px-3 py-2">Time</th>
+                <th className="text-right px-3 py-2">Sale</th>
+                <th className="text-right px-3 py-2">COGS</th>
+                <th className="text-right px-3 py-2">%</th>
+              </tr></thead>
+              <tbody>
+                {res.orders.map(o => (
+                  <tr key={o.saleId} onClick={()=>setOpenId(o.saleId)}
+                    className={`border-t border-slate-800/60 cursor-pointer ${openId===o.saleId?"bg-indigo-950/40":"hover:bg-slate-900/50"}`}>
+                    <td className="px-3 py-2 text-slate-300">{(o.time||"").slice(11,16)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-300">{money(o.revenue)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-300">{money(o.cogs)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-400">{pct(o.cogsPct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex-1 min-w-[320px]">
+            {!open && <div className="text-xs text-slate-500 p-4">Select an order to see its cost breakdown.</div>}
+            {open && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <div className="flex justify-between text-sm mb-3">
+                  <span className="text-white font-bold">Order {open.saleId.slice(0,8)}…</span>
+                  <span className="font-mono text-slate-300">{money(open.cogs)} / {money(open.revenue)} · {pct(open.cogsPct)}</span>
+                </div>
+                <div className="space-y-3">
+                  {open.lines.map((l, i) => (
+                    <div key={i} className="border-t border-slate-800/60 pt-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-white">{l.caption}{!l.mapped && <span className="text-red-400 text-[11px] ml-2">unmapped</span>}{l.baseUncosted && <span className="text-amber-400 text-[11px] ml-2">base uncosted</span>}</span>
+                        <span className="font-mono text-slate-300">{money4(l.cogs)}</span>
+                      </div>
+                      <div className="mt-1 space-y-0.5">
+                        {l.parts.map((p, j) => (
+                          <div key={j} className="flex justify-between text-[11px] pl-3">
+                            <span className={p.kind==="unmatched"?"text-red-400":p.kind==="collapse"?"text-emerald-400":p.kind==="global"?"text-sky-400":p.kind==="scoped"?"text-violet-400":"text-slate-500"}>
+                              {p.kind==="base"?"base recipe":p.kind==="global"?`+ ${p.label} (global)`:p.kind==="scoped"?`+ ${p.label} (scoped)`:p.kind==="collapse"?`+ ${p.label}`:`+ ${p.label}`}
+                              {p.kind==="unmatched" && " — no modifier"}
+                            </span>
+                            <span className="font-mono text-slate-400">{p.cost==null?"—":money4(p.cost)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {res && res.orderCount === 0 && !loading && <div className="text-xs text-slate-500">No orders for this store/date/channel.</div>}
     </div>
   );
 }

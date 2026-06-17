@@ -7276,7 +7276,114 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
   };
 }
 
-// ── IGNORED TILL NAMES (hide junk/open-item names from COGS mapping) ─────────
+// ── TILL ORDER AUDIT — real flipdish_sales orders with full per-line COGS ────
+// Same costing logic as computeStoreCogsV2, but returns each order with its
+// line-by-line build-up (base + each matched modifier, collapse shown) so the
+// COGS can be eyeballed for accuracy. Scoped to one store + single date.
+export async function auditTillOrders({ storeId, date, channel = "POS", limit = 200 } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  if (!date) throw new Error("date required");
+  const [inv, rec, mapsRaw, salesRaw] = await Promise.all([
+    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
+    (async () => {
+      let q = supabase.from("flipdish_sales")
+        .select("sale_id, channel, sale_time, sale_items, is_cancelled, amount_total")
+        .eq("store_id", storeId).eq("business_date", date)
+        .order("sale_time", { ascending: false }).limit(limit);
+      if (channel && channel !== "all") q = q.eq("channel", channel);
+      const { data, error } = await q; if (error) throw error; return data || [];
+    })(),
+  ]);
+
+  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+  const itemById = new Map();
+  (inv.store || []).forEach(x => itemById.set("store:" + x.id, x));
+  (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
+  const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+  const prepCost = (prep) => {
+    if (!prep) return null;
+    const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
+    if (!comps.length || !prep.yieldQty) return null;
+    let total = 0, ok = true;
+    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
+    return ok ? total / Number(prep.yieldQty) : null;
+  };
+  const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
+  const productBaseCost = (productId) => {
+    const comps = (rec.productComponents || []).filter(c => c.productId === productId && (c.variantId == null));
+    if (!comps.length) return { cost: 0, missing: 0, count: 0 };
+    let total = 0, missing = 0;
+    comps.forEach(c => { const unit = c.kind === "prep" ? prepCostPerUnit(c.prepId) : itemCost(c.itemScope, c.itemId); if (unit == null || c.portionQty == null) missing++; else total += unit * Number(c.portionQty); });
+    return { cost: total, missing, count: comps.length };
+  };
+  const modCostOf = (m) => {
+    if (!m) return null;
+    if (m.sourceType === "prep") { const u = prepCostPerUnit(m.prepId); return (u != null && m.prepPortion != null) ? u * Number(m.prepPortion) : null; }
+    const u = itemCost(m.itemScope, m.itemId); return (u != null && m.portionQty != null) ? u * Number(m.portionQty) : null;
+  };
+  const modById = new Map((rec.modifiers || []).map(m => [m.id, m]));
+  const scopedByProduct = new Map();
+  (rec.productModifiers || []).forEach(pm => {
+    const m = modById.get(pm.modifierId); if (!m || m.isGlobal) return;
+    if (!scopedByProduct.has(pm.productId)) scopedByProduct.set(pm.productId, new Map());
+    const key = m.tillCaption ? norm(m.tillCaption) : (m.groupLabel ? norm((m.name || "").replace(new RegExp(m.groupLabel, "i"), "")) : norm(m.name));
+    scopedByProduct.get(pm.productId).set(key, m);
+  });
+  const globalByCaption = new Map();
+  (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(norm(m.posName), m.productId); });
+  const productName = (id) => (rec.products || []).find(p => p.id === id)?.name || "—";
+
+  const orders = (salesRaw || []).filter(s => !s.is_cancelled).map(s => {
+    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+    let orderCogs = 0, orderRevenue = 0;
+    const lines = items.filter(li => li && !li.isRefunded && !li.isComplimented).map(li => {
+      const rev = Number(li.retailPrice != null ? li.retailPrice : li.unitPrice) || 0;
+      orderRevenue += rev;
+      const pid = mapByName.get(norm(li.caption));
+      if (pid == null) return { caption: li.caption, revenue: rev, mapped: false, cogs: null, parts: [] };
+      const base = productBaseCost(pid);
+      const parts = [{ label: "base recipe", cost: base.missing === 0 ? base.cost : null, kind: "base" }];
+      const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
+      const collapseMax = {}; // group -> {cost, captions:[]}
+      let modSum = 0;
+      kids.forEach(ch => {
+        const cn = norm(ch && ch.caption); if (!cn || cn === "none") return;
+        const scoped = scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn);
+        const m = scoped || globalByCaption.get(cn);
+        if (!m) { parts.push({ label: ch.caption, cost: null, kind: "unmatched" }); return; }
+        const c = modCostOf(m);
+        const scope = scoped ? "scoped" : "global";
+        if (m.collapseToMax) {
+          const g = m.groupLabel || "_c";
+          if (!collapseMax[g]) collapseMax[g] = { cost: c, captions: [ch.caption], group: g };
+          else { collapseMax[g].captions.push(ch.caption); if (c != null && (collapseMax[g].cost == null || c > collapseMax[g].cost)) collapseMax[g].cost = c; }
+        } else {
+          if (c != null) modSum += c;
+          parts.push({ label: ch.caption, cost: c, kind: scope });
+        }
+      });
+      Object.values(collapseMax).forEach(g => {
+        if (g.cost != null) modSum += g.cost;
+        parts.push({ label: `${g.group} (max of ${g.captions.length}: ${g.captions.join(", ")})`, cost: g.cost, kind: "collapse" });
+      });
+      const lineCogs = (base.missing === 0 ? base.cost : 0) + modSum;
+      orderCogs += lineCogs;
+      return { caption: li.caption, revenue: rev, mapped: true, baseUncosted: base.missing > 0, cogs: +lineCogs.toFixed(4), parts };
+    });
+    return {
+      saleId: s.sale_id, channel: s.channel, time: s.sale_time,
+      amountTotal: Number(s.amount_total) || 0,
+      revenue: +orderRevenue.toFixed(2), cogs: +orderCogs.toFixed(2),
+      cogsPct: orderRevenue > 0 ? orderCogs / orderRevenue : null,
+      lines,
+    };
+  });
+  return { storeId, date, channel, orderCount: orders.length, orders };
+}
+
 export async function fetchIgnoredTillNames(storeId) {
   let q = supabase.from("cogs_ignored_till_names").select("*");
   if (storeId) q = q.eq("store_id", storeId);
