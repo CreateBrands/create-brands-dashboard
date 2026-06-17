@@ -24817,6 +24817,26 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
                       Only {(theoCogs.coverage*100).toFixed(0)}% of sales are mapped to costed recipes — theoretical COGS is understated until mapping improves. {fmt(theoCogs.unmappedRevenue)} of sales is unmapped{theoCogs.mappedButUncostedRevenue>0?`, ${fmt(theoCogs.mappedButUncostedRevenue)} mapped but the recipe has no cost yet`:""}. Fix in COGS / Recipes → Mapping.
                     </div>
                   )}
+
+                  {(theoCogs.uncostedByProduct || []).length > 0 && (
+                    <details className="mt-3 bg-slate-950/40 border border-slate-800 rounded-xl">
+                      <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-amber-300 select-none">
+                        Mapped products with no cost yet ({theoCogs.uncostedByProduct.length}) — {fmt(theoCogs.mappedButUncostedRevenue)} of sales
+                      </summary>
+                      <div className="px-3 pb-3 space-y-1">
+                        <div className="text-[10px] text-slate-500 mb-1">Ranked by sales — cost these recipes first for the biggest impact. Fix in COGS / Recipes → Products.</div>
+                        {theoCogs.uncostedByProduct.map((u, i) => (
+                          <div key={u.productId || i} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-slate-900/60">
+                            <div className="min-w-0">
+                              <div className="text-[13px] text-slate-200 truncate">{i+1}. {u.productName}</div>
+                              <div className="text-[10px] text-amber-400/80">{u.reason}{u.tillNames && u.tillNames.length>1?` · ${u.tillNames.length} till names`:""}</div>
+                            </div>
+                            <div className="text-[13px] font-semibold text-slate-300 flex-shrink-0">{fmt(u.revenue)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                   <div className="text-[10px] text-slate-600 mt-2">Theoretical = what sold should have cost, from recipes. Shown alongside your recorded COGS (manual EOD + invoices) for comparison — it does not change the P&L yet.</div>
                 </>
               )}

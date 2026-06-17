@@ -6994,11 +6994,28 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
     const pid = mapByName.get(s.name.trim().toLowerCase());
     if (!pid) { unmappedRevenue += s.revenue; lines.push({ ...s, status: "unmapped", lineCogs: 0 }); return; }
     const pc = costFor(pid);
-    if (pc.cost == null) { mappedButUncosted += s.revenue; lines.push({ ...s, status: "uncosted", lineCogs: 0 }); return; }
+    const prodNm = (rec.products || []).find(p => p.id === pid)?.name || "—";
+    if (pc.cost == null) {
+      mappedButUncosted += s.revenue;
+      const reason = pc.count === 0 ? "no recipe components" : "ingredient cost missing";
+      lines.push({ ...s, status: "uncosted", lineCogs: 0, productId: pid, productName: prodNm, reason, missing: pc.missing, components: pc.count });
+      return;
+    }
     const lineCogs = pc.cost * s.qty;
     cogs += lineCogs; costedRevenue += s.revenue;
-    lines.push({ ...s, status: "costed", unitCost: +pc.cost.toFixed(4), lineCogs: +lineCogs.toFixed(2) });
+    lines.push({ ...s, status: "costed", productId: pid, productName: prodNm, unitCost: +pc.cost.toFixed(4), lineCogs: +lineCogs.toFixed(2) });
   });
+
+  // Roll uncosted lines up to the product level (so you fix each product once).
+  const uncostedByProduct = (() => {
+    const m = {};
+    lines.filter(l => l.status === "uncosted").forEach(l => {
+      const k = l.productId || l.name;
+      m[k] = m[k] || { productId: l.productId, productName: l.productName, reason: l.reason, revenue: 0, qty: 0, tillNames: [] };
+      m[k].revenue += l.revenue; m[k].qty += l.qty; m[k].tillNames.push(l.name);
+    });
+    return Object.values(m).sort((a, b) => b.revenue - a.revenue);
+  })();
 
   const coverage = totalRevenue > 0 ? costedRevenue / totalRevenue : 0;
   return {
@@ -7008,6 +7025,7 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
     costedRevenue: +costedRevenue.toFixed(2),
     unmappedRevenue: +unmappedRevenue.toFixed(2),
     mappedButUncostedRevenue: +mappedButUncosted.toFixed(2),
+    uncostedByProduct,
     coverage,                          // 0..1 share of revenue that is costed
     cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
     lines: lines.sort((a, b) => b.revenue - a.revenue),
