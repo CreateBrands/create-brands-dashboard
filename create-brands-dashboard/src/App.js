@@ -12187,9 +12187,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       .catch(() => { if (!cancelled) setDashCogs(null); });
     return () => { cancelled = true; };
   }, [storeId, period.from, period.to, dashTick]); // eslint-disable-line react-hooks/exhaustive-deps
-  const primeCostPct = (dashCogs && cur.revenue > 0) ? ((cur.labourCost + dashCogs.cogs) / cur.revenue) * 100 : null;
-  const netMarginPct = (dashCogs && cur.revenue > 0) ? ((cur.revenue - cur.labourCost - dashCogs.cogs) / cur.revenue) * 100 : null;
-  const dashCogsCoverage = dashCogs ? dashCogs.coverage : null;
+  // Only trust the ratio when actuals loaded cleanly for a single store and the
+  // COGS is sane relative to revenue (COGS > revenue ⇒ scope/period mismatch, hide it).
+  const cogsTrustworthy = USE_COGS_V2 && dashCogs && !err && !loading && storeId !== "all"
+    && cur.revenue > 0 && dashCogs.cogs <= cur.revenue * 1.5;
+  const primeCostPct = cogsTrustworthy ? ((cur.labourCost + dashCogs.cogs) / cur.revenue) * 100 : null;
+  const netMarginPct = cogsTrustworthy ? ((cur.revenue - cur.labourCost - dashCogs.cogs) / cur.revenue) * 100 : null;
+  const dashCogsCoverage = cogsTrustworthy ? dashCogs.coverage : null;
 
   // ── Targets for the selected period + stores ──────────────────────────────
   const target = useMemo(() => {
@@ -12392,13 +12396,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
-        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (storeId==="all" ? "Select a store" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
+        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (storeId==="all" ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
-        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : "Pending COGS")} sub={netMarginPct != null ? `after COGS + labour` : (storeId==="all" ? "Select a store" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
+        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={netMarginPct != null ? `after COGS + labour` : (storeId==="all" ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
