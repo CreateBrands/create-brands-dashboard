@@ -7073,13 +7073,14 @@ export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 }
     fetchFlipdishOrders({ from, to, limit }), fetchIgnoredTillNames(storeId).catch(() => []),
   ]);
 
-  // Which flipdish store ids belong to this internal store? Match by name.
-  const ourStore = (await fetchStores().catch(() => [])).find(s => s.id === storeId);
-  const ourName = (ourStore?.name || ourStore?.shortName || "").trim().toLowerCase();
+  // Which flipdish store rows are linked to this internal store? Use the
+  // explicit link (flipdish_stores.store_id === our store id), set via the
+  // admin "link Flipdish store" action. An order belongs to us if its
+  // flipdishStoreId matches one of those flipdish store ids.
   const fStoreIds = new Set(
     (fStores || [])
-      .filter(fs => (fs.name || "").trim().toLowerCase() === ourName || (ourName && (fs.name || "").trim().toLowerCase().includes(ourName)))
-      .map(fs => fs.storeId)
+      .filter(fs => fs.storeId === storeId)
+      .map(fs => fs.id)
   );
 
   // Cost rollup (same logic as theoretical COGS).
