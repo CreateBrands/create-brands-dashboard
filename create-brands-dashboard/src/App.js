@@ -641,6 +641,13 @@ function LocationDropdown({ brands, value, onChange, allLabel = null, className 
 // pick or filter by. Use these helpers wherever a store list/dropdown is built.
 const FACILITY_SITE_TYPES = new Set(["central_kitchen", "distribution", "franchise_ops"]);
 const isShopSite = (s) => !FACILITY_SITE_TYPES.has(s?.siteType);
+
+// COGS engine toggle for the P&L / dashboard figure.
+// false = old engine (item_day_aggregates, base recipe only) — current default.
+// true  = new exact engine (flipdish_sales, base + matched modifiers).
+// Flip to true only after validating in COGS Reconcile. Reconcile view always
+// shows both regardless of this flag.
+const USE_COGS_V2 = false;
 const shopStoresOnly = (list) => (list || []).filter(isShopSite);
 
 function StoreScopeDropdown({ stores, brands, value, onChange, className = "" }) {
@@ -5630,7 +5637,17 @@ function ModifierRow({ m, inv, preps, cost, onSave, onDelete }) {
   return (
     <tr className="border-t border-slate-800/60">
       <td className="px-2 py-1.5"><input value={f.name} onChange={e=>set("name",e.target.value)} onBlur={()=>blur("name")} className={cell+" w-28"}/></td>
-      <td className="px-2 py-1.5"><input value={f.groupLabel} onChange={e=>set("groupLabel",e.target.value)} onBlur={()=>blur("groupLabel")} className={cell+" w-24"} placeholder="Chocolate"/></td>
+      <td className="px-2 py-1.5">
+        <input value={f.groupLabel} onChange={e=>set("groupLabel",e.target.value)} onBlur={()=>blur("groupLabel")} className={cell+" w-24"} placeholder="Chocolate"/>
+        <div className="flex gap-2 mt-1">
+          <label className="flex items-center gap-1 text-[10px] text-slate-400 cursor-pointer" title="Shared add-on, matched on any product by caption">
+            <input type="checkbox" checked={!!m.isGlobal} onChange={e=>onSave({isGlobal:e.target.checked})}/> global
+          </label>
+          <label className="flex items-center gap-1 text-[10px] text-slate-400 cursor-pointer" title="Fixed portion: when several in this group are chosen, cost only the most expensive once">
+            <input type="checkbox" checked={!!m.collapseToMax} onChange={e=>onSave({collapseToMax:e.target.checked})}/> max
+          </label>
+        </div>
+      </td>
       <td className="px-2 py-1.5"><select value={src} onChange={e=>onSave({sourceType:e.target.value})} className={cell+" w-16"}><option value="item">Item</option><option value="prep">Prep</option></select></td>
       {src === "prep" ? (
         <td className="px-2 py-1.5"><select value={m.prepId||""} onChange={e=>onSave({prepId:e.target.value})} className={cell+" w-full max-w-[220px]"}><option value="">Select prep…</option>{(preps||[]).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></td>
@@ -25134,8 +25151,18 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     if (storeFilter === "all") { setTheoCogs(null); return; }
     const iso = (x) => x.toISOString().slice(0, 10);
     setTheoLoading(true); setTheoCogs(null);
-    computeStoreTheoreticalCogs({ storeId: storeFilter, from: iso(bounds.from), to: iso(bounds.to) })
-      .then(setTheoCogs).catch(() => setTheoCogs(null)).finally(() => setTheoLoading(false));
+    const args = { storeId: storeFilter, from: iso(bounds.from), to: iso(bounds.to) };
+    const p = USE_COGS_V2
+      ? computeStoreCogsV2(args).then(r => ({
+          // normalise v2 -> the shape this UI reads (uncostedByProduct from byProduct flags)
+          ...r,
+          uncostedByProduct: (r.byProduct || [])
+            .filter(x => x.baseUncosted || x.modUncosted)
+            .map(x => ({ productName: x.productName, revenue: x.revenue,
+              reason: x.baseUncosted ? "base recipe has no cost" : "modifier has no cost", tillNames: [] })),
+        }))
+      : computeStoreTheoreticalCogs(args);
+    p.then(setTheoCogs).catch(() => setTheoCogs(null)).finally(() => setTheoLoading(false));
   }, [storeFilter, bounds.from, bounds.to]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // VAT helper — figures from sources are treated as their natural basis:
