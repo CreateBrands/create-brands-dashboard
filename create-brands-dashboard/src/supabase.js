@@ -5576,6 +5576,85 @@ export async function deletePosMapping(id) {
 }
 // ===== end POS_MAPPER_V1 =====
 
+// ===== MODIFIER_DISCOVERY_V1 — find uncosted modifier selections in sales ====
+// Reads flipdish_sales.sale_items for a store/period, extracts nested option
+// captions (the chosen modifiers), and ranks those with NO matching modifier
+// yet. Heuristic: 'no ...' = exclusion (skip); >=5 distinct parents = global
+// add-on; else product-scoped. Human overrides in the UI.
+const _normCap = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+
+export async function discoverModifierCandidates({ storeId, from, to } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const fromD = from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const toD   = to   || new Date().toISOString().slice(0, 10);
+  const [sales, mods] = await Promise.all([
+    (async () => {
+      const { data, error } = await supabase.from("flipdish_sales")
+        .select("sale_items, is_cancelled")
+        .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD);
+      if (error) throw error; return data || [];
+    })(),
+    (async () => {
+      const { data, error } = await supabase.from("cogs_modifiers").select("name, till_caption");
+      if (error) throw error; return data || [];
+    })(),
+  ]);
+  // captions already covered by a modifier (by till_caption or name)
+  const covered = new Set();
+  mods.forEach(m => { covered.add(_normCap(m.till_caption || m.name)); if (m.name) covered.add(_normCap(m.name)); });
+
+  const agg = new Map(); // child_norm -> { example, occ, parents:Set, maxPrice }
+  sales.forEach(s => {
+    if (s.is_cancelled) return;
+    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+    items.forEach(li => {
+      if (li && li.isRefunded) return;
+      const parentNorm = _normCap(li && li.caption);
+      const kids = Array.isArray(li && li.saleItems) ? li.saleItems : [];
+      kids.forEach(ch => {
+        const raw = ch && ch.caption; const norm = _normCap(raw);
+        if (!norm || norm === "none") return;
+        let e = agg.get(norm);
+        if (!e) { e = { example: raw, occ: 0, parents: new Set(), maxPrice: 0 }; agg.set(norm, e); }
+        e.occ += 1; if (parentNorm) e.parents.add(parentNorm);
+        const p = Number(ch && ch.unitPrice) || 0; if (p > e.maxPrice) e.maxPrice = p;
+      });
+    });
+  });
+
+  const sizes = new Set(["regular","small","medium","large","half","full","single","double"]);
+  const out = [];
+  agg.forEach((e, norm) => {
+    if (covered.has(norm)) return;
+    const parents = e.parents.size;
+    let suggestion;
+    if (norm.startsWith("no ")) suggestion = "skip";
+    else if (sizes.has(norm)) suggestion = "review";
+    else if (parents >= 5) suggestion = "global";
+    else suggestion = "scoped";
+    out.push({ caption: e.example, captionNorm: norm, occurrences: e.occ,
+      distinctParents: parents, maxPrice: +e.maxPrice.toFixed(2),
+      suggestGlobal: parents >= 5, suggestion });
+  });
+  out.sort((a, b) => b.occurrences - a.occurrences);
+  return out;
+}
+
+// Create a modifier from a discovered caption. isGlobal sets the scope flag;
+// till_caption stores the exact caption for clean matching (no stripping).
+export async function createModifierFromCaption({ caption, isGlobal, groupLabel = null }) {
+  if (!caption || !caption.trim()) throw new Error("caption required");
+  const { error } = await supabase.from("cogs_modifiers").insert({
+    name: caption.trim(),
+    group_label: groupLabel,
+    till_caption: caption.trim(),
+    is_global: !!isGlobal,
+    source_type: "item",
+  });
+  if (error) throw error;
+}
+// ===== end MODIFIER_DISCOVERY_V1 =====
+
 // ============================================================================
 // CENTRAL KITCHEN — Phase 1: ingredients + goods-in (batch-tracked)
 // ============================================================================
