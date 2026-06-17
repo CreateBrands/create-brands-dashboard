@@ -125,6 +125,7 @@ import {
   attachProductModifier, detachProductModifier,
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
   fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
+  discoverModifierCandidates, createModifierFromCaption,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4905,6 +4906,7 @@ function CogsView({ stores = [] }) {
     { key: "modifiers", label: "Modifiers" },
     { key: "products",  label: "Products" },
     { key: "mapping",   label: "Mapping" },
+    { key: "discover",  label: "Discover Modifiers" },
     { key: "simulator", label: "Order Simulator" },
     { key: "inspector", label: "Order Inspector" },
   ];
@@ -4925,6 +4927,7 @@ function CogsView({ stores = [] }) {
       {tab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
       {tab === "products"  && <RecipeBuilder mode="products"/>}
       {tab === "mapping"   && <PosMapper stores={stores}/>}
+      {tab === "discover"  && <ModifierDiscovery stores={stores}/>}
       {tab === "simulator" && <OrderSimulator stores={stores}/>}
       {tab === "inspector" && <OrderInspector stores={stores}/>}
     </div>
@@ -6042,6 +6045,96 @@ function OrderInspector({ stores = [] }) {
           </>
         )
       )}
+    </div>
+  );
+}
+
+function ModifierDiscovery({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const today = new Date().toISOString().slice(0,10);
+  const monthAgo = new Date(Date.now() - 30*24*3600*1000).toISOString().slice(0,10);
+  const [from, setFrom] = useState(monthAgo);
+  const [to, setTo] = useState(today);
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [hidden, setHidden] = useState(() => new Set());
+  const [busy, setBusy] = useState(null);
+  const [done, setDone] = useState(() => new Set());
+
+  const run = async () => {
+    if (!storeId) return;
+    setLoading(true); setErr(null); setRows(null);
+    try { setRows(await discoverModifierCandidates({ storeId, from, to })); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { if (storeId) run(); /* eslint-disable-next-line */ }, [storeId]);
+
+  const create = async (r, isGlobal) => {
+    setBusy(r.captionNorm); setErr(null);
+    try {
+      await createModifierFromCaption({ caption: r.caption, isGlobal });
+      setDone(d => new Set(d).add(r.captionNorm));
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(null); }
+  };
+  const skip = (r) => setHidden(h => new Set(h).add(r.captionNorm));
+
+  const shown = (rows || []).filter(r => !hidden.has(r.captionNorm) && !done.has(r.captionNorm) && r.suggestion !== "skip");
+  const skippable = (rows || []).filter(r => r.suggestion === "skip").length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-[11px] text-slate-500 mb-1">Store</label>
+          <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+          </select>
+        </div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">From</label>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">To</label>
+          <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{loading?"Scanning…":"Scan sales"}</button>
+      </div>
+      <p className="text-xs text-slate-500">Modifier selections from real sales with no costed modifier yet, ranked by volume. Create as a global add-on (matches everywhere) or product-scoped, then set its cost in the Modifiers tab. Exclusions (e.g. "No Tomatoes") are auto-hidden{skippable?` (${skippable} hidden)`:""}.</p>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading && <div className="text-xs text-slate-500">Scanning sales…</div>}
+      {!loading && rows && shown.length === 0 && <div className="text-xs text-slate-500">No uncosted modifier selections found for this period.</div>}
+      {!loading && shown.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+              <th className="text-left px-3 py-2">Caption</th>
+              <th className="text-right px-3 py-2">Uses</th>
+              <th className="text-right px-3 py-2">Products</th>
+              <th className="text-right px-3 py-2">Max £</th>
+              <th className="text-left px-3 py-2">Suggested</th>
+              <th className="text-right px-3 py-2">Action</th>
+            </tr></thead>
+            <tbody>
+              {shown.map(r => (
+                <tr key={r.captionNorm} className="border-t border-slate-800/60">
+                  <td className="px-3 py-2 text-white">{r.caption}</td>
+                  <td className="px-3 py-2 text-right text-slate-300 font-mono">{r.occurrences}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.distinctParents}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.maxPrice ? "£"+r.maxPrice.toFixed(2) : "—"}</td>
+                  <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${r.suggestGlobal?"bg-emerald-900/50 text-emerald-300":"bg-slate-800 text-slate-400"}`}>{r.suggestGlobal?"global":"scoped"}</span></td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button disabled={busy===r.captionNorm} onClick={()=>create(r,true)} className="text-xs px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white mr-1 disabled:opacity-50">Global</button>
+                    <button disabled={busy===r.captionNorm} onClick={()=>create(r,false)} className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-white mr-1 disabled:opacity-50">Scoped</button>
+                    <button disabled={busy===r.captionNorm} onClick={()=>skip(r)} className="text-xs px-2 py-1 rounded text-slate-500 hover:text-red-400 disabled:opacity-50">Skip</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {done.size > 0 && <div className="text-xs text-emerald-400">{done.size} modifier{done.size>1?"s":""} created — set their cost in the Modifiers tab.</div>}
     </div>
   );
 }
