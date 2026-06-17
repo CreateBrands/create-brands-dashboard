@@ -124,6 +124,7 @@ import {
   addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
   attachProductModifier, detachProductModifier,
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
+  fetchIgnoredTillNames, ignoreTillName, unignoreTillName,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -5884,18 +5885,21 @@ function PosMapper({ stores = [] }) {
   const [loading, setLoading] = useState(false);
   const [manualName, setManualName] = useState("");
   const [mq, setMq] = useState("");
-  const [onlyUnmapped, setOnlyUnmapped] = useState(false);
+  const [filterMode, setFilterMode] = useState("all"); // all | mapped | unmapped
+  const [ignored, setIgnored] = useState([]);          // [{id,posName}]
+  const [showHidden, setShowHidden] = useState(false);
 
   const load = async (sid) => {
     if (!sid) return;
     setLoading(true); setErr(null);
     try {
-      const [names, maps, rec] = await Promise.all([
+      const [names, maps, rec, ign] = await Promise.all([
         fetchStoreTillNames(sid).catch(() => []),
         fetchPosMappings(sid),
         fetchRecipes(),
+        fetchIgnoredTillNames(sid).catch(() => []),
       ]);
-      setTillNames(names); setMappings(maps); setProducts(rec.products);
+      setTillNames(names); setMappings(maps); setProducts(rec.products); setIgnored(ign);
     } catch (e) { setErr(e.message || String(e)); }
     finally { setLoading(false); }
   };
@@ -5914,6 +5918,9 @@ function PosMapper({ stores = [] }) {
     catch (e) { setErr(e.message || String(e)); }
   };
   const unset = async (id) => { try { await deletePosMapping(id); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
+  const hideTill = async (name) => { try { await ignoreTillName(storeId, name); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
+  const restoreTill = async (id) => { try { await unignoreTillName(id); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
+  const ignoredSet = new Set((ignored || []).map(i => (i.posName||"").trim().toLowerCase()));
   const addManual = async () => {
     const n = manualName.trim(); if (!n) return;
     try { await setPosMapping(storeId, n, null); setManualName(""); await load(storeId); }
@@ -5928,9 +5935,13 @@ function PosMapper({ stores = [] }) {
     mappings.forEach(m => { const k = (m.posName||"").trim().toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push({ name: m.posName, qty: 0, revenue: 0 }); } });
     return out;
   })();
-  const unmappedCount = rows.filter(r => !mapFor(r.name)?.productId).length;
+  const unmappedCount = rows.filter(r => !ignoredSet.has(r.name.trim().toLowerCase()) && !mapFor(r.name)?.productId).length;
+  const mappedCount = rows.filter(r => !ignoredSet.has(r.name.trim().toLowerCase()) && mapFor(r.name)?.productId).length;
   const shownRows = rows.filter(r => {
-    if (onlyUnmapped && mapFor(r.name)?.productId) return false;
+    if (ignoredSet.has(r.name.trim().toLowerCase())) return false; // hidden — shown in the Hidden section instead
+    const isMapped = !!mapFor(r.name)?.productId;
+    if (filterMode === "mapped" && !isMapped) return false;
+    if (filterMode === "unmapped" && isMapped) return false;
     if (!mq) return true;
     return r.name.toLowerCase().includes(mq.toLowerCase()) || (productName(mapFor(r.name)?.productId)||"").toLowerCase().includes(mq.toLowerCase());
   });
@@ -5972,11 +5983,29 @@ function PosMapper({ stores = [] }) {
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
               {mq && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">{shownRows.length} of {rows.length}</span>}
             </div>
-            <button onClick={()=>setOnlyUnmapped(v=>!v)}
-              className={`px-3 py-2.5 rounded-xl text-xs font-semibold border ${onlyUnmapped?"bg-amber-600 border-amber-500 text-white":"bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800"}`}>
-              {onlyUnmapped?"Showing unmapped":"Unmapped only"} ({unmappedCount})
-            </button>
+            <div className="flex gap-1 bg-slate-800 rounded-xl p-1 flex-shrink-0">
+              {[["all",`All (${mappedCount+unmappedCount})`],["mapped",`Mapped (${mappedCount})`],["unmapped",`Unmapped (${unmappedCount})`]].map(([k,l])=>(
+                <button key={k} onClick={()=>setFilterMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${filterMode===k?(k==="unmapped"?"bg-amber-600 text-white":"bg-indigo-600 text-white"):"text-slate-400 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+            {ignored.length>0 && (
+              <button onClick={()=>setShowHidden(v=>!v)} className={`px-3 py-2.5 rounded-xl text-xs font-semibold border flex-shrink-0 ${showHidden?"bg-slate-700 border-slate-600 text-white":"bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800"}`}>
+                Hidden ({ignored.length})
+              </button>
+            )}
           </div>
+
+          {showHidden && ignored.length>0 && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 space-y-1.5">
+              <div className="text-[11px] uppercase text-slate-500 font-bold">Hidden till names — excluded from mapping &amp; coverage</div>
+              {ignored.map(ig => (
+                <div key={ig.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-slate-950/40">
+                  <span className="text-sm text-slate-400">{ig.posName}</span>
+                  <button onClick={()=>restoreTill(ig.id)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-indigo-300 text-[11px] font-semibold">Restore</button>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full text-sm">
@@ -6010,7 +6039,10 @@ function PosMapper({ stores = [] }) {
                           <button onClick={()=>save(r.name, sug.id)} className="ml-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Use suggestion</button>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-right">{m && <button onClick={()=>unset(m.id)} className="text-slate-600 hover:text-red-400"><X size={16}/></button>}</td>
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                        {m && <button onClick={()=>unset(m.id)} title="Clear mapping" className="text-slate-600 hover:text-red-400 mr-2"><X size={16}/></button>}
+                        <button onClick={()=>hideTill(r.name)} title="Hide this till name (keeps sales, removes from mapping & coverage)" className="px-2 py-1 rounded-lg bg-slate-800 text-slate-500 hover:text-amber-400 text-[11px] font-semibold">Hide</button>
+                      </td>
                     </tr>
                   );
                 })}

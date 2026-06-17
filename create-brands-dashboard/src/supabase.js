@@ -6932,7 +6932,7 @@ export async function archiveExpensePayee(id) {
 // touch the P&L's existing COGS (manual EOD + invoices) — shown alongside.
 export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
   if (!storeId) throw new Error("storeId required");
-  const [inv, rec, mapsRaw, salesRaw] = await Promise.all([
+  const [inv, rec, mapsRaw, salesRaw, ignoredRaw] = await Promise.all([
     fetchInventory(),
     fetchRecipes(),
     fetchPosMappings(storeId),
@@ -6942,7 +6942,9 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
       if (to)   q = q.lte("business_date", to);
       const { data, error } = await q; if (error) throw error; return data || [];
     })(),
+    fetchIgnoredTillNames(storeId).catch(() => []),
   ]);
+  const ignoredSet = new Set((ignoredRaw || []).map(i => (i.posName || "").trim().toLowerCase()));
 
   // Cost rollup (ported from RecipeBuilder, identical logic).
   const itemById = new Map();
@@ -6987,6 +6989,7 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
     byItem[name].revenue += Number(r.revenue) || 0;
   });
   Object.values(byItem).forEach(s => {
+    if (ignoredSet.has(s.name.trim().toLowerCase())) return; // hidden open-item junk — excluded from coverage
     totalRevenue += s.revenue;
     const pid = mapByName.get(s.name.trim().toLowerCase());
     if (!pid) { unmappedRevenue += s.revenue; lines.push({ ...s, status: "unmapped", lineCogs: 0 }); return; }
@@ -7009,4 +7012,30 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
     cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
     lines: lines.sort((a, b) => b.revenue - a.revenue),
   };
+}
+
+// ── IGNORED TILL NAMES (hide junk/open-item names from COGS mapping) ─────────
+export async function fetchIgnoredTillNames(storeId) {
+  let q = supabase.from("cogs_ignored_till_names").select("*");
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, storeId: r.store_id, posName: r.pos_name }));
+}
+export async function ignoreTillName(storeId, posName, by = null) {
+  if (!storeId || !posName?.trim()) throw new Error("store and name required");
+  const { data, error } = await supabase.from("cogs_ignored_till_names")
+    .upsert({ store_id: storeId, pos_name: posName.trim(), created_by: by || null }, { onConflict: "store_id,pos_name" })
+    .select().maybeSingle();
+  if (error) {
+    // unique index is on (store_id, lower(pos_name)); ignore dup errors
+    if (String(error.message || "").toLowerCase().includes("duplicate")) return null;
+    throw error;
+  }
+  return data ? { id: data.id, storeId: data.store_id, posName: data.pos_name } : null;
+}
+export async function unignoreTillName(id) {
+  const { error } = await supabase.from("cogs_ignored_till_names").delete().eq("id", id);
+  if (error) throw error;
+  return id;
 }
