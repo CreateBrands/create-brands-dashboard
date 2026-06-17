@@ -35,7 +35,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -24557,6 +24557,18 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     return () => { cancelled = true; };
   }, [bounds.from, bounds.to]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Stage 1 theoretical COGS (sales × recipe cost) — per store only, shown
+  // alongside the recorded figure (manual EOD + invoices). Read-only.
+  const [theoCogs, setTheoCogs] = useState(null);
+  const [theoLoading, setTheoLoading] = useState(false);
+  useEffect(() => {
+    if (storeFilter === "all") { setTheoCogs(null); return; }
+    const iso = (x) => x.toISOString().slice(0, 10);
+    setTheoLoading(true); setTheoCogs(null);
+    computeStoreTheoreticalCogs({ storeId: storeFilter, from: iso(bounds.from), to: iso(bounds.to) })
+      .then(setTheoCogs).catch(() => setTheoCogs(null)).finally(() => setTheoLoading(false));
+  }, [storeFilter, bounds.from, bounds.to]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // VAT helper — figures from sources are treated as their natural basis:
   // EOD net_sales is gross (inc VAT, as taken); invoices are ex-VAT; bank is gross.
   // We present a consistent view per the toggle. UK standard rate 20%.
@@ -24713,6 +24725,35 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
               </div>
             ))}
           </div>
+
+          {/* Stage 1: theoretical COGS (recipe × sales) shown alongside recorded COGS */}
+          {storeFilter !== "all" && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-sm font-bold text-white">Theoretical COGS <span className="text-[10px] uppercase text-indigo-300 ml-1">recipe × sales</span></div>
+                {theoLoading ? <span className="text-xs text-slate-500">Calculating…</span> : theoCogs && (
+                  <span className="text-lg font-bold text-amber-300">{fmt(theoCogs.cogs)}</span>
+                )}
+              </div>
+              {!theoLoading && theoCogs && (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                    <Stat label="Theoretical COGS" value={fmt(theoCogs.cogs)} tone="text-amber-300" />
+                    <Stat label="Recorded COGS" value={fmt(vatMode==="inc"?incVat(totals.cogs):totals.cogs)} tone="text-slate-300" />
+                    <Stat label="COGS % (of costed sales)" value={`${(theoCogs.cogsPctOfCosted*100).toFixed(1)}%`} tone="text-slate-300" />
+                    <Stat label="Mapping coverage" value={`${(theoCogs.coverage*100).toFixed(0)}%`} tone={theoCogs.coverage>=0.9?"text-emerald-400":theoCogs.coverage>=0.6?"text-amber-400":"text-red-400"} />
+                  </div>
+                  {theoCogs.coverage < 0.9 && (
+                    <div className="text-[11px] text-amber-400 bg-amber-950/20 border border-amber-500/30 rounded-lg px-3 py-2 mt-3">
+                      Only {(theoCogs.coverage*100).toFixed(0)}% of sales are mapped to costed recipes — theoretical COGS is understated until mapping improves. {fmt(theoCogs.unmappedRevenue)} of sales is unmapped{theoCogs.mappedButUncostedRevenue>0?`, ${fmt(theoCogs.mappedButUncostedRevenue)} mapped but the recipe has no cost yet`:""}. Fix in COGS / Recipes → Mapping.
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-600 mt-2">Theoretical = what sold should have cost, from recipes. Shown alongside your recorded COGS (manual EOD + invoices) for comparison — it does not change the P&L yet.</div>
+                </>
+              )}
+              {!theoLoading && !theoCogs && <div className="text-xs text-slate-500 mt-2">No theoretical COGS available — check recipes and POS mapping for this store.</div>}
+            </div>
+          )}
 
           {/* Cashflow */}
           <div className="grid grid-cols-3 gap-3">

@@ -6924,3 +6924,89 @@ export async function archiveExpensePayee(id) {
   if (error) throw error;
   return id;
 }
+
+// ── STAGE 1: STORE THEORETICAL COGS (sales × recipe cost) ────────────────────
+// Reuses the recipe cost rollup (itemCost → prepCost → productBaseCost) and the
+// store POS map. Returns per-store theoretical COGS for a date range plus a
+// mapping-coverage figure so the number can be trusted. Read-only; does not
+// touch the P&L's existing COGS (manual EOD + invoices) — shown alongside.
+export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const [inv, rec, mapsRaw, salesRaw] = await Promise.all([
+    fetchInventory(),
+    fetchRecipes(),
+    fetchPosMappings(storeId),
+    (async () => {
+      let q = supabase.from("item_day_aggregates").select("item, qty, revenue, business_date").eq("store_id", storeId);
+      if (from) q = q.gte("business_date", from);
+      if (to)   q = q.lte("business_date", to);
+      const { data, error } = await q; if (error) throw error; return data || [];
+    })(),
+  ]);
+
+  // Cost rollup (ported from RecipeBuilder, identical logic).
+  const itemById = new Map();
+  (inv.store || []).forEach(x => itemById.set("store:" + x.id, x));
+  (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
+  const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+  const prepCost = (prep) => {
+    if (!prep) return null;
+    const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
+    if (!comps.length || !prep.yieldQty) return null;
+    let total = 0, ok = true;
+    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
+    return ok ? total / Number(prep.yieldQty) : null;
+  };
+  const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
+  const productCost = (productId) => {
+    const comps = (rec.productComponents || []).filter(c => c.productId === productId && (c.variantId == null));
+    if (!comps.length) return { cost: null, missing: 1, count: 0 };
+    let total = 0, missing = 0;
+    comps.forEach(c => {
+      const unit = c.kind === "prep" ? prepCostPerUnit(c.prepId) : itemCost(c.itemScope, c.itemId);
+      if (unit == null || c.portionQty == null) missing++; else total += unit * Number(c.portionQty);
+    });
+    return { cost: missing ? null : total, missing, count: comps.length };
+  };
+
+  // POS name (normalised) -> productId.
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(m.posName.trim().toLowerCase(), m.productId); });
+  const productCostCache = new Map();
+  const costFor = (productId) => { if (!productCostCache.has(productId)) productCostCache.set(productId, productCost(productId)); return productCostCache.get(productId); };
+
+  let cogs = 0, costedRevenue = 0, totalRevenue = 0, mappedButUncosted = 0, unmappedRevenue = 0;
+  const lines = [];
+  // Aggregate sales by item name across the range.
+  const byItem = {};
+  (salesRaw || []).forEach(r => {
+    const name = (r.item || "").trim(); if (!name) return;
+    byItem[name] = byItem[name] || { name, qty: 0, revenue: 0 };
+    byItem[name].qty += Number(r.qty) || 0;
+    byItem[name].revenue += Number(r.revenue) || 0;
+  });
+  Object.values(byItem).forEach(s => {
+    totalRevenue += s.revenue;
+    const pid = mapByName.get(s.name.trim().toLowerCase());
+    if (!pid) { unmappedRevenue += s.revenue; lines.push({ ...s, status: "unmapped", lineCogs: 0 }); return; }
+    const pc = costFor(pid);
+    if (pc.cost == null) { mappedButUncosted += s.revenue; lines.push({ ...s, status: "uncosted", lineCogs: 0 }); return; }
+    const lineCogs = pc.cost * s.qty;
+    cogs += lineCogs; costedRevenue += s.revenue;
+    lines.push({ ...s, status: "costed", unitCost: +pc.cost.toFixed(4), lineCogs: +lineCogs.toFixed(2) });
+  });
+
+  const coverage = totalRevenue > 0 ? costedRevenue / totalRevenue : 0;
+  return {
+    storeId, from: from || null, to: to || null,
+    cogs: +cogs.toFixed(2),
+    totalRevenue: +totalRevenue.toFixed(2),
+    costedRevenue: +costedRevenue.toFixed(2),
+    unmappedRevenue: +unmappedRevenue.toFixed(2),
+    mappedButUncostedRevenue: +mappedButUncosted.toFixed(2),
+    coverage,                          // 0..1 share of revenue that is costed
+    cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
+    lines: lines.sort((a, b) => b.revenue - a.revenue),
+  };
+}
