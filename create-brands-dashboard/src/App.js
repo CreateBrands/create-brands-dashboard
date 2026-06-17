@@ -23178,8 +23178,9 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
 
 function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], bankAccounts = [], stores = [], opsTeam = [], typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {}, money }) {
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white";
-  const [section, setSection] = useState("types"); // types | categories | stores | people
+  const [section, setSection] = useState("types"); // types | categories | people
   const [newType, setNewType] = useState(""); const [newCat, setNewCat] = useState("");
+  const [catEdit, setCatEdit] = useState(null); // {id, name}
   const [editType, setEditType] = useState(null); // expense type whose accounts are being edited
   const [editMember, setEditMember] = useState(""); // member id
   const exSet = new Set(excludedStores || []);
@@ -23215,7 +23216,7 @@ function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], 
   return (
     <div className="space-y-4">
       <div className="flex gap-1 flex-wrap">
-        {[["types","Expense types"],["categories","Categories"],["stores","Stores"],["people","Assign employee"]].map(([k,l])=>(
+        {[["types","Expense types"],["categories","Categories"],["people","Assign employee"]].map(([k,l])=>(
           <button key={k} onClick={()=>setSection(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${section===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
         ))}
       </div>
@@ -23244,24 +23245,32 @@ function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], 
       )}
 
       {section==="categories" && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="flex gap-2"><input value={newCat} onChange={e=>setNewCat(e.target.value)} placeholder="New category" className={`${ec} flex-1`}/><button onClick={async()=>{ if(newCat.trim()){ await handlers.saveCategory?.({ name:newCat, type:"expense" }); setNewCat(""); } }} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button></div>
-          <div className="flex flex-wrap gap-1.5">
-            {categories.map(c=><span key={c.id} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px]">{c.name}</span>)}
+          <div className="space-y-1.5">
+            {categories.map(c => (
+              <div key={c.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+                {catEdit?.id === c.id ? (
+                  <>
+                    <input value={catEdit.name} onChange={e=>setCatEdit({...catEdit, name:e.target.value})} className={`${ec} flex-1`} autoFocus/>
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <button onClick={async()=>{ if(catEdit.name.trim()){ await handlers.saveCategory?.({ ...c, name:catEdit.name.trim() }); setCatEdit(null); } }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-semibold">Save</button>
+                      <button onClick={()=>setCatEdit(null)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-slate-200">{c.name}</div>
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <button onClick={()=>setCatEdit({ id:c.id, name:c.name })} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Rename</button>
+                      <button onClick={async()=>{ if(window.confirm(`Delete category "${c.name}"? Items using it become uncategorised.`)) await handlers.removeCategory?.(c.id); }} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-500 hover:text-red-400 text-[11px] font-semibold">Delete</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
-          <div className="text-[11px] text-slate-600">Categories are shared with the accounts module. Manage/remove them in Accounts → categories.</div>
-        </div>
-      )}
-
-      {section==="stores" && (
-        <div className="space-y-2">
-          <div className="text-[11px] text-slate-500">Toggle which stores appear on the expense form.</div>
-          {stores.filter(s=>!s.archivedAt).map(s=>(
-            <div key={s.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
-              <div className="text-sm text-slate-200">{s.shortName||s.name}</div>
-              <button onClick={()=>handlers.setStoreExcluded?.(s.id, !exSet.has(s.id))} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${exSet.has(s.id)?"bg-slate-800 text-slate-500":"bg-emerald-600/30 text-emerald-200"}`}>{exSet.has(s.id)?"Hidden":"Shown"}</button>
-            </div>
-          ))}
+          <div className="text-[11px] text-slate-600">Categories are shared with the Accounts module — changes here apply there too.</div>
         </div>
       )}
 
@@ -23442,14 +23451,8 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const byStatus = (st) => claims.filter(c => c.status === st);
   const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
 
-  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", categoryId:"", storeId:"", vendor:"", reference:"" }); setTab("new"); };
+  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", storeId:"", vendor:"", reference:"" }); setTab("new"); };
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
-  const submit = async () => {
-    setBusy(true); setErr("");
-    try { await handlers.submit?.({ ...form, amount: Number(form.amount) }); setForm(null); setTab("submitted"); }
-    catch (e) { setErr(e?.message || "Could not submit."); }
-    setBusy(false);
-  };
 
   // Submit-form scoping: a regular employee only sees what they're granted.
   // Owner/HQ are unrestricted. No grant for a dimension = nothing (strict).
@@ -23459,13 +23462,36 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const myCatIds = new Set(memberCategories?.[myMemberId] || []);
   const myStoreIds = new Set(memberStores?.[myMemberId] || []);
   const formTypes = unrestrictedSubmit ? expenseTypes : expenseTypes.filter(t => myTypeIds.has(t.id));
+
+  // Assigned accounts (cash/bank) this person can pick as the paid-from account.
+  // Owner/HQ see all; others see only their assigned accounts.
+  const myAccountKeys = (memberAccounts?.[myMemberId] || []);
+  const accountOptions = (() => {
+    const out = [];
+    const cashAllowed = unrestrictedSubmit ? null : new Set(myAccountKeys.filter(a=>a.accountKind==="cash").map(a=>a.accountId));
+    const bankAllowed = unrestrictedSubmit ? null : new Set(myAccountKeys.filter(a=>a.accountKind==="bank").map(a=>a.accountId));
+    cashAccounts.forEach(a => { if (!cashAllowed || cashAllowed.has(a.id)) out.push({ key:`cash:${a.id}`, label:`${a.name} (cash)` }); });
+    (bankAccounts||[]).filter(a=>!a.archived).forEach(a => { if (!bankAllowed || bankAllowed.has(a.id)) out.push({ key:`bank:${a.id}`, label:`${a.name} (bank)` }); });
+    return out;
+  })();
+  const submit = async () => {
+    setBusy(true); setErr("");
+    try {
+      const chosen = accountOptions.find(o => o.key === form.accountKey);
+      const payload = { ...form, amount: Number(form.amount) };
+      if (chosen) payload.reference = `[${chosen.label}]${form.reference?` ${form.reference}`:""}`;
+      await handlers.submit?.(payload); setForm(null); setTab("submitted");
+    }
+    catch (e) { setErr(e?.message || "Could not submit."); }
+    setBusy(false);
+  };
   const formCategories = unrestrictedSubmit ? categories : categories.filter(c => myCatIds.has(c.id));
   const expenseStores = useMemo(() => {
     const ex = new Set(excludedStores || []);
     const base = (stores || []).filter(s => !s.archivedAt && !ex.has(s.id));
     return unrestrictedSubmit ? base : base.filter(s => myStoreIds.has(s.id));
   }, [stores, excludedStores, unrestrictedSubmit, memberStores, myMemberId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const cannotSubmit = !unrestrictedSubmit && formTypes.length === 0 && expenseStores.length === 0;
+  const cannotSubmit = !unrestrictedSubmit && accountOptions.length === 0 && expenseStores.length === 0;
 
   // Allowed accounts for reconciling a claim = intersection of the expense
   // type's assigned accounts and the submitter's assigned accounts. If either
@@ -23574,7 +23600,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           <div className="text-sm font-bold text-white">New expense</div>
           {cannotSubmit && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-xl px-3 py-2">You don't have any expense types or stores assigned yet. Ask an admin to assign them in Manage lists → Assign employee.</div>}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
-          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{formTypes.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Bank assigned</label><select value={form.accountKey} onChange={e=>setF("accountKey",e.target.value)} className={ec}><option value="">—</option>{accountOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{formCategories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{expenseStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-2">
@@ -35113,7 +35139,8 @@ export default function App() {
     saveExpenseType: async (e) => { await upsertCashExpenseType(e); await Promise.all([reloadExpenses(), reloadCash()]); },
     archiveExpenseType: async (id) => { await archiveCashExpenseType(id); await Promise.all([reloadExpenses(), reloadCash()]); },
     saveCategory: async (c) => { await saveCategory(c); },
-  }), [reloadExpenses, reloadCash, currentUser, saveCategory]);
+    removeCategory: async (id) => { await removeCategory(id); },
+  }), [reloadExpenses, reloadCash, currentUser, saveCategory, removeCategory]);
 
   // Feature-level access check for the current user (Level 2). Owner always
   // allowed. Defined here, after currentUser, to avoid a TDZ reference.
