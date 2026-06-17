@@ -5669,6 +5669,98 @@ export async function createModifierFromCaption({ caption, isGlobal, groupLabel 
 }
 // ===== end MODIFIER_DISCOVERY_V1 =====
 
+// ===== MODIFIER_MAPPER_V1 — per-store till caption -> modifier =============
+export async function fetchModifierMappings(storeId) {
+  let q = supabase.from("cogs_modifier_mappings").select("*");
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q; if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, storeId: r.store_id, caption: r.caption, modifierId: r.modifier_id }));
+}
+
+export async function setModifierMapping(storeId, caption, modifierId) {
+  if (!storeId || !caption?.trim()) throw new Error("store and caption required");
+  const c = caption.trim();
+  const { data: existing } = await supabase.from("cogs_modifier_mappings")
+    .select("id").eq("store_id", storeId).ilike("caption", c).maybeSingle();
+  if (existing) {
+    const { error } = await supabase.from("cogs_modifier_mappings").update({ modifier_id: modifierId }).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("cogs_modifier_mappings").insert({ store_id: storeId, caption: c, modifier_id: modifierId });
+    if (error) throw error;
+  }
+}
+
+export async function deleteModifierMapping(id) {
+  const { error } = await supabase.from("cogs_modifier_mappings").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// All distinct modifier captions sold at a store/period, each with: occurrences,
+// whether it already matches a modifier (auto by caption or via explicit mapping),
+// and the mapped modifier if any. Mirrors the menu mapper's "show all" behaviour.
+export async function fetchModifierCaptions({ storeId, from, to } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const fromD = from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const toD   = to   || new Date().toISOString().slice(0, 10);
+  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+  const [salesPages, mods, maps] = await Promise.all([
+    (async () => {
+      const PAGE = 1000, MAX = 200; let all = [], st = 0;
+      for (let p = 0; p < MAX; p++) {
+        const { data, error } = await supabase.from("flipdish_sales")
+          .select("sale_items, is_cancelled")
+          .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD)
+          .order("sale_id", { ascending: true }).range(st, st + PAGE - 1);
+        if (error) throw error;
+        const b = data || []; all = all.concat(b); if (b.length < PAGE) break; st += PAGE;
+      }
+      return all;
+    })(),
+    (async () => { const { data, error } = await supabase.from("cogs_modifiers").select("id, name, till_caption, is_global"); if (error) throw error; return data || []; })(),
+    fetchModifierMappings(storeId),
+  ]);
+
+  // auto-match set (global/by-caption) + mapping lookup
+  const autoCaps = new Set();
+  mods.forEach(m => { autoCaps.add(norm(m.till_caption || m.name)); if (m.name) autoCaps.add(norm(m.name)); });
+  const mapByCap = new Map(); maps.forEach(mm => mapByCap.set(norm(mm.caption), mm));
+  const modNameById = new Map(mods.map(m => [m.id, m.name]));
+
+  const agg = new Map();
+  (salesPages || []).forEach(s => {
+    if (s.is_cancelled) return;
+    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+    items.forEach(li => {
+      if (li && li.isRefunded) return;
+      const kids = Array.isArray(li && li.saleItems) ? li.saleItems : [];
+      kids.forEach(ch => {
+        const raw = ch && ch.caption; const n = norm(raw);
+        if (!n || n === "none") return;
+        let e = agg.get(n); if (!e) { e = { example: raw, occ: 0 }; agg.set(n, e); }
+        e.occ += 1;
+      });
+    });
+  });
+
+  const out = [];
+  agg.forEach((e, n) => {
+    const mapping = mapByCap.get(n);
+    const auto = autoCaps.has(n);
+    out.push({
+      caption: e.example, captionNorm: n, occurrences: e.occ,
+      autoMatched: auto,
+      mappingId: mapping ? mapping.id : null,
+      mappedModifierId: mapping ? mapping.modifierId : null,
+      mappedModifierName: mapping ? (modNameById.get(mapping.modifierId) || "—") : null,
+      status: mapping ? "mapped" : (auto ? "auto" : "unmatched"),
+    });
+  });
+  out.sort((a, b) => b.occurrences - a.occurrences);
+  return out;
+}
+// ===== end MODIFIER_MAPPER_V1 =====
+
 // ============================================================================
 // CENTRAL KITCHEN — Phase 1: ingredients + goods-in (batch-tracked)
 // ============================================================================
@@ -7206,6 +7298,10 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
   // global: captionNorm -> modifier
   const globalByCaption = new Map();
   (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
+  // explicit per-store caption -> modifier mappings (checked FIRST)
+  const modMaps = await fetchModifierMappings(storeId).catch(() => []);
+  const mappingByCaption = new Map();
+  (modMaps || []).forEach(mm => { const m = modById.get(mm.modifierId); if (m) mappingByCaption.set(norm(mm.caption), m); });
 
   // POS name -> productId
   const mapByName = new Map();
@@ -7234,7 +7330,7 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
       kids.forEach(ch => {
         const cn = norm(ch && ch.caption);
         if (!cn || cn === "none") return;
-        const m = (scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn)) || globalByCaption.get(cn);
+        const m = mappingByCaption.get(cn) || (scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn)) || globalByCaption.get(cn);
         if (!m) return; // unmatched modifier — not costed (shows in discovery)
         const c = modCostOf(m);
         if (c == null) { lineUncostedMod = true; uncostedModifierHits++; return; }
@@ -7332,6 +7428,9 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
   });
   const globalByCaption = new Map();
   (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
+  const modMaps = await fetchModifierMappings(storeId).catch(() => []);
+  const mappingByCaption = new Map();
+  (modMaps || []).forEach(mm => { const m = modById.get(mm.modifierId); if (m) mappingByCaption.set(norm(mm.caption), m); });
   const mapByName = new Map();
   (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(norm(m.posName), m.productId); });
   const productName = (id) => (rec.products || []).find(p => p.id === id)?.name || "—";
@@ -7352,7 +7451,7 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
       kids.forEach(ch => {
         const cn = norm(ch && ch.caption); if (!cn || cn === "none") return;
         const scoped = scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn);
-        const m = scoped || globalByCaption.get(cn);
+        const m = mappingByCaption.get(cn) || scoped || globalByCaption.get(cn);
         if (!m) { parts.push({ label: ch.caption, cost: null, kind: "unmatched" }); return; }
         const c = modCostOf(m);
         const scope = scoped ? "scoped" : "global";

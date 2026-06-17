@@ -127,6 +127,7 @@ import {
   fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
   discoverModifierCandidates, createModifierFromCaption,
   computeStoreCogsV2, auditTillOrders,
+  fetchModifierMappings, setModifierMapping, deleteModifierMapping, fetchModifierCaptions,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4917,8 +4918,7 @@ function CogsView({ stores = [] }) {
     { key: "discover",  label: "Discover Modifiers" },
     { key: "reconcile", label: "COGS Reconcile" },
     { key: "tillaudit", label: "Till Audit" },
-    { key: "simulator", label: "Order Simulator" },
-    { key: "inspector", label: "Order Inspector" },
+    { key: "modmapper", label: "Modifier Mapper" },
   ];
   return (
     <div className="space-y-4">
@@ -4940,8 +4940,7 @@ function CogsView({ stores = [] }) {
       {tab === "discover"  && <ModifierDiscovery stores={stores}/>}
       {tab === "reconcile" && <CogsReconciliation stores={stores}/>}
       {tab === "tillaudit" && <TillAudit stores={stores}/>}
-      {tab === "simulator" && <OrderSimulator stores={stores}/>}
-      {tab === "inspector" && <OrderInspector stores={stores}/>}
+      {tab === "modmapper" && <ModifierMapper stores={stores}/>}
     </div>
   );
 }
@@ -6067,6 +6066,120 @@ function OrderInspector({ stores = [] }) {
           </>
         )
       )}
+    </div>
+  );
+}
+
+function ModifierMapper({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const today = new Date().toISOString().slice(0,10);
+  const monthAgo = new Date(Date.now() - 30*24*3600*1000).toISOString().slice(0,10);
+  const [from, setFrom] = useState(monthAgo);
+  const [to, setTo] = useState(today);
+  const [caps, setCaps] = useState(null);
+  const [mods, setMods] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all"); // all | unmatched | mapped | auto
+
+  const load = async () => {
+    if (!storeId) return;
+    setLoading(true); setErr(null);
+    try {
+      const [c, rec] = await Promise.all([
+        fetchModifierCaptions({ storeId, from, to }),
+        fetchRecipes(),
+      ]);
+      setCaps(c); setMods(rec.modifiers || []);
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { if (storeId) load(); /* eslint-disable-next-line */ }, [storeId]);
+
+  const map = async (caption, modifierId) => {
+    setErr(null);
+    try {
+      if (modifierId) await setModifierMapping(storeId, caption, Number(modifierId));
+      await load();
+    } catch (e) { setErr(e.message || String(e)); }
+  };
+  const unmap = async (mappingId) => {
+    setErr(null);
+    try { await deleteModifierMapping(mappingId); await load(); }
+    catch (e) { setErr(e.message || String(e)); }
+  };
+
+  const shown = (caps || []).filter(c => {
+    if (q && !c.caption.toLowerCase().includes(q.toLowerCase())) return false;
+    if (filter === "unmatched") return c.status === "unmatched";
+    if (filter === "mapped") return c.status === "mapped";
+    if (filter === "auto") return c.status === "auto";
+    return true;
+  });
+  const counts = (caps || []).reduce((a,c)=>{a[c.status]=(a[c.status]||0)+1;return a;},{});
+
+  const badge = (s) => s === "mapped" ? <span className="text-[11px] px-2 py-0.5 rounded bg-violet-900/50 text-violet-300">mapped</span>
+    : s === "auto" ? <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/50 text-emerald-300">auto</span>
+    : <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">unmatched</span>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div><label className="block text-[11px] text-slate-500 mb-1">Store</label>
+          <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+          </select></div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">From</label>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">To</label>
+          <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <button onClick={load} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{loading?"Loading…":"Load captions"}</button>
+      </div>
+      <p className="text-xs text-slate-500">Till modifier captions for this store. "auto" = already matches a modifier by name; "mapped" = you've pointed it at a modifier; "unmatched" = no cost yet. Map unmatched captions to an existing modifier (e.g. "Oat Milk (Recommended)" → the "Oat Milk" modifier). Mappings are checked first by the COGS engine.</p>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search captions…" className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white flex-1 min-w-[200px]"/>
+        {["all","unmatched","mapped","auto"].map(f => (
+          <button key={f} onClick={()=>setFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs ${filter===f?"bg-indigo-600 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>
+            {f}{f!=="all" && counts[f]?` (${counts[f]})`:""}
+          </button>
+        ))}
+      </div>
+      {loading && <div className="text-xs text-slate-500">Loading…</div>}
+      {!loading && shown.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+              <th className="text-left px-3 py-2">Caption</th>
+              <th className="text-right px-3 py-2">Uses</th>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">Map to modifier</th>
+            </tr></thead>
+            <tbody>
+              {shown.map(c => (
+                <tr key={c.captionNorm} className="border-t border-slate-800/60">
+                  <td className="px-3 py-2 text-white">{c.caption}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{c.occurrences}</td>
+                  <td className="px-3 py-2">{badge(c.status)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <select value={c.mappedModifierId||""} onChange={e=>map(c.caption, e.target.value)}
+                        className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white max-w-[260px]">
+                        <option value="">{c.status==="auto"?"— auto-matched —":"map to…"}</option>
+                        {mods.map(m=><option key={m.id} value={m.id}>{m.groupLabel?m.groupLabel+" · ":""}{m.name}{m.isGlobal?" (global)":""}</option>)}
+                      </select>
+                      {c.mappingId && <button onClick={()=>unmap(c.mappingId)} className="text-slate-500 hover:text-red-400"><X size={13}/></button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!loading && caps && shown.length === 0 && <div className="text-xs text-slate-500">No captions match this filter.</div>}
     </div>
   );
 }
