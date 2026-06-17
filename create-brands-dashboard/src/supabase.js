@@ -6456,7 +6456,7 @@ export async function setMemberCustomRole(memberId, roleId) {
 }
 
 // ── CASH ACCOUNTS (double-entry cash ledger, Finance entity) ─────────────────
-const mapCashAccount = (a) => ({ id: a.id, name: a.name, kind: a.kind, storeId: a.store_id || null, description: a.description || "", archivedAt: a.archived_at || null });
+const mapCashAccount = (a) => ({ id: a.id, name: a.name, kind: a.kind, storeId: a.store_id || null, description: a.description || "", isPetty: a.is_petty ?? false, archivedAt: a.archived_at || null });
 const mapCashSource = (s) => ({ id: s.id, name: s.name, categoryId: s.category_id || null });
 const mapCashExpenseType = (e) => ({ id: e.id, name: e.name, categoryId: e.category_id || null });
 const mapCashLedger = (t) => ({
@@ -6478,6 +6478,7 @@ export async function fetchCashAccounts() {
 }
 export async function upsertCashAccount(acc) {
   const row = { name: (acc.name||"").trim(), kind: acc.kind, store_id: acc.storeId || null, description: acc.description || null, updated_at: new Date().toISOString() };
+  if (acc.isPetty !== undefined) row.is_petty = !!acc.isPetty;
   if (acc.id) row.id = acc.id;
   const { data, error } = await supabase.from("cash_accounts").upsert(row).select().maybeSingle();
   if (error) throw error;
@@ -6868,4 +6869,36 @@ export async function setCashLedgerReconciled(id, reconciled, by = null) {
   const { error } = await supabase.from("cash_ledger").update(patch).eq("id", id);
   if (error) throw error;
   return id;
+}
+
+// ── PETTY CASH FLOAT (single shared account) ─────────────────────────────────
+// Ensure the one petty-cash account exists; create it if missing. Returns it.
+export async function ensurePettyCashAccount() {
+  const { data: existing, error: e1 } = await supabase.from("cash_accounts").select("*").eq("is_petty", true).is("archived_at", null).limit(1);
+  if (e1) throw e1;
+  if ((existing || []).length) return mapCashAccount(existing[0]);
+  const { data, error } = await supabase.from("cash_accounts")
+    .insert({ name: "Petty Cash", kind: "expense", store_id: null, is_petty: true, description: "Shared petty cash float" })
+    .select().maybeSingle();
+  if (error) {
+    // Race: someone created it — re-fetch.
+    const { data: re } = await supabase.from("cash_accounts").select("*").eq("is_petty", true).limit(1);
+    if ((re || []).length) return mapCashAccount(re[0]);
+    throw error;
+  }
+  return mapCashAccount(data);
+}
+
+// Top up petty cash: transfer from a source (shop) cash account into petty cash.
+export async function topUpPettyCash({ fromAccountId, pettyAccountId, amount, txnDate, createdBy }) {
+  const amt = Number(amount);
+  if (!fromAccountId) throw new Error("Choose the source cash account.");
+  if (!pettyAccountId) throw new Error("Petty cash account missing.");
+  if (!(amt > 0)) throw new Error("Enter an amount greater than zero.");
+  return addCashLedgerEntry({
+    txnDate: txnDate || new Date().toISOString().slice(0,10),
+    type: "transfer", amount: amt,
+    fromAccountId, toAccountId: pettyAccountId,
+    reference: "Petty cash top-up", createdBy: createdBy || null,
+  });
 }

@@ -19,6 +19,7 @@ import {
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
   fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
   computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit, setCashLedgerReconciled,
+  ensurePettyCashAccount, topUpPettyCash,
   fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
   reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
   fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts,
@@ -23309,6 +23310,122 @@ function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], 
   );
 }
 
+function PettyCashView({ accounts = [], ledger = [], stores = [], target = 0, handlers = {} }) {
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white";
+  const petty = accounts.find(a => a.isPetty) || null;
+  const balances = useMemo(() => computeCashBalances(accounts, ledger), [accounts, ledger]);
+  const pettyBal = petty ? (balances[petty.id] || 0) : 0;
+  const sourceAccounts = accounts.filter(a => !a.isPetty && a.kind === "revenue");
+
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const [topUp, setTopUp] = useState(null);
+  const [targetEdit, setTargetEdit] = useState(false); const [targetVal, setTargetVal] = useState(target);
+
+  useEffect(() => { setTargetVal(target); }, [target]);
+  useEffect(() => { if (!petty) handlers.ensure?.(); }, [petty]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const movements = useMemo(() => {
+    if (!petty) return [];
+    return ledger.filter(t => t.fromAccountId === petty.id || t.toAccountId === petty.id)
+      .slice().sort((a,b)=>(b.txnDate||"").localeCompare(a.txnDate||""));
+  }, [ledger, petty]);
+
+  const acctName = (id) => accounts.find(a => a.id === id)?.name || "—";
+  const doTopUp = async () => {
+    setErr(""); if (!topUp.fromAccountId) { setErr("Choose where the money comes from."); return; }
+    if (!(Number(topUp.amount) > 0)) { setErr("Enter an amount."); return; }
+    setBusy(true);
+    try { await handlers.topUp?.({ fromAccountId: topUp.fromAccountId, pettyAccountId: petty.id, amount: Number(topUp.amount), txnDate: topUp.txnDate }); setTopUp(null); }
+    catch (e) { setErr(e?.message || "Top-up failed."); }
+    setBusy(false);
+  };
+
+  const low = target > 0 && pettyBal < target;
+  if (!petty) return <div className="text-center py-12 text-sm text-slate-500">Setting up the petty cash account…</div>;
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <div>
+        <h2 className="text-lg font-bold text-white">Petty Cash</h2>
+        <p className="text-sm text-slate-500">One shared float. Top up from any shop's cash takings; spend it down by paying expenses from this account.</p>
+      </div>
+
+      <div className={`rounded-2xl border p-4 ${low ? "border-amber-500/40 bg-amber-950/15" : "border-slate-800 bg-slate-900"}`}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-[11px] uppercase text-slate-500 font-semibold">Current balance</div>
+            <div className={`text-3xl font-bold ${low ? "text-amber-300" : "text-emerald-300"}`}>{money(pettyBal)}</div>
+            {target > 0 && <div className="text-[11px] text-slate-500 mt-0.5">Target float: {money(target)}{low && " · running low"}</div>}
+          </div>
+          <button onClick={()=>setTopUp({ fromAccountId:"", amount:"", txnDate:new Date().toISOString().slice(0,10) })} className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">Top up</button>
+        </div>
+        {low && <div className="text-xs text-amber-300 mt-2">⚠ Below target — consider topping up from shop cash.</div>}
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 flex items-center justify-between gap-2">
+        <div className="text-sm text-slate-300">Low-balance target</div>
+        {targetEdit ? (
+          <div className="flex items-center gap-2">
+            <input type="number" step="0.01" value={targetVal} onChange={e=>setTargetVal(e.target.value)} className="w-28 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"/>
+            <button onClick={async()=>{ await handlers.setTarget?.(targetVal); setTargetEdit(false); }} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Save</button>
+            <button onClick={()=>{ setTargetVal(target); setTargetEdit(false); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+          </div>
+        ) : (
+          <button onClick={()=>setTargetEdit(true)} className="text-sm font-semibold text-indigo-300">{target > 0 ? `${money(target)} · edit` : "Set a target"}</button>
+        )}
+      </div>
+
+      {topUp && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="text-sm font-bold text-white">Top up petty cash</div>
+          <div>
+            <label className="text-[11px] text-slate-500 uppercase font-semibold">From shop cash account</label>
+            <select value={topUp.fromAccountId} onChange={e=>setTopUp({...topUp, fromAccountId:e.target.value})} className={ec}>
+              <option value="">— Choose source —</option>
+              {sourceAccounts.map(a => { const st = stores.find(s=>s.id===a.storeId); return <option key={a.id} value={a.id}>{a.name}{st?` (${st.shortName||st.name})`:""}</option>; })}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Amount (£)</label><input type="number" step="0.01" value={topUp.amount} onChange={e=>setTopUp({...topUp, amount:e.target.value})} className={ec}/></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={topUp.txnDate} onChange={e=>setTopUp({...topUp, txnDate:e.target.value})} className={ec}/></div>
+          </div>
+          {err && <div className="text-xs text-red-400">{err}</div>}
+          <div className="flex gap-2">
+            <button onClick={()=>setTopUp(null)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doTopUp} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">{busy?"Saving…":"Top up"}</button>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <div className="text-[11px] uppercase text-slate-500 font-semibold mb-2">Recent movements</div>
+        {movements.length === 0 ? (
+          <div className="text-sm text-slate-500">No movements yet. Top up to get started.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {movements.slice(0, 40).map(t => {
+              const isIn = t.toAccountId === petty.id;
+              const amt = Number(t.amount)||0;
+              return (
+                <div key={t.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200 truncate">{t.reference || (isIn ? "Top-up" : "Spend")}</div>
+                    <div className="text-[11px] text-slate-500">{t.txnDate}{isIn && t.fromAccountId?` · from ${acctName(t.fromAccountId)}`:""}{t.sourceRef?.startsWith("exp:")?" · expense":""}</div>
+                  </div>
+                  <div className={`text-sm font-bold flex-shrink-0 ${isIn?"text-emerald-300":"text-red-300"}`}>{isIn?"+":"−"}{money(amt)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="text-[11px] text-slate-600">To spend from petty cash, reconcile an approved expense against the “Petty Cash” account in Expenses — it reduces this balance and shows here.</div>
+    </div>
+  );
+}
+
 function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {} }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
@@ -34552,6 +34669,10 @@ export default function App() {
   }, []);
   useEffect(() => { reloadCash(); }, [reloadCash]);
 
+  // ── Petty cash float (single shared account) ───────────────────────────────
+  const [pettyTarget, setPettyTarget] = useState(0);
+  useEffect(() => { (async () => { try { const s = await fetchAppSettings(); setPettyTarget(Number(s?.petty_cash_target) || 0); } catch(e){} })(); }, []);
+
   // ── Expense claims (submit → approve → reconcile vs cash/bank) ──────────────
   const [expenseClaims, setExpenseClaims] = useState([]);
   const [expTypeAccounts, setExpTypeAccounts] = useState({}); // {typeId:[{accountKind,accountId}]}
@@ -34968,6 +35089,12 @@ export default function App() {
     setReconciled: async (id, val) => { await setCashLedgerReconciled(id, val, currentUser?.name || null); await reloadCash(); },
     ensureStoreAccounts: async () => { const n = await ensureStoreCashAccounts(stores); await reloadCash(); return n; },
   }), [reloadCash, currentUser, stores]);
+
+  const pettyHandlers = useMemo(() => ({
+    ensure: async () => { const a = await ensurePettyCashAccount(); await reloadCash(); return a; },
+    topUp: async ({ fromAccountId, pettyAccountId, amount, txnDate }) => { await topUpPettyCash({ fromAccountId, pettyAccountId, amount, txnDate, createdBy: currentUser?.name || null }); await reloadCash(); },
+    setTarget: async (val) => { await upsertAppSetting("petty_cash_target", Number(val)||0); setPettyTarget(Number(val)||0); },
+  }), [reloadCash, currentUser]);
 
   const expenseHandlers = useMemo(() => ({
     submit: async (c) => { await submitExpenseClaim({ ...c, submittedBy: c.submittedBy || currentUser?.name || null, submittedById: currentUser?.opsTeamMemberId || currentUser?.id || null }); await reloadExpenses(); },
@@ -35672,6 +35799,7 @@ export default function App() {
   const FINANCE_NAV = [
     { group: "FINANCE", items: [
       { key: "accounts", label: "Accounts", icon: BarChart2 },
+      { key: "petty-cash", label: "Petty Cash", icon: Wallet },
       { key: "expenses", label: "Expenses", icon: Receipt },
     ]},
   ];
@@ -35880,6 +36008,7 @@ export default function App() {
             {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
+            {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
