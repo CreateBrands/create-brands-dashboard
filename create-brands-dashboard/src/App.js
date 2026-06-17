@@ -20,6 +20,7 @@ import {
   fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
   computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit, setCashLedgerReconciled,
   ensurePettyCashAccount, topUpPettyCash,
+  fetchExpensePayees, upsertExpensePayee, archiveExpensePayee,
   fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
   reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
   fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts,
@@ -23176,11 +23177,12 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   );
 }
 
-function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], bankAccounts = [], stores = [], opsTeam = [], typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {}, money }) {
+function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAccounts = [], bankAccounts = [], stores = [], opsTeam = [], typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {}, money }) {
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white";
-  const [section, setSection] = useState("types"); // types | categories | people
+  const [section, setSection] = useState("categories"); // categories | payees | people
   const [newType, setNewType] = useState(""); const [newCat, setNewCat] = useState("");
   const [catEdit, setCatEdit] = useState(null); // {id, name}
+  const [newPayee, setNewPayee] = useState(""); const [payeeEdit, setPayeeEdit] = useState(null); // {id, name}
   const [editType, setEditType] = useState(null); // expense type whose accounts are being edited
   const [editMember, setEditMember] = useState(""); // member id
   const exSet = new Set(excludedStores || []);
@@ -23216,31 +23218,38 @@ function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], 
   return (
     <div className="space-y-4">
       <div className="flex gap-1 flex-wrap">
-        {[["types","Expense types"],["categories","Categories"],["people","Assign employee"]].map(([k,l])=>(
+        {[["categories","Categories"],["payees","Payees"],["people","Assign employee"]].map(([k,l])=>(
           <button key={k} onClick={()=>setSection(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${section===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
         ))}
       </div>
 
-      {section==="types" && (
-        <div className="space-y-2">
-          <div className="flex gap-2"><input value={newType} onChange={e=>setNewType(e.target.value)} placeholder="New expense type" className={`${ec} flex-1`}/><button onClick={async()=>{ if(newType.trim()){ await handlers.saveExpenseType?.({name:newType}); setNewType(""); } }} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button></div>
-          {expenseTypes.map(x=>(
-            <div key={x.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold text-white">{x.name}</div>
-                <div className="flex gap-2">
-                  <button onClick={()=>setEditType(editType?.id===x.id?null:x)} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">{editType?.id===x.id?"Close":"Accounts"}</button>
-                  <button onClick={async()=>{ if(window.confirm(`Delete "${x.name}"?`)) await handlers.archiveExpenseType?.(x.id); }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
-                </div>
+      {section==="payees" && (
+        <div className="space-y-3">
+          <div className="text-[11px] text-slate-500">Manage the list of payees (used as “Payment for” on the expense form). Track how much you spend per payee.</div>
+          <div className="flex gap-2"><input value={newPayee} onChange={e=>setNewPayee(e.target.value)} placeholder="New payee" className={`${ec} flex-1`}/><button onClick={async()=>{ if(newPayee.trim()){ await handlers.savePayee?.({ name:newPayee }); setNewPayee(""); } }} className="px-3 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Add</button></div>
+          <div className="space-y-1.5">
+            {payees.length===0 ? <div className="text-sm text-slate-500">No payees yet. Add one above.</div> : payees.map(p => (
+              <div key={p.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+                {payeeEdit?.id === p.id ? (
+                  <>
+                    <input value={payeeEdit.name} onChange={e=>setPayeeEdit({...payeeEdit, name:e.target.value})} className={`${ec} flex-1`} autoFocus/>
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <button onClick={async()=>{ if(payeeEdit.name.trim()){ await handlers.savePayee?.({ ...p, name:payeeEdit.name.trim() }); setPayeeEdit(null); } }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-semibold">Save</button>
+                      <button onClick={()=>setPayeeEdit(null)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-slate-200">{p.name}</div>
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <button onClick={()=>setPayeeEdit({ id:p.id, name:p.name })} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Rename</button>
+                      <button onClick={async()=>{ if(window.confirm(`Delete payee "${p.name}"?`)) await handlers.removePayee?.(p.id); }} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-500 hover:text-red-400 text-[11px] font-semibold">Delete</button>
+                    </div>
+                  </>
+                )}
               </div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{(typeAccounts[x.id]||[]).length} account(s) assigned</div>
-              {editType?.id===x.id && (
-                <div className="mt-2 pt-2 border-t border-slate-800">
-                  <AccountPicker value={typeAccounts[x.id]||[]} onChange={(v)=>handlers.setTypeAccounts?.(x.id, v)}/>
-                </div>
-              )}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
@@ -23276,21 +23285,13 @@ function ExpenseManage({ expenseTypes = [], categories = [], cashAccounts = [], 
 
       {section==="people" && (
         <div className="space-y-2">
-          <div className="text-[11px] text-slate-500">Assign what each person can use when submitting an expense — types, accounts (cash/bank), categories, and stores. With nothing assigned, they can't submit.</div>
+          <div className="text-[11px] text-slate-500">Assign what each person can use when submitting an expense — accounts (cash/bank), categories, and stores. With nothing assigned, they can't submit.</div>
           <select value={editMember} onChange={e=>setEditMember(e.target.value)} className={ec}>
             <option value="">— select a person —</option>
             {people.map(m=><option key={m.id} value={m.id}>{m.firstName} {m.lastName}{m.nickname?` (${m.nickname})`:""}</option>)}
           </select>
           {editMember && (
             <div className="space-y-3">
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-                <div className="text-[10px] uppercase text-slate-500 font-bold mb-1.5">Expense types</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {expenseTypes.length===0 ? <span className="text-[11px] text-slate-600">none defined</span> : expenseTypes.map(t=>{ const on=(memberTypes[editMember]||[]).includes(t.id); return (
-                    <button key={t.id} onClick={()=>{ const cur=memberTypes[editMember]||[]; handlers.setMemberTypes?.(editMember, on?cur.filter(x=>x!==t.id):[...cur,t.id]); }} className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${on?"bg-fuchsia-600 text-white":"bg-slate-800 text-slate-400"}`}>{t.name}</button>
-                  ); })}
-                </div>
-              </div>
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
                 <div className="text-[10px] uppercase text-slate-500 font-bold mb-1.5">Accounts (cash / bank)</div>
                 <AccountPicker value={memberAccounts[editMember]||[]} onChange={(v)=>handlers.setMemberAccounts?.(editMember, v)}/>
@@ -23435,7 +23436,7 @@ function PettyCashView({ accounts = [], ledger = [], stores = [], target = 0, ha
   );
 }
 
-function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {} }) {
+function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], payees = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {} }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
   const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
@@ -23451,7 +23452,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const byStatus = (st) => claims.filter(c => c.status === st);
   const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
 
-  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", storeId:"", vendor:"", reference:"" }); setTab("new"); };
+  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"" }); setTab("new"); };
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
 
   // Submit-form scoping: a regular employee only sees what they're granted.
@@ -23602,6 +23603,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Bank assigned</label><select value={form.accountKey} onChange={e=>setF("accountKey",e.target.value)} className={ec}><option value="">—</option>{accountOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{formCategories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Payment for</label><select value={form.payeeId} onChange={e=>setF("payeeId",e.target.value)} className={ec}><option value="">—</option>{payees.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{expenseStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-2">
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Amount (£) *</label><input type="number" step="0.01" value={form.amount} onChange={e=>setF("amount",e.target.value)} className={ec}/></div>
@@ -23616,7 +23618,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           </div>
         </div>
       ) : tab==="manage" ? (
-        <ExpenseManage expenseTypes={expenseTypes} categories={categories} cashAccounts={cashAccounts} bankAccounts={bankAccounts} stores={stores} opsTeam={opsTeam} typeAccounts={typeAccounts} memberAccounts={memberAccounts} excludedStores={excludedStores} memberTypes={memberTypes} memberCategories={memberCategories} memberStores={memberStores} handlers={handlers} money={money}/>
+        <ExpenseManage expenseTypes={expenseTypes} categories={categories} payees={payees} cashAccounts={cashAccounts} bankAccounts={bankAccounts} stores={stores} opsTeam={opsTeam} typeAccounts={typeAccounts} memberAccounts={memberAccounts} excludedStores={excludedStores} memberTypes={memberTypes} memberCategories={memberCategories} memberStores={memberStores} handlers={handlers} money={money}/>
       ) : (
         <div className="space-y-2">
           {byStatus(tab).length===0 ? <div className="text-center py-10 text-sm text-slate-500">Nothing here.</div> : byStatus(tab).map(c => <Row key={c.id} c={c}/>)}
@@ -34707,14 +34709,15 @@ export default function App() {
   const [memberExpTypes, setMemberExpTypes] = useState({}); // {memberId:[typeId]}
   const [memberExpCategories, setMemberExpCategories] = useState({}); // {memberId:[catId]}
   const [memberExpStores, setMemberExpStores] = useState({}); // {memberId:[storeId]}
+  const [expensePayees, setExpensePayees] = useState([]); // [{id,name}]
   const reloadExpenses = useCallback(async () => {
     try {
-      const [cl, eta, mea, exc, met, mec, mes] = await Promise.all([
+      const [cl, eta, mea, exc, met, mec, mes, pay] = await Promise.all([
         fetchExpenseClaims(), fetchExpenseTypeAccounts(), fetchMemberExpenseAccounts(), fetchExpenseExcludedStores(),
-        fetchMemberExpenseTypes(), fetchMemberExpenseCategories(), fetchMemberExpenseStores(),
+        fetchMemberExpenseTypes(), fetchMemberExpenseCategories(), fetchMemberExpenseStores(), fetchExpensePayees().catch(()=>[]),
       ]);
       setExpenseClaims(cl); setExpTypeAccounts(eta); setMemberExpAccounts(mea); setExpExcludedStores(exc);
-      setMemberExpTypes(met); setMemberExpCategories(mec); setMemberExpStores(mes);
+      setMemberExpTypes(met); setMemberExpCategories(mec); setMemberExpStores(mes); setExpensePayees(pay);
     } catch (e) {}
   }, []);
   useEffect(() => { reloadExpenses(); }, [reloadExpenses]);
@@ -35140,6 +35143,8 @@ export default function App() {
     archiveExpenseType: async (id) => { await archiveCashExpenseType(id); await Promise.all([reloadExpenses(), reloadCash()]); },
     saveCategory: async (c) => { await saveCategory(c); },
     removeCategory: async (id) => { await removeCategory(id); },
+    savePayee: async (p) => { await upsertExpensePayee(p); await reloadExpenses(); },
+    removePayee: async (id) => { await archiveExpensePayee(id); await reloadExpenses(); },
   }), [reloadExpenses, reloadCash, currentUser, saveCategory, removeCategory]);
 
   // Feature-level access check for the current user (Level 2). Owner always
@@ -36036,7 +36041,7 @@ export default function App() {
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
-            {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
+            {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView

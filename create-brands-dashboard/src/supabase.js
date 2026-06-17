@@ -6658,6 +6658,7 @@ export async function postEodCashDeposit(eodEntry, stores = [], createdBy = null
 const mapExpenseClaim = (e) => ({
   id: e.id, description: e.description, amount: Number(e.amount)||0, expenseDate: e.expense_date,
   expenseTypeId: e.expense_type_id || null, categoryId: e.category_id || null, storeId: e.store_id || null,
+  payeeId: e.payee_id || null,
   vendor: e.vendor || "", reference: e.reference || "",
   status: e.status || "submitted", submittedBy: e.submitted_by || "", submittedById: e.submitted_by_id || null,
   approvedBy: e.approved_by || null, approvedAt: e.approved_at || null, rejectedReason: e.rejected_reason || null,
@@ -6682,6 +6683,7 @@ export async function submitExpenseClaim(claim) {
     description: claim.description.trim(), amount: amt,
     expense_date: claim.expenseDate || new Date().toISOString().slice(0,10),
     expense_type_id: claim.expenseTypeId || null, category_id: claim.categoryId || null,
+    payee_id: claim.payeeId || null,
     store_id: claim.storeId || null, vendor: claim.vendor || null, reference: claim.reference || null,
     status: "submitted", submitted_by: claim.submittedBy || null, submitted_by_id: claim.submittedById || null,
     updated_at: new Date().toISOString(),
@@ -6901,4 +6903,24 @@ export async function topUpPettyCash({ fromAccountId, pettyAccountId, amount, tx
     fromAccountId, toAccountId: pettyAccountId,
     reference: "Petty cash top-up", createdBy: createdBy || null,
   });
+}
+
+// ── EXPENSE PAYEES (managed list; "Payment For" on the form) ──────────────────
+export async function fetchExpensePayees() {
+  const { data, error } = await supabase.from("expense_payees").select("*").is("archived_at", null).order("name");
+  if (error) throw error;
+  return (data || []).map(p => ({ id: p.id, name: p.name }));
+}
+export async function upsertExpensePayee(payee) {
+  const row = { name: (payee.name || "").trim(), updated_at: new Date().toISOString() };
+  if (!row.name) throw new Error("Payee needs a name.");
+  if (payee.id) row.id = payee.id;
+  const { data, error } = await supabase.from("expense_payees").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? { id: data.id, name: data.name } : null;
+}
+export async function archiveExpensePayee(id) {
+  const { error } = await supabase.from("expense_payees").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return id;
 }
