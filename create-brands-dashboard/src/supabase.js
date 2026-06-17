@@ -991,22 +991,13 @@ export async function publishWeekSchedules(arg1, weekStart, published) {
 // ── PUNCH RECORDS ─────────────────────────────────────────────────────────────
 
 export async function fetchPunchRecords({ brandId, from, to } = {}) {
-  const PAGE = 1000, MAX_PAGES = 200;
-  let all = [], start = 0;
-  for (let p = 0; p < MAX_PAGES; p++) {
-    let q = supabase.from("punch_records").select("*")
-      .order("id", { ascending: true }).range(start, start + PAGE - 1);
-    if (brandId) q = q.eq("brand_id", brandId);
-    if (from)    q = q.gte("date", from);
-    if (to)      q = q.lte("date", to);
-    const { data, error } = await q;
-    if (error) throw error;
-    const batch = data || [];
-    all = all.concat(batch);
-    if (batch.length < PAGE) break;
-    start += PAGE;
-  }
-  return all.map(dbPunchToApp);
+  let q = supabase.from("punch_records").select("*").order("punch_in", { ascending: false });
+  if (brandId) q = q.eq("brand_id", brandId);
+  if (from)    q = q.gte("date", from);
+  if (to)      q = q.lte("date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data.map(dbPunchToApp);
 }
 
 export async function insertPunchIn(record) {
