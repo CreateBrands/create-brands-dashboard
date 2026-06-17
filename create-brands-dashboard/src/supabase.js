@@ -7061,3 +7061,99 @@ export async function unignoreTillName(id) {
   if (error) throw error;
   return id;
 }
+
+// ── ORDER SIMULATOR: replay real Flipdish orders, cost each basket ───────────
+// Covers online/Flipdish orders only (in-store till sales aren't stored as
+// individual orders). Costs each line via the same POS-name → recipe path used
+// by theoretical COGS, and returns per-order COGS, sale total and margin.
+export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const [inv, rec, mapsRaw, fStores, orders, ignoredRaw] = await Promise.all([
+    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId), fetchFlipdishStores(),
+    fetchFlipdishOrders({ from, to, limit }), fetchIgnoredTillNames(storeId).catch(() => []),
+  ]);
+
+  // Which flipdish store ids belong to this internal store? Match by name.
+  const ourStore = (await fetchStores().catch(() => [])).find(s => s.id === storeId);
+  const ourName = (ourStore?.name || ourStore?.shortName || "").trim().toLowerCase();
+  const fStoreIds = new Set(
+    (fStores || [])
+      .filter(fs => (fs.name || "").trim().toLowerCase() === ourName || (ourName && (fs.name || "").trim().toLowerCase().includes(ourName)))
+      .map(fs => fs.storeId)
+  );
+
+  // Cost rollup (same logic as theoretical COGS).
+  const itemById = new Map();
+  (inv.store || []).forEach(x => itemById.set("store:" + x.id, x));
+  (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
+  const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+  const prepCost = (prep) => {
+    if (!prep) return null;
+    const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
+    if (!comps.length || !prep.yieldQty) return null;
+    let total = 0, ok = true;
+    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
+    return ok ? total / Number(prep.yieldQty) : null;
+  };
+  const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
+  const productCost = (productId) => {
+    const comps = (rec.productComponents || []).filter(c => c.productId === productId && (c.variantId == null));
+    if (!comps.length) return null;
+    let total = 0, missing = 0;
+    comps.forEach(c => { const unit = c.kind === "prep" ? prepCostPerUnit(c.prepId) : itemCost(c.itemScope, c.itemId); if (unit == null || c.portionQty == null) missing++; else total += unit * Number(c.portionQty); });
+    return missing ? null : total;
+  };
+  const prodNameById = new Map((rec.products || []).map(p => [p.id, p.name]));
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(m.posName.trim().toLowerCase(), m.productId); });
+  const ignoredSet = new Set((ignoredRaw || []).map(i => (i.posName || "").trim().toLowerCase()));
+  const costCache = new Map();
+  const costFor = (pid) => { if (!costCache.has(pid)) costCache.set(pid, productCost(pid)); return costCache.get(pid); };
+
+  // Defensive line-field extraction (Flipdish item shapes vary).
+  const lineName = (li) => (li.name || li.itemName || li.menuItemName || li.product || li.title || "").toString();
+  const lineQty  = (li) => Number(li.quantity ?? li.qty ?? li.count ?? 1) || 1;
+  const linePrice = (li) => Number(li.price ?? li.unitPrice ?? li.amount ?? li.total ?? 0) || 0;
+
+  const simOrders = [];
+  let totCogs = 0, totSale = 0, costedLines = 0, totalLines = 0;
+  (orders || []).forEach(o => {
+    if (fStoreIds.size && !fStoreIds.has(o.flipdishStoreId)) return; // not this store
+    const items = Array.isArray(o.items) ? o.items : [];
+    if (!items.length) return;
+    let orderCogs = 0; const lines = []; let anyCosted = false;
+    items.forEach(li => {
+      const nm = lineName(li).trim(); if (!nm) return;
+      const qty = lineQty(li), price = linePrice(li);
+      totalLines++;
+      const ignored = ignoredSet.has(nm.toLowerCase());
+      const pid = ignored ? null : mapByName.get(nm.toLowerCase());
+      let unitCost = null, status = "unmapped", prodNm = null;
+      if (pid) { prodNm = prodNameById.get(pid) || null; const c = costFor(pid); if (c != null) { unitCost = c; status = "costed"; } else status = "uncosted"; }
+      else if (ignored) status = "ignored";
+      const lineCogs = unitCost != null ? unitCost * qty : 0;
+      if (status === "costed") { anyCosted = true; costedLines++; }
+      orderCogs += lineCogs;
+      lines.push({ name: nm, productName: prodNm, qty, price, lineSale: +(price * qty).toFixed(2), unitCost: unitCost != null ? +unitCost.toFixed(4) : null, lineCogs: +lineCogs.toFixed(2), status });
+    });
+    const sale = o.amountSubtotal || o.amountTotal || lines.reduce((a, l) => a + l.lineSale, 0);
+    totCogs += orderCogs; totSale += sale;
+    simOrders.push({
+      id: o.id, time: o.orderPlacedTime, channel: o.channel, orderType: o.orderType,
+      sale: +sale.toFixed(2), cogs: +orderCogs.toFixed(2),
+      gp: +(sale - orderCogs).toFixed(2), marginPct: sale > 0 ? (sale - orderCogs) / sale : null,
+      anyCosted, lines,
+    });
+  });
+  simOrders.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+  return {
+    storeId, from: from || null, to: to || null,
+    orderCount: simOrders.length,
+    totalSale: +totSale.toFixed(2), totalCogs: +totCogs.toFixed(2),
+    totalGp: +(totSale - totCogs).toFixed(2),
+    avgMarginPct: totSale > 0 ? (totSale - totCogs) / totSale : null,
+    lineCoverage: totalLines > 0 ? costedLines / totalLines : 0,
+    orders: simOrders,
+  };
+}

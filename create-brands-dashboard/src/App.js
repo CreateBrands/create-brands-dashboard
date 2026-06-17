@@ -124,7 +124,7 @@ import {
   addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
   attachProductModifier, detachProductModifier,
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
-  fetchIgnoredTillNames, ignoreTillName, unignoreTillName,
+  fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4905,6 +4905,7 @@ function CogsView({ stores = [] }) {
     { key: "modifiers", label: "Modifiers" },
     { key: "products",  label: "Products" },
     { key: "mapping",   label: "Mapping" },
+    { key: "simulator", label: "Order Simulator" },
   ];
   return (
     <div className="space-y-4">
@@ -4923,6 +4924,7 @@ function CogsView({ stores = [] }) {
       {tab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
       {tab === "products"  && <RecipeBuilder mode="products"/>}
       {tab === "mapping"   && <PosMapper stores={stores}/>}
+      {tab === "simulator" && <OrderSimulator stores={stores}/>}
     </div>
   );
 }
@@ -5875,6 +5877,108 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
 // ═══════════════════════════════════════════════════════════════════════════
 // POS MAPPER — per-store till name -> master product
 // ═══════════════════════════════════════════════════════════════════════════
+function OrderSimulator({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const today = new Date().toISOString().slice(0,10);
+  const weekAgo = new Date(Date.now() - 7*24*3600*1000).toISOString().slice(0,10);
+  const [from, setFrom] = useState(weekAgo);
+  const [to, setTo] = useState(today);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [openOrder, setOpenOrder] = useState(null);
+
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
+
+  const run = async () => {
+    if (!storeId) return;
+    setLoading(true); setErr(null); setData(null); setOpenOrder(null);
+    try {
+      const fromIso = new Date(from + "T00:00:00").toISOString();
+      const toIso = new Date(to + "T23:59:59").toISOString();
+      const res = await simulateFlipdishOrders({ storeId, from: fromIso, to: toIso });
+      setData(res);
+    } catch (e) { setErr(e.message || String(e)); }
+    setLoading(false);
+  };
+
+  const statusColor = (s) => s==="costed" ? "text-emerald-400" : s==="uncosted" ? "text-amber-400" : s==="ignored" ? "text-slate-600" : "text-red-400";
+  const statusLabel = (s) => s==="costed" ? "costed" : s==="uncosted" ? "no recipe cost" : s==="ignored" ? "hidden" : "unmapped";
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">Replays real online (Flipdish) orders and costs each basket through your recipes — so you can see exactly how COGS and margin work out per order. Covers online orders only; in-store till sales aren't stored as individual orders.</p>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+          {activeStores.map(s => <option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+        </select>
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white"/>
+        <span className="text-slate-600 text-xs">to</span>
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white"/>
+        <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{loading?"Running…":"Replay orders"}</button>
+      </div>
+
+      {err && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{err}</div>}
+
+      {data && (
+        <>
+          {data.orderCount === 0 ? (
+            <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">No online orders found for this store and period. (If this store has online sales but shows none, the Flipdish store name may not match — tell me and I'll wire an explicit link.)</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <Stat label="Orders" value={data.orderCount} tone="text-white" />
+                <Stat label="Sales" value={money(data.totalSale)} tone="text-emerald-400" />
+                <Stat label="COGS" value={money(data.totalCogs)} tone="text-amber-300" />
+                <Stat label="Gross profit" value={money(data.totalGp)} tone="text-emerald-400" />
+                <Stat label="Avg margin" value={pct(data.avgMarginPct)} tone="text-white" />
+              </div>
+              {data.lineCoverage < 0.95 && (
+                <div className="text-[11px] text-amber-400 bg-amber-950/20 border border-amber-500/30 rounded-lg px-3 py-2">
+                  {pct(data.lineCoverage)} of order lines are costed — the rest are unmapped or have no recipe cost, so order COGS/margin is understated for those. Improve in Mapping &amp; Products.
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                {data.orders.map(o => (
+                  <div key={o.id} className="bg-slate-900 border border-slate-800 rounded-xl">
+                    <button onClick={()=>setOpenOrder(openOrder===o.id?null:o.id)} className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left">
+                      <div className="min-w-0">
+                        <div className="text-sm text-slate-200 truncate">{o.time ? new Date(o.time).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : o.id} <span className="text-[11px] text-slate-600">· {o.lines.length} items{o.channel?` · ${o.channel}`:""}</span></div>
+                        <div className="text-[11px] text-slate-500">Sale {money(o.sale)} · COGS {money(o.cogs)} · GP {money(o.gp)}</div>
+                      </div>
+                      <div className={`text-sm font-bold flex-shrink-0 ${o.marginPct!=null && o.marginPct>=0.6?"text-emerald-300":o.marginPct!=null&&o.marginPct>=0.4?"text-amber-300":"text-red-300"}`}>{pct(o.marginPct)}</div>
+                    </button>
+                    {openOrder===o.id && (
+                      <div className="px-3 pb-3 border-t border-slate-800 pt-2 space-y-1">
+                        {o.lines.map((l,i)=>(
+                          <div key={i} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-slate-950/40">
+                            <div className="min-w-0">
+                              <div className="text-[13px] text-slate-200 truncate">{l.qty}× {l.name}{l.productName && l.productName!==l.name?` → ${l.productName}`:""}</div>
+                              <div className={`text-[10px] ${statusColor(l.status)}`}>{statusLabel(l.status)}{l.unitCost!=null?` · unit cost ${money(l.unitCost)}`:""}</div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <div className="text-[13px] text-slate-300">{money(l.lineSale)}</div>
+                              <div className="text-[10px] text-amber-300">COGS {money(l.lineCogs)}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function PosMapper({ stores = [] }) {
   const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
