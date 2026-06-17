@@ -648,7 +648,7 @@ const isShopSite = (s) => !FACILITY_SITE_TYPES.has(s?.siteType);
 // true  = new exact engine (flipdish_sales, base + matched modifiers).
 // Flip to true only after validating in COGS Reconcile. Reconcile view always
 // shows both regardless of this flag.
-const USE_COGS_V2 = false;
+const USE_COGS_V2 = true;
 const shopStoresOnly = (list) => (list || []).filter(isShopSite);
 
 function StoreScopeDropdown({ stores, brands, value, onChange, className = "" }) {
