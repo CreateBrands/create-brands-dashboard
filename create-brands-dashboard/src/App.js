@@ -4906,6 +4906,7 @@ function CogsView({ stores = [] }) {
     { key: "products",  label: "Products" },
     { key: "mapping",   label: "Mapping" },
     { key: "simulator", label: "Order Simulator" },
+    { key: "inspector", label: "Order Inspector" },
   ];
   return (
     <div className="space-y-4">
@@ -4925,6 +4926,7 @@ function CogsView({ stores = [] }) {
       {tab === "products"  && <RecipeBuilder mode="products"/>}
       {tab === "mapping"   && <PosMapper stores={stores}/>}
       {tab === "simulator" && <OrderSimulator stores={stores}/>}
+      {tab === "inspector" && <OrderInspector stores={stores}/>}
     </div>
   );
 }
@@ -5877,6 +5879,151 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
 // ═══════════════════════════════════════════════════════════════════════════
 // POS MAPPER — per-store till name -> master product
 // ═══════════════════════════════════════════════════════════════════════════
+function OrderInspector({ stores = [] }) {
+  const today = new Date().toISOString().slice(0,10);
+  const monthAgo = new Date(Date.now() - 60*24*3600*1000).toISOString().slice(0,10);
+  const [from, setFrom] = useState(monthAgo);
+  const [to, setTo] = useState(today);
+  const [orders, setOrders] = useState(null);
+  const [recipes, setRecipes] = useState({ products: [] });
+  const [maps, setMaps] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [showRaw, setShowRaw] = useState({});
+  const [limit, setLimit] = useState(25);
+
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+
+  const run = async () => {
+    setLoading(true); setErr(null); setOrders(null); setOpen(null);
+    try {
+      const fromIso = new Date(from + "T00:00:00").toISOString();
+      const toIso = new Date(to + "T23:59:59").toISOString();
+      const [os, rec, mp] = await Promise.all([
+        fetchFlipdishOrders({ from: fromIso, to: toIso, limit: 500 }),
+        fetchRecipes(),
+        fetchPosMappings(null).catch(()=>[]),
+      ]);
+      setOrders(os || []); setRecipes(rec || { products: [] }); setMaps(mp || []);
+    } catch (e) { setErr(e.message || String(e)); }
+    setLoading(false);
+  };
+
+  // POS name -> product (mapping is per store; here we match by name across all).
+  const mapByName = new Map();
+  (maps || []).forEach(m => { if (m.posName && m.productId) mapByName.set(m.posName.trim().toLowerCase(), m.productId); });
+  const prodById = new Map((recipes.products || []).map(p => [p.id, p]));
+  const recipeMatch = (name) => {
+    if (!name) return null;
+    const pid = mapByName.get(name.trim().toLowerCase());
+    if (!pid) return { mapped: false };
+    const p = prodById.get(pid);
+    return { mapped: true, productName: p?.name || "—", productId: pid };
+  };
+
+  // Defensive field readers (Flipdish shapes vary).
+  const fName = (o) => o?.name ?? o?.itemName ?? o?.menuItemName ?? o?.product ?? o?.title ?? o?.optionName ?? o?.modifierName ?? "";
+  const fPrice = (o) => Number(o?.price ?? o?.unitPrice ?? o?.amount ?? o?.total ?? o?.priceIncludingTax ?? 0) || 0;
+  const fQty = (o) => Number(o?.quantity ?? o?.qty ?? o?.count ?? 1) || 1;
+  // Find nested children arrays whatever they're called.
+  const childArrays = (o) => {
+    if (!o || typeof o !== "object") return [];
+    const keys = ["modifiers","options","variants","subItems","children","optionSets","selectedOptions","items","modifierGroups"];
+    const out = [];
+    keys.forEach(k => { if (Array.isArray(o[k]) && o[k].length) out.push([k, o[k]]); });
+    return out;
+  };
+
+  const Line = ({ node, depth, typeHint }) => {
+    const name = String(fName(node) || "").trim();
+    const price = fPrice(node);
+    const qty = fQty(node);
+    const kids = childArrays(node);
+    const rm = depth === 0 ? recipeMatch(name) : null;
+    const zero = price === 0;
+    return (
+      <div style={{ marginLeft: depth*14 }} className="py-1">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex items-center gap-2 flex-wrap">
+            <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{typeHint}</span>
+            <span className="text-[13px] text-slate-200 truncate">{qty>1?`${qty}× `:""}{name || <span className="text-slate-600 italic">(no name)</span>}</span>
+            {zero && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300">£0</span>}
+            {rm && (rm.mapped
+              ? <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300">→ {rm.productName}</span>
+              : <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-red-600/20 text-red-300">unmapped</span>)}
+          </div>
+          <span className={`text-[12px] tabular-nums flex-shrink-0 ${zero?"text-amber-400":"text-slate-400"}`}>{money(price)}</span>
+        </div>
+        {kids.map(([k, arr], ki) => (
+          <div key={ki}>
+            {arr.map((child, ci) => <Line key={ci} node={child} depth={depth+1} typeHint={k.replace(/s$/,"")} />)}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const storeName = (fid) => fid; // raw flipdish store id (orders aren't store-linked here)
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">Inspect the raw structure of real Flipdish orders — items, variants and modifiers as Flipdish sends them, with each price (£0 lines flagged) and whether each item maps to a recipe. Use this to compare order structure against your recipes. Pulls recent orders directly (no store link needed).</p>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white"/>
+        <span className="text-slate-600 text-xs">to</span>
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white"/>
+        <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{loading?"Loading…":"Load orders"}</button>
+      </div>
+
+      {err && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{err}</div>}
+
+      {orders && (
+        orders.length === 0 ? (
+          <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">No Flipdish orders found in this window. Try a wider date range.</div>
+        ) : (
+          <>
+            <div className="text-xs text-slate-500">{orders.length} order(s) found. Showing first {Math.min(limit, orders.length)}.</div>
+            <div className="space-y-1.5">
+              {orders.slice(0, limit).map(o => {
+                const items = Array.isArray(o.items) ? o.items : [];
+                return (
+                  <div key={o.id} className="bg-slate-900 border border-slate-800 rounded-xl">
+                    <button onClick={()=>setOpen(open===o.id?null:o.id)} className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left">
+                      <div className="min-w-0">
+                        <div className="text-sm text-slate-200 truncate">{o.orderPlacedTime ? new Date(o.orderPlacedTime).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) : o.id}</div>
+                        <div className="text-[11px] text-slate-500">store {storeName(o.flipdishStoreId)} · {items.length} items · total {money(o.amountTotal)}{o.channel?` · ${o.channel}`:""}</div>
+                      </div>
+                      <span className="text-xs text-slate-500 flex-shrink-0">{open===o.id?"Hide":"Inspect"}</span>
+                    </button>
+                    {open===o.id && (
+                      <div className="px-3 pb-3 border-t border-slate-800 pt-2 space-y-2">
+                        {items.length === 0 ? <div className="text-xs text-slate-500">This order has no items array.</div> : (
+                          <div className="bg-slate-950/40 rounded-lg p-2">
+                            {items.map((it, i) => <Line key={i} node={it} depth={0} typeHint="item" />)}
+                          </div>
+                        )}
+                        <button onClick={()=>setShowRaw(s=>({...s,[o.id]:!s[o.id]}))} className="text-[11px] text-indigo-300 font-semibold">{showRaw[o.id]?"Hide raw JSON":"Show raw JSON"}</button>
+                        {showRaw[o.id] && (
+                          <pre className="text-[10px] text-slate-400 bg-slate-950 rounded-lg p-2 overflow-x-auto max-h-96">{JSON.stringify(o.items, null, 2)}</pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {orders.length > limit && (
+              <button onClick={()=>setLimit(l=>l+25)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Show more</button>
+            )}
+          </>
+        )
+      )}
+    </div>
+  );
+}
+
 function OrderSimulator({ stores = [] }) {
   const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
