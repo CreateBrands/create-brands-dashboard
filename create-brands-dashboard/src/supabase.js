@@ -7024,12 +7024,16 @@ export async function fetchIgnoredTillNames(storeId) {
 }
 export async function ignoreTillName(storeId, posName, by = null) {
   if (!storeId || !posName?.trim()) throw new Error("store and name required");
+  const name = posName.trim();
+  // Already ignored? (case-insensitive, matching the functional unique index)
+  const { data: existing } = await supabase.from("cogs_ignored_till_names")
+    .select("id, store_id, pos_name").eq("store_id", storeId).ilike("pos_name", name).maybeSingle();
+  if (existing) return { id: existing.id, storeId: existing.store_id, posName: existing.pos_name };
   const { data, error } = await supabase.from("cogs_ignored_till_names")
-    .upsert({ store_id: storeId, pos_name: posName.trim(), created_by: by || null }, { onConflict: "store_id,pos_name" })
+    .insert({ store_id: storeId, pos_name: name, created_by: by || null })
     .select().maybeSingle();
   if (error) {
-    // unique index is on (store_id, lower(pos_name)); ignore dup errors
-    if (String(error.message || "").toLowerCase().includes("duplicate")) return null;
+    if (String(error.message || "").toLowerCase().includes("duplicate")) return null; // race: already added
     throw error;
   }
   return data ? { id: data.id, storeId: data.store_id, posName: data.pos_name } : null;
