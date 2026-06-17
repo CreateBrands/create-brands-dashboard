@@ -5917,6 +5917,10 @@ function PosMapper({ stores = [] }) {
     try { await setPosMapping(storeId, posName, productId); await load(storeId); }
     catch (e) { setErr(e.message || String(e)); }
   };
+  const [selected, setSelected] = useState(() => new Set()); // selected till names (lowercased)
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const toggleSel = (name) => setSelected(prev => { const n = new Set(prev); const k = name.trim().toLowerCase(); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const clearSel = () => setSelected(new Set());
   const unset = async (id) => { try { await deletePosMapping(id); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
   const hideTill = async (name) => { try { await ignoreTillName(storeId, name); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
   const restoreTill = async (id) => { try { await unignoreTillName(id); await load(storeId); } catch (e) { setErr(e.message || String(e)); } };
@@ -5945,6 +5949,24 @@ function PosMapper({ stores = [] }) {
     if (!mq) return true;
     return r.name.toLowerCase().includes(mq.toLowerCase()) || (productName(mapFor(r.name)?.productId)||"").toLowerCase().includes(mq.toLowerCase());
   });
+  const selectedCount = shownRows.filter(r => selected.has(r.name.trim().toLowerCase())).length;
+  const bulkAutoMap = async () => {
+    setBulkBusy(true); setErr(null);
+    let mapped = 0, skipped = 0;
+    try {
+      for (const r of shownRows) {
+        if (!selected.has(r.name.trim().toLowerCase())) continue;
+        if (mapFor(r.name)?.productId) { skipped++; continue; } // already mapped
+        const sug = suggest(r.name);
+        if (!sug) { skipped++; continue; }
+        await setPosMapping(storeId, r.name, sug.id); mapped++;
+      }
+      await load(storeId);
+      clearSel();
+      setErr(mapped || skipped ? `Auto-mapped ${mapped}${skipped?`, skipped ${skipped} (no confident match or already mapped)`:""}.` : null);
+    } catch (e) { setErr(e.message || String(e)); }
+    setBulkBusy(false);
+  };
 
   return (
     <div className="space-y-4">
@@ -6007,27 +6029,42 @@ function PosMapper({ stores = [] }) {
             </div>
           )}
 
+          {selectedCount > 0 && (
+            <div className="flex items-center justify-between gap-2 bg-indigo-950/30 border border-indigo-500/30 rounded-xl px-3 py-2">
+              <span className="text-sm text-indigo-200 font-semibold">{selectedCount} selected</span>
+              <div className="flex gap-2">
+                <button onClick={clearSel} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Clear</button>
+                <button onClick={bulkAutoMap} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-50">{bulkBusy?"Mapping…":"Auto-map selected to best match"}</button>
+              </div>
+            </div>
+          )}
+
           <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full text-sm">
               <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+                <th className="px-2 py-2 w-8"></th>
+                <th className="text-right px-2 py-2 w-8">#</th>
                 <th className="text-left px-3 py-2">Till name</th>
                 <th className="text-right px-3 py-2">Sales £</th>
-                <th className="text-left px-3 py-2">Mapped to master product</th>
+                <th className="text-left px-3 py-2 min-w-[24rem]">Mapped to master product</th>
                 <th></th>
               </tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-500 text-sm">No till names found for this store (no sales synced yet). Add manually above.</td></tr>}
-                {rows.length > 0 && shownRows.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-500 text-sm">No till names match "{mq}".</td></tr>}
-                {shownRows.map(r => {
+                {rows.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500 text-sm">No till names found for this store (no sales synced yet). Add manually above.</td></tr>}
+                {rows.length > 0 && shownRows.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-500 text-sm">No till names match "{mq}".</td></tr>}
+                {shownRows.map((r, idx) => {
                   const m = mapFor(r.name);
                   const sug = !m?.productId ? suggest(r.name) : null;
+                  const sel = selected.has(r.name.trim().toLowerCase());
                   return (
-                    <tr key={r.name} className="border-t border-slate-800/60">
+                    <tr key={r.name} className={`border-t border-slate-800/60 ${sel?"bg-indigo-950/20":""}`}>
+                      <td className="px-2 py-2.5 text-center"><input type="checkbox" checked={sel} onChange={()=>toggleSel(r.name)} className="rounded"/></td>
+                      <td className="px-2 py-2.5 text-right text-[11px] text-slate-600 tabular-nums">{idx+1}</td>
                       <td className="px-3 py-2.5 text-slate-200 text-sm">{r.name}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-400 text-xs">{r.revenue>0?"£"+r.revenue.toFixed(0):"—"}</td>
                       <td className="px-3 py-2.5">
                         <select value={m?.productId || ""} onChange={e=>save(r.name, e.target.value?Number(e.target.value):null)}
-                          className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-72 ${m?.productId?"border-slate-700":"border-amber-500/40"}`}>
+                          className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-96 max-w-full ${m?.productId?"border-slate-700":"border-amber-500/40"}`}>
                           <option value="">{sug ? `— unmapped (suggest: ${sug.name}) —` : "— unmapped —"}</option>
                           {Object.entries(products.reduce((acc,p)=>{ const k=p.category||"Uncategorised"; (acc[k]=acc[k]||[]).push(p); return acc; },{})).sort((a,b)=>a[0].localeCompare(b[0])).map(([cat,items])=>(
                             <optgroup key={cat} label={cat}>
