@@ -23457,7 +23457,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   // Submit-form scoping: a regular employee only sees what they're granted.
   // Owner/HQ are unrestricted. No grant for a dimension = nothing (strict).
   const myMemberId = currentUser?.opsTeamMemberId || currentUser?.id || null;
-  const unrestrictedSubmit = ["owner","hq_staff"].includes(effectiveRole);
+  const unrestrictedSubmit = effectiveRole === "owner";
   const myTypeIds = new Set(memberTypes?.[myMemberId] || []);
   const myCatIds = new Set(memberCategories?.[myMemberId] || []);
   const myStoreIds = new Set(memberStores?.[myMemberId] || []);
