@@ -5891,6 +5891,12 @@ function OrderSimulator({ stores = [] }) {
 
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
+  const Stat = ({ label, value, tone }) => (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div className="text-[11px] text-slate-500 uppercase">{label}</div>
+      <div className={`text-xl font-bold ${tone||"text-white"}`}>{value}</div>
+    </div>
+  );
 
   const run = async () => {
     if (!storeId) return;
