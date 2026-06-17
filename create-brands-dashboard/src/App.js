@@ -12563,6 +12563,37 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
   const prev = aggregateEntries(prevFiltered);
   const dayCount = curFiltered.length;
 
+  // Theoretical COGS (recipe x sales) for this store/period — replaces the
+  // recorded cogsCost in the dashboard KPIs. Coverage is surfaced so a low
+  // COGS% from incomplete recipe costing isn't misread as good performance.
+  const [theoCogsDash, setTheoCogsDash] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedStore || !USE_COGS_V2) { setTheoCogsDash(null); return; }
+    const iso = (x) => (x instanceof Date ? x.toISOString().slice(0,10) : String(x).slice(0,10));
+    computeStoreCogsV2({ storeId: selectedStore.id, from: iso(period.from), to: iso(period.to) })
+      .then(r => { if (!cancelled) setTheoCogsDash(r); })
+      .catch(() => { if (!cancelled) setTheoCogsDash(null); });
+    return () => { cancelled = true; };
+  }, [selectedStore, period.from, period.to]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Effective current aggregate: if theoretical COGS is available, override the
+  // recorded cogsCost with it and recompute the cost-derived KPIs.
+  const curEffective = useMemo(() => {
+    if (!cur) return cur;
+    if (!USE_COGS_V2 || !theoCogsDash) return cur;
+    const cogsCost = theoCogsDash.cogs || 0;
+    const netSales = cur.netSales || 0;
+    return {
+      ...cur,
+      cogsCost,
+      primeCost: netSales > 0 ? ((cur.laborCost + cogsCost) / netSales) * 100 : 0,
+      netMargin: netSales > 0 ? ((netSales - cur.laborCost - cogsCost) / netSales) * 100 : 0,
+      cogsPct: netSales > 0 ? (cogsCost / netSales) * 100 : 0,
+    };
+  }, [cur, theoCogsDash]);
+  const cogsCoverage = theoCogsDash ? theoCogsDash.coverage : null;
+
   // Per-day-of-week target math. If the store has no kpiTargets, both
   // periodTargets and ratios are null and the UI gracefully degrades.
   const ratios = selectedStore?.kpiTargets?.ratios || null;
@@ -12663,12 +12694,17 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
 
       {/* KPI cards. Target Progress and Prime Cost % gracefully show "—" when
           targets are missing, so the page is still useful without them. */}
+      {USE_COGS_V2 && cogsCoverage != null && cogsCoverage < 0.9 && (
+        <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-900/50 rounded-lg px-3 py-2">
+          COGS, Prime Cost and Net Margin use recipe-based theoretical cost. Only {(cogsCoverage*100).toFixed(0)}% of sales are mapped to costed recipes, so these figures are understated — cost the remaining items in COGS / Recipes to make them accurate.
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard label="Net Revenue" current={cur?.netSales} previous={prev?.netSales} format="currency" icon={DollarSign} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="Target Progress" current={periodTargets ? (targetProgress || null) : null} previous={null} format="percent" icon={Target} alert={periodTargets && targetProgress>0 && targetProgress<80} />
-        <ComparisonKPICard label="Prime Cost %" current={cur?.primeCost} previous={prev?.primeCost} format="percent" icon={Activity} invertDelta alert={cur && ratios && cur.primeCost > ratios.primeCostMax} prevLabel={prevPeriod?.label} />
+        <ComparisonKPICard label="Prime Cost %" current={curEffective?.primeCost} previous={prev?.primeCost} format="percent" icon={Activity} invertDelta alert={curEffective && ratios && curEffective.primeCost > ratios.primeCostMax} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="SPLH" current={cur?.splh} previous={prev?.splh} format="splh" icon={Zap} prevLabel={prevPeriod?.label} />
-        <ComparisonKPICard label="Net Margin" current={cur?.netMargin} previous={prev?.netMargin} format="percent" icon={TrendingUp} prevLabel={prevPeriod?.label} />
+        <ComparisonKPICard label="Net Margin" current={curEffective?.netMargin} previous={prev?.netMargin} format="percent" icon={TrendingUp} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="Labour Cost" current={cur?.laborCost} previous={prev?.laborCost} format="currency" icon={Users} invertDelta subCurrent={cur?`${cur.laborPct.toFixed(1)}% of sales`:undefined} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="Total Orders" current={cur?.totalOrders} previous={prev?.totalOrders} format="number" icon={BarChart2} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="ATV" current={cur?.atv} previous={prev?.atv} format="splh" icon={DollarSign} prevLabel={prevPeriod?.label} />
