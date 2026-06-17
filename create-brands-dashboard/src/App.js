@@ -23320,6 +23320,189 @@ function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAc
   );
 }
 
+function SpendDashboardView({ claims = [], payees = [], bankTransactions = [], bankAccounts = [], cashAccounts = [], cashLedger = [], stores = [] }) {
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const today = new Date();
+  const ym = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+  const [periodMode, setPeriodMode] = useState("this_month");
+  const [rangeFrom, setRangeFrom] = useState(`${ym(today)}-01`);
+  const [rangeTo, setRangeTo] = useState(new Date().toISOString().slice(0,10));
+  const [storeScope, setStoreScope] = useState("all");
+  const [expanded, setExpanded] = useState({});
+
+  const bounds = useMemo(() => {
+    if (periodMode === "this_month") { const f=new Date(today.getFullYear(),today.getMonth(),1); return { from: f.toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), label: f.toLocaleDateString("en-GB",{month:"long",year:"numeric"}) }; }
+    if (periodMode === "last_month") { const f=new Date(today.getFullYear(),today.getMonth()-1,1); const t=new Date(today.getFullYear(),today.getMonth(),0); return { from: f.toISOString().slice(0,10), to: t.toISOString().slice(0,10), label: f.toLocaleDateString("en-GB",{month:"long",year:"numeric"}) }; }
+    return { from: rangeFrom, to: rangeTo, label: `${rangeFrom} → ${rangeTo}` };
+  }, [periodMode, rangeFrom, rangeTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const inRange = (d) => d && d >= bounds.from && d <= bounds.to;
+
+  const bankAcctById = useMemo(()=>{ const m={}; bankAccounts.forEach(a=>m[a.id]=a); return m; }, [bankAccounts]);
+  const cashAcctById = useMemo(()=>{ const m={}; cashAccounts.forEach(a=>m[a.id]=a); return m; }, [cashAccounts]);
+  const payeeById = useMemo(()=>{ const m={}; payees.forEach(p=>m[p.id]=p); return m; }, [payees]);
+  const storeName = (id) => { const s = stores.find(x=>x.id===id); return s?(s.shortName||s.name):"—"; };
+  const txnStoreId = (t) => t.storeId || bankAcctById[t.accountId]?.storeId || "";
+  const inStore = (sid) => storeScope === "all" || sid === storeScope;
+
+  const spendClaims = useMemo(() => claims.filter(c => c.status !== "rejected" && inRange(c.expenseDate) && inStore(c.storeId || "")), [claims, bounds, storeScope]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const byPayee = useMemo(() => {
+    const m = {};
+    spendClaims.forEach(c => { const k = c.payeeId || "_none"; (m[k] = m[k] || { id:k, total:0, rows:[] }); m[k].total += c.amount; m[k].rows.push(c); });
+    return Object.values(m).sort((a,b)=>b.total-a.total);
+  }, [spendClaims]);
+
+  const byBank = useMemo(() => {
+    const m = {};
+    bankTransactions.forEach(t => { if (!inRange(t.txnDate) || t.amount >= 0) return; if (!inStore(txnStoreId(t))) return; const k=t.accountId||"_none"; (m[k]=m[k]||{id:k,total:0,rows:[]}); m[k].total += Math.abs(t.amount); m[k].rows.push(t); });
+    return Object.values(m).sort((a,b)=>b.total-a.total);
+  }, [bankTransactions, bounds, storeScope]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const byStore = useMemo(() => {
+    const m = {};
+    const add = (sid, amt, row) => { const k=sid||"_none"; (m[k]=m[k]||{id:k,total:0,rows:[]}); m[k].total += amt; m[k].rows.push(row); };
+    bankTransactions.forEach(t => { if (!inRange(t.txnDate) || t.amount >= 0) return; const sid=txnStoreId(t); if(!inStore(sid)) return; add(sid, Math.abs(t.amount), { kind:"bank", date:t.txnDate, amount:-Math.abs(t.amount), desc:t.description||t.category||"Bank payment", src:bankAcctById[t.accountId]?.name||"Bank" }); });
+    cashLedger.forEach(t => { if (!inRange(t.txnDate) || t.type !== "expense") return; const acct=cashAcctById[t.fromAccountId]; const sid=t.storeId||acct?.storeId||""; if(!inStore(sid)) return; add(sid, Math.abs(t.amount), { kind:"cash", date:t.txnDate, amount:-Math.abs(t.amount), desc:t.reference||"Cash spend", src:acct?.name||"Cash" }); });
+    return Object.values(m).sort((a,b)=>b.total-a.total);
+  }, [bankTransactions, cashLedger, bounds, storeScope]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const petty = cashAccounts.find(a => a.isPetty) || null;
+  const pettyData = useMemo(() => {
+    if (!petty) return { spend:0, topups:0, rows:[] };
+    let spend=0, topups=0; const rows=[];
+    cashLedger.forEach(t => { if (!inRange(t.txnDate)) return; const isIn=t.toAccountId===petty.id, isOut=t.fromAccountId===petty.id; if(!isIn&&!isOut) return; if(isOut) spend+=Math.abs(t.amount); if(isIn) topups+=Math.abs(t.amount); rows.push({ ...t, _in:isIn }); });
+    rows.sort((a,b)=>(b.txnDate||"").localeCompare(a.txnDate||""));
+    return { spend, topups, rows };
+  }, [cashLedger, petty, bounds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleRow = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
+  const RowList = ({ rows, render }) => (
+    <div className="mt-2 space-y-1 border-t border-slate-800 pt-2">
+      {rows.length===0 ? <div className="text-[11px] text-slate-600 px-1">No transactions.</div> : rows.map((r,i)=>render(r,i))}
+    </div>
+  );
+  const txnRow = (r, i) => (
+    <div key={i} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-slate-950/40">
+      <div className="min-w-0">
+        <div className="text-[13px] text-slate-300 truncate">{r.desc || r.description || r.reference || "—"}</div>
+        <div className="text-[10px] text-slate-600">{r.date || r.txnDate}{r.src?` · ${r.src}`:""}</div>
+      </div>
+      <div className="text-[13px] font-semibold text-red-300 flex-shrink-0">{money(Math.abs(r.amount))}</div>
+    </div>
+  );
+  const claimRow = (c, i) => (
+    <div key={c.id||i} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-slate-950/40">
+      <div className="min-w-0">
+        <div className="text-[13px] text-slate-300 truncate">{c.description || c.vendor || "Expense"}</div>
+        <div className="text-[10px] text-slate-600">{c.expenseDate}{c.storeId?` · ${storeName(c.storeId)}`:""} · {c.status}</div>
+      </div>
+      <div className="text-[13px] font-semibold text-red-300 flex-shrink-0">{money(c.amount)}</div>
+    </div>
+  );
+
+  const Card = ({ title, total, sub, children }) => (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-bold text-white">{title}</div>
+        <div className="text-lg font-bold text-red-300">{money(total)}</div>
+      </div>
+      {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+      <div className="mt-3 space-y-1.5">{children}</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-white">Spend</h2>
+        <p className="text-sm text-slate-500">Where the money's going — by payee, bank account, store, and petty cash. Tap any row to see the transactions behind it.</p>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex gap-1 bg-slate-800 rounded-xl p-1">
+          {[["this_month","This month"],["last_month","Last month"],["range","Range"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setPeriodMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${periodMode===k?"bg-indigo-600 text-white":"text-slate-400"}`}>{l}</button>
+          ))}
+        </div>
+        {periodMode==="range" && (
+          <div className="flex items-center gap-1.5">
+            <input type="date" value={rangeFrom} onChange={e=>setRangeFrom(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"/>
+            <span className="text-slate-600 text-xs">to</span>
+            <input type="date" value={rangeTo} onChange={e=>setRangeTo(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"/>
+          </div>
+        )}
+        <select value={storeScope} onChange={e=>setStoreScope(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+          <option value="all">All stores (group)</option>
+          {stores.filter(s=>!s.archivedAt).map(s => <option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+        </select>
+      </div>
+
+      <Card title="Spend per payee" total={byPayee.reduce((a,p)=>a+p.total,0)} sub={`${bounds.label} · expense claims`}>
+        {byPayee.length===0 ? <div className="text-sm text-slate-500">No spend in this period.</div> : byPayee.map(p => {
+          const k = `payee:${p.id}`; const name = p.id==="_none" ? "Unassigned" : (payeeById[p.id]?.name || "—");
+          return (
+            <div key={k} className="bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2">
+              <button onClick={()=>toggleRow(k)} className="w-full flex items-center justify-between gap-2">
+                <span className="text-sm text-slate-200">{name} <span className="text-[11px] text-slate-600">· {p.rows.length}</span></span>
+                <span className="text-sm font-bold text-red-300">{money(p.total)}</span>
+              </button>
+              {expanded[k] && <RowList rows={p.rows} render={claimRow}/>}
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card title="Spend per bank account" total={byBank.reduce((a,b)=>a+b.total,0)} sub={`${bounds.label} · bank outflows`}>
+        {byBank.length===0 ? <div className="text-sm text-slate-500">No bank spend in this period.</div> : byBank.map(b => {
+          const k = `bank:${b.id}`; const name = bankAcctById[b.id]?.name || "Unlinked";
+          return (
+            <div key={k} className="bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2">
+              <button onClick={()=>toggleRow(k)} className="w-full flex items-center justify-between gap-2">
+                <span className="text-sm text-slate-200">{name} <span className="text-[11px] text-slate-600">· {b.rows.length}</span></span>
+                <span className="text-sm font-bold text-red-300">{money(b.total)}</span>
+              </button>
+              {expanded[k] && <RowList rows={b.rows} render={(t,i)=>txnRow({ desc:t.description||t.category, date:t.txnDate, amount:t.amount, src:bankAcctById[t.accountId]?.name },i)}/>}
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card title="Spend per store" total={byStore.reduce((a,s)=>a+s.total,0)} sub={`${bounds.label} · bank + cash`}>
+        {byStore.length===0 ? <div className="text-sm text-slate-500">No store spend in this period.</div> : byStore.map(s => {
+          const k = `store:${s.id}`; const name = s.id==="_none" ? "Unassigned" : storeName(s.id);
+          return (
+            <div key={k} className="bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2">
+              <button onClick={()=>toggleRow(k)} className="w-full flex items-center justify-between gap-2">
+                <span className="text-sm text-slate-200">{name} <span className="text-[11px] text-slate-600">· {s.rows.length}</span></span>
+                <span className="text-sm font-bold text-red-300">{money(s.total)}</span>
+              </button>
+              {expanded[k] && <RowList rows={s.rows.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""))} render={txnRow}/>}
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card title="Petty cash" total={pettyData.spend} sub={petty ? `${bounds.label} · spend (topped up ${money(pettyData.topups)})` : "No petty cash account yet"}>
+        {!petty ? <div className="text-sm text-slate-500">Set up petty cash to see its movements here.</div> : pettyData.rows.length===0 ? <div className="text-sm text-slate-500">No movements in this period.</div> : (
+          <div className="space-y-1">
+            {pettyData.rows.map((t,i)=>(
+              <div key={t.id||i} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-slate-950/40">
+                <div className="min-w-0">
+                  <div className="text-[13px] text-slate-300 truncate">{t.reference || (t._in?"Top-up":"Spend")}</div>
+                  <div className="text-[10px] text-slate-600">{t.txnDate}{t.sourceRef?.startsWith("exp:")?" · expense":""}</div>
+                </div>
+                <div className={`text-[13px] font-semibold flex-shrink-0 ${t._in?"text-emerald-300":"text-red-300"}`}>{t._in?"+":"−"}{money(Math.abs(t.amount))}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <div className="text-[11px] text-slate-600">Management figures from your recorded expenses, bank imports and cash ledger — not statutory accounts. Payee totals come from expenses tagged with a payee.</div>
+    </div>
+  );
+}
+
 function PettyCashView({ accounts = [], ledger = [], stores = [], target = 0, handlers = {} }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white";
@@ -35831,6 +36014,7 @@ export default function App() {
   const FINANCE_NAV = [
     { group: "FINANCE", items: [
       { key: "accounts", label: "Accounts", icon: BarChart2 },
+      { key: "spend", label: "Spend", icon: TrendingDown },
       { key: "petty-cash", label: "Petty Cash", icon: Wallet },
       { key: "expenses", label: "Expenses", icon: Receipt },
     ]},
@@ -36040,6 +36224,7 @@ export default function App() {
             {effectiveActiveView === "central-kitchen" && ["owner","hq_staff"].includes(currentUser.role) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
+            {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
