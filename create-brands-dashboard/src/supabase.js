@@ -7073,15 +7073,14 @@ export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 }
     fetchFlipdishOrders({ from, to, limit }), fetchIgnoredTillNames(storeId).catch(() => []),
   ]);
 
-  // Which flipdish store rows are linked to this internal store? Use the
-  // explicit link (flipdish_stores.store_id === our store id), set via the
-  // admin "link Flipdish store" action. An order belongs to us if its
-  // flipdishStoreId matches one of those flipdish store ids.
-  const fStoreIds = new Set(
-    (fStores || [])
-      .filter(fs => fs.storeId === storeId)
-      .map(fs => fs.id)
-  );
+  // Which flipdish store rows are linked to this internal store? The explicit
+  // link is flipdish_stores.store_id === our store id. An order's store field
+  // may carry either the flipdish row id or the flipdish RMS store id, so we
+  // match against both to be safe.
+  const linkedFStores = (fStores || []).filter(fs => fs.storeId === storeId);
+  const fStoreIds = new Set();
+  linkedFStores.forEach(fs => { if (fs.id != null) fStoreIds.add(String(fs.id)); if (fs.storeId != null) fStoreIds.add(String(fs.storeId)); });
+  const orderStoreId = (o) => String(o.flipdishStoreId ?? "");
 
   // Cost rollup (same logic as theoretical COGS).
   const itemById = new Map();
@@ -7119,8 +7118,11 @@ export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 }
 
   const simOrders = [];
   let totCogs = 0, totSale = 0, costedLines = 0, totalLines = 0;
+  let ordersInWindow = (orders || []).length, ordersMatchedStore = 0;
+  const sampleOrderStoreIds = [...new Set((orders || []).slice(0, 200).map(o => orderStoreId(o)))].slice(0, 12);
   (orders || []).forEach(o => {
-    if (fStoreIds.size && !fStoreIds.has(o.flipdishStoreId)) return; // not this store
+    if (fStoreIds.size && !fStoreIds.has(orderStoreId(o))) return; // not this store
+    ordersMatchedStore++;
     const items = Array.isArray(o.items) ? o.items : [];
     if (!items.length) return;
     let orderCogs = 0; const lines = []; let anyCosted = false;
@@ -7156,5 +7158,12 @@ export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 }
     avgMarginPct: totSale > 0 ? (totSale - totCogs) / totSale : null,
     lineCoverage: totalLines > 0 ? costedLines / totalLines : 0,
     orders: simOrders,
+    diag: {
+      linkedFlipdishStores: linkedFStores.length,
+      linkedIds: [...fStoreIds].slice(0, 12),
+      ordersInWindow,
+      ordersMatchedStore,
+      sampleOrderStoreIds,
+    },
   };
 }

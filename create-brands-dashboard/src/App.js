@@ -5932,7 +5932,23 @@ function OrderSimulator({ stores = [] }) {
       {data && (
         <>
           {data.orderCount === 0 ? (
-            <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">No online orders found for this store and period. (If this store has online sales but shows none, the Flipdish store name may not match — tell me and I'll wire an explicit link.)</div>
+            <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-5 space-y-2">
+              <div className="font-semibold text-slate-300">No costed orders for this store and period.</div>
+              {data.diag && (
+                <div className="text-[12px] text-slate-500 space-y-1">
+                  <div>Flipdish stores linked to this site: <span className="text-slate-300">{data.diag.linkedFlipdishStores}</span>{data.diag.linkedIds?.length>0 && <> (ids: {data.diag.linkedIds.join(", ")})</>}</div>
+                  <div>Orders in the date window (all stores): <span className="text-slate-300">{data.diag.ordersInWindow}</span></div>
+                  <div>Of those, matched to this store: <span className="text-slate-300">{data.diag.ordersMatchedStore}</span></div>
+                  {data.diag.sampleOrderStoreIds?.length>0 && <div>Store ids seen on orders: <span className="text-slate-400">{data.diag.sampleOrderStoreIds.join(", ")}</span></div>}
+                  <div className="text-[11px] text-slate-600 pt-1">
+                    {data.diag.linkedFlipdishStores===0 ? "This site has no linked Flipdish store — link it in Admin → Flipdish/RMS stores first." :
+                     data.diag.ordersInWindow===0 ? "No Flipdish orders synced in this window — try a wider date range." :
+                     data.diag.ordersMatchedStore===0 ? "Orders exist but none match this store's linked ids — the order store id and the linked id differ. Send me the two id lists above and I'll align them." :
+                     "Orders matched but had no line items to cost."}
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
