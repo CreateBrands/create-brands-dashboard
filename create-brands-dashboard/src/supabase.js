@@ -5589,10 +5589,21 @@ export async function discoverModifierCandidates({ storeId, from, to } = {}) {
   const toD   = to   || new Date().toISOString().slice(0, 10);
   const [sales, mods] = await Promise.all([
     (async () => {
-      const { data, error } = await supabase.from("flipdish_sales")
-        .select("sale_items, is_cancelled")
-        .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD);
-      if (error) throw error; return data || [];
+      const PAGE = 1000, MAX_PAGES = 200;
+      let all = [], pageStart = 0;
+      for (let p = 0; p < MAX_PAGES; p++) {
+        const { data, error } = await supabase.from("flipdish_sales")
+          .select("sale_items, is_cancelled")
+          .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD)
+          .order("sale_id", { ascending: true })
+          .range(pageStart, pageStart + PAGE - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all = all.concat(batch);
+        if (batch.length < PAGE) break;
+        pageStart += PAGE;
+      }
+      return all;
     })(),
     (async () => {
       const { data, error } = await supabase.from("cogs_modifiers").select("name, till_caption");
@@ -7126,10 +7137,21 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
   const [inv, rec, mapsRaw, sales] = await Promise.all([
     fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
     (async () => {
-      const { data, error } = await supabase.from("flipdish_sales")
-        .select("sale_items, is_cancelled")
-        .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD);
-      if (error) throw error; return data || [];
+      const PAGE = 1000, MAX_PAGES = 200; // up to 200k rows safety cap
+      let all = [], pageStart = 0;
+      for (let p = 0; p < MAX_PAGES; p++) {
+        const { data, error } = await supabase.from("flipdish_sales")
+          .select("sale_items, is_cancelled")
+          .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD)
+          .order("sale_id", { ascending: true })
+          .range(pageStart, pageStart + PAGE - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all = all.concat(batch);
+        if (batch.length < PAGE) break;
+        pageStart += PAGE;
+      }
+      return all;
     })(),
   ]);
 
