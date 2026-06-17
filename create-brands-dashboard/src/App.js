@@ -23811,7 +23811,8 @@ function AccountsHubView(props) {
   const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser,
     onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
     onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
-    sharedFile, onConsumeSharedFile, initialTab } = props;
+    sharedFile, onConsumeSharedFile, initialTab,
+    cashAccounts = [], cashLedger = [], cashHandlers = {} } = props;
   const [tab, setTab] = useState(initialTab || "pnl");
   const [storeFilter, setStoreFilter] = useState("all");
   // If a Tide statement was shared in, jump straight to the Bank tab.
@@ -23820,7 +23821,7 @@ function AccountsHubView(props) {
   const { canFeature: acctCanFeature } = useAccess();
   const TABS = [
     ["pnl", "P&L"],
-    ["bank", "Bank"],
+    ["bank", "Bank & Cash"],
     ["invoices", "Invoices"],
     ["suppliers", "Suppliers"],
     ["reconcile", "Reconcile"],
@@ -23842,7 +23843,7 @@ function AccountsHubView(props) {
       </select>
 
       {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
-      {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
+      {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
       {tab === "suppliers" && <SuppliersView stores={stores}/>}
       {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
@@ -24523,7 +24524,7 @@ const FNB_CATEGORY_PACK = [
   ["Transfer between accounts","expense","transfer"],
 ];
 
-function BankView({ bankTransactions = [], bankAccounts = [], stores = [], storeFilter = "all", categories = [], categoryRules = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule, sharedFile, onConsumeSharedFile }) {
+function BankView({ bankTransactions = [], bankAccounts = [], stores = [], storeFilter = "all", cashAccounts = [], cashLedger = [], cashHandlers = {}, categories = [], categoryRules = [], onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount, onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule, sharedFile, onConsumeSharedFile }) {
   const [step, setStep] = useState("list");
   const [preview, setPreview] = useState([]);
   const [errors, setErrors] = useState([]);
@@ -24684,6 +24685,16 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
   // When a specific store is selected, restrict to that store's bank accounts.
   const storeAccountIds = storeFilter === "all" ? null : new Set((bankAccounts || []).filter(a => a.storeId === storeFilter).map(a => a.id));
   const visibleAccounts = storeFilter === "all" ? bankAccounts : (bankAccounts || []).filter(a => a.storeId === storeFilter);
+
+  // Cash accounts for this store (or all), with derived balances.
+  const cashBalances = useMemo(() => computeCashBalances(cashAccounts, cashLedger), [cashAccounts, cashLedger]);
+  const visibleCash = storeFilter === "all" ? cashAccounts : (cashAccounts || []).filter(a => (a.storeId || "") === storeFilter);
+  const [newCash, setNewCash] = useState(null); // {name, kind, storeId}
+  const saveNewCash = async () => {
+    if (!newCash?.name?.trim()) return;
+    try { await cashHandlers.saveAccount?.({ name: newCash.name.trim(), kind: newCash.kind || "revenue", storeId: newCash.storeId || null }); setNewCash(null); }
+    catch (e) { alert(e?.message || "Could not save cash account."); }
+  };
   const txns = bankTransactions.filter(t => {
     if (storeAccountIds && !storeAccountIds.has(t.accountId)) return false;
     if (accountFilter !== "all" && t.accountId !== accountFilter) return false;
@@ -24755,6 +24766,55 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
             })}
           </div>
         )}
+      </div>
+
+      {/* Cash accounts — same page as bank, per store */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-sm font-bold text-white">Cash accounts{storeFilter !== "all" ? " · this store" : ""}</div>
+          {!newCash && <button onClick={()=>setNewCash({ name:"", kind:"revenue", storeId: storeFilter !== "all" ? storeFilter : "" })} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">+ Add cash account</button>}
+        </div>
+
+        {newCash && (
+          <div className="bg-slate-950/50 rounded-xl p-3 space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <input value={newCash.name} onChange={e=>setNewCash({...newCash, name:e.target.value})} placeholder="Cash account name (e.g. Till — Loughborough)" className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white"/>
+              <select value={newCash.kind} onChange={e=>setNewCash({...newCash, kind:e.target.value})} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                <option value="revenue">Revenue (takings)</option>
+                <option value="expense">Expense (petty cash)</option>
+              </select>
+              <select value={newCash.storeId} onChange={e=>setNewCash({...newCash, storeId:e.target.value})} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                <option value="">— Link to store —</option>
+                {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={saveNewCash} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Save cash account</button>
+              <button onClick={()=>setNewCash(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {visibleCash.length === 0 ? (
+          <div className="text-xs text-slate-500">{storeFilter !== "all" ? "No cash accounts for this store yet. Add one above." : "No cash accounts yet. Add one above."}</div>
+        ) : (
+          <div className="space-y-1.5">
+            {visibleCash.map(a => {
+              const st = stores.find(s => s.id === a.storeId);
+              const bal = cashBalances[a.id] || 0;
+              return (
+                <div key={a.id} className="flex items-center justify-between gap-2 bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200 font-semibold truncate">{a.name}</div>
+                    <div className="text-[11px] text-slate-500">{a.kind === "expense" ? "Petty cash" : "Takings"}{st ? ` · ${st.shortName || st.name}` : " · no store"}</div>
+                  </div>
+                  <div className="text-sm font-bold text-emerald-300 flex-shrink-0">£{(Number(bal)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="text-[10px] text-slate-600">Full cash movements (deposits, transfers, EOD takings) are recorded in the cash ledger. This shows each account's current balance.</div>
       </div>
 
       {manageCats && (
@@ -35537,7 +35597,6 @@ export default function App() {
   const FINANCE_NAV = [
     { group: "FINANCE", items: [
       { key: "accounts", label: "Accounts", icon: BarChart2 },
-      { key: "cash-accounts", label: "Cash Accounts", icon: Wallet },
       { key: "expenses", label: "Expenses", icon: Receipt },
     ]},
   ];
@@ -35747,7 +35806,7 @@ export default function App() {
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
