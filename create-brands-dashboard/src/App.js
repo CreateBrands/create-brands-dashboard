@@ -24711,6 +24711,52 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
         </div>
       </div>
 
+      {/* Bank accounts — always visible, manage per store */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-sm font-bold text-white">Bank accounts{storeFilter !== "all" ? " · this store" : ""}</div>
+          {!newAcct && <button onClick={()=>setNewAcct({ name:"", bank:"Tide", storeId: storeFilter !== "all" ? storeFilter : "" })} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">+ Add account</button>}
+        </div>
+
+        {newAcct && (
+          <div className="bg-slate-950/50 rounded-xl p-3 space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <input value={newAcct.name} onChange={e=>setNewAcct({...newAcct, name:e.target.value})} placeholder="Account name (e.g. Loughborough — Tide)" className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white"/>
+              <select value={newAcct.bank} onChange={e=>setNewAcct({...newAcct, bank:e.target.value})} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                <option>Tide</option><option>Revolut</option><option>Monzo</option><option>Metro</option><option>Other</option>
+              </select>
+              <select value={newAcct.storeId} onChange={e=>setNewAcct({...newAcct, storeId:e.target.value})} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+                <option value="">— Link to store —</option>
+                {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={saveNewAccount} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Save account</button>
+              <button onClick={()=>setNewAcct(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {visibleAccounts.filter(a=>!a.archived).length === 0 ? (
+          <div className="text-xs text-slate-500">{storeFilter !== "all" ? "No bank accounts for this store yet. Add one above." : "No bank accounts yet. Add one above."}</div>
+        ) : (
+          <div className="space-y-1.5">
+            {visibleAccounts.filter(a=>!a.archived).map(a => {
+              const st = stores.find(s => s.id === a.storeId);
+              return (
+                <div key={a.id} className="flex items-center justify-between gap-2 bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200 font-semibold truncate">{a.name}</div>
+                    <div className="text-[11px] text-slate-500">{a.bank || "Bank"}{st ? ` · ${st.shortName || st.name}` : " · no store"}</div>
+                  </div>
+                  <button onClick={()=>{ if(window.confirm(`Delete account "${a.name}"? Its transactions stay but lose their account link.`)) onDeleteAccount?.(a.id); }} className="text-slate-600 hover:text-red-400 text-xs flex-shrink-0">Delete</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {manageCats && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
