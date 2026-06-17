@@ -18,7 +18,7 @@ import {
   fetchCashSources, upsertCashSource, archiveCashSource,
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
   fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
-  computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit,
+  computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit, setCashLedgerReconciled,
   fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
   reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
   fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts,
@@ -23846,13 +23846,14 @@ function AccountsHubView(props) {
       {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
       {tab === "suppliers" && <SuppliersView stores={stores}/>}
-      {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
+      {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
       {tab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories}/>}
     </div>
   );
 }
 
-function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn, onInvoicePaid }) {
+function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = "all", cashLedger = [], cashAccounts = [], cashHandlers = {}, onUpdateTxn, onInvoicePaid }) {
+  const [mode, setMode] = useState("bank"); // bank | cash
   const [matches, setMatches] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [payouts, setPayouts] = useState([]);
@@ -23999,6 +24000,76 @@ function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn, o
     }).filter(x=>x.txn).sort((a,b)=>(b.txn.txnDate||"").localeCompare(a.txn.txnDate||""));
   }, [matches, bankTransactions]);
 
+  // Cash movements for the selected store, in/out, with confirm toggle.
+  const cashAcctById = useMemo(() => { const m={}; (cashAccounts||[]).forEach(a=>m[a.id]=a); return m; }, [cashAccounts]);
+  const cashRows = useMemo(() => {
+    const inStore = (tx) => {
+      if (storeFilter === "all") return true;
+      if (tx.storeId === storeFilter) return true;
+      const fa = cashAcctById[tx.fromAccountId]; const ta = cashAcctById[tx.toAccountId];
+      return (fa && fa.storeId === storeFilter) || (ta && ta.storeId === storeFilter);
+    };
+    return (cashLedger || []).filter(inStore).slice().sort((a,b)=> (b.txnDate||"").localeCompare(a.txnDate||""));
+  }, [cashLedger, storeFilter, cashAcctById]);
+  const cashOutstanding = cashRows.filter(r => !r.reconciled).length;
+
+  const ModeTabs = (
+    <div className="flex gap-1 bg-slate-800 rounded-xl p-1 w-fit">
+      {[["bank","Card / Bank"],["cash",`Cash${cashOutstanding?` (${cashOutstanding})`:""}`]].map(([k,l])=>(
+        <button key={k} onClick={()=>setMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${mode===k?"bg-indigo-600 text-white":"text-slate-400"}`}>{l}</button>
+      ))}
+    </div>
+  );
+
+  if (mode === "cash") {
+    const dirLabel = (tx) => {
+      if (tx.type === "income" || tx.type === "opening") return { dir:"in", label: tx.type==="opening"?"Opening":"Cash in" };
+      if (tx.type === "expense") return { dir:"out", label:"Cash out" };
+      if (tx.type === "transfer") return { dir:"move", label:"Transfer" };
+      return { dir: (Number(tx.amount)>=0?"in":"out"), label: tx.type || "Movement" };
+    };
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-base font-bold text-white flex items-center gap-2"><CheckCircle size={18}/> Reconciliation</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Confirm each cash movement (in and out) for {storeFilter==="all"?"all stores":"this store"}. Cash expenses appear here already linked.</p>
+          </div>
+          {ModeTabs}
+        </div>
+        {cashRows.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-500">No cash movements{storeFilter!=="all"?" for this store":""}.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {cashRows.map(tx => {
+              const d = dirLabel(tx);
+              const amt = Number(tx.amount)||0;
+              const acct = cashAcctById[tx.fromAccountId] || cashAcctById[tx.toAccountId];
+              return (
+                <div key={tx.id} className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 border ${tx.reconciled?"bg-emerald-950/15 border-emerald-800/40":"bg-slate-900 border-slate-800"}`}>
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200 font-semibold truncate flex items-center gap-2">
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold ${d.dir==="in"?"bg-emerald-600/20 text-emerald-300":d.dir==="out"?"bg-red-600/20 text-red-300":"bg-slate-700 text-slate-300"}`}>{d.label}</span>
+                      {tx.reference || (acct?.name) || "Cash movement"}
+                    </div>
+                    <div className="text-[11px] text-slate-500">{tx.txnDate}{acct?` · ${acct.name}`:""}{tx.sourceRef?.startsWith("exp:")?" · expense":tx.sourceRef?.startsWith("eod:")?" · EOD takings":""}</div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className={`text-sm font-bold ${d.dir==="out"?"text-red-300":"text-emerald-300"}`}>{d.dir==="out"?"−":""}£{Math.abs(amt).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                    <button onClick={()=>cashHandlers.setReconciled?.(tx.id, !tx.reconciled)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${tx.reconciled?"bg-emerald-600 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>
+                      {tx.reconciled?"✓ Reconciled":"Confirm"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -24006,7 +24077,10 @@ function ReconciliationView({ bankTransactions = [], stores = [], onUpdateTxn, o
           <h2 className="text-base font-bold text-white flex items-center gap-2"><CheckCircle size={18}/> Reconciliation</h2>
           <p className="text-xs text-slate-500 mt-0.5">Match bank payments to invoices, Flipdish payouts and payroll. Auto-matches exact 1:1; build batches manually.</p>
         </div>
-        <button onClick={runAutoMatch} disabled={busy||loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">⚡ Auto-match exact</button>
+        <div className="flex items-center gap-2">
+          {ModeTabs}
+          <button onClick={runAutoMatch} disabled={busy||loading} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-semibold text-white">⚡ Auto-match exact</button>
+        </div>
       </div>
       {autoMsg && <div className="rounded-xl px-4 py-2.5 text-xs bg-emerald-950/20 border border-emerald-800/40 text-emerald-300">{autoMsg}</div>}
 
@@ -34891,6 +34965,7 @@ export default function App() {
     archiveExpenseType: async (id) => { await archiveCashExpenseType(id); await reloadCash(); },
     addEntry: async (tx) => { await addCashLedgerEntry({ ...tx, createdBy: currentUser?.name || null }); await reloadCash(); },
     deleteEntry: async (id) => { await deleteCashLedgerEntry(id); await reloadCash(); },
+    setReconciled: async (id, val) => { await setCashLedgerReconciled(id, val, currentUser?.name || null); await reloadCash(); },
     ensureStoreAccounts: async () => { const n = await ensureStoreCashAccounts(stores); await reloadCash(); return n; },
   }), [reloadCash, currentUser, stores]);
 

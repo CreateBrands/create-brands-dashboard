@@ -6465,6 +6465,9 @@ const mapCashLedger = (t) => ({
   sourceId: t.source_id || null, expenseTypeId: t.expense_type_id || null,
   storeId: t.store_id || null, reference: t.reference || "", createdBy: t.created_by || null,
   sourceRef: t.source_ref || null,
+  reconciled: t.reconciled ?? false,
+  reconciledAt: t.reconciled_at || null,
+  reconciledBy: t.reconciled_by || null,
   createdAt: t.created_at,
 });
 
@@ -6855,4 +6858,14 @@ export async function setMemberExpenseStores(memberId, storeIds = []) {
   const rows = (storeIds || []).map(id => ({ member_id: memberId, store_id: id }));
   if (rows.length) { const { error } = await supabase.from("member_expense_stores").insert(rows); if (error) throw error; }
   return true;
+}
+
+// ── Cash movement reconcile/confirm ──────────────────────────────────────────
+export async function setCashLedgerReconciled(id, reconciled, by = null) {
+  const patch = reconciled
+    ? { reconciled: true, reconciled_at: new Date().toISOString(), reconciled_by: by || null }
+    : { reconciled: false, reconciled_at: null, reconciled_by: null };
+  const { error } = await supabase.from("cash_ledger").update(patch).eq("id", id);
+  if (error) throw error;
+  return id;
 }
