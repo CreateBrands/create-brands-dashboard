@@ -5204,7 +5204,7 @@ function InventoryBuilder() {
 
   return (
     <div className="space-y-5">
-      <p className="text-xs text-slate-500">Store = what shops buy (incl. Central Kitchen as a supplier). CK = the kitchen's own raw ingredients.</p>
+      <p className="text-xs text-slate-500">Ingredients and goods the shops buy (Central Kitchen items are managed in the Central Kitchen module).</p>
 
       {err && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
@@ -5258,10 +5258,7 @@ function InventoryBuilder() {
       {/* scope tabs */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
-          <button onClick={() => setScope("store")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${scope==="store"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Store inventory ({data?.store.length || 0})</button>
-          <button onClick={() => setScope("ck")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${scope==="ck"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>CK inventory ({data?.ck.length || 0})</button>
+          <span className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white">Store inventory ({data?.store.length || 0})</span>
         </div>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…"
           className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"/>
