@@ -5968,6 +5968,84 @@ export async function computeActualCogs({ storeId, openCountId, closeCountId } =
 }
 // ===== end ACTUAL_COGS_V1 =====
 
+// ===== INVOICE_PRICE_SYNC_V1 ==============================================
+// Search the LIVE inventory (cogs_store_items) for invoice line matching.
+export async function searchStoreInventory(q, limit = 12) {
+  let query = supabase.from("cogs_store_items").select("id, name").order("name").limit(limit);
+  if (q && q.trim()) query = query.ilike("name", `%${q.trim()}%`);
+  const { data, error } = await query; if (error) throw error;
+  return data || [];
+}
+
+// Detect price changes from an approved invoice. For each line matched to a
+// store item with a usable unit price, compare to the item's current per-store
+// cost and, if it differs beyond threshold, post a 'pending' row to the queue.
+// storeId comes from invoice.entity. Returns number of changes queued.
+export async function detectInvoicePriceChanges(invoiceId, { thresholdPct = 1 } = {}) {
+  const { data: inv, error: e0 } = await supabase.from("invoices").select("*").eq("id", invoiceId).single();
+  if (e0) throw e0;
+  const storeId = inv.entity;
+  if (!storeId || storeId === "kitchen") return 0; // only store invoices update store overlay
+  const { data: lines, error: e1 } = await supabase.from("invoice_lines")
+    .select("*").eq("invoice_id", invoiceId);
+  if (e1) throw e1;
+
+  // current resolved per-store costs
+  const invForStore = await fetchInventoryForStore(storeId);
+  const costByItem = new Map(invForStore.store.map(i => [i.id, i.costPerBaseUnit]));
+
+  let queued = 0;
+  for (const ln of (lines || [])) {
+    const itemId = ln.matched_store_item_id;
+    if (!itemId) continue;
+    const qtyBase = Number(ln.pack_qty_base);
+    const priceEx = Number(ln.pack_price_ex_vat);
+    if (!(qtyBase > 0) || !(priceEx >= 0)) continue;
+    const newCost = priceEx / qtyBase;                 // per-base-unit from invoice
+    const oldCost = costByItem.get(itemId);
+    const pct = (oldCost != null && oldCost > 0) ? ((newCost - oldCost) / oldCost) * 100 : null;
+    // skip if effectively unchanged
+    if (oldCost != null && Math.abs(pct) < thresholdPct) continue;
+    // avoid duplicate pending row for same invoice+item
+    const { data: dup } = await supabase.from("cogs_price_changes")
+      .select("id").eq("invoice_id", invoiceId).eq("item_id", itemId).eq("status", "pending").maybeSingle();
+    if (dup) continue;
+    const { error } = await supabase.from("cogs_price_changes").insert({
+      store_id: storeId, item_id: itemId, old_cost: oldCost ?? null, new_cost: newCost,
+      pct_change: pct, invoice_id: invoiceId, invoice_ref: inv.invoice_number || inv.reference || null,
+      supplier: inv.supplier || inv.supplier_name || null,
+    });
+    if (error) throw error; queued++;
+  }
+  return queued;
+}
+
+export async function fetchPriceChanges(status = "pending") {
+  let q = supabase.from("cogs_price_changes").select("*").order("detected_at", { ascending: false });
+  if (status && status !== "all") q = q.eq("status", status);
+  const { data, error } = await q; if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, storeId: r.store_id, itemId: r.item_id, oldCost: r.old_cost,
+    newCost: r.new_cost, pctChange: r.pct_change, invoiceId: r.invoice_id, invoiceRef: r.invoice_ref,
+    supplier: r.supplier, detectedAt: r.detected_at, status: r.status }));
+}
+
+// Apply a queued change: write the new cost to the store's overlay and mark applied.
+export async function applyPriceChange(id, userId) {
+  const { data: pc, error } = await supabase.from("cogs_price_changes").select("*").eq("id", id).single();
+  if (error) throw error;
+  await setStoreItemOverride(pc.store_id, pc.item_id, { costPerBaseUnit: pc.new_cost });
+  const { error: e2 } = await supabase.from("cogs_price_changes")
+    .update({ status: "applied", resolved_at: new Date().toISOString(), resolved_by: userId || null }).eq("id", id);
+  if (e2) throw e2;
+}
+
+export async function dismissPriceChange(id, userId) {
+  const { error } = await supabase.from("cogs_price_changes")
+    .update({ status: "dismissed", resolved_at: new Date().toISOString(), resolved_by: userId || null }).eq("id", id);
+  if (error) throw error;
+}
+// ===== end INVOICE_PRICE_SYNC_V1 =====
+
 // ============================================================================
 // CENTRAL KITCHEN — Phase 1: ingredients + goods-in (batch-tracked)
 // ============================================================================

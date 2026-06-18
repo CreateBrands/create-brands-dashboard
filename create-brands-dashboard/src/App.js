@@ -131,6 +131,7 @@ import {
   fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount,
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
+  searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6090,7 +6091,7 @@ function ActualCogs({ stores = [] }) {
             {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
           </select></div>
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
-          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["settings","Store Inventory Settings"]].map(([k,l])=>(
+          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].map(([k,l])=>(
             <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
@@ -6100,6 +6101,7 @@ function ActualCogs({ stores = [] }) {
       {storeId && sub === "purchases" && <Purchases storeId={storeId} money={money}/>}
       {storeId && sub === "variance" && <Variance storeId={storeId} money={money}/>}
       {storeId && sub === "settings" && <StoreInventorySettings storeId={storeId} money={money}/>}
+      {sub === "pricechanges" && <PriceChanges stores={stores} money={money}/>}
     </div>
   );
 }
@@ -6185,6 +6187,92 @@ function StoreInventorySettings({ storeId, money }) {
                     <td className="px-2 py-2 text-right"><input value={dval(i,"packQty",i.overridePackQty)} onChange={e=>setD(i.id,"packQty",e.target.value)} onBlur={()=>saveField(i,"packQty",i.overridePackQty)} placeholder={i.masterPackQty!=null?String(i.masterPackQty):"—"} className={`${cell} ${ph} w-16 text-right ${savedKey===dkey(i.id,"packQty")?"border-emerald-500":"border-slate-700"}`}/></td>
                     <td className="px-2 py-2"><input value={dval(i,"supplier",i.overrideSupplier)} onChange={e=>setD(i.id,"supplier",e.target.value)} onBlur={()=>saveField(i,"supplier",i.overrideSupplier)} placeholder={i.masterSupplier||"—"} className={`${cell} ${ph} w-28 ${savedKey===dkey(i.id,"supplier")?"border-emerald-500":"border-slate-700"}`}/></td>
                     <td className="px-2 py-2 text-right">{ovd && <button onClick={()=>clearAll(i)} className="text-[11px] text-slate-500 hover:text-red-400">reset</button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PriceChanges({ stores = [], money }) {
+  const [status, setStatus] = useState("pending");
+  const [rows, setRows] = useState(null);
+  const [inv, setInv] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(null);
+
+  const storeName = (id) => stores.find(s=>s.id===id)?.shortName || stores.find(s=>s.id===id)?.name || id;
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const [r, i] = await Promise.all([fetchPriceChanges(status), fetchInventory()]);
+      setRows(r); setInv(i);
+    } catch(e){ setErr(e.message); }
+  };
+  useEffect(() => { setRows(null); load(); /* eslint-disable-next-line */ }, [status]);
+
+  const itemName = (id) => (inv?.store||[]).find(x=>x.id===id)?.name || `#${id}`;
+
+  const apply = async (id) => { setBusy(id); setErr(null); try { await applyPriceChange(id); await load(); } catch(e){ setErr(e.message);} finally{ setBusy(null);} };
+  const dismiss = async (id) => { setBusy(id); setErr(null); try { await dismissPriceChange(id); await load(); } catch(e){ setErr(e.message);} finally{ setBusy(null);} };
+  const applyAll = async () => {
+    if (!rows || !rows.length) return;
+    if (!window.confirm(`Apply all ${rows.length} pending price changes? This updates each store's cost.`)) return;
+    setBusy("all"); setErr(null);
+    try { for (const r of rows) { await applyPriceChange(r.id); } await load(); }
+    catch(e){ setErr(e.message); } finally { setBusy(null); }
+  };
+
+  return (
+    <div className="space-y-3">
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <p className="text-xs text-slate-500">When an invoice is approved, lines whose unit price differs from the stored per-store cost are flagged here. Apply to update that store{"\u2019"}s cost (kept as price history), or dismiss. Applied changes feed more accurate theoretical COGS.</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        {[["pending","Pending"],["applied","Applied"],["dismissed","Dismissed"],["all","All"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setStatus(k)} className={`px-3 py-1.5 rounded-full text-xs font-semibold ${status===k?"bg-indigo-600 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>{l}</button>
+        ))}
+        {status==="pending" && rows && rows.length>0 && <button onClick={applyAll} disabled={busy==="all"} className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50">{busy==="all"?"Applying…":`Apply all (${rows.length})`}</button>}
+      </div>
+      {!rows && <div className="text-xs text-slate-500">Loading…</div>}
+      {rows && rows.length===0 && <div className="text-xs text-slate-500 py-6 text-center">No {status==="all"?"":status} price changes.</div>}
+      {rows && rows.length>0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+              <th className="text-left px-3 py-2">Item</th>
+              <th className="text-left px-3 py-2">Store</th>
+              <th className="text-right px-3 py-2">Old £/unit</th>
+              <th className="text-right px-3 py-2">New £/unit</th>
+              <th className="text-right px-3 py-2">Change</th>
+              <th className="text-left px-3 py-2">Invoice</th>
+              <th className="text-left px-3 py-2">When</th>
+              <th></th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r=>{
+                const up = r.pctChange!=null && r.pctChange>0;
+                return (
+                  <tr key={r.id} className="border-t border-slate-800/60">
+                    <td className="px-3 py-2 text-white">{itemName(r.itemId)}</td>
+                    <td className="px-3 py-2 text-slate-400">{storeName(r.storeId)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-400">{r.oldCost!=null?`£${Number(r.oldCost).toFixed(4)}`:"—"}</td>
+                    <td className="px-3 py-2 text-right font-mono text-white">£{Number(r.newCost).toFixed(4)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${r.pctChange==null?"text-slate-500":up?"text-red-300":"text-emerald-300"}`}>{r.pctChange!=null?`${up?"+":""}${r.pctChange.toFixed(1)}%`:"new"}</td>
+                    <td className="px-3 py-2 text-slate-400 text-xs">{r.invoiceRef||"—"}{r.supplier?` · ${r.supplier}`:""}</td>
+                    <td className="px-3 py-2 text-slate-500 text-xs">{(r.detectedAt||"").slice(0,10)}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {r.status==="pending" ? (
+                        <>
+                          <button onClick={()=>apply(r.id)} disabled={busy===r.id} className="text-emerald-400 text-xs font-semibold mr-3 disabled:opacity-50">Apply</button>
+                          <button onClick={()=>dismiss(r.id)} disabled={busy===r.id} className="text-slate-500 hover:text-red-400 text-xs disabled:opacity-50">Dismiss</button>
+                        </>
+                      ) : <span className={`text-[11px] ${r.status==="applied"?"text-emerald-400":"text-slate-500"}`}>{r.status}</span>}
+                    </td>
                   </tr>
                 );
               })}
@@ -8894,16 +8982,15 @@ function InvoiceLineRow({ line, domain, onChanged }) {
 
   useEffect(() => {
     let live = true;
-    if (line.matched_ingredient_id) {
-      searchCogsIngredients(domain, "").then(() => {});
-      supabaseLookupName(line.matched_ingredient_id).then((n) => { if (live) setMatchedName(n); });
+    if (line.matched_store_item_id) {
+      supabaseLookupName(line.matched_store_item_id).then((n) => { if (live) setMatchedName(n); });
     } else setMatchedName(null);
     return () => { live = false; };
-  }, [line.matched_ingredient_id, domain]);
+  }, [line.matched_store_item_id, domain]);
 
   async function supabaseLookupName(id) {
     try {
-      const opts = await searchCogsIngredients(domain, "");
+      const opts = await searchStoreInventory("");
       const hit = opts.find((o) => o.id === id);
       if (hit) return hit.name;
     } catch {}
@@ -8913,13 +9000,13 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   const doSearch = async (q) => {
     setSearch(q);
     if (!q || q.length < 2) { setOptions([]); return; }
-    try { setOptions(await searchCogsIngredients(domain, q)); } catch { setOptions([]); }
+    try { setOptions(await searchStoreInventory(q)); } catch { setOptions([]); }
   };
 
   const pick = async (opt) => {
     setBusy(true);
     try {
-      await saveInvoiceLine(line.id, { matched_ingredient_id: opt.id, match_method: "human", match_confidence: 1 });
+      await saveInvoiceLine(line.id, { matched_store_item_id: opt.id, match_method: "human", match_confidence: 1 });
       setOptions([]); setSearch("");
       onChanged();
     } finally { setBusy(false); }
@@ -8941,7 +9028,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
     try { await setInvoiceLineStatus(line.id, status); onChanged(); } finally { setBusy(false); }
   };
 
-  const ok = line.matched_ingredient_id && Number(line.pack_qty_base) > 0 && line.pack_price_ex_vat !== null;
+  const ok = line.matched_store_item_id && Number(line.pack_qty_base) > 0 && line.pack_price_ex_vat !== null;
   const badge =
     line.status === "confirmed" ? "bg-emerald-600/20 text-emerald-300 border-emerald-700/40" :
     line.status === "skipped"   ? "bg-slate-700/30 text-slate-500 border-slate-700/40" :
@@ -8955,7 +9042,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-slate-500">Maps to:</span>
-        {line.matched_ingredient_id ? (
+        {line.matched_store_item_id ? (
           <span className="px-2 py-0.5 rounded-md bg-indigo-600/20 border border-indigo-700/40 text-indigo-300">
             {matchedName || "(matched)"} {line.match_method === "fuzzy" && line.match_confidence ? `· ${Math.round(line.match_confidence * 100)}%` : ""}
           </span>
@@ -9155,7 +9242,12 @@ function InvoicesView({ currentUser, categories = [] }) {
     setBusy(true); setError(null);
     try {
       const res = await approveInvoiceRpc(selected.id, currentUser.id);
-      setNotice(`Approved — ${res?.prices_written ?? 0} price update(s) written, ${res?.alerts ?? 0} alert(s) raised.`);
+      let queuedMsg = "";
+      try {
+        const queued = await detectInvoicePriceChanges(selected.id);
+        if (queued > 0) queuedMsg = ` · ${queued} price change(s) flagged for review`;
+      } catch (pe) { /* non-fatal: approval still succeeded */ }
+      setNotice(`Approved — ${res?.prices_written ?? 0} price update(s) written, ${res?.alerts ?? 0} alert(s) raised.${queuedMsg}`);
       await refreshList();
       await openInvoice(selected.id);
     } catch (e) { setError(e?.message || String(e)); }
