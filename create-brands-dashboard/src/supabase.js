@@ -5318,6 +5318,75 @@ export async function fetchInventory() {
   };
 }
 
+// Master catalogue merged with a store's overrides. Each returned store item has
+// RESOLVED fields (override ?? master) used for costing/valuation, plus the raw
+// override values (overrideLocation, overrideCost, ...) so the editor knows what's
+// explicitly set per store vs inherited.
+export async function fetchInventoryForStore(storeId) {
+  const [base, settings] = await Promise.all([
+    fetchInventory(),
+    storeId ? supabase.from("cogs_store_item_settings").select("*").eq("store_id", storeId)
+            : Promise.resolve({ data: [] }),
+  ]);
+  if (settings.error) throw settings.error;
+  const ovById = new Map((settings.data || []).map(s => [s.item_id, s]));
+  const merged = (base.store || []).map(it => {
+    const o = ovById.get(it.id);
+    const resolvedCost = (o && o.cost_per_base_unit != null) ? Number(o.cost_per_base_unit) : it.costPerBaseUnit;
+    return {
+      ...it,
+      // resolved (effective) values for this store
+      location:        (o && o.location != null) ? o.location : (it.location || null),
+      costPerBaseUnit: resolvedCost,
+      packDesc:        (o && o.pack_desc != null) ? o.pack_desc : it.packDesc,
+      packQty:         (o && o.pack_qty  != null) ? o.pack_qty  : it.packQty,
+      packPrice:       (o && o.pack_price!= null) ? o.pack_price: it.packPrice,
+      supplier:        (o && o.supplier  != null) ? o.supplier  : it.supplier,
+      // master defaults (for "inherited" display)
+      masterCost: it.costPerBaseUnit, masterLocation: it.location || null,
+      masterPackDesc: it.packDesc, masterPackQty: it.packQty, masterPackPrice: it.packPrice, masterSupplier: it.supplier,
+      // raw overrides (null = inheriting master)
+      overrideLocation:  o ? o.location : null,
+      overrideCost:      o ? o.cost_per_base_unit : null,
+      overridePackDesc:  o ? o.pack_desc : null,
+      overridePackQty:   o ? o.pack_qty : null,
+      overridePackPrice: o ? o.pack_price : null,
+      overrideSupplier:  o ? o.supplier : null,
+    };
+  });
+  return { store: merged, ck: base.ck, categories: base.categories };
+}
+
+// Set/clear a single override field for (store,item). Passing null clears that field.
+// camelCase field -> column
+const _OVCOL = { location:"location", costPerBaseUnit:"cost_per_base_unit", packDesc:"pack_desc", packQty:"pack_qty", packPrice:"pack_price", supplier:"supplier" };
+export async function setStoreItemOverride(storeId, itemId, patch) {
+  if (!storeId || !itemId) throw new Error("store and item required");
+  const body = {};
+  Object.entries(patch).forEach(([k, v]) => {
+    if (!(k in _OVCOL)) return;
+    const num = ["costPerBaseUnit","packQty","packPrice"].includes(k);
+    body[_OVCOL[k]] = (v === "" || v == null) ? null : (num ? Number(v) : v);
+  });
+  body.updated_at = new Date().toISOString();
+  const { data: existing } = await supabase.from("cogs_store_item_settings")
+    .select("id").eq("store_id", storeId).eq("item_id", itemId).maybeSingle();
+  if (existing) {
+    const { error } = await supabase.from("cogs_store_item_settings").update(body).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("cogs_store_item_settings")
+      .insert({ store_id: storeId, item_id: itemId, ...body });
+    if (error) throw error;
+  }
+}
+
+export async function clearStoreItemOverride(storeId, itemId) {
+  const { error } = await supabase.from("cogs_store_item_settings")
+    .delete().eq("store_id", storeId).eq("item_id", itemId);
+  if (error) throw error;
+}
+
 // scope: 'store' | 'ck'
 export async function addInventoryItem(scope, patch) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
@@ -5855,7 +5924,7 @@ function valueCountLines(lines, invCostByKey) {
 export async function computeActualCogs({ storeId, openCountId, closeCountId } = {}) {
   if (!storeId || !openCountId || !closeCountId) throw new Error("storeId, openCountId, closeCountId required");
   const [openC, closeC, inv] = await Promise.all([
-    fetchStockCount(openCountId), fetchStockCount(closeCountId), fetchInventory(),
+    fetchStockCount(openCountId), fetchStockCount(closeCountId), fetchInventoryForStore(storeId),
   ]);
   if (!openC.head || !closeC.head) throw new Error("count not found");
   const invCostByKey = new Map();

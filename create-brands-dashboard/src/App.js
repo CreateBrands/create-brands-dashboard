@@ -130,6 +130,7 @@ import {
   fetchModifierMappings, setModifierMapping, deleteModifierMapping, fetchModifierCaptions,
   fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount,
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
+  fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6089,7 +6090,7 @@ function ActualCogs({ stores = [] }) {
             {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
           </select></div>
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
-          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"]].map(([k,l])=>(
+          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["settings","Store Inventory Settings"]].map(([k,l])=>(
             <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
@@ -6098,6 +6099,99 @@ function ActualCogs({ stores = [] }) {
       {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money}/>}
       {storeId && sub === "purchases" && <Purchases storeId={storeId} money={money}/>}
       {storeId && sub === "variance" && <Variance storeId={storeId} money={money}/>}
+      {storeId && sub === "settings" && <StoreInventorySettings storeId={storeId} money={money}/>}
+    </div>
+  );
+}
+
+function StoreInventorySettings({ storeId, money }) {
+  const [inv, setInv] = useState(null);
+  const [err, setErr] = useState(null);
+  const [q, setQ] = useState("");
+  const [cat, setCat] = useState("all");
+  const [onlyOverridden, setOnlyOverridden] = useState(false);
+  const [savedKey, setSavedKey] = useState(null);
+  const [draft, setDraft] = useState({}); // "id:field" -> string (in-progress edits)
+
+  const load = async () => { try { setInv(await fetchInventoryForStore(storeId)); } catch(e){ setErr(e.message);} };
+  useEffect(() => { setInv(null); load(); /* eslint-disable-next-line */ }, [storeId]);
+
+  const items = inv ? inv.store : [];
+  const categories = Array.from(new Set(items.map(i=>i.category).filter(Boolean))).sort();
+  const isOverridden = (i) => i.overrideLocation!=null || i.overrideCost!=null || i.overridePackDesc!=null || i.overridePackQty!=null || i.overridePackPrice!=null || i.overrideSupplier!=null;
+  const shown = items.filter(i =>
+    (!q || (i.name||"").toLowerCase().includes(q.toLowerCase())) &&
+    (cat==="all" || i.category===cat) &&
+    (!onlyOverridden || isOverridden(i))
+  );
+
+  const dkey = (id,f)=>id+":"+f;
+  const dval = (i,f,overrideVal)=>{ const k=dkey(i.id,f); return k in draft ? draft[k] : (overrideVal==null?"":String(overrideVal)); };
+  const setD = (id,f,v)=>setDraft(s=>({...s,[dkey(id,f)]:v}));
+
+  const saveField = async (i, field, overrideVal) => {
+    const k = dkey(i.id, field);
+    const raw = k in draft ? draft[k] : (overrideVal==null?"":String(overrideVal));
+    setErr(null);
+    try {
+      await setStoreItemOverride(storeId, i.id, { [field]: raw==="" ? null : raw });
+      setSavedKey(k); setTimeout(()=>setSavedKey(x=>x===k?null:x),1000);
+      setDraft(s=>{ const n={...s}; delete n[k]; return n; });
+      await load();
+    } catch(e){ setErr(e.message); }
+  };
+  const clearAll = async (i) => {
+    if(!window.confirm(`Clear all per-store overrides for ${i.name}? It will inherit master values.`))return;
+    try { await clearStoreItemOverride(storeId, i.id); await load(); } catch(e){ setErr(e.message); }
+  };
+
+  const cell = "bg-slate-800 border rounded px-2 py-1 text-xs text-white";
+  const ph = "placeholder-slate-600";
+
+  return (
+    <div className="space-y-3">
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <p className="text-xs text-slate-500">Override location, cost, pack and supplier for this store only. Blank = inherits the master value (shown as faint placeholder). The stock count and Actual COGS valuation use these per-store costs.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…" className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/>
+        <select value={cat} onChange={e=>setCat(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+          <option value="all">All categories ({items.length})</option>
+          {categories.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+        <button onClick={()=>setOnlyOverridden(v=>!v)} className={`px-3 py-2 rounded-lg text-xs font-semibold ${onlyOverridden?"bg-indigo-600 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>Overridden only</button>
+      </div>
+      {!inv && <div className="text-xs text-slate-500">Loading…</div>}
+      {inv && (
+        <div className="overflow-x-auto max-h-[65vh]">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs sticky top-0"><tr>
+              <th className="text-left px-3 py-2">Item</th>
+              <th className="text-left px-2 py-2">Location</th>
+              <th className="text-right px-2 py-2">Cost/unit £</th>
+              <th className="text-left px-2 py-2">Pack desc</th>
+              <th className="text-right px-2 py-2">Pack qty</th>
+              <th className="text-left px-2 py-2">Supplier</th>
+              <th className="px-2 py-2"></th>
+            </tr></thead>
+            <tbody>
+              {shown.map(i=>{
+                const ovd = isOverridden(i);
+                return (
+                  <tr key={i.id} className={`border-t border-slate-800/60 ${ovd?"bg-indigo-950/20":""}`}>
+                    <td className="px-3 py-2 text-white">{i.name}{ovd && <span className="text-[10px] text-indigo-300 ml-2">store-set</span>}</td>
+                    <td className="px-2 py-2"><input value={dval(i,"location",i.overrideLocation)} onChange={e=>setD(i.id,"location",e.target.value)} onBlur={()=>saveField(i,"location",i.overrideLocation)} placeholder={i.masterLocation||"—"} className={`${cell} ${ph} w-24 ${savedKey===dkey(i.id,"location")?"border-emerald-500":"border-slate-700"}`}/></td>
+                    <td className="px-2 py-2 text-right"><input value={dval(i,"costPerBaseUnit",i.overrideCost)} onChange={e=>setD(i.id,"costPerBaseUnit",e.target.value)} onBlur={()=>saveField(i,"costPerBaseUnit",i.overrideCost)} placeholder={i.masterCost!=null?i.masterCost.toFixed(4):"—"} className={`${cell} ${ph} w-20 text-right ${savedKey===dkey(i.id,"costPerBaseUnit")?"border-emerald-500":"border-slate-700"}`}/></td>
+                    <td className="px-2 py-2"><input value={dval(i,"packDesc",i.overridePackDesc)} onChange={e=>setD(i.id,"packDesc",e.target.value)} onBlur={()=>saveField(i,"packDesc",i.overridePackDesc)} placeholder={i.masterPackDesc||"—"} className={`${cell} ${ph} w-28 ${savedKey===dkey(i.id,"packDesc")?"border-emerald-500":"border-slate-700"}`}/></td>
+                    <td className="px-2 py-2 text-right"><input value={dval(i,"packQty",i.overridePackQty)} onChange={e=>setD(i.id,"packQty",e.target.value)} onBlur={()=>saveField(i,"packQty",i.overridePackQty)} placeholder={i.masterPackQty!=null?String(i.masterPackQty):"—"} className={`${cell} ${ph} w-16 text-right ${savedKey===dkey(i.id,"packQty")?"border-emerald-500":"border-slate-700"}`}/></td>
+                    <td className="px-2 py-2"><input value={dval(i,"supplier",i.overrideSupplier)} onChange={e=>setD(i.id,"supplier",e.target.value)} onBlur={()=>saveField(i,"supplier",i.overrideSupplier)} placeholder={i.masterSupplier||"—"} className={`${cell} ${ph} w-28 ${savedKey===dkey(i.id,"supplier")?"border-emerald-500":"border-slate-700"}`}/></td>
+                    <td className="px-2 py-2 text-right">{ovd && <button onClick={()=>clearAll(i)} className="text-[11px] text-slate-500 hover:text-red-400">reset</button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -6165,7 +6259,7 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
   useEffect(() => {
     (async () => {
       try {
-        const [invD, countD] = await Promise.all([fetchInventory(), fetchStockCount(countId)]);
+        const [invD, countD] = await Promise.all([fetchInventoryForStore(storeId), fetchStockCount(countId)]);
         setInv(invD); setHead(countD.head);
         const m = {}; countD.lines.forEach(l => { m[l.itemScope+":"+l.itemId] = l.qty==null?"":String(l.qty); });
         setQtys(m);
