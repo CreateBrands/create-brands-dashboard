@@ -6152,6 +6152,7 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
   const [qtys, setQtys] = useState({});      // "scope:id" -> qty string
   const [err, setErr] = useState(null);
   const [q, setQ] = useState("");
+  const [cat, setCat] = useState("all");
   const [savingKey, setSavingKey] = useState(null);
 
   useEffect(() => {
@@ -6166,7 +6167,11 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
   }, [countId]);
 
   const items = inv ? inv.store : [];
-  const shown = items.filter(i => !q || (i.name||"").toLowerCase().includes(q.toLowerCase()));
+  const categories = Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort();
+  const shown = items.filter(i =>
+    (!q || (i.name||"").toLowerCase().includes(q.toLowerCase())) &&
+    (cat === "all" || i.category === cat)
+  );
   const costOf = (i) => i.costPerBaseUnit != null ? Number(i.costPerBaseUnit) : null;
 
   const saveQty = async (i) => {
@@ -6188,14 +6193,25 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
         <div className="text-sm text-white font-bold">Count {head?.countDate} · {countedN} items counted</div>
         <div className="text-sm font-mono text-amber-300">Stock value: {money(totalValue)}</div>
       </div>
-      <div className="flex items-center gap-2">
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…" className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/>
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…" className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/>
+        <select value={cat} onChange={e=>setCat(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+          <option value="all">All categories ({items.length})</option>
+          {categories.map(c => <option key={c} value={c}>{c} ({items.filter(i=>i.category===c).length})</option>)}
+        </select>
         {head?.status!=="finalised" && <button onClick={async()=>{try{await finaliseStockCount(countId);onBack();}catch(e){setErr(e.message);}}} className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-xs font-semibold">Finalise</button>}
       </div>
+      <p className="text-[11px] text-slate-500">Enter quantity in base units ({"\u2018"}Unit{"\u2019"} column). Pack columns are reference — e.g. pack of 360 means 2 full packs = 720.</p>
       <div className="max-h-[60vh] overflow-y-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-slate-400 text-xs sticky top-0"><tr>
-            <th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Cost/unit</th><th className="text-right px-3 py-2">Qty counted</th><th className="text-right px-3 py-2">Value</th>
+            <th className="text-left px-3 py-2">Item</th>
+            <th className="text-left px-3 py-2">Pack desc</th>
+            <th className="text-right px-3 py-2">Pack qty</th>
+            <th className="text-left px-3 py-2">Unit</th>
+            <th className="text-right px-3 py-2">Cost/unit</th>
+            <th className="text-right px-3 py-2">Qty counted</th>
+            <th className="text-right px-3 py-2">Value</th>
           </tr></thead>
           <tbody>
             {shown.map(i=>{ const key="store:"+i.id; const c=costOf(i); const qv=qtys[key];
@@ -6203,6 +6219,9 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
               return (
                 <tr key={i.id} className="border-t border-slate-800/60">
                   <td className="px-3 py-2 text-white">{i.name}{c==null&&<span className="text-[10px] text-amber-400 ml-2">no cost</span>}</td>
+                  <td className="px-3 py-2 text-slate-400 text-xs">{i.packDesc||"—"}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs">{i.packQty??"—"}</td>
+                  <td className="px-3 py-2 text-slate-400 text-xs">{i.baseUnit||"—"}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-400">{c!=null?`£${c.toFixed(4)}`:"—"}</td>
                   <td className="px-3 py-2 text-right">
                     <input value={qv??""} onChange={e=>setQtys(s=>({...s,[key]:e.target.value}))} onBlur={()=>saveQty(i)}
