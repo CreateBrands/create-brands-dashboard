@@ -11962,25 +11962,24 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     (async () => {
       setLoading(true); setErr(null);
       try {
-        const ranges = [];
-        // current
-        ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: period.from, to: period.to, brandId: b }))));
-        ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: period.from, to: period.to }))));
-        // prior (may be null). When the current period is in progress, clip the
-        // comparison period's sales to the same time-of-day for a like-for-like total.
+        // Run the query GROUPS sequentially (each still parallel across brands).
+        // Firing all groups at once exhausted the connection pool and tripped the
+        // statement timeout on wide in-progress ranges; sequential keeps it light.
+        const curSalesRaw = await Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: period.from, to: period.to, brandId: b })));
+        const curPunchRaw = await Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: period.from, to: period.to })));
+        let prevSalesRaw = [], prevPunchRaw = [];
         if (prevPeriod) {
-          if (inProgress) {
-            ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesToTime({ from: prevPeriod.from, to: prevPeriod.to, cutoffMinutes: nowCutoffMin, brandId: b }))));
-          } else {
-            ranges.push(Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b }))));
-          }
-          ranges.push(Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: prevPeriod.from, to: prevPeriod.to }))));
+          // When the current period is in progress, clip the comparison period's
+          // sales to the same time-of-day for a like-for-like running total.
+          prevSalesRaw = inProgress
+            ? await Promise.all(visibleBrandIds.map(b => fetchSalesToTime({ from: prevPeriod.from, to: prevPeriod.to, cutoffMinutes: nowCutoffMin, brandId: b })))
+            : await Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b })));
+          prevPunchRaw = await Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: prevPeriod.from, to: prevPeriod.to })));
         }
-        const res = await Promise.all(ranges);
         if (cancelled) return;
         setData({
-          curSales: res[0].flat(), curPunch: res[1].flat(),
-          prevSales: prevPeriod ? res[2].flat() : [], prevPunch: prevPeriod ? res[3].flat() : [],
+          curSales: curSalesRaw.flat(), curPunch: curPunchRaw.flat(),
+          prevSales: prevSalesRaw.flat(), prevPunch: prevPunchRaw.flat(),
         });
       } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
       finally { if (!cancelled) setLoading(false); }
