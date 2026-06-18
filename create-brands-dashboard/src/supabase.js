@@ -5282,7 +5282,7 @@ export async function fetchReviewScanStats({ since = null, storeId = null } = {}
 const _invMap = (r) => ({
   id: r.id, name: r.name, category: r.category, supplier: r.supplier,
   packDesc: r.pack_desc, packQty: r.pack_qty, baseUnit: r.base_unit, packPrice: r.pack_price,
-  costPerBaseUnit: r.cost_per_base_unit, notes: r.notes,
+  costPerBaseUnit: r.cost_per_base_unit, notes: r.notes, location: r.location || null,
   allergens: r.allergens || [], reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
   siteId: r.site_id || null, archivedAt: r.archived_at || null,
 });
@@ -5296,6 +5296,7 @@ function _invBody(p) {
   if ("baseUnit" in p) b.base_unit = p.baseUnit;
   if ("packPrice" in p) b.pack_price = p.packPrice === "" || p.packPrice == null ? null : Number(p.packPrice);
   if ("notes" in p) b.notes = p.notes;
+  if ("location" in p) b.location = p.location || null;
   if ("allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
   if ("reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
   if ("siteId" in p) b.site_id = p.siteId || null;

@@ -5324,6 +5324,9 @@ function InventoryBuilder() {
       </div>
 
       {/* table */}
+      <datalist id="inv-locations">
+        {Array.from(new Set((data?.store||[]).map(i=>i.location).filter(Boolean))).sort().map(loc=><option key={loc} value={loc}/>)}
+      </datalist>
       <div className="overflow-x-auto rounded-xl border border-slate-800">
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-slate-400 text-xs">
@@ -5332,6 +5335,7 @@ function InventoryBuilder() {
               <th className="text-left px-2 py-2">Category</th>
               <th className="text-left px-2 py-2">Supplier</th>
               <th className="text-left px-2 py-2">Pack desc</th>
+              <th className="text-left px-2 py-2">Location</th>
               <th className="text-right px-2 py-2">Pack qty</th>
               <th className="text-left px-2 py-2">Unit</th>
               <th className="text-right px-2 py-2">Pack £</th>
@@ -6152,8 +6156,11 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
   const [qtys, setQtys] = useState({});      // "scope:id" -> qty string
   const [err, setErr] = useState(null);
   const [q, setQ] = useState("");
-  const [cat, setCat] = useState("all");
-  const [savingKey, setSavingKey] = useState(null);
+  const [groupBy, setGroupBy] = useState("location"); // location | category | none
+  const [status, setStatus] = useState("all");        // all | uncounted | counted
+  const [showValues, setShowValues] = useState(false); // staff hide values by default
+  const [savedKey, setSavedKey] = useState(null);
+  const [collapsed, setCollapsed] = useState({});      // section -> bool
 
   useEffect(() => {
     (async () => {
@@ -6167,72 +6174,148 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
   }, [countId]);
 
   const items = inv ? inv.store : [];
-  const categories = Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort();
-  const shown = items.filter(i =>
-    (!q || (i.name||"").toLowerCase().includes(q.toLowerCase())) &&
-    (cat === "all" || i.category === cat)
-  );
   const costOf = (i) => i.costPerBaseUnit != null ? Number(i.costPerBaseUnit) : null;
+  const keyOf = (i) => "store:"+i.id;
+  const isCounted = (i) => { const v = qtys[keyOf(i)]; return v !== "" && v != null; };
 
-  const saveQty = async (i) => {
-    const key = "store:"+i.id;
-    setSavingKey(key); setErr(null);
-    try { await setStockCountLine(countId, "store", i.id, qtys[key]===""?null:qtys[key], costOf(i)); }
-    catch(e){ setErr(e.message); }
-    finally { setSavingKey(null); }
+  const save = async (i, value) => {
+    const key = keyOf(i);
+    setErr(null);
+    try {
+      await setStockCountLine(countId, "store", i.id, value===""?null:value, costOf(i));
+      setSavedKey(key); setTimeout(()=>setSavedKey(k=>k===key?null:k), 1200);
+    } catch(e){ setErr(e.message); }
+  };
+  const setVal = (i, v) => setQtys(s => ({ ...s, [keyOf(i)]: v }));
+  const step = (i, delta) => {
+    const key = keyOf(i); const cur = Number(qtys[key]) || 0;
+    const next = Math.max(0, cur + delta); const str = String(next);
+    setQtys(s => ({ ...s, [key]: str })); save(i, str);
   };
 
-  const totalValue = items.reduce((s,i)=>{ const key="store:"+i.id; const qv=qtys[key]; const c=costOf(i); return (qv!==""&&qv!=null&&c!=null)? s + Number(qv)*c : s; }, 0);
-  const countedN = Object.values(qtys).filter(v=>v!==""&&v!=null).length;
+  // filter
+  const filtered = items.filter(i => {
+    if (q && !(i.name||"").toLowerCase().includes(q.toLowerCase())) return false;
+    if (status === "uncounted" && isCounted(i)) return false;
+    if (status === "counted" && !isCounted(i)) return false;
+    return true;
+  });
+
+  // group
+  const sectionOf = (i) => groupBy === "location" ? (i.location || "Unassigned")
+    : groupBy === "category" ? (i.category || "Uncategorised") : "All items";
+  const sections = {};
+  filtered.forEach(i => { const s = sectionOf(i); (sections[s] = sections[s] || []).push(i); });
+  const sectionNames = Object.keys(sections).sort((a,b) =>
+    a==="Unassigned"||a==="Uncategorised"?1 : b==="Unassigned"||b==="Uncategorised"?-1 : a.localeCompare(b));
+
+  const countedN = items.filter(isCounted).length;
+  const totalN = items.length;
+  const pct = totalN ? Math.round((countedN/totalN)*100) : 0;
+  const totalValue = items.reduce((s,i)=>{ const v=qtys[keyOf(i)]; const c=costOf(i); return (v!==""&&v!=null&&c!=null)? s+Number(v)*c : s; }, 0);
+
+  const finalised = head?.status === "finalised";
 
   return (
     <div className="space-y-3">
       <button onClick={onBack} className="text-xs text-indigo-400">← Back to counts</button>
-      {err && <div className="text-xs text-red-400">{err}</div>}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm text-white font-bold">Count {head?.countDate} · {countedN} items counted</div>
-        <div className="text-sm font-mono text-amber-300">Stock value: {money(totalValue)}</div>
+      {err && <div className="text-xs text-red-400 bg-red-950/40 rounded-lg px-3 py-2">{err}</div>}
+
+      {/* Sticky progress header */}
+      <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur rounded-2xl border border-slate-800 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-white">Count · {head?.countDate}</div>
+          {showValues && <div className="text-sm font-mono text-amber-300">{money(totalValue)}</div>}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-2.5 rounded-full bg-slate-800 overflow-hidden">
+            <div className="h-full bg-emerald-500 transition-all" style={{width:`${pct}%`}}/>
+          </div>
+          <div className="text-xs font-semibold text-slate-300 whitespace-nowrap">{countedN} / {totalN} · {pct}%</div>
+        </div>
+        {/* search */}
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…"
+          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white"/>
+        {/* status chips */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {[["all","All"],["uncounted","To do"],["counted","Done"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setStatus(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold ${status===k?"bg-indigo-600 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>
+              {l}{k==="uncounted"?` (${totalN-countedN})`:k==="counted"?` (${countedN})`:""}
+            </button>
+          ))}
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          {[["location","By location"],["category","By category"],["none","Flat list"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setGroupBy(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold ${groupBy===k?"bg-slate-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>{l}</button>
+          ))}
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          <button onClick={()=>setShowValues(v=>!v)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold ${showValues?"bg-amber-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>
+            {showValues?"Hide values":"Show values"}
+          </button>
+          {!finalised && <button onClick={async()=>{if(!window.confirm("Finalise this count? It locks the figures."))return; try{await finaliseStockCount(countId);onBack();}catch(e){setErr(e.message);}}}
+            className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs font-semibold ml-auto">Finalise</button>}
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…" className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/>
-        <select value={cat} onChange={e=>setCat(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
-          <option value="all">All categories ({items.length})</option>
-          {categories.map(c => <option key={c} value={c}>{c} ({items.filter(i=>i.category===c).length})</option>)}
-        </select>
-        {head?.status!=="finalised" && <button onClick={async()=>{try{await finaliseStockCount(countId);onBack();}catch(e){setErr(e.message);}}} className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-xs font-semibold">Finalise</button>}
-      </div>
-      <p className="text-[11px] text-slate-500">Enter quantity in base units ({"\u2018"}Unit{"\u2019"} column). Pack columns are reference — e.g. pack of 360 means 2 full packs = 720.</p>
-      <div className="max-h-[60vh] overflow-y-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-900 text-slate-400 text-xs sticky top-0"><tr>
-            <th className="text-left px-3 py-2">Item</th>
-            <th className="text-left px-3 py-2">Pack desc</th>
-            <th className="text-right px-3 py-2">Pack qty</th>
-            <th className="text-left px-3 py-2">Unit</th>
-            <th className="text-right px-3 py-2">Cost/unit</th>
-            <th className="text-right px-3 py-2">Qty counted</th>
-            <th className="text-right px-3 py-2">Value</th>
-          </tr></thead>
-          <tbody>
-            {shown.map(i=>{ const key="store:"+i.id; const c=costOf(i); const qv=qtys[key];
-              const val=(qv!==""&&qv!=null&&c!=null)?Number(qv)*c:null;
-              return (
-                <tr key={i.id} className="border-t border-slate-800/60">
-                  <td className="px-3 py-2 text-white">{i.name}{c==null&&<span className="text-[10px] text-amber-400 ml-2">no cost</span>}</td>
-                  <td className="px-3 py-2 text-slate-400 text-xs">{i.packDesc||"—"}</td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs">{i.packQty??"—"}</td>
-                  <td className="px-3 py-2 text-slate-400 text-xs">{i.baseUnit||"—"}</td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-400">{c!=null?`£${c.toFixed(4)}`:"—"}</td>
-                  <td className="px-3 py-2 text-right">
-                    <input value={qv??""} onChange={e=>setQtys(s=>({...s,[key]:e.target.value}))} onBlur={()=>saveQty(i)}
-                      className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white text-right" placeholder="0"/>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-300">{val!=null?money(val):"—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+
+      {finalised && <div className="text-[11px] text-emerald-400">This count is finalised (read-only).</div>}
+
+      {/* Sections */}
+      <div className="space-y-3 pb-20">
+        {sectionNames.length === 0 && <div className="text-xs text-slate-500 py-8 text-center">No items match. Try {"\u2018"}All{"\u2019"} or clear the search.</div>}
+        {sectionNames.map(sec => {
+          const list = sections[sec];
+          const secCounted = list.filter(isCounted).length;
+          const isOpen = !collapsed[sec];
+          return (
+            <div key={sec} className="rounded-2xl border border-slate-800 overflow-hidden">
+              <button onClick={()=>setCollapsed(c=>({...c,[sec]:!c[sec]}))}
+                className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 text-left">
+                <span className="text-sm font-bold text-white flex items-center gap-2">
+                  <ChevronRight size={15} className={`transition-transform ${isOpen?"rotate-90":""}`}/>
+                  {sec}
+                </span>
+                <span className={`text-xs font-semibold ${secCounted===list.length?"text-emerald-400":"text-slate-400"}`}>{secCounted}/{list.length}</span>
+              </button>
+              {isOpen && (
+                <div className="divide-y divide-slate-800/60">
+                  {list.map(i => {
+                    const key = keyOf(i); const c = costOf(i); const v = qtys[key];
+                    const counted = v!==""&&v!=null;
+                    const val = (counted&&c!=null)?Number(v)*c:null;
+                    return (
+                      <div key={i.id} className={`flex items-center gap-3 px-4 py-3 ${counted?"bg-emerald-950/20":""}`}>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-white truncate flex items-center gap-2">
+                            {counted && <Check size={14} className="text-emerald-400 shrink-0"/>}
+                            {i.name}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate">
+                            {i.packDesc?`${i.packDesc} · `:""}{i.baseUnit?`per ${i.baseUnit}`:""}
+                            {showValues && c!=null?` · £${c.toFixed(3)}/${i.baseUnit||"unit"}`:""}
+                            {showValues && val!=null?` · ${money(val)}`:""}
+                            {c==null && <span className="text-amber-400 ml-1">no cost</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button disabled={finalised} onClick={()=>step(i,-1)}
+                            className="w-9 h-9 rounded-lg bg-slate-800 text-white text-lg font-bold disabled:opacity-40 active:bg-slate-700">−</button>
+                          <input disabled={finalised} value={v??""} inputMode="decimal"
+                            onChange={e=>setVal(i,e.target.value)} onBlur={()=>save(i,qtys[key]??"")}
+                            className={`w-16 h-9 text-center bg-slate-800 border rounded-lg text-sm text-white ${savedKey===key?"border-emerald-500":"border-slate-700"}`}
+                            placeholder="0"/>
+                          <button disabled={finalised} onClick={()=>step(i,1)}
+                            className="w-9 h-9 rounded-lg bg-slate-800 text-white text-lg font-bold disabled:opacity-40 active:bg-slate-700">+</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -7175,6 +7258,7 @@ function CogsItemRow({ item, scope, cats, sups, saving, onSave, onDelete }) {
     name: item.name || "", category: item.category || "",
     supplier: item.supplier || "", packDesc: item.packDesc || "",
     packQty: item.packQty ?? "", baseUnit: item.baseUnit || "", packPrice: item.packPrice ?? "",
+    location: item.location || "",
   });
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
   const blur = (k) => { if (String(f[k] ?? "") !== String(item[k] ?? "")) onSave({ [k]: f[k] }); };
@@ -7198,6 +7282,7 @@ function CogsItemRow({ item, scope, cats, sups, saving, onSave, onDelete }) {
         </select>
       </td>
       <td className="px-2 py-1.5"><input value={f.packDesc} onChange={e=>set("packDesc",e.target.value)} onBlur={()=>blur("packDesc")} className={cell+" w-28"} placeholder="6x2.3kg box"/></td>
+      <td className="px-2 py-1.5"><input value={f.location} onChange={e=>set("location",e.target.value)} onBlur={()=>blur("location")} className={cell+" w-24"} placeholder="Fridge" list="inv-locations"/></td>
       <td className="px-2 py-1.5 text-right"><input value={f.packQty} onChange={e=>set("packQty",e.target.value)} onBlur={()=>blur("packQty")} className={cell+" w-16 text-right"}/></td>
       <td className="px-2 py-1.5">
         <select value={f.baseUnit} onChange={e=>pick("baseUnit",e.target.value)} className={cell}>
