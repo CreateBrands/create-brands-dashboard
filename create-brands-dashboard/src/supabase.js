@@ -5761,6 +5761,143 @@ export async function fetchModifierCaptions({ storeId, from, to } = {}) {
 }
 // ===== end MODIFIER_MAPPER_V1 =====
 
+// ===== ACTUAL_COGS_V1 — stock counts, purchases, variance =================
+export async function fetchStockCounts(storeId) {
+  let q = supabase.from("cogs_stock_counts").select("*").order("count_date", { ascending: false });
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q; if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, storeId: r.store_id, countDate: r.count_date, status: r.status, countedBy: r.counted_by, note: r.note }));
+}
+
+export async function fetchStockCount(countId) {
+  const [{ data: head, error: e1 }, { data: lines, error: e2 }] = await Promise.all([
+    supabase.from("cogs_stock_counts").select("*").eq("id", countId).maybeSingle(),
+    supabase.from("cogs_stock_count_lines").select("*").eq("count_id", countId),
+  ]);
+  if (e1) throw e1; if (e2) throw e2;
+  return {
+    head: head ? { id: head.id, storeId: head.store_id, countDate: head.count_date, status: head.status, countedBy: head.counted_by, note: head.note } : null,
+    lines: (lines || []).map(l => ({ id: l.id, itemScope: l.item_scope, itemId: l.item_id, qty: l.qty, costPerUnit: l.cost_per_unit })),
+  };
+}
+
+export async function createStockCount(storeId, countDate, countedBy) {
+  const { data, error } = await supabase.from("cogs_stock_counts")
+    .insert({ store_id: storeId, count_date: countDate, counted_by: countedBy || null })
+    .select("id").single();
+  if (error) throw error; return data.id;
+}
+
+export async function setStockCountLine(countId, itemScope, itemId, qty, costPerUnit) {
+  const { data: existing } = await supabase.from("cogs_stock_count_lines")
+    .select("id").eq("count_id", countId).eq("item_scope", itemScope).eq("item_id", itemId).maybeSingle();
+  const payload = { count_id: countId, item_scope: itemScope, item_id: itemId,
+    qty: qty === "" || qty == null ? null : Number(qty), cost_per_unit: costPerUnit == null ? null : Number(costPerUnit) };
+  if (existing) {
+    const { error } = await supabase.from("cogs_stock_count_lines").update(payload).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("cogs_stock_count_lines").insert(payload);
+    if (error) throw error;
+  }
+}
+
+export async function finaliseStockCount(countId, status = "finalised") {
+  const { error } = await supabase.from("cogs_stock_counts").update({ status }).eq("id", countId);
+  if (error) throw error;
+}
+
+export async function deleteStockCount(countId) {
+  const { error } = await supabase.from("cogs_stock_counts").delete().eq("id", countId);
+  if (error) throw error;
+}
+
+export async function fetchPurchases({ storeId, from, to } = {}) {
+  let q = supabase.from("cogs_purchases").select("*").order("purchase_date", { ascending: false });
+  if (storeId) q = q.eq("store_id", storeId);
+  if (from) q = q.gte("purchase_date", from);
+  if (to)   q = q.lte("purchase_date", to);
+  const { data, error } = await q; if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, storeId: r.store_id, purchaseDate: r.purchase_date,
+    itemScope: r.item_scope, itemId: r.item_id, qty: r.qty, totalCost: r.total_cost, supplier: r.supplier, invoiceRef: r.invoice_ref, note: r.note }));
+}
+
+export async function addPurchase(p) {
+  const { error } = await supabase.from("cogs_purchases").insert({
+    store_id: p.storeId, purchase_date: p.purchaseDate, item_scope: p.itemScope || "store", item_id: p.itemId,
+    qty: p.qty == null || p.qty === "" ? null : Number(p.qty),
+    total_cost: p.totalCost == null || p.totalCost === "" ? null : Number(p.totalCost),
+    supplier: p.supplier || null, invoice_ref: p.invoiceRef || null, note: p.note || null,
+  });
+  if (error) throw error;
+}
+
+export async function deletePurchase(id) {
+  const { error } = await supabase.from("cogs_purchases").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Value a stock count = Σ(qty × cost_per_unit). Falls back to current inventory
+// cost if the line has no snapshot cost.
+function valueCountLines(lines, invCostByKey) {
+  let total = 0;
+  (lines || []).forEach(l => {
+    const cpu = l.costPerUnit != null ? Number(l.costPerUnit) : (invCostByKey.get(l.itemScope + ":" + l.itemId) ?? null);
+    if (cpu != null && l.qty != null) total += cpu * Number(l.qty);
+  });
+  return total;
+}
+
+// Actual COGS for a store over [openCount -> closeCount]:
+//   opening stock value + purchases(open..close] − closing stock value
+// Returns actual cogs, the two stock values, purchases total, and per-item rows.
+export async function computeActualCogs({ storeId, openCountId, closeCountId } = {}) {
+  if (!storeId || !openCountId || !closeCountId) throw new Error("storeId, openCountId, closeCountId required");
+  const [openC, closeC, inv] = await Promise.all([
+    fetchStockCount(openCountId), fetchStockCount(closeCountId), fetchInventory(),
+  ]);
+  if (!openC.head || !closeC.head) throw new Error("count not found");
+  const invCostByKey = new Map();
+  (inv.store || []).forEach(x => invCostByKey.set("store:" + x.id, x.costPerBaseUnit != null ? Number(x.costPerBaseUnit) : null));
+  (inv.ck || []).forEach(x => invCostByKey.set("ck:" + x.id, x.costPerBaseUnit != null ? Number(x.costPerBaseUnit) : null));
+  const nameByKey = new Map();
+  (inv.store || []).forEach(x => nameByKey.set("store:" + x.id, x.name));
+  (inv.ck || []).forEach(x => nameByKey.set("ck:" + x.id, x.name));
+
+  const from = openC.head.countDate, to = closeC.head.countDate;
+  const purch = await fetchPurchases({ storeId, from, to });
+  // exclude purchases dated exactly on the opening date? Keep (open, close] convention:
+  const purchUsed = purch.filter(p => p.purchaseDate > from && p.purchaseDate <= to);
+
+  const openValue  = valueCountLines(openC.lines, invCostByKey);
+  const closeValue = valueCountLines(closeC.lines, invCostByKey);
+  const purchTotal = purchUsed.reduce((a, p) => a + (Number(p.totalCost) || 0), 0);
+  const actualCogs = openValue + purchTotal - closeValue;
+
+  // per-item: opening qty/value, purchased qty/cost, closing qty/value, implied used
+  const keyset = new Set();
+  const openByKey = new Map(), closeByKey = new Map(), purchByKey = new Map();
+  openC.lines.forEach(l => { const k=l.itemScope+":"+l.itemId; openByKey.set(k,l); keyset.add(k); });
+  closeC.lines.forEach(l => { const k=l.itemScope+":"+l.itemId; closeByKey.set(k,l); keyset.add(k); });
+  purchUsed.forEach(p => { const k=p.itemScope+":"+p.itemId; const e=purchByKey.get(k)||{qty:0,cost:0}; e.qty+=Number(p.qty)||0; e.cost+=Number(p.totalCost)||0; purchByKey.set(k,e); keyset.add(k); });
+
+  const byItem = [];
+  keyset.forEach(k => {
+    const cpu = invCostByKey.get(k);
+    const o = openByKey.get(k), c = closeByKey.get(k), pu = purchByKey.get(k) || { qty:0, cost:0 };
+    const openQty = o?.qty != null ? Number(o.qty) : 0;
+    const closeQty = c?.qty != null ? Number(c.qty) : 0;
+    const usedQty = openQty + pu.qty - closeQty;
+    const lineCogs = (o?.costPerUnit ?? cpu ?? 0) * openQty + pu.cost - (c?.costPerUnit ?? cpu ?? 0) * closeQty;
+    byItem.push({ key: k, name: nameByKey.get(k) || k, openQty, purchasedQty: pu.qty, closeQty, usedQty,
+      costPerUnit: cpu, actualCost: lineCogs });
+  });
+  byItem.sort((a, b) => b.actualCost - a.actualCost);
+
+  return { storeId, from, to, openValue, closeValue, purchTotal, actualCogs, byItem };
+}
+// ===== end ACTUAL_COGS_V1 =====
+
 // ============================================================================
 // CENTRAL KITCHEN — Phase 1: ingredients + goods-in (batch-tracked)
 // ============================================================================

@@ -128,6 +128,8 @@ import {
   discoverModifierCandidates, createModifierFromCaption,
   computeStoreCogsV2, auditTillOrders,
   fetchModifierMappings, setModifierMapping, deleteModifierMapping, fetchModifierCaptions,
+  fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount,
+  fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -4919,6 +4921,7 @@ function CogsView({ stores = [] }) {
     { key: "reconcile", label: "COGS Reconcile" },
     { key: "tillaudit", label: "Till Audit" },
     { key: "modmapper", label: "Modifier Mapper" },
+    { key: "actualcogs", label: "Stock & Actual COGS" },
   ];
   return (
     <div className="space-y-4">
@@ -4941,6 +4944,7 @@ function CogsView({ stores = [] }) {
       {tab === "reconcile" && <CogsReconciliation stores={stores}/>}
       {tab === "tillaudit" && <TillAudit stores={stores}/>}
       {tab === "modmapper" && <ModifierMapper stores={stores}/>}
+      {tab === "actualcogs" && <ActualCogs stores={stores}/>}
     </div>
   );
 }
@@ -6062,6 +6066,321 @@ function OrderInspector({ stores = [] }) {
             )}
           </>
         )
+      )}
+    </div>
+  );
+}
+
+function ActualCogs({ stores = [] }) {
+  const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
+  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const [sub, setSub] = useState("counts"); // counts | purchases | variance
+  const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div><label className="block text-[11px] text-slate-500 mb-1">Store</label>
+          <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+          </select></div>
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
+          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-slate-500">Actual COGS = opening stock value + purchases − closing stock value. Weekly full counts: each count is both that week's closing and next week's opening. Variance compares actual against the theoretical (recipe × sales) engine — the gap is waste, over-portioning, or loss.</p>
+      {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money}/>}
+      {storeId && sub === "purchases" && <Purchases storeId={storeId} money={money}/>}
+      {storeId && sub === "variance" && <Variance storeId={storeId} money={money}/>}
+    </div>
+  );
+}
+
+function StockCounts({ storeId, money }) {
+  const [counts, setCounts] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [err, setErr] = useState(null);
+  const [newDate, setNewDate] = useState(new Date().toISOString().slice(0,10));
+
+  const load = async () => { try { setCounts(await fetchStockCounts(storeId)); } catch(e){ setErr(e.message);} };
+  useEffect(() => { setOpenId(null); load(); /* eslint-disable-next-line */ }, [storeId]);
+
+  const create = async () => {
+    setErr(null);
+    try { const id = await createStockCount(storeId, newDate); await load(); setOpenId(id); }
+    catch(e){ setErr(e.message); }
+  };
+  const remove = async (id) => { if(!window.confirm("Delete this count?"))return; try{ await deleteStockCount(id); if(openId===id)setOpenId(null); await load(); }catch(e){setErr(e.message);} };
+
+  if (openId) return <StockCountEditor countId={openId} storeId={storeId} money={money} onBack={()=>{setOpenId(null);load();}}/>;
+
+  return (
+    <div className="space-y-3">
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="flex items-end gap-2">
+        <div><label className="block text-[11px] text-slate-500 mb-1">New count date</label>
+          <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/></div>
+        <button onClick={create} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">+ New count</button>
+      </div>
+      {counts && counts.length === 0 && <div className="text-xs text-slate-500">No counts yet. Create one to start.</div>}
+      {counts && counts.length > 0 && (
+        <table className="w-full text-sm">
+          <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+            <th className="text-left px-3 py-2">Count date</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">By</th><th></th>
+          </tr></thead>
+          <tbody>
+            {counts.map(c=>(
+              <tr key={c.id} className="border-t border-slate-800/60">
+                <td className="px-3 py-2 text-white cursor-pointer hover:text-indigo-300" onClick={()=>setOpenId(c.id)}>{c.countDate}</td>
+                <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${c.status==="finalised"?"bg-emerald-900/50 text-emerald-300":"bg-slate-800 text-slate-400"}`}>{c.status}</span></td>
+                <td className="px-3 py-2 text-slate-400">{c.countedBy||"—"}</td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>setOpenId(c.id)} className="text-indigo-400 text-xs mr-3">Edit</button><button onClick={()=>remove(c.id)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function StockCountEditor({ countId, storeId, money, onBack }) {
+  const [inv, setInv] = useState(null);
+  const [head, setHead] = useState(null);
+  const [qtys, setQtys] = useState({});      // "scope:id" -> qty string
+  const [err, setErr] = useState(null);
+  const [q, setQ] = useState("");
+  const [savingKey, setSavingKey] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [invD, countD] = await Promise.all([fetchInventory(), fetchStockCount(countId)]);
+        setInv(invD); setHead(countD.head);
+        const m = {}; countD.lines.forEach(l => { m[l.itemScope+":"+l.itemId] = l.qty==null?"":String(l.qty); });
+        setQtys(m);
+      } catch(e){ setErr(e.message); }
+    })();
+  }, [countId]);
+
+  const items = inv ? inv.store : [];
+  const shown = items.filter(i => !q || (i.name||"").toLowerCase().includes(q.toLowerCase()));
+  const costOf = (i) => i.costPerBaseUnit != null ? Number(i.costPerBaseUnit) : null;
+
+  const saveQty = async (i) => {
+    const key = "store:"+i.id;
+    setSavingKey(key); setErr(null);
+    try { await setStockCountLine(countId, "store", i.id, qtys[key]===""?null:qtys[key], costOf(i)); }
+    catch(e){ setErr(e.message); }
+    finally { setSavingKey(null); }
+  };
+
+  const totalValue = items.reduce((s,i)=>{ const key="store:"+i.id; const qv=qtys[key]; const c=costOf(i); return (qv!==""&&qv!=null&&c!=null)? s + Number(qv)*c : s; }, 0);
+  const countedN = Object.values(qtys).filter(v=>v!==""&&v!=null).length;
+
+  return (
+    <div className="space-y-3">
+      <button onClick={onBack} className="text-xs text-indigo-400">← Back to counts</button>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm text-white font-bold">Count {head?.countDate} · {countedN} items counted</div>
+        <div className="text-sm font-mono text-amber-300">Stock value: {money(totalValue)}</div>
+      </div>
+      <div className="flex items-center gap-2">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…" className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/>
+        {head?.status!=="finalised" && <button onClick={async()=>{try{await finaliseStockCount(countId);onBack();}catch(e){setErr(e.message);}}} className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-xs font-semibold">Finalise</button>}
+      </div>
+      <div className="max-h-[60vh] overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-900 text-slate-400 text-xs sticky top-0"><tr>
+            <th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Cost/unit</th><th className="text-right px-3 py-2">Qty counted</th><th className="text-right px-3 py-2">Value</th>
+          </tr></thead>
+          <tbody>
+            {shown.map(i=>{ const key="store:"+i.id; const c=costOf(i); const qv=qtys[key];
+              const val=(qv!==""&&qv!=null&&c!=null)?Number(qv)*c:null;
+              return (
+                <tr key={i.id} className="border-t border-slate-800/60">
+                  <td className="px-3 py-2 text-white">{i.name}{c==null&&<span className="text-[10px] text-amber-400 ml-2">no cost</span>}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{c!=null?`£${c.toFixed(4)}`:"—"}</td>
+                  <td className="px-3 py-2 text-right">
+                    <input value={qv??""} onChange={e=>setQtys(s=>({...s,[key]:e.target.value}))} onBlur={()=>saveQty(i)}
+                      className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white text-right" placeholder="0"/>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300">{val!=null?money(val):"—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function Purchases({ storeId, money }) {
+  const [inv, setInv] = useState(null);
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const today = new Date().toISOString().slice(0,10);
+  const [f, setF] = useState({ purchaseDate: today, itemId: "", qty: "", totalCost: "", supplier: "", invoiceRef: "" });
+
+  const load = async () => {
+    try { const [i, p] = await Promise.all([fetchInventory(), fetchPurchases({ storeId })]); setInv(i); setRows(p); }
+    catch(e){ setErr(e.message); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [storeId]);
+
+  const items = inv ? inv.store : [];
+  const nameById = new Map(items.map(i=>[String(i.id), i.name]));
+
+  const add = async () => {
+    if (!f.itemId || !f.totalCost) { setErr("Pick an item and enter a cost."); return; }
+    setErr(null);
+    try {
+      await addPurchase({ storeId, purchaseDate: f.purchaseDate, itemScope: "store", itemId: Number(f.itemId),
+        qty: f.qty, totalCost: f.totalCost, supplier: f.supplier, invoiceRef: f.invoiceRef });
+      setF({ ...f, itemId:"", qty:"", totalCost:"", invoiceRef:"" }); await load();
+    } catch(e){ setErr(e.message); }
+  };
+  const remove = async (id) => { try{ await deletePurchase(id); await load(); }catch(e){setErr(e.message);} };
+
+  return (
+    <div className="space-y-3">
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 grid grid-cols-2 lg:grid-cols-6 gap-2 items-end">
+        <div><label className="block text-[10px] text-slate-500 mb-1">Date</label><input type="date" value={f.purchaseDate} onChange={e=>setF({...f,purchaseDate:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white"/></div>
+        <div className="lg:col-span-2"><label className="block text-[10px] text-slate-500 mb-1">Item</label>
+          <select value={f.itemId} onChange={e=>setF({...f,itemId:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white">
+            <option value="">Select…</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+          </select></div>
+        <div><label className="block text-[10px] text-slate-500 mb-1">Qty (base unit)</label><input value={f.qty} onChange={e=>setF({...f,qty:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white text-right" placeholder="0"/></div>
+        <div><label className="block text-[10px] text-slate-500 mb-1">Total cost £</label><input value={f.totalCost} onChange={e=>setF({...f,totalCost:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white text-right" placeholder="0.00"/></div>
+        <button onClick={add} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold h-fit">+ Add</button>
+        <div className="lg:col-span-3"><label className="block text-[10px] text-slate-500 mb-1">Supplier (optional)</label><input value={f.supplier} onChange={e=>setF({...f,supplier:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white"/></div>
+        <div className="lg:col-span-2"><label className="block text-[10px] text-slate-500 mb-1">Invoice ref (optional)</label><input value={f.invoiceRef} onChange={e=>setF({...f,invoiceRef:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white"/></div>
+      </div>
+      {rows && rows.length === 0 && <div className="text-xs text-slate-500">No purchases logged yet.</div>}
+      {rows && rows.length > 0 && (
+        <table className="w-full text-sm">
+          <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+            <th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Cost</th><th className="text-left px-3 py-2">Supplier</th><th></th>
+          </tr></thead>
+          <tbody>
+            {rows.map(r=>(
+              <tr key={r.id} className="border-t border-slate-800/60">
+                <td className="px-3 py-2 text-slate-300">{r.purchaseDate}</td>
+                <td className="px-3 py-2 text-white">{nameById.get(String(r.itemId))||r.itemId}</td>
+                <td className="px-3 py-2 text-right font-mono text-slate-400">{r.qty??"—"}</td>
+                <td className="px-3 py-2 text-right font-mono text-slate-300">{money(r.totalCost)}</td>
+                <td className="px-3 py-2 text-slate-400">{r.supplier||"—"}</td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>remove(r.id)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function Variance({ storeId, money }) {
+  const Row = ({ k, v, strong, tone }) => (
+    <div className="flex items-center justify-between">
+      <span className={`text-xs ${strong?"text-white font-semibold":"text-slate-400"}`}>{k}</span>
+      <span className={`text-sm font-mono ${tone||(strong?"text-white font-bold":"text-slate-300")}`}>{v}</span>
+    </div>
+  );
+  const [counts, setCounts] = useState([]);
+  const [openId, setOpenId] = useState("");
+  const [closeId, setCloseId] = useState("");
+  const [res, setRes] = useState(null);
+  const [theo, setTheo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    (async () => { try { const c = await fetchStockCounts(storeId); setCounts(c);
+      if (c.length>=2){ setCloseId(String(c[0].id)); setOpenId(String(c[1].id)); } } catch(e){ setErr(e.message);} })();
+    setRes(null); setTheo(null);
+  }, [storeId]);
+
+  const run = async () => {
+    if (!openId || !closeId) { setErr("Pick an opening and closing count."); return; }
+    setLoading(true); setErr(null); setRes(null); setTheo(null);
+    try {
+      const actual = await computeActualCogs({ storeId, openCountId: Number(openId), closeCountId: Number(closeId) });
+      setRes(actual);
+      // theoretical over the same date span
+      const t = await computeStoreCogsV2({ storeId, from: actual.from, to: actual.to });
+      setTheo(t);
+    } catch(e){ setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const variance = (res && theo) ? res.actualCogs - theo.cogs : null;
+  const variancePct = (variance != null && theo && theo.cogs>0) ? (variance/theo.cogs)*100 : null;
+
+  return (
+    <div className="space-y-4">
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="flex flex-wrap items-end gap-3">
+        <div><label className="block text-[11px] text-slate-500 mb-1">Opening count</label>
+          <select value={openId} onChange={e=>setOpenId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            <option value="">Select…</option>{counts.map(c=><option key={c.id} value={c.id}>{c.countDate}</option>)}
+          </select></div>
+        <div><label className="block text-[11px] text-slate-500 mb-1">Closing count</label>
+          <select value={closeId} onChange={e=>setCloseId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            <option value="">Select…</option>{counts.map(c=><option key={c.id} value={c.id}>{c.countDate}</option>)}
+          </select></div>
+        <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{loading?"Calculating…":"Compute variance"}</button>
+      </div>
+      {counts.length < 2 && <div className="text-xs text-amber-400">You need at least two stock counts to compute actual COGS for the period between them.</div>}
+
+      {res && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-1.5">
+            <div className="text-sm font-bold text-white mb-2">Actual COGS · {res.from} → {res.to}</div>
+            <Row k="Opening stock value" v={money(res.openValue)}/>
+            <Row k="+ Purchases" v={money(res.purchTotal)}/>
+            <Row k="− Closing stock value" v={money(res.closeValue)}/>
+            <div className="border-t border-slate-800 my-1"/>
+            <Row k="Actual COGS" v={money(res.actualCogs)} strong/>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-1.5">
+            <div className="text-sm font-bold text-white mb-2">Theoretical vs Actual</div>
+            <Row k="Theoretical COGS (recipe × sales)" v={theo?money(theo.cogs):"—"}/>
+            <Row k="Actual COGS (stock)" v={money(res.actualCogs)}/>
+            <div className="border-t border-slate-800 my-1"/>
+            <Row k="Variance (actual − theoretical)" v={variance!=null?money(variance):"—"} strong tone={variance>0?"text-red-300":"text-emerald-300"}/>
+            {variancePct!=null && <Row k="Variance %" v={`${variancePct>0?"+":""}${variancePct.toFixed(1)}%`} tone={variancePct>0?"text-red-300":"text-emerald-300"}/>}
+            {theo && theo.coverage<0.9 && <div className="text-[11px] text-amber-400 mt-2">Theoretical is understated — only {(theo.coverage*100).toFixed(0)}% of sales costed. Variance not yet reliable.</div>}
+          </div>
+        </div>
+      )}
+
+      {res && res.byItem && res.byItem.length>0 && (
+        <div>
+          <div className="text-sm font-bold text-white mb-2">Actual cost by item (top consumers)</div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
+              <th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Open</th><th className="text-right px-3 py-2">Purch.</th><th className="text-right px-3 py-2">Close</th><th className="text-right px-3 py-2">Used</th><th className="text-right px-3 py-2">Actual £</th>
+            </tr></thead>
+            <tbody>
+              {res.byItem.slice(0,40).map(it=>(
+                <tr key={it.key} className="border-t border-slate-800/60">
+                  <td className="px-3 py-2 text-white">{it.name}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{it.openQty}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{it.purchasedQty}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{it.closeQty}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300">{it.usedQty}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300">{money(it.actualCost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
