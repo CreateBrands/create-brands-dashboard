@@ -9345,7 +9345,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   );
 }
 
-function InvoicesView({ currentUser, categories = [] }) {
+function InvoicesView({ currentUser, categories = [], storeFilter = "all" }) {
   const [invoices, setInvoices] = useState([]);
   const [stores, setStores] = useState([]);
   const [entity, setEntity] = useState("kitchen");
@@ -9361,7 +9361,6 @@ function InvoicesView({ currentUser, categories = [] }) {
   const [search, setSearch] = useState("");
   const [statusF, setStatusF] = useState("all");      // all | pending_review | approved | rejected/failed
   const [payF, setPayF] = useState("all");             // all | unpaid | partial | paid | overdue
-  const [storeF, setStoreF] = useState("all");
   const [bulkProgress, setBulkProgress] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -9464,7 +9463,7 @@ function InvoicesView({ currentUser, categories = [] }) {
     if (payF !== "all") {
       if (payF === "overdue" ? !isOverdue(inv) : (inv.payment_status || "unpaid") !== payF) return false;
     }
-    if (storeF !== "all" && inv.entity !== storeF) return false;
+    if (storeFilter !== "all" && inv.entity !== storeFilter) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const hay = `${inv.supplier_name||""} ${inv.invoice_number||""}`.toLowerCase();
@@ -9595,10 +9594,6 @@ function InvoicesView({ currentUser, categories = [] }) {
             </select>
             <select value={payF} onChange={e=>setPayF(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
               <option value="all">All payment</option><option value="unpaid">Unpaid</option><option value="partial">Partial</option><option value="paid">Paid</option><option value="overdue">Overdue</option>
-            </select>
-            <select value={storeF} onChange={e=>setStoreF(e.target.value)} className="px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
-              <option value="all">All entities</option><option value="kitchen">Central Kitchen</option>
-              {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
           {filtered.length === 0 && <div className="text-xs text-slate-600">No invoices match.</div>}
@@ -24755,7 +24750,7 @@ function OpsTeamView({
   );
 }
 
-function SuppliersView({ stores = [] }) {
+function SuppliersView({ stores = [], storeFilter = "all" }) {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
@@ -24839,7 +24834,7 @@ function SuppliersView({ stores = [] }) {
   );
 }
 
-function AccountsExportView({ stores = [], bankTransactions = [], categories = [] }) {
+function AccountsExportView({ stores = [], bankTransactions = [], categories = [], storeFilter = "all" }) {
   const [busy, setBusy] = useState("");
   const [from, setFrom] = useState(() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`; });
   const [to, setTo] = useState(() => new Date().toISOString().split("T")[0]);
@@ -24856,7 +24851,7 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   const exportTransactions = () => {
     setBusy("txn");
     const rows = [["Date","Description","Reference","Account","Store","Category","Amount","Reconciled"]];
-    bankTransactions.filter(t => t.txnDate>=from && t.txnDate<=to).forEach(t => {
+    bankTransactions.filter(t => t.txnDate>=from && t.txnDate<=to && (storeFilter==="all" || storeFilter==="kitchen" || t.storeId===storeFilter)).forEach(t => {
       const store = stores.find(s=>s.id===t.storeId);
       rows.push([t.txnDate, t.description, t.reference, t.account, store?(store.shortName||store.name):"", t.category, t.amount, t.reconciled?"yes":"no"]);
     });
@@ -25914,17 +25909,22 @@ function AccountsHubView(props) {
         ))}
       </div>
 
-      <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
-        <option value="all">All stores (group)</option>
-        {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-      </select>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Finance scope</span>
+        <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+          <option value="all">All stores (group)</option>
+          <option value="kitchen">Central Kitchen</option>
+          {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        <span className="text-[11px] text-slate-500">applies to all Finance tabs</span>
+      </div>
 
       {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
       {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
-      {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories}/>}
-      {tab === "suppliers" && <SuppliersView stores={stores}/>}
+      {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter}/>}
+      {tab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
       {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
-      {tab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories}/>}
+      {tab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter}/>}
     </div>
   );
 }
