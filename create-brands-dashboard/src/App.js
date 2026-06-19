@@ -6128,15 +6128,26 @@ function StoreInventorySettings({ storeId, money }) {
   );
 
   const dkey = (id,f)=>id+":"+f;
-  const dval = (i,f,overrideVal)=>{ const k=dkey(i.id,f); return k in draft ? draft[k] : (overrideVal==null?"":String(overrideVal)); };
+  // effective display value: draft (being typed) > override > inherited master
+  const effective = (i,f,overrideVal,masterVal)=>{
+    const k=dkey(i.id,f);
+    if (k in draft) return draft[k];
+    if (overrideVal!=null) return String(overrideVal);
+    return masterVal!=null ? String(masterVal) : "";
+  };
+  const isOv = (overrideVal)=> overrideVal!=null;
   const setD = (id,f,v)=>setDraft(s=>({...s,[dkey(id,f)]:v}));
 
-  const saveField = async (i, field, overrideVal) => {
+  const saveField = async (i, field, overrideVal, masterVal) => {
     const k = dkey(i.id, field);
-    const raw = k in draft ? draft[k] : (overrideVal==null?"":String(overrideVal));
+    const shownVal = effective(i, field, overrideVal, masterVal);
+    // if the value equals the master (or is blank), treat as "inherit" → clear override
+    const raw = (k in draft) ? draft[k] : (overrideVal==null ? "" : String(overrideVal));
+    const masterStr = masterVal!=null ? String(masterVal) : "";
+    const finalRaw = (raw==="" || raw===masterStr) ? null : raw;  // matching master = inherit
     setErr(null);
     try {
-      await setStoreItemOverride(storeId, i.id, { [field]: raw==="" ? null : raw });
+      await setStoreItemOverride(storeId, i.id, { [field]: finalRaw });
       setSavedKey(k); setTimeout(()=>setSavedKey(x=>x===k?null:x),1000);
       setDraft(s=>{ const n={...s}; delete n[k]; return n; });
       await load();
@@ -6147,13 +6158,29 @@ function StoreInventorySettings({ storeId, money }) {
     try { await clearStoreItemOverride(storeId, i.id); await load(); } catch(e){ setErr(e.message); }
   };
 
-  const cell = "bg-slate-800 border rounded px-2 py-1 text-xs text-white";
-  const ph = "placeholder-slate-600";
+  // editable cell: inherited values show in muted text, overrides in bold white
+  const OvCell = ({ i, field, overrideVal, masterVal, w="w-24", align="" }) => {
+    const ov = isOv(overrideVal);
+    const k = dkey(i.id, field);
+    return (
+      <input
+        value={effective(i, field, overrideVal, masterVal)}
+        onChange={e=>setD(i.id, field, e.target.value)}
+        onBlur={()=>saveField(i, field, overrideVal, masterVal)}
+        placeholder="—"
+        title={ov ? `Store override (master: ${masterVal??"—"})` : "Inherited from master — edit to override for this store"}
+        className={`bg-slate-800 border rounded px-2 py-1 text-xs ${w} ${align} ${
+          savedKey===k ? "border-emerald-500"
+          : ov ? "border-indigo-500 text-white font-semibold"
+          : "border-slate-700/60 text-slate-400 italic"}`}
+      />
+    );
+  };
 
   return (
     <div className="space-y-3">
       {err && <div className="text-xs text-red-400">{err}</div>}
-      <p className="text-xs text-slate-500">Override location, cost, pack and supplier for this store only. Blank = inherits the master value (shown as faint placeholder). The stock count and Actual COGS valuation use these per-store costs.</p>
+      <p className="text-xs text-slate-500">Each field shows the value this store uses. <span className="text-slate-400 italic">Muted italic</span> = inherited from the master catalogue; <span className="text-white font-semibold">bold</span> = a per-store override. Type to override for this store only; clear it (or retype the master value) to go back to inheriting. The stock count and Actual COGS valuation use these per-store costs.</p>
       <div className="flex flex-wrap items-center gap-2">
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search items…" className="flex-1 min-w-[160px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"/>
         <select value={cat} onChange={e=>setCat(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
@@ -6181,11 +6208,11 @@ function StoreInventorySettings({ storeId, money }) {
                 return (
                   <tr key={i.id} className={`border-t border-slate-800/60 ${ovd?"bg-indigo-950/20":""}`}>
                     <td className="px-3 py-2 text-white">{i.name}{ovd && <span className="text-[10px] text-indigo-300 ml-2">store-set</span>}</td>
-                    <td className="px-2 py-2"><input value={dval(i,"location",i.overrideLocation)} onChange={e=>setD(i.id,"location",e.target.value)} onBlur={()=>saveField(i,"location",i.overrideLocation)} placeholder={i.masterLocation||"—"} className={`${cell} ${ph} w-24 ${savedKey===dkey(i.id,"location")?"border-emerald-500":"border-slate-700"}`}/></td>
-                    <td className="px-2 py-2 text-right"><input value={dval(i,"costPerBaseUnit",i.overrideCost)} onChange={e=>setD(i.id,"costPerBaseUnit",e.target.value)} onBlur={()=>saveField(i,"costPerBaseUnit",i.overrideCost)} placeholder={i.masterCost!=null?i.masterCost.toFixed(4):"—"} className={`${cell} ${ph} w-20 text-right ${savedKey===dkey(i.id,"costPerBaseUnit")?"border-emerald-500":"border-slate-700"}`}/></td>
-                    <td className="px-2 py-2"><input value={dval(i,"packDesc",i.overridePackDesc)} onChange={e=>setD(i.id,"packDesc",e.target.value)} onBlur={()=>saveField(i,"packDesc",i.overridePackDesc)} placeholder={i.masterPackDesc||"—"} className={`${cell} ${ph} w-28 ${savedKey===dkey(i.id,"packDesc")?"border-emerald-500":"border-slate-700"}`}/></td>
-                    <td className="px-2 py-2 text-right"><input value={dval(i,"packQty",i.overridePackQty)} onChange={e=>setD(i.id,"packQty",e.target.value)} onBlur={()=>saveField(i,"packQty",i.overridePackQty)} placeholder={i.masterPackQty!=null?String(i.masterPackQty):"—"} className={`${cell} ${ph} w-16 text-right ${savedKey===dkey(i.id,"packQty")?"border-emerald-500":"border-slate-700"}`}/></td>
-                    <td className="px-2 py-2"><input value={dval(i,"supplier",i.overrideSupplier)} onChange={e=>setD(i.id,"supplier",e.target.value)} onBlur={()=>saveField(i,"supplier",i.overrideSupplier)} placeholder={i.masterSupplier||"—"} className={`${cell} ${ph} w-28 ${savedKey===dkey(i.id,"supplier")?"border-emerald-500":"border-slate-700"}`}/></td>
+                    <td className="px-2 py-2"><OvCell i={i} field="location" overrideVal={i.overrideLocation} masterVal={i.masterLocation} w="w-24"/></td>
+                    <td className="px-2 py-2 text-right"><OvCell i={i} field="costPerBaseUnit" overrideVal={i.overrideCost} masterVal={i.masterCost!=null?Number(i.masterCost).toFixed(4):null} w="w-20" align="text-right"/></td>
+                    <td className="px-2 py-2"><OvCell i={i} field="packDesc" overrideVal={i.overridePackDesc} masterVal={i.masterPackDesc} w="w-28"/></td>
+                    <td className="px-2 py-2 text-right"><OvCell i={i} field="packQty" overrideVal={i.overridePackQty} masterVal={i.masterPackQty} w="w-16" align="text-right"/></td>
+                    <td className="px-2 py-2"><OvCell i={i} field="supplier" overrideVal={i.overrideSupplier} masterVal={i.masterSupplier} w="w-28"/></td>
                     <td className="px-2 py-2 text-right">{ovd && <button onClick={()=>clearAll(i)} className="text-[11px] text-slate-500 hover:text-red-400">reset</button>}</td>
                   </tr>
                 );
