@@ -3940,12 +3940,15 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           <h2 className="text-base font-bold text-white flex items-center gap-2"><ChefHat size={18}/> Central Kitchen — Inventory</h2>
           <p className="text-xs text-slate-500 mt-0.5">{kitchen.shortName || kitchen.name} · raw materials in, batch-tracked. Ingredients are shared with COGS recipes.</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>
-          <button onClick={()=>openIng(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Ingredient</button>
-          <button onClick={()=>{setBulkModal(true);setBulkText("");setErr("");}} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Bulk add</button>
-          <button onClick={exportCsv} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold flex items-center gap-1"><Download size={14}/> Export CSV</button>
-          <button onClick={()=>fileInputRef.current?.click()} disabled={bulkBusy} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Import CSV</button>
+        <div className="flex gap-2 flex-wrap justify-end">
+          {tab === "stock" && <>
+            <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>
+            <button onClick={()=>openIng(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Ingredient</button>
+            <button onClick={()=>{setBulkModal(true);setBulkText("");setErr("");}} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Bulk add</button>
+            <button onClick={exportCsv} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold flex items-center gap-1"><Download size={14}/> Export CSV</button>
+            <button onClick={()=>fileInputRef.current?.click()} disabled={bulkBusy} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Import CSV</button>
+          </>}
+          {tab === "goods" && <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>}
           <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={onImportFile} className="hidden"/>
         </div>
       </div>
@@ -3960,10 +3963,25 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
         <div className={`rounded-xl p-3 border ${expiringSoon.length?"bg-red-950/30 border-red-500/30":"bg-slate-900 border-slate-800"}`}><div className="text-[10px] uppercase text-slate-500 tracking-widest">Expiring ≤7d</div><div className={`text-2xl font-black ${expiringSoon.length?"text-red-300":"text-white"}`}>{expiringSoon.length}</div></div>
       </div>
 
-      <div className="flex gap-1 border-b border-slate-800">
-        {[["stock","Stock"],["goods","Goods in log"],["preps","Preps"],["products","Products"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"],["categories","Categories"],["suppliers","Suppliers"]].filter(([k])=>ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`)).map(([k,l])=>(
-          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
-        ))}
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-slate-800 pb-1">
+        {[
+          { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"]] },
+          { label: "Recipes",   tabs: [["preps","Preps"],["products","Products"]] },
+          { label: "Planning",  tabs: [["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
+          { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
+        ].map((grp, gi) => {
+          const visible = grp.tabs.filter(([k]) => ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
+          if (!visible.length) return null;
+          return (
+            <div key={grp.label} className="flex items-center gap-1">
+              {gi > 0 && <span className="w-px h-5 bg-slate-700/60 mx-1.5" aria-hidden/>}
+              <span className="text-[9px] uppercase tracking-widest text-slate-600 font-bold mr-1 hidden sm:inline">{grp.label}</span>
+              {visible.map(([k,l]) => (
+                <button key={k} onClick={()=>setTab(k)} className={`px-2.5 py-2 text-sm font-semibold border-b-2 -mb-px whitespace-nowrap ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-500 hover:text-slate-300"}`}>{l}</button>
+              ))}
+            </div>
+          );
+        })}
       </div>
 
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : tab === "stock" ? (
