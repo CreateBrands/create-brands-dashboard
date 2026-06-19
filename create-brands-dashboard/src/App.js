@@ -16959,13 +16959,16 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
         {bAssigns.map(a => {
           const od = isOverdue(a); const taskName = getTaskName(a.type, a.taskId);
           const cl = a.type === "checklist" ? checklists.find(c => c.id === a.taskId) : null;
-          const doneToday = auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName));
           // Stable key — includes storeId when present so per-store checklist
           // state doesn't collide across stores sharing a brand.
           const stateKey = `${a.storeId || a.brandId}||${a.taskId}||${getTodayStr()}`;
           const clState = checklistStates[stateKey] || {};
+          // Done if signed off (checklist-state marker — the reliable source) or,
+          // for legacy rows, if an audit entry mentions the task today.
+          const doneToday = clState.__signedOff === true
+            || auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName));
           const totalItems = cl?.items?.length || 0;
-          const doneItems = totalItems ? Object.values(clState).filter(Boolean).length : 0;
+          const doneItems = totalItems ? Object.values(clState).filter(v => v === true).length : 0;
           const pct = totalItems ? Math.round((doneItems / totalItems) * 100) : 0;
           const isExp = expandedId === a.id;
           // Show the store name on each task when the dropdown is on "all" so
@@ -37293,7 +37296,11 @@ export default function App() {
       };
       await insertAuditEntry(e);
       setAuditTrail(at => [e, ...at]);
-    } catch {}
+    } catch (err) {
+      // Re-throw so callers (e.g. sign-off) can surface the real reason rather
+      // than silently appearing to do nothing.
+      throw err;
+    }
   }, []);
 
   const addEntry     = useCallback(async e=>{
@@ -37578,18 +37585,22 @@ export default function App() {
     try {
       const now=new Date().toISOString();
       const d=now.split("T")[0];
-      // Assignments are now NOT NULL on store_id, so this is always present
-      // for new rows. We still tolerate missing storeId on possible legacy
-      // assignments by warning rather than silently failing.
       if (!assignment.storeId) {
         showToast("Cannot sign off: assignment has no store linked. Re-create it.", "error");
         return;
       }
       const stateKey=`${assignment.storeId}||${assignment.taskId}||${d}`;
-      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, checklistStates[stateKey]||{}, currentUser?.name||"Manager", now);
-      await addAudit("sign-off",`${assignment.checklistName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId);
+      const itemStates = checklistStates[stateKey]||{};
+      // Source of truth for "done": the checklist state write. This throws on
+      // failure (incl. permissions), so a real problem surfaces to the user.
+      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, itemStates, currentUser?.name||"Manager", now);
+      // Reflect immediately in local state with a sign-off marker so the card
+      // flips to "done" without waiting for a reload.
+      setChecklistStates(s => ({ ...s, [stateKey]: { ...(s[stateKey]||{}), __signedOff: true, __signedOffAt: now, __signedOffBy: currentUser?.name||"Manager" } }));
+      // Audit is a best-effort log — never let it block or undo the sign-off.
+      try { await addAudit("sign-off",`${assignment.checklistName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId); } catch { /* logged server-side */ }
       showToast("✓ Signed off");
-    } catch(err){showToast(err.message,"error");}
+    } catch(err){ showToast(err?.message || "Sign-off failed", "error"); }
   }, [checklistStates,currentUser,addAudit,showToast]);
   const handleClearAudit = useCallback(async()=>{try{await clearAuditTrail();setAuditTrail([]);showToast("Cleared");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const addAvailability    = useCallback(async a=>{const s=await insertAvailability(a);setAvailability(av=>av.some(x=>x.id===s.id)?av.map(x=>x.id===s.id?s:x):[s,...av]);}, []);
