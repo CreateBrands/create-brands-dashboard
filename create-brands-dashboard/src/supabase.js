@@ -6052,6 +6052,7 @@ export async function dismissPriceChange(id, userId) {
 const mapIngredient = (r) => ({
   id: r.id, siteId: r.site_id || null, name: r.name, category: r.category || "",
   unit: r.base_unit || "kg", allergens: r.allergens || [],
+  mayContain: r.may_contain_allergens || [],
   reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
   defaultSupplier: r.supplier || "", note: r.notes || "",
   packDesc: r.pack_desc || "", packQty: r.pack_qty, packPrice: r.pack_price,
@@ -6082,6 +6083,7 @@ export async function upsertCkIngredient(ing) {
   const row = {
     name: ing.name, category: ing.category || null, base_unit: ing.unit || "kg",
     allergens: ing.allergens || [],
+    may_contain_allergens: ing.mayContain || [],
     reorder_point: ing.reorderPoint != null && ing.reorderPoint !== "" ? Number(ing.reorderPoint) : null,
     supplier: ing.defaultSupplier || null, notes: ing.note || null,
     location: ing.location || null,
