@@ -1025,6 +1025,48 @@ export async function insertPunchIn(record) {
   return dbPunchToApp(data);
 }
 
+// Auto-clockout sweep: close stale OPEN shifts that are still open past their
+// store's configured auto-clockout time. Sets punch_out to that day's cutoff
+// and flags status='auto_closed' for manager review. Deliberately leaves
+// gross_pay NULL — hours are recorded but pay is NOT auto-calculated, so a
+// manager confirms before it's paid. Returns the number of shifts closed.
+// stores: app-side stores with { id, autoClockoutTime } ("HH:MM").
+export async function sweepAutoClockouts(stores = []) {
+  const cutoffByStore = {};
+  (stores || []).forEach(s => { if (s.autoClockoutTime) cutoffByStore[s.id] = s.autoClockoutTime; });
+  if (!Object.keys(cutoffByStore).length) return 0;
+
+  const { data: open, error } = await supabase
+    .from("punch_records").select("*").is("punch_out", null);
+  if (error) throw error;
+  if (!open || !open.length) return 0;
+
+  const now = Date.now();
+  let closed = 0;
+  for (const p of open) {
+    const cutoff = cutoffByStore[p.store_id];
+    if (!cutoff || !p.date || !p.punch_in) continue;
+    // The cutoff moment for this shift's own date.
+    const cutoffMs = new Date(`${p.date}T${cutoff}:00`).getTime();
+    if (isNaN(cutoffMs)) continue;
+    // Only act once the cutoff has actually passed.
+    if (now <= cutoffMs) continue;
+    const pInMs = new Date(p.punch_in).getTime();
+    // Guard against bad data: cutoff must be after clock-in.
+    const hours = cutoffMs > pInMs ? Math.max(0, (cutoffMs - pInMs) / 3600000) : 0;
+    const { error: upErr } = await supabase.from("punch_records").update({
+      punch_out: new Date(cutoffMs).toISOString(),
+      hours_worked: +hours.toFixed(2),
+      gross_pay: null,                 // NOT auto-paid — manager reviews
+      status: "auto_closed",
+      notes: ((p.notes ? p.notes + " · " : "") + "Auto-closed at store cut-off — needs review").slice(0, 500),
+      updated_at: new Date().toISOString(),
+    }).eq("id", p.id);
+    if (!upErr) closed++;
+  }
+  return closed;
+}
+
 export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
   const { data, error } = await supabase
     .from("punch_records")

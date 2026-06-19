@@ -35,7 +35,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -12968,7 +12968,11 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       const cutoffMs = new Date(r.date + "T00:00:00").getTime() + cutoffMin * 60000;
       if (end > cutoffMs) end = cutoffMs;
     }
-    return Math.max(0, (end - pIn) / 3600000);
+    const raw = Math.max(0, (end - pIn) / 3600000);
+    // Guard: an OPEN punch left running (forgotten clock-out) can balloon to
+    // hundreds of hours and wreck cost totals. Cap a single open shift at 16h.
+    const isOpen = (r.status === "open" || !r.punchOut);
+    return isOpen ? Math.min(raw, 16) : raw;
   };
   // Current hourly rate from the employee's live profile (falls back to the
   // punch's snapshot if not found). Used for OPEN shifts so that setting a
@@ -13152,10 +13156,15 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     const punches = data.curPunch.filter(r => scopedStoreIds.has(r.storeId))
       .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (a.employeeName||"").localeCompare(b.employeeName||""));
     if (mode === "cost") {
+      let totHours = 0, totCost = 0;
       const rows = punches.map(p => {
         const open = (p.status === "open" || !p.punchOut);
         const member = (opsTeam || []).find(m => m.id === p.employeeId);
         const salaried = isSalaried(member);
+        const h = open ? punchHours(p) : (p.hoursWorked || 0);
+        totHours += h;
+        const rowCost = salaried ? salariedDailyCost(member) : (open ? punchCost(p) : (p.grossPay || 0));
+        totCost += rowCost;
         const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`;
         // Salaried: cost is the fixed daily slice, not hours×rate.
         const costCell = salaried
@@ -13167,7 +13176,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         title: `Labour cost breakdown · ${period.label}`,
         columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
         rows,
-        footer: ["Total", "", "", `${cur.hours.toFixed(2)}h`, fmtCurrency(cur.labourCost)],
+        footer: ["Total", "", "", `${totHours.toFixed(2)}h`, fmtCurrency(totCost)],
       });
     } else {
       // hours: Name, Start, End, Worked hours, Overtime
@@ -34693,6 +34702,12 @@ function KioskShell() {
       .then(([team, br, sts, punches, scheds, assigns, cls, clean, sroles, sdepts]) => {
         setOpsTeam(team); setBrands(br); setStores(sts);
         setPunchRecords(punches); setSchedules(scheds || []);
+        // Auto-clockout sweep: close stale open shifts past their store's
+        // cut-off (flagged for review, not auto-paid). Runs once after load;
+        // refresh punches if any were closed so the UI reflects it.
+        sweepAutoClockouts(sts).then(n => {
+          if (n > 0) fetchPunchRecords().then(fresh => setPunchRecords(fresh)).catch(()=>{});
+        }).catch(()=>{});
         setAssignments(assigns || []);
         setChecklists(cls || []);
         setCleaningTasks(clean || []);
