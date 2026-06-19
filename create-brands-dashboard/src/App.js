@@ -25879,11 +25879,122 @@ function CashManage({ accounts = [], sources = [], expenseTypes = [], categories
   );
 }
 
+// Finance → Team & Roles. Owner/admin-only. Create FINANCE-scoped roles
+// (scope: finance_only, base hq_staff) and assign employees to them. Reuses the
+// same handlers as Access & Roles so it's one source of truth, just focused.
+function FinanceRolesTab({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRole, onAssignMemberRole }) {
+  const financeRoles = (customRoles || []).filter(r => r.scope === "finance_only" && !r.archivedAt);
+  const financeRoleIds = new Set(financeRoles.map(r => r.id));
+  const [modal, setModal] = useState(null);   // null | "new" | role
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [assignFor, setAssignFor] = useState(null); // role being assigned to
+
+  const activeMembers = (opsTeam || []).filter(m => !m.archivedAt);
+  const memberRole = (m) => customRoles.find(r => r.id === m.roleId) || null;
+
+  const openNew = () => { setName(""); setDesc(""); setErr(""); setModal("new"); };
+  const openEdit = (r) => { setName(r.name); setDesc(r.description || ""); setErr(""); setModal(r); };
+  const save = async () => {
+    if (!name.trim()) { setErr("Give the role a name."); return; }
+    setBusy(true); setErr("");
+    try {
+      // Always finance-scoped: base hq_staff + scope finance_only.
+      await onSaveRole?.({ id: modal === "new" ? undefined : modal.id, name: name.trim(), description: desc.trim(), baseRole: "hq_staff", scope: "finance_only" });
+      setModal(null);
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const ec = "w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="text-sm font-bold text-white">Finance roles</div>
+          <div className="text-xs text-slate-500">Create roles that see only the Finance section, then assign employees to them.</div>
+        </div>
+        <button onClick={openNew} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New finance role</button>
+      </div>
+
+      <div className="space-y-2">
+        {financeRoles.length === 0 && <div className="text-xs text-slate-600 bg-slate-900 border border-slate-800 rounded-xl p-4">No finance roles yet. Create one to grant Finance-only access.</div>}
+        {financeRoles.map(r => {
+          const holders = activeMembers.filter(m => m.roleId === r.id);
+          return (
+            <div key={r.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-white">{r.name} <span className="text-[10px] text-emerald-300 ml-1">finance only</span></div>
+                  {r.description && <div className="text-xs text-slate-500">{r.description}</div>}
+                  <div className="text-[11px] text-slate-500 mt-1">{holders.length} {holders.length===1?"person":"people"}{holders.length?`: ${holders.map(m=>m.firstName||m.name).join(", ")}`:""}</div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={()=>setAssignFor(assignFor===r.id?null:r.id)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Assign</button>
+                  <button onClick={()=>openEdit(r)} className="text-slate-500 hover:text-white"><Edit size={14}/></button>
+                  <button onClick={async()=>{ if(window.confirm(`Archive the role "${r.name}"? People assigned to it will lose finance access.`)){ try{await onArchiveRole?.(r.id);}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                </div>
+              </div>
+              {assignFor === r.id && (
+                <div className="mt-3 border-t border-slate-800 pt-3 space-y-1.5 max-h-72 overflow-y-auto">
+                  <div className="text-[11px] text-slate-500 mb-1">Tap a person to assign them to {r.name}. Tap again to remove.</div>
+                  {activeMembers.map(m => {
+                    const mr = memberRole(m);
+                    const onThis = m.roleId === r.id;
+                    const onOtherFinance = mr && financeRoleIds.has(mr.id) && !onThis;
+                    return (
+                      <button key={m.id} disabled={onOtherFinance}
+                        onClick={()=>onAssignMemberRole?.(m.id, onThis ? null : r.id)}
+                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-left text-xs ${onThis?"bg-emerald-900/40 border border-emerald-600/40":onOtherFinance?"opacity-40 cursor-not-allowed bg-slate-950":"bg-slate-950 hover:bg-slate-800 border border-slate-800"}`}>
+                        <span className="text-slate-200">{m.firstName||m.name} {m.lastName||""}</span>
+                        <span className="text-[10px]">
+                          {onThis ? <span className="text-emerald-300 font-semibold">✓ assigned</span>
+                            : onOtherFinance ? <span className="text-slate-500">on {mr.name}</span>
+                            : mr ? <span className="text-slate-500">{mr.name}</span> : <span className="text-slate-600">no custom role</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {modal && (
+        <Modal title={modal === "new" ? "New finance role" : "Edit finance role"} onClose={()=>setModal(null)}>
+          <div className="space-y-3">
+            {err && <div className="text-xs text-red-400">{err}</div>}
+            <div>
+              <label className="text-[11px] uppercase tracking-wide text-slate-500">Role name</label>
+              <input value={name} onChange={e=>setName(e.target.value)} className={ec} placeholder="e.g. Finance Manager"/>
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wide text-slate-500">Description (optional)</label>
+              <input value={desc} onChange={e=>setDesc(e.target.value)} className={ec} placeholder="What this role is for"/>
+            </div>
+            <div className="text-[11px] text-slate-500 bg-slate-950 border border-slate-800 rounded-lg p-2.5">This role sees <span className="text-emerald-300">only the Finance section</span> — no stores, team, or operations. Based on HQ Staff access, scoped to Finance.</div>
+            <div className="flex justify-end gap-2">
+              <button onClick={()=>setModal(null)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-sm">Cancel</button>
+              <button onClick={save} disabled={busy} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?"Saving…":"Save role"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function AccountsHubView(props) {
-  const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser,
+  const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser, opsTeam = [],
     onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
     onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
     sharedFile, onConsumeSharedFile, initialTab,
+    customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole,
     cashAccounts = [], cashLedger = [], cashHandlers = {} } = props;
   const [tab, setTab] = useState(initialTab || "pnl");
   const [storeFilter, setStoreFilter] = useState("all");
@@ -25891,6 +26002,7 @@ function AccountsHubView(props) {
   useEffect(() => { if (sharedFile) setTab("bank"); }, [sharedFile]);
 
   const { canFeature: acctCanFeature } = useAccess();
+  const isAdmin = currentUser?.role === "owner";
   const TABS = [
     ["pnl", "P&L"],
     ["bank", "Bank & Cash"],
@@ -25898,6 +26010,7 @@ function AccountsHubView(props) {
     ["suppliers", "Suppliers"],
     ["reconcile", "Reconcile"],
     ["export", "Export"],
+    ...(isAdmin ? [["roles", "Team & Roles"]] : []),
   ].filter(([k]) => k==="pnl" ? acctCanFeature("feat.accounts.pnl") : k==="bank" ? acctCanFeature("feat.accounts.bank") : true);
 
   return (
@@ -25909,15 +26022,19 @@ function AccountsHubView(props) {
         ))}
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Finance scope</span>
-        <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
-          <option value="all">All stores (group)</option>
-          <option value="kitchen">Central Kitchen</option>
-          {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-        </select>
-        <span className="text-[11px] text-slate-500">applies to all Finance tabs</span>
-      </div>
+      {tab !== "roles" && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Finance scope</span>
+          <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+            <option value="all">All stores (group)</option>
+            <option value="kitchen">Central Kitchen</option>
+            {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+          </select>
+          <span className="text-[11px] text-slate-500">applies to all Finance tabs</span>
+        </div>
+      )}
+
+      {tab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole}/>}
 
       {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
       {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
@@ -38067,7 +38184,7 @@ export default function App() {
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
