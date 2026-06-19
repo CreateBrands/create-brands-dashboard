@@ -3923,7 +3923,15 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                     {s.low && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">low</span>}
                     {(s.allergens||[]).length>0 && <span className="text-[9px] text-red-400/80">⚠ {s.allergens.join(", ")}</span>}
                   </div>
-                  <div className="text-[11px] text-slate-500">{s.category || "Uncategorised"}{s.reorderPoint!=null?` · reorder at ${s.reorderPoint} ${s.unit}`:""}{s.costPerBaseUnit!=null?` · ${money(s.costPerBaseUnit)}/${s.unit}`:""}</div>
+                  <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
+                    <span>{s.category || "Uncategorised"}</span>
+                    {s.location ? <span>· 📍 {s.location}</span> : null}
+                    {s.packDesc ? <span>· {s.packDesc}</span> : null}
+                    {s.packQty != null ? <span>· pack {s.packQty} {s.unit}</span> : null}
+                    {s.packPrice != null ? <span>· pack {money(s.packPrice)}</span> : null}
+                    {s.costPerBaseUnit != null ? <span>· {money(s.costPerBaseUnit)}/{s.unit}</span> : null}
+                    {s.reorderPoint != null ? <span>· reorder at {s.reorderPoint} {s.unit}</span> : null}
+                  </div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <div className="text-right"><div className={`text-sm font-bold ${s.low?"text-amber-300":"text-white"}`}>{s.stock} {s.unit}</div></div>
@@ -4461,6 +4469,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Reorder point ({ingForm.unit||"kg"})</label><input type="number" value={ingForm.reorderPoint??""} onChange={e=>setIngForm(f=>({...f,reorderPoint:e.target.value}))} className={inputCls}/></div>
+              <div><label className={labelCls}>Location</label><input value={ingForm.location||""} onChange={e=>setIngForm(f=>({...f,location:e.target.value}))} className={inputCls} placeholder="Fridge, Dry Store…"/></div>
               <div><label className={labelCls}>Default supplier</label>
                 <select value={ingForm.defaultSupplier||""} onChange={e=>setIngForm(f=>({...f,defaultSupplier:e.target.value}))} className={inputCls}>
                   <option value="">— none —</option>

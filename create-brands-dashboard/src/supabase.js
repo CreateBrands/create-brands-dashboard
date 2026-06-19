@@ -6055,6 +6055,7 @@ const mapIngredient = (r) => ({
   reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
   defaultSupplier: r.supplier || "", note: r.notes || "",
   packDesc: r.pack_desc || "", packQty: r.pack_qty, packPrice: r.pack_price,
+  location: r.location || "",
   costPerBaseUnit: r.cost_per_base_unit != null ? Number(r.cost_per_base_unit) : null,
   archivedAt: r.archived_at || null, createdAt: r.created_at,
 });
@@ -6083,6 +6084,7 @@ export async function upsertCkIngredient(ing) {
     allergens: ing.allergens || [],
     reorder_point: ing.reorderPoint != null && ing.reorderPoint !== "" ? Number(ing.reorderPoint) : null,
     supplier: ing.defaultSupplier || null, notes: ing.note || null,
+    location: ing.location || null,
     site_id: ing.siteId || null,
   };
   if (ing.id) {
