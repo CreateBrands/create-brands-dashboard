@@ -3394,6 +3394,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   };
   const removeIng = async (i) => { if (!window.confirm(`Archive ${i.name}?`)) return; try { await archiveCkIngredient(i.id); load(); } catch (e) { setErr(e?.message||String(e)); } };
   const toggleAllergen = (a) => setIngForm(f => ({ ...f, allergens: (f.allergens||[]).includes(a) ? f.allergens.filter(x=>x!==a) : [...(f.allergens||[]), a] }));
+  const toggleIngMayContain = (a) => setIngForm(f => ({ ...f, mayContain: (f.mayContain||[]).includes(a) ? f.mayContain.filter(x=>x!==a) : [...(f.mayContain||[]), a] }));
 
   // Goods-in editor
   const [ginModal, setGinModal] = useState(false);
@@ -3487,7 +3488,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const applyAllergenUpdate = async () => {
     if (!allergenCheck?.detected) return;
     try {
-      await upsertCkIngredient({ ...allergenCheck.ingredient, allergens: allergenCheck.detected, siteId });
+      await upsertCkIngredient({ ...allergenCheck.ingredient, allergens: allergenCheck.detected, mayContain: allergenCheck.mayContain || [], siteId });
       const fresh = await fetchCkIngredients(siteId); setIngredients(fresh);
       setAllergenCheck(null); load();
     } catch (e) { setErr(e?.message || String(e)); }
@@ -3921,8 +3922,23 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                   <div className="text-sm font-semibold text-slate-200 flex items-center gap-2 flex-wrap">
                     {s.name}
                     {s.low && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">low</span>}
-                    {(s.allergens||[]).length>0 && <span className="text-[9px] text-red-400/80">⚠ {s.allergens.join(", ")}</span>}
                   </div>
+                  {((s.allergens||[]).length>0 || (s.mayContain||[]).length>0) && (
+                    <div className="flex flex-col gap-1 mt-1.5">
+                      {(s.allergens||[]).length>0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-600 text-white">Contains</span>
+                          {s.allergens.map(a => <span key={a} className="text-[10px] capitalize px-1.5 py-0.5 rounded bg-red-950/40 text-red-200 border border-red-800/50">{a}</span>)}
+                        </div>
+                      )}
+                      {(s.mayContain||[]).length>0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500 text-amber-950">May contain</span>
+                          {s.mayContain.map(a => <span key={a} className="text-[10px] capitalize px-1.5 py-0.5 rounded bg-amber-950/30 text-amber-200 border border-amber-800/40">{a}</span>)}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
                     <span>{s.category || "Uncategorised"}</span>
                     {s.location ? <span>· 📍 {s.location}</span> : null}
@@ -4487,10 +4503,18 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
               <div className="text-[11px] text-emerald-400">Cost: £{(Number(ingForm.packPrice)/Number(ingForm.packQty)).toFixed(4)} / {ingForm.unit||"kg"}</div>
             )}
             <div>
-              <label className={labelCls}>Allergens</label>
+              <label className={labelCls}>Allergens (contains)</label>
               <div className="flex flex-wrap gap-1.5 mt-1">
                 {CK_ALLERGENS.map(a => { const on = (ingForm.allergens||[]).includes(a); return (
                   <button key={a} onClick={()=>toggleAllergen(a)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize ${on?"bg-red-600/30 text-red-200 border border-red-500/40":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{a}</button>
+                ); })}
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>May contain (traces)</label>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {CK_ALLERGENS.map(a => { const on = (ingForm.mayContain||[]).includes(a); const isContains = (ingForm.allergens||[]).includes(a); return (
+                  <button key={a} onClick={()=>toggleIngMayContain(a)} disabled={isContains} title={isContains?"Already marked as 'contains'":""} className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize ${isContains?"bg-slate-900 text-slate-700 border border-slate-800 cursor-not-allowed":on?"bg-amber-600/30 text-amber-200 border border-amber-500/40":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{a}</button>
                 ); })}
               </div>
             </div>
