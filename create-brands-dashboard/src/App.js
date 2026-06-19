@@ -25385,12 +25385,16 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
   const [expenseTypeId, setExpenseTypeId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [accountKey, setAccountKey] = useState("");
-  const [lines, setLines] = useState([]);       // [{ id, desc, qty, price, storeId }]
+  const [lines, setLines] = useState([]);       // [{ id, desc, qty, price, alloc:{storeId:qty} }]
   const [pickStores, setPickStores] = useState([]); // store ids selected for this split
+  const [allocFor, setAllocFor] = useState(null);   // line id whose allocation panel is open
 
   const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
   const lineTotal = (l) => (Number(l.qty)||0) * (Number(l.price)||0);
   const grandTotal = lines.reduce((a,l)=>a+lineTotal(l), 0);
+  // How many units of a line are allocated to stores so far, and what's left.
+  const allocatedQty = (l) => Object.values(l.alloc||{}).reduce((a,n)=>a+(Number(n)||0), 0);
+  const remainingQty = (l) => (Number(l.qty)||0) - allocatedQty(l);
 
   // Scan + extract. Uploads through the invoice extractor, then maps lines into
   // an editable local model. Falls back to a manual blank line if nothing comes.
@@ -25410,54 +25414,75 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
         desc: l.raw_description || `Item ${i+1}`,
         qty: l.pack_qty_base != null ? Number(l.pack_qty_base) : 1,
         price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : 0,
-        storeId: "",
+        alloc: {},
       }));
-      setLines(mapped.length ? mapped : [{ id:"ln-0", desc:"", qty:1, price:0, storeId:"" }]);
+      setLines(mapped.length ? mapped : [{ id:"ln-0", desc:"", qty:1, price:0, alloc:{} }]);
       setStep("assign");
     } catch (e) { setErr(e?.message || "Could not scan the invoice. You can add items manually."); 
-      // Allow manual entry even if scan failed.
-      if (!lines.length) setLines([{ id:"ln-0", desc:"", qty:1, price:0, storeId:"" }]);
+      if (!lines.length) setLines([{ id:"ln-0", desc:"", qty:1, price:0, alloc:{} }]);
       setStep("assign");
     }
     finally { setBusy(false); }
   };
 
   const setLine = (id, patch) => setLines(ls => ls.map(l => l.id===id ? { ...l, ...patch } : l));
-  const addLine = () => setLines(ls => [...ls, { id:`ln-${Date.now()}`, desc:"", qty:1, price:0, storeId:"" }]);
+  const addLine = () => setLines(ls => [...ls, { id:`ln-${Date.now()}`, desc:"", qty:1, price:0, alloc:{} }]);
   const removeLine = (id) => setLines(ls => ls.filter(l => l.id!==id));
+  // Set units of a line allocated to a store (clamped 0..remaining+current).
+  const setAlloc = (lineId, storeId, qty) => setLines(ls => ls.map(l => {
+    if (l.id !== lineId) return l;
+    const others = Object.entries(l.alloc||{}).reduce((a,[sid,n])=>a+(sid===storeId?0:(Number(n)||0)),0);
+    const max = Math.max(0, (Number(l.qty)||0) - others);
+    const v = Math.max(0, Math.min(max, Number(qty)||0));
+    const next = { ...(l.alloc||{}) };
+    if (v <= 0) delete next[storeId]; else next[storeId] = v;
+    return { ...l, alloc: next };
+  }));
 
-  // Stores that actually have items assigned → one claim each.
+  // Per store: sum the £ value of allocated quantities across all lines.
   const perStore = useMemo(() => {
     const m = {};
-    lines.forEach(l => { if (l.storeId) { (m[l.storeId] = m[l.storeId] || []).push(l); } });
+    lines.forEach(l => {
+      const price = Number(l.price)||0;
+      Object.entries(l.alloc||{}).forEach(([sid, n]) => {
+        const units = Number(n)||0; if (units<=0) return;
+        m[sid] = m[sid] || { units: 0, amount: 0, items: [] };
+        m[sid].units += units; m[sid].amount += units*price;
+        m[sid].items.push({ desc: l.desc, units, price });
+      });
+    });
     return m;
   }, [lines]);
   const assignedStoreIds = Object.keys(perStore);
-  const unassigned = lines.filter(l => !l.storeId);
+  const unallocated = lines.filter(l => remainingQty(l) > 0.0001);
   const storeName = (id) => { const s = stores.find(x=>x.id===id); return s?(s.shortName||s.name):id; };
 
-  // Quick helper: spread all currently-unassigned items evenly across the
-  // chosen stores (round-robin) — handy when you just want a rough split.
+  // Quick helper: spread each line's remaining units evenly across chosen stores.
   const autoSpread = () => {
     if (!pickStores.length) { setErr("Pick the stores to split between first."); return; }
     setErr("");
-    let i = 0;
-    setLines(ls => ls.map(l => l.storeId ? l : { ...l, storeId: pickStores[(i++) % pickStores.length] }));
+    setLines(ls => ls.map(l => {
+      const total = Number(l.qty)||0;
+      const base = Math.floor(total / pickStores.length);
+      let rem = total - base*pickStores.length;
+      const alloc = {};
+      pickStores.forEach((sid) => { const extra = rem>0?1:0; if (rem>0) rem--; const v = base+extra; if (v>0) alloc[sid]=v; });
+      return { ...l, alloc };
+    }));
   };
 
   const submitAll = async () => {
-    if (!assignedStoreIds.length) { setErr("Assign at least one item to a store."); return; }
-    if (unassigned.length) { setErr(`${unassigned.length} item(s) still have no store. Assign or remove them.`); return; }
+    if (!assignedStoreIds.length) { setErr("Allocate at least some quantity to a store."); return; }
+    if (unallocated.length) { setErr(`${unallocated.length} item(s) still have unallocated quantity. Allocate or reduce the qty.`); return; }
     setBusy(true); setErr("");
     try {
       const chosen = accountOptions.find(o => o.key === accountKey);
       const claims = assignedStoreIds.map(sid => {
-        const items = perStore[sid];
-        const amount = items.reduce((a,l)=>a+lineTotal(l), 0);
-        const itemList = items.map(l => `${l.qty}× ${l.desc} @ ${money(l.price)}`).join("; ");
+        const s = perStore[sid];
+        const itemList = s.items.map(it => `${it.units}× ${it.desc} @ ${money(it.price)}`).join("; ");
         return {
           description: `Split: ${vendor||"expense"} — ${storeName(sid)}`,
-          amount: Math.round(amount*100)/100,
+          amount: Math.round(s.amount*100)/100,
           expenseDate, expenseTypeId: expenseTypeId||null, categoryId: categoryId||null,
           storeId: sid, vendor: vendor||null,
           reference: `${chosen?`[${chosen.label}] `:""}${itemList}`.slice(0,500),
@@ -25518,46 +25543,73 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
                 );
               })}
             </div>
-            {pickStores.length>0 && <button onClick={autoSpread} className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300">↳ Spread unassigned items evenly across these stores</button>}
+            {pickStores.length>0 && <button onClick={autoSpread} className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300">↳ Spread every item's quantity evenly across these stores</button>}
           </div>
 
-          {/* Line items */}
+          {/* Line items — tap an item to allocate its quantity across stores */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="text-[11px] uppercase font-semibold text-slate-500">Items ({lines.length}) · total {money(grandTotal)}</div>
               <button onClick={addLine} className="text-[11px] text-indigo-400 hover:text-indigo-300">+ Add item</button>
             </div>
-            {lines.map(l => (
-              <div key={l.id} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-2">
-                <div className="flex items-center gap-2">
-                  <input value={l.desc} onChange={e=>setLine(l.id,{desc:e.target.value})} placeholder="Item description" className="flex-1 px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white"/>
-                  <button onClick={()=>removeLine(l.id)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={15}/></button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-slate-500">Qty</span>
-                    <input type="number" inputMode="decimal" value={l.qty} onChange={e=>setLine(l.id,{qty:e.target.value})} className="w-16 px-2 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-right"/>
+            {lines.map(l => {
+              const rem = remainingQty(l);
+              const fully = Math.abs(rem) < 0.0001;
+              const open = allocFor === l.id;
+              const allocStores = Object.keys(l.alloc||{});
+              const allocTargets = pickStores.length ? pickStores : stores.map(s=>s.id);
+              return (
+                <div key={l.id} className={`bg-slate-950 border rounded-xl p-2.5 space-y-2 ${fully?"border-emerald-700/40":rem<0?"border-red-600/50":"border-slate-800"}`}>
+                  {/* Header row: description + qty/price + the line's £, tappable to open allocation */}
+                  <div className="flex items-center gap-2">
+                    <input value={l.desc} onChange={e=>setLine(l.id,{desc:e.target.value})} placeholder="Item description" className="flex-1 px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white"/>
+                    <button onClick={()=>removeLine(l.id)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={15}/></button>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-slate-500">£ each</span>
-                    <input type="number" inputMode="decimal" value={l.price} onChange={e=>setLine(l.id,{price:e.target.value})} className="w-20 px-2 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-right"/>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-slate-500">Qty</span>
+                      <input type="number" inputMode="decimal" value={l.qty} onChange={e=>setLine(l.id,{qty:e.target.value})} className="w-16 px-2 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-right"/>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-slate-500">£ each</span>
+                      <input type="number" inputMode="decimal" value={l.price} onChange={e=>setLine(l.id,{price:e.target.value})} className="w-20 px-2 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-right"/>
+                    </div>
+                    <div className="ml-auto text-sm font-bold text-white">{money(lineTotal(l))}</div>
                   </div>
-                  <div className="ml-auto text-sm font-bold text-white">{money(lineTotal(l))}</div>
+                  {/* Tap target: allocate this item's quantity across stores */}
+                  <button onClick={()=>setAllocFor(open?null:l.id)}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-semibold border ${fully?"bg-emerald-900/30 border-emerald-700/40 text-emerald-200":"bg-slate-900 border-slate-700 text-slate-300"}`}>
+                    <span>
+                      {allocStores.length===0 ? "Tap to assign to stores"
+                        : allocStores.map(sid=>`${storeName(sid)} ×${l.alloc[sid]}`).join(" · ")}
+                    </span>
+                    <span className={`text-[10px] ${fully?"text-emerald-300":rem<0?"text-red-300":"text-amber-300"}`}>
+                      {fully ? "✓ all allocated" : rem<0 ? `${Math.abs(rem)} over` : `${rem} left`}
+                    </span>
+                  </button>
+                  {/* Allocation panel: per-store steppers */}
+                  {open && (
+                    <div className="border-t border-slate-800 pt-2 space-y-1.5">
+                      <div className="text-[10px] text-slate-500">Allocate {l.qty} unit(s) across stores — {rem} still to allocate.</div>
+                      {allocTargets.map(sid => {
+                        const cur = Number(l.alloc?.[sid])||0;
+                        return (
+                          <div key={sid} className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-slate-300 truncate">{storeName(sid)}</span>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <button onClick={()=>setAlloc(l.id, sid, cur-1)} disabled={cur<=0} className="w-8 h-8 rounded-lg bg-slate-800 text-white text-lg leading-none disabled:opacity-30">−</button>
+                              <input type="number" inputMode="numeric" value={cur} onChange={e=>setAlloc(l.id, sid, e.target.value)} className="w-12 px-1 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-center"/>
+                              <button onClick={()=>setAlloc(l.id, sid, cur+1)} disabled={rem<=0} className="w-8 h-8 rounded-lg bg-indigo-600 text-white text-lg leading-none disabled:opacity-30">+</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {allocTargets.length===0 && <div className="text-[11px] text-amber-300">Pick stores for the split first (chips above).</div>}
+                    </div>
+                  )}
                 </div>
-                {/* Store assignment chips — only the stores chosen for the split */}
-                <div className="flex flex-wrap gap-1.5">
-                  {(pickStores.length?pickStores:stores.map(s=>s.id)).map(sid => {
-                    const on = l.storeId===sid;
-                    return (
-                      <button key={sid} onClick={()=>setLine(l.id,{storeId:on?"":sid})}
-                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border ${on?"bg-emerald-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-400"}`}>
-                        {storeName(sid)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Per-store running totals */}
@@ -25566,17 +25618,17 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
               <div className="text-[11px] uppercase font-semibold text-slate-500 mb-1">Per-store totals</div>
               {assignedStoreIds.map(sid => (
                 <div key={sid} className="flex items-center justify-between text-xs">
-                  <span className="text-slate-300">{storeName(sid)} <span className="text-slate-600">· {perStore[sid].length} item(s)</span></span>
-                  <span className="font-bold text-white">{money(perStore[sid].reduce((a,l)=>a+lineTotal(l),0))}</span>
+                  <span className="text-slate-300">{storeName(sid)} <span className="text-slate-600">· {perStore[sid].units} unit(s)</span></span>
+                  <span className="font-bold text-white">{money(perStore[sid].amount)}</span>
                 </div>
               ))}
-              {unassigned.length>0 && <div className="flex items-center justify-between text-xs text-amber-300"><span>Unassigned</span><span>{unassigned.length} item(s)</span></div>}
+              {unallocated.length>0 && <div className="flex items-center justify-between text-xs text-amber-300"><span>Unallocated</span><span>{unallocated.length} item(s)</span></div>}
             </div>
           )}
 
           <div className="flex gap-2">
             <button onClick={()=>setStep("scan")} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Back</button>
-            <button onClick={()=>{ if(!assignedStoreIds.length){setErr("Assign at least one item to a store.");return;} if(unassigned.length){setErr(`${unassigned.length} item(s) still unassigned.`);return;} setErr(""); setStep("review"); }}
+            <button onClick={()=>{ if(!assignedStoreIds.length){setErr("Allocate at least some quantity to a store.");return;} if(unallocated.length){setErr(`${unallocated.length} item(s) have unallocated quantity.`);return;} setErr(""); setStep("review"); }}
               className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Review</button>
           </div>
         </div>
@@ -25599,7 +25651,7 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
             {assignedStoreIds.map(sid => (
               <div key={sid} className="flex items-center justify-between text-sm">
                 <span className="text-slate-300">{storeName(sid)}</span>
-                <span className="font-bold text-white">{money(perStore[sid].reduce((a,l)=>a+lineTotal(l),0))}</span>
+                <span className="font-bold text-white">{money(perStore[sid].amount)}</span>
               </div>
             ))}
             <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-800"><span>Total</span><span>{money(grandTotal)}</span></div>
