@@ -4351,10 +4351,55 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 )}
               </div>
 
+              {/* ── Production requirements (full) ──────────────────────────── */}
+              {planEcon.requirements.length > 0 && (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Production requirements — stock vs buy</div>
+                    <div className="text-[10px] text-slate-500">{planEcon.requirements.filter(r=>r.toBuy>0).length} to buy · {planEcon.requirements.filter(r=>r.toBuy<=0).length} covered</div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px]">
+                      <thead className="text-slate-500 uppercase tracking-wider">
+                        <tr className="border-b border-slate-800">
+                          <th className="text-left py-1.5 font-bold">Ingredient</th>
+                          <th className="text-right py-1.5 font-bold">Needed</th>
+                          <th className="text-right py-1.5 font-bold">In stock</th>
+                          <th className="text-right py-1.5 font-bold">To buy</th>
+                          <th className="text-right py-1.5 font-bold">Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {planEcon.requirements.map(r => {
+                          const covered = r.toBuy <= 0;
+                          return (
+                            <tr key={r.ingredientId} className={`border-b border-slate-800/40 ${covered?"opacity-60":""}`}>
+                              <td className="py-1.5 text-slate-200">{r.name}
+                                {covered && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300 uppercase">in stock</span>}
+                              </td>
+                              <td className="py-1.5 text-right text-slate-400 whitespace-nowrap">{r.needed} {r.unit}</td>
+                              <td className={`py-1.5 text-right whitespace-nowrap ${r.inStock>0?"text-emerald-400":"text-slate-600"}`}>{r.inStock} {r.unit}</td>
+                              <td className={`py-1.5 text-right font-semibold whitespace-nowrap ${r.toBuy>0?"text-amber-300":"text-slate-600"}`}>{r.toBuy} {r.unit}</td>
+                              <td className="py-1.5 text-right text-slate-400 whitespace-nowrap">{r.buyCost!=null?money(r.buyCost):"—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-slate-700">
+                          <td className="py-1.5 font-bold text-slate-300" colSpan={4}>Total to buy</td>
+                          <td className="py-1.5 text-right font-black text-amber-300">{money(planEcon.buyCost)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {/* ── Shopping list (live) ────────────────────────────────────── */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Shopping list — what to buy</div>
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Shopping list — to buy, grouped by supplier</div>
                   {planEcon.buyCost>0 && <div className="text-sm font-black text-amber-300">{money(planEcon.buyCost)}</div>}
                 </div>
                 {shoppingBySupplier.length === 0 ? <div className="text-xs text-slate-600">Stock covers this plan — nothing to buy (or no quantities entered yet).</div> : (
@@ -4367,9 +4412,12 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                         </div>
                         <div className="space-y-1">
                           {g.lines.map(r=>(
-                            <div key={r.ingredientId} className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-300">{r.name}</span>
-                              <span className="text-slate-400 whitespace-nowrap ml-2">{r.toBuy} {r.unit}{r.buyCost!=null?` · ${money(r.buyCost)}`:""}</span>
+                            <div key={r.ingredientId} className="flex items-center justify-between text-[11px] gap-2">
+                              <span className="text-slate-300 flex-1 min-w-0 truncate">{r.name}</span>
+                              <span className="text-slate-600 whitespace-nowrap">need {r.needed}</span>
+                              <span className={`whitespace-nowrap ${r.inStock>0?"text-emerald-400":"text-slate-600"}`}>have {r.inStock}</span>
+                              <span className="text-amber-300 font-semibold whitespace-nowrap">buy {r.toBuy} {r.unit}</span>
+                              {r.buyCost!=null && <span className="text-slate-400 whitespace-nowrap w-14 text-right">{money(r.buyCost)}</span>}
                             </div>
                           ))}
                         </div>
