@@ -6193,6 +6193,49 @@ export async function upsertCkSupplier(s) {
 export async function archiveCkSupplier(id) { const { error } = await supabase.from("ck_suppliers").update({ archived_at: new Date().toISOString() }).eq("id", id); if (error) throw error; return id; }
 
 // Bulk insert ingredients into the unified cogs_ck_items table.
+// Round-trip CSV import: update existing ingredients by (case-insensitive) name
+// match, create new ones. Returns { updated, created }. Computes cost_per_base_unit
+// from pack qty + price when both present.
+export async function upsertCkIngredientsByName(siteId, rows) {
+  const clean = (rows || []).filter(r => r.name && r.name.trim());
+  if (!clean.length) return { updated: 0, created: 0 };
+  const { data: existing, error: e0 } = await supabase.from("cogs_ck_items").select("id, name").is("archived_at", null);
+  if (e0) throw e0;
+  const byName = new Map((existing || []).map(x => [x.name.trim().toLowerCase(), x.id]));
+
+  const toRow = (r) => {
+    const packQty = r.packQty != null && r.packQty !== "" ? Number(r.packQty) : null;
+    const packPrice = r.packPrice != null && r.packPrice !== "" ? Number(r.packPrice) : null;
+    return {
+      name: r.name.trim(), category: r.category?.trim() || null, base_unit: r.unit || "kg",
+      location: r.location?.trim() || null, pack_desc: r.packDesc?.trim() || null,
+      pack_qty: packQty, pack_price: packPrice,
+      cost_per_base_unit: (packQty > 0 && packPrice != null) ? packPrice / packQty : null,
+      supplier: r.defaultSupplier?.trim() || null,
+      reorder_point: r.reorderPoint != null && r.reorderPoint !== "" ? Number(r.reorderPoint) : null,
+      allergens: Array.isArray(r.allergens) ? r.allergens : [],
+      may_contain_allergens: Array.isArray(r.mayContain) ? r.mayContain : [],
+    };
+  };
+
+  let updated = 0, created = 0;
+  const inserts = [];
+  for (const r of clean) {
+    const id = byName.get(r.name.trim().toLowerCase());
+    if (id) {
+      const { error } = await supabase.from("cogs_ck_items").update(toRow(r)).eq("id", id);
+      if (error) throw error; updated++;
+    } else {
+      inserts.push({ ...toRow(r), site_id: siteId || null });
+    }
+  }
+  if (inserts.length) {
+    const { error } = await supabase.from("cogs_ck_items").insert(inserts);
+    if (error) throw error; created = inserts.length;
+  }
+  return { updated, created };
+}
+
 export async function bulkAddCkIngredients(siteId, rows) {
   const clean = (rows || []).filter(r => r.name && r.name.trim()).map(r => ({
     site_id: siteId || null, name: r.name.trim(), category: r.category?.trim() || null,

@@ -64,7 +64,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3512,6 +3512,55 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const [bulkText, setBulkText] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const parseAllergens = (s) => (s||"").split(/[;|]/).map(x=>x.trim().toLowerCase()).filter(a => CK_ALLERGENS.includes(a));
+  const fileInputRef = useRef(null);
+  const [ioMsg, setIoMsg] = useState("");
+  const csvEscape = (v) => { const s = v==null?"":String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+  const exportCsv = () => {
+    const cols = ["name","unit","category","location","pack_desc","pack_qty","pack_price","cost_per_unit","supplier","reorder_point","allergens","may_contain"];
+    const rows = (ingredients||[]).map(i => [
+      i.name, i.unit, i.category, i.location, i.packDesc, i.packQty, i.packPrice,
+      i.costPerBaseUnit!=null?Number(i.costPerBaseUnit).toFixed(4):"", i.defaultSupplier, i.reorderPoint,
+      (i.allergens||[]).join("; "), (i.mayContain||[]).join("; "),
+    ]);
+    const csv = [cols.join(","), ...rows.map(r => r.map(csvEscape).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `ck-ingredients-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+  const parseCsvLine = (line) => {
+    const out = []; let cur = "", q = false;
+    for (let i=0;i<line.length;i++){ const ch=line[i];
+      if (q){ if (ch==='"'){ if (line[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=ch; }
+      else { if (ch===','){out.push(cur);cur="";} else if (ch==='"') q=true; else cur+=ch; }
+    }
+    out.push(cur); return out;
+  };
+  const onImportFile = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setBulkBusy(true); setIoMsg(""); setErr("");
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) throw new Error("CSV has no data rows.");
+      const header = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
+      const ix = (k) => header.findIndex(h => h===k || h===k.replace(/_/g," "));
+      const iN=ix("name"),iU=ix("unit"),iC=ix("category"),iL=ix("location"),iPD=ix("pack_desc"),
+            iPQ=ix("pack_qty"),iPP=ix("pack_price"),iS=ix("supplier"),iR=ix("reorder_point"),
+            iA=ix("allergens"),iMC=ix("may_contain");
+      const rows = lines.slice(1).map(l => { const c = parseCsvLine(l); const g=(i)=>i>=0?(c[i]||"").trim():"";
+        return { name:g(iN), unit:CK_UNITS.includes(g(iU))?g(iU):"kg", category:g(iC), location:g(iL),
+          packDesc:g(iPD), packQty:g(iPQ), packPrice:g(iPP), defaultSupplier:g(iS), reorderPoint:g(iR),
+          allergens:parseAllergens(g(iA)), mayContain:parseAllergens(g(iMC)) };
+      }).filter(r => r.name);
+      if (!rows.length) throw new Error("No valid rows found (need a 'name' column).");
+      const res = await upsertCkIngredientsByName(siteId, rows);
+      setIoMsg(`Imported: ${res.updated} updated, ${res.created} created.`);
+      load();
+    } catch (ex) { setErr(ex?.message || String(ex)); }
+    finally { setBulkBusy(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+  };
   const parseBulk = (text, mode) => {
     const lines = (text||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
     if (!lines.length) return [];
@@ -3895,10 +3944,14 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           <button onClick={openGin} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Goods in</button>
           <button onClick={()=>openIng(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Ingredient</button>
           <button onClick={()=>{setBulkModal(true);setBulkText("");setErr("");}} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Bulk add</button>
+          <button onClick={exportCsv} disabled={!ingredients.length} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold flex items-center gap-1"><Download size={14}/> Export CSV</button>
+          <button onClick={()=>fileInputRef.current?.click()} disabled={bulkBusy} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold flex items-center gap-1"><Upload size={14}/> Import CSV</button>
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={onImportFile} className="hidden"/>
         </div>
       </div>
 
       {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+      {ioMsg && <div className="text-xs text-emerald-300 bg-emerald-950/20 border border-emerald-800/40 rounded-xl px-3 py-2">{ioMsg}</div>}
 
       {/* Alert tiles */}
       <div className="grid grid-cols-3 gap-2">
