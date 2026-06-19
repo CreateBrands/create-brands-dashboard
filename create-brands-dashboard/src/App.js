@@ -5306,6 +5306,14 @@ function InventoryBuilder() {
   const [err, setErr] = useState(null);
   const [scope, setScope] = useState("store");   // 'store' | 'ck'
   const [q, setQ] = useState("");
+  const [filterCat, setFilterCat] = useState("all");
+  const [filterSup, setFilterSup] = useState("all");
+  const [filterLoc, setFilterLoc] = useState("all");
+  const [unpricedOnly, setUnpricedOnly] = useState(false);
+  const [sortBy, setSortBy] = useState("name");   // name | cost | priced
+  const [sortDir, setSortDir] = useState("asc");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
   const [savingId, setSavingId] = useState(null);
   const [showCats, setShowCats] = useState(false);
   const [newCat, setNewCat] = useState("");
@@ -5324,8 +5332,28 @@ function InventoryBuilder() {
   const supScope = scope === "ck" ? "supplier_ck" : "supplier_store";
   const cats = data ? data.categories.filter(c => c.scope === catScope) : [];
   const sups = data ? data.categories.filter(c => c.scope === supScope) : [];
+  const locations = Array.from(new Set(items.map(i => i.location).filter(Boolean))).sort();
   const match = (s) => !q || (s || "").toLowerCase().includes(q.toLowerCase());
-  const shown = items.filter(i => match(i.name) || match(i.category) || match(i.supplier));
+  const filtered = items.filter(i =>
+    (match(i.name) || match(i.category) || match(i.supplier)) &&
+    (filterCat === "all" || i.category === filterCat) &&
+    (filterSup === "all" || i.supplier === filterSup) &&
+    (filterLoc === "all" || (i.location || "") === filterLoc) &&
+    (!unpricedOnly || i.costPerBaseUnit == null)
+  );
+  const shown = [...filtered].sort((a, b) => {
+    let cmp = 0;
+    if (sortBy === "name") cmp = (a.name || "").localeCompare(b.name || "");
+    else if (sortBy === "cost") cmp = (a.costPerBaseUnit ?? -1) - (b.costPerBaseUnit ?? -1);
+    else if (sortBy === "priced") cmp = (a.costPerBaseUnit == null ? 0 : 1) - (b.costPerBaseUnit == null ? 0 : 1);
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+  const totalPages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
+  const pageClamped = Math.min(page, totalPages - 1);
+  const pageRows = shown.slice(pageClamped * PAGE_SIZE, (pageClamped + 1) * PAGE_SIZE);
+  // reset to first page when filters/search change
+  useEffect(() => { setPage(0); }, [q, filterCat, filterSup, filterLoc, unpricedOnly, sortBy, sortDir, scope]);
+  const toggleSort = (key) => { if (sortBy === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortBy(key); setSortDir("asc"); } };
 
   const [adding, setAdding] = useState(false);     // dialog open
   const [addName, setAddName] = useState("");
@@ -5436,6 +5464,29 @@ function InventoryBuilder() {
           className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={14}/> Add item</button>
       </div>
 
+      {/* filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+          <option value="all">All categories ({items.length})</option>
+          {cats.map(c => <option key={c.id} value={c.name}>{c.name} ({items.filter(i=>i.category===c.name).length})</option>)}
+        </select>
+        <select value={filterSup} onChange={e=>setFilterSup(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+          <option value="all">All suppliers</option>
+          {sups.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+        </select>
+        {locations.length > 0 && (
+          <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+            <option value="all">All locations</option>
+            {locations.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+        )}
+        <button onClick={()=>setUnpricedOnly(v=>!v)} className={`px-3 py-2 rounded-xl text-xs font-semibold ${unpricedOnly?"bg-amber-700 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>Unpriced only</button>
+        {(filterCat!=="all"||filterSup!=="all"||filterLoc!=="all"||unpricedOnly||q) && (
+          <button onClick={()=>{setQ("");setFilterCat("all");setFilterSup("all");setFilterLoc("all");setUnpricedOnly(false);}} className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">Clear ✕</button>
+        )}
+        <span className="text-xs text-slate-500 ml-auto">{shown.length} of {items.length}</span>
+      </div>
+
       {importing && (
         <InventoryImport scope={scope} onClose={() => setImporting(false)} onDone={async (n) => { setImporting(false); await load(); setErr(null); }}/>
       )}
@@ -5493,7 +5544,7 @@ function InventoryBuilder() {
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-slate-400 text-xs">
             <tr>
-              <th className="text-left px-2 py-2">Name</th>
+              <th className="text-left px-2 py-2 cursor-pointer select-none hover:text-white" onClick={()=>toggleSort("name")}>Name{sortBy==="name"?(sortDir==="asc"?" ↑":" ↓"):""}</th>
               <th className="text-left px-2 py-2">Category</th>
               <th className="text-left px-2 py-2">Supplier</th>
               <th className="text-left px-2 py-2">Pack desc</th>
@@ -5501,21 +5552,33 @@ function InventoryBuilder() {
               <th className="text-right px-2 py-2">Pack qty</th>
               <th className="text-left px-2 py-2">Unit</th>
               <th className="text-right px-2 py-2">Pack £</th>
-              <th className="text-right px-2 py-2">£/unit</th>
+              <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-white" onClick={()=>toggleSort("cost")}>£/unit{sortBy==="cost"?(sortDir==="asc"?" ↑":" ↓"):""}</th>
               <th className="px-2 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {shown.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-500 text-sm">No items yet. Click "Add item" to start building.</td></tr>
+              <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-500 text-sm">No items match. Adjust filters or click "Add item".</td></tr>
             )}
-            {shown.map(it => (
+            {pageRows.map(it => (
               <CogsItemRow key={it.id} item={it} scope={scope} cats={cats} sups={sups} saving={savingId===it.id}
                 onSave={(patch) => saveField(it.id, patch)} onDelete={() => removeRow(it.id)}/>
             ))}
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-slate-500">Showing {pageClamped*PAGE_SIZE+1}–{Math.min((pageClamped+1)*PAGE_SIZE, shown.length)} of {shown.length}</span>
+          <div className="flex items-center gap-1">
+            <button onClick={()=>setPage(0)} disabled={pageClamped===0} className="px-2 py-1.5 rounded-lg bg-slate-800 text-slate-300 disabled:opacity-30 hover:bg-slate-700">« First</button>
+            <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={pageClamped===0} className="px-2 py-1.5 rounded-lg bg-slate-800 text-slate-300 disabled:opacity-30 hover:bg-slate-700">‹ Prev</button>
+            <span className="px-3 py-1.5 text-slate-400 font-semibold">Page {pageClamped+1} / {totalPages}</span>
+            <button onClick={()=>setPage(p=>Math.min(totalPages-1,p+1))} disabled={pageClamped>=totalPages-1} className="px-2 py-1.5 rounded-lg bg-slate-800 text-slate-300 disabled:opacity-30 hover:bg-slate-700">Next ›</button>
+            <button onClick={()=>setPage(totalPages-1)} disabled={pageClamped>=totalPages-1} className="px-2 py-1.5 rounded-lg bg-slate-800 text-slate-300 disabled:opacity-30 hover:bg-slate-700">Last »</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
