@@ -6085,6 +6085,11 @@ export async function upsertCkIngredient(ing) {
     reorder_point: ing.reorderPoint != null && ing.reorderPoint !== "" ? Number(ing.reorderPoint) : null,
     supplier: ing.defaultSupplier || null, notes: ing.note || null,
     location: ing.location || null,
+    pack_desc: ing.packDesc || null,
+    pack_qty: ing.packQty != null && ing.packQty !== "" ? Number(ing.packQty) : null,
+    pack_price: ing.packPrice != null && ing.packPrice !== "" ? Number(ing.packPrice) : null,
+    cost_per_base_unit: (Number(ing.packQty) > 0 && ing.packPrice != null && ing.packPrice !== "")
+      ? Number(ing.packPrice) / Number(ing.packQty) : null,
     site_id: ing.siteId || null,
   };
   if (ing.id) {

@@ -4478,6 +4478,14 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 </select>
               </div>
             </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className={labelCls}>Pack desc</label><input value={ingForm.packDesc||""} onChange={e=>setIngForm(f=>({...f,packDesc:e.target.value}))} className={inputCls} placeholder="6x2.5kg bag"/></div>
+              <div><label className={labelCls}>Pack qty ({ingForm.unit||"kg"})</label><input type="number" value={ingForm.packQty??""} onChange={e=>setIngForm(f=>({...f,packQty:e.target.value}))} className={inputCls} placeholder="15"/></div>
+              <div><label className={labelCls}>Pack price £</label><input type="number" value={ingForm.packPrice??""} onChange={e=>setIngForm(f=>({...f,packPrice:e.target.value}))} className={inputCls} placeholder="0.00"/></div>
+            </div>
+            {(Number(ingForm.packQty)>0 && Number(ingForm.packPrice)>=0 && ingForm.packPrice!=="" && ingForm.packPrice!=null) && (
+              <div className="text-[11px] text-emerald-400">Cost: £{(Number(ingForm.packPrice)/Number(ingForm.packQty)).toFixed(4)} / {ingForm.unit||"kg"}</div>
+            )}
             <div>
               <label className={labelCls}>Allergens</label>
               <div className="flex flex-wrap gap-1.5 mt-1">
