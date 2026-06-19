@@ -237,8 +237,15 @@ const FEATURE_REGISTRY = [
   { key: "feat.time.approve", label: "Approve hours",      section: "time-attend", defaultRoles: ["owner","hq_staff","manager"] },
   { key: "feat.time.editPunch", label: "Edit punches",     section: "time-attend", defaultRoles: ["owner","hq_staff","manager"] },
   // Accounts / Finance
-  { key: "feat.accounts.pnl",  label: "View P&L",          section: "accounts", defaultRoles: ["owner","hq_staff"] },
-  { key: "feat.accounts.bank", label: "Bank transactions", section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.pnl",       label: "View P&L",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.bank",      label: "Bank & Cash",         section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.invoices",  label: "Invoices",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.suppliers", label: "Suppliers",           section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.reconcile", label: "Reconcile",           section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.export",    label: "Export",              section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.finance.spend",      label: "Spend",               section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.finance.pettycash",  label: "Petty Cash",          section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.finance.expenses",   label: "Expenses",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
 ];
 const FEATURES_BY_SECTION = FEATURE_REGISTRY.reduce((m,f)=>{ (m[f.section]=m[f.section]||[]).push(f); return m; }, {});
 
@@ -25882,7 +25889,7 @@ function CashManage({ accounts = [], sources = [], expenseTypes = [], categories
 // Finance → Team & Roles. Owner/admin-only. Create FINANCE-scoped roles
 // (scope: finance_only, base hq_staff) and assign employees to them. Reuses the
 // same handlers as Access & Roles so it's one source of truth, just focused.
-function FinanceRolesTab({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRole, onAssignMemberRole }) {
+function FinanceRolesTab({ customRoles = [], opsTeam = [], accessPerms = {}, onSaveRole, onArchiveRole, onAssignMemberRole, onSetPerm }) {
   const financeRoles = (customRoles || []).filter(r => r.scope === "finance_only" && !r.archivedAt);
   const financeRoleIds = new Set(financeRoles.map(r => r.id));
   const [modal, setModal] = useState(null);   // null | "new" | role
@@ -25890,7 +25897,26 @@ function FinanceRolesTab({ customRoles = [], opsTeam = [], onSaveRole, onArchive
   const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [assignFor, setAssignFor] = useState(null); // role being assigned to
+  const [assignFor, setAssignFor] = useState(null); // role id: assign panel open
+  const [permsFor, setPermsFor] = useState(null);   // role id: permissions panel open
+  // The finance modules a role can be granted/denied.
+  const FIN_FEATURES = [
+    ["feat.accounts.pnl", "P&L"],
+    ["feat.accounts.bank", "Bank & Cash"],
+    ["feat.accounts.invoices", "Invoices"],
+    ["feat.accounts.suppliers", "Suppliers"],
+    ["feat.accounts.reconcile", "Reconcile"],
+    ["feat.accounts.export", "Export"],
+    ["feat.finance.spend", "Spend"],
+    ["feat.finance.pettycash", "Petty Cash"],
+    ["feat.finance.expenses", "Expenses"],
+  ];
+  // Resolved permission for a finance role: explicit override wins, else default
+  // (finance roles are base hq_staff, which defaults ON for these features).
+  const permOn = (roleId, featKey) => {
+    const ov = accessPerms?.[roleId]?.[featKey];
+    return ov === undefined ? true : ov;
+  };
 
   const activeMembers = (opsTeam || []).filter(m => !m.archivedAt);
   const memberRole = (m) => customRoles.find(r => r.id === m.roleId) || null;
@@ -25933,11 +25959,29 @@ function FinanceRolesTab({ customRoles = [], opsTeam = [], onSaveRole, onArchive
                   <div className="text-[11px] text-slate-500 mt-1">{holders.length} {holders.length===1?"person":"people"}{holders.length?`: ${holders.map(m=>m.firstName||m.name).join(", ")}`:""}</div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={()=>setAssignFor(assignFor===r.id?null:r.id)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Assign</button>
+                  <button onClick={()=>{setPermsFor(permsFor===r.id?null:r.id); setAssignFor(null);}} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Access</button>
+                  <button onClick={()=>{setAssignFor(assignFor===r.id?null:r.id); setPermsFor(null);}} className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Assign</button>
                   <button onClick={()=>openEdit(r)} className="text-slate-500 hover:text-white"><Edit size={14}/></button>
                   <button onClick={async()=>{ if(window.confirm(`Archive the role "${r.name}"? People assigned to it will lose finance access.`)){ try{await onArchiveRole?.(r.id);}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
                 </div>
               </div>
+              {permsFor === r.id && (
+                <div className="mt-3 border-t border-slate-800 pt-3">
+                  <div className="text-[11px] text-slate-500 mb-2">Which Finance modules can {r.name} see? Toggle off to hide a module from this role.</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    {FIN_FEATURES.map(([fk,fl]) => {
+                      const on = permOn(r.id, fk);
+                      return (
+                        <button key={fk} onClick={async()=>{ try{ await onSetPerm?.(r.id, fk, !on); }catch(e){ setErr(e?.message||String(e)); } }}
+                          className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs border ${on?"bg-emerald-900/30 border-emerald-600/40 text-emerald-200":"bg-slate-950 border-slate-800 text-slate-500"}`}>
+                          <span>{fl}</span>
+                          <span className={`text-[10px] font-bold ${on?"text-emerald-300":"text-slate-600"}`}>{on?"ON":"OFF"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {assignFor === r.id && (
                 <div className="mt-3 border-t border-slate-800 pt-3 space-y-1.5 max-h-72 overflow-y-auto">
                   <div className="text-[11px] text-slate-500 mb-1">Tap a person to assign them to {r.name}. Tap again to remove.</div>
@@ -25994,7 +26038,7 @@ function AccountsHubView(props) {
     onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
     onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
     sharedFile, onConsumeSharedFile, initialTab,
-    customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole,
+    customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, accessPerms = {}, onSetPerm,
     cashAccounts = [], cashLedger = [], cashHandlers = {} } = props;
   const [tab, setTab] = useState(initialTab || "pnl");
   const [storeFilter, setStoreFilter] = useState("all");
@@ -26003,6 +26047,7 @@ function AccountsHubView(props) {
 
   const { canFeature: acctCanFeature } = useAccess();
   const isAdmin = currentUser?.role === "owner";
+  const TAB_FEAT = { pnl:"feat.accounts.pnl", bank:"feat.accounts.bank", invoices:"feat.accounts.invoices", suppliers:"feat.accounts.suppliers", reconcile:"feat.accounts.reconcile", export:"feat.accounts.export" };
   const TABS = [
     ["pnl", "P&L"],
     ["bank", "Bank & Cash"],
@@ -26011,18 +26056,21 @@ function AccountsHubView(props) {
     ["reconcile", "Reconcile"],
     ["export", "Export"],
     ...(isAdmin ? [["roles", "Team & Roles"]] : []),
-  ].filter(([k]) => k==="pnl" ? acctCanFeature("feat.accounts.pnl") : k==="bank" ? acctCanFeature("feat.accounts.bank") : true);
+  ].filter(([k]) => k === "roles" ? true : acctCanFeature(TAB_FEAT[k]));
+  // If the active tab isn't permitted, fall back to the first allowed tab.
+  const allowedTabKeys = TABS.map(([k]) => k);
+  const effTab = allowedTabKeys.includes(tab) ? tab : (allowedTabKeys[0] || "pnl");
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
         {TABS.map(([k,l]) => (
           <button key={k} onClick={()=>setTab(k)}
-            className={`px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap flex-shrink-0 ${tab===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
+            className={`px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap flex-shrink-0 ${effTab===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
         ))}
       </div>
 
-      {tab !== "roles" && (
+      {effTab !== "roles" && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Finance scope</span>
           <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
@@ -26034,14 +26082,14 @@ function AccountsHubView(props) {
         </div>
       )}
 
-      {tab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole}/>}
+      {effTab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} accessPerms={accessPerms} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole} onSetPerm={onSetPerm}/>}
 
-      {tab === "pnl" && acctCanFeature("feat.accounts.pnl") && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
-      {tab === "bank" && acctCanFeature("feat.accounts.bank") && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
-      {tab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter}/>}
-      {tab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
-      {tab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
-      {tab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter}/>}
+      {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
+      {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
+      {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter}/>}
+      {effTab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
+      {effTab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
+      {effTab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter}/>}
     </div>
   );
 }
@@ -37968,13 +38016,14 @@ export default function App() {
   // Finance entity — a focused accounts-only workspace. When the user has
   // stepped into the Finance tile, the sidebar shows just the accounts hub.
   const isFinanceEntity = selectedEntityBrand === "finance";
+  const FINANCE_NAV_FEAT = { spend: "feat.finance.spend", "petty-cash": "feat.finance.pettycash", expenses: "feat.finance.expenses" };
   const FINANCE_NAV = [
     { group: "FINANCE", items: [
       { key: "accounts", label: "Accounts", icon: BarChart2 },
       { key: "spend", label: "Spend", icon: TrendingDown },
       { key: "petty-cash", label: "Petty Cash", icon: Wallet },
       { key: "expenses", label: "Expenses", icon: Receipt },
-    ]},
+    ].filter(i => !FINANCE_NAV_FEAT[i.key] || canFeature(FINANCE_NAV_FEAT[i.key])) },
   ];
   const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : NAV_GROUPS;
 
@@ -38184,7 +38233,7 @@ export default function App() {
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
