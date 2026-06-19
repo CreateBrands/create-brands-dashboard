@@ -36113,8 +36113,8 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
 // Mobile bottom tab bar (md:hidden). Desktop keeps the sidebar untouched.
 // "More" opens a full-screen grouped sheet. All routing via setActiveView.
-function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen }) {
-  const tabs = [
+function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: tabsOverride }) {
+  const tabs = tabsOverride || [
     { key: "store-analytics", label: "Home",     icon: LayoutDashboard },
     { key: "schedule",        label: "Schedule", icon: CalendarDays },
     { key: "availability",    label: "Availability", icon: Calendar },
@@ -36140,9 +36140,11 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen }) {
   );
 }
 
-function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], onLogout }) {
+function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverride = null, onLogout }) {
   if (!open) return null;
-  const GROUPS = [
+  const GROUPS = groupsOverride
+    ? groupsOverride.map(g => ({ title: g.group, items: g.items }))
+    : [
     { title: "Operations", items: [
       { key:"ops-tasks", label:"Today's Tasks", icon:CheckSquare },
       { key:"ops-temps", label:"Temperature", icon:Thermometer },
@@ -37815,8 +37817,14 @@ export default function App() {
             />}
           </main>
         </div>
-        <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}/>
-        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={NAV_GROUPS.flatMap(g => g.items.map(i => i.key))} onLogout={handleLogout}/>
+        <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}
+          tabs={isFinanceEntity ? [
+            { key: "accounts",   label: "Accounts", icon: BarChart2 },
+            { key: "spend",      label: "Spend",    icon: TrendingDown },
+            { key: "petty-cash", label: "Petty Cash", icon: Wallet },
+            { key: "expenses",   label: "Expenses", icon: Receipt },
+          ] : undefined}/>
+        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={effectiveNavGroups.flatMap(g => g.items.map(i => i.key))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} onLogout={handleLogout}/>
         <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
