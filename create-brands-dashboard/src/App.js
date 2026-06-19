@@ -12968,11 +12968,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       const cutoffMs = new Date(r.date + "T00:00:00").getTime() + cutoffMin * 60000;
       if (end > cutoffMs) end = cutoffMs;
     }
-    const raw = Math.max(0, (end - pIn) / 3600000);
-    // Guard: an OPEN punch left running (forgotten clock-out) can balloon to
-    // hundreds of hours and wreck cost totals. Cap a single open shift at 16h.
-    const isOpen = (r.status === "open" || !r.punchOut);
-    return isOpen ? Math.min(raw, 16) : raw;
+    return Math.max(0, (end - pIn) / 3600000);
   };
   // Current hourly rate from the employee's live profile (falls back to the
   // punch's snapshot if not found). Used for OPEN shifts so that setting a
@@ -13004,6 +13000,15 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     [opsTeam, scopedStoreIds]
   );
   const salariedIds = useMemo(() => new Set(scopedSalaried.map(m => m.id)), [scopedSalaried]);
+  // ALL salaried staff (not store-scoped). Used to exclude salaried punches from
+  // the hourly cost sum even if the member's store mapping is incomplete — their
+  // 'hourlyRate' column actually holds an annual/monthly salary, so costing a
+  // punch at that rate would massively inflate labour. Their cost is the fixed
+  // daily slice (salariedPeriodCost), not hours × rate.
+  const salariedByIdAll = useMemo(
+    () => new Set((opsTeam || []).filter(m => isSalaried(m)).map(m => m.id)),
+    [opsTeam]
+  );
   // Fixed salaried cost for the whole selected period = sum(dailySlice) * days.
   const salariedPeriodCost = useMemo(() => {
     const perDay = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m), 0);
@@ -13026,8 +13031,9 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     const revenue = s.reduce((a, r) => a + r.revenue, 0);
     const orders = s.reduce((a, r) => a + r.saleCount, 0);
     const hours = Math.round(p.reduce((a, r) => a + punchHours(r, cutoffMin), 0) * 100) / 100;
-    // Hourly cost excludes salaried staff (their cost is the fixed slice).
-    const hourlyCost = p.reduce((a, r) => salariedIds.has(r.employeeId) ? a : a + punchCost(r, cutoffMin), 0);
+    // Hourly cost excludes ALL salaried staff (their 'rate' is a salary, not an
+    // hourly rate — costing punches at it would inflate labour massively).
+    const hourlyCost = p.reduce((a, r) => salariedByIdAll.has(r.employeeId) ? a : a + punchCost(r, cutoffMin), 0);
     const labourCost = Math.round((hourlyCost + salariedCost) * 100) / 100;
     return {
       revenue, orders, hours, labourCost,
@@ -13036,9 +13042,9 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       atv: orders > 0 ? revenue / orders : null,
     };
   };
-  const cur = useMemo(() => rollup(data.curSales, data.curPunch, null, salariedPeriodCost), [data, scopedStoreIds, dashTick, salariedIds, salariedPeriodCost]);
+  const cur = useMemo(() => rollup(data.curSales, data.curPunch, null, salariedPeriodCost), [data, scopedStoreIds, dashTick, salariedIds, salariedByIdAll, salariedPeriodCost]);
   // When in progress, clip the comparison day's punches to the same time-of-day.
-  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null, salariedPrevCost), [data, scopedStoreIds, inProgress, nowCutoffMin, salariedIds, salariedPrevCost]);
+  const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null, salariedPrevCost), [data, scopedStoreIds, inProgress, nowCutoffMin, salariedIds, salariedByIdAll, salariedPrevCost]);
 
   // Theoretical COGS (recipe x sales) for Prime Cost % and Net Margin. Only for a
   // single selected store (the engine is per-store); "all" leaves these blank.
