@@ -20,7 +20,7 @@ import {
   fetchCashLedger, addCashLedgerEntry, deleteCashLedgerEntry,
   computeCashBalances, ensureStoreCashAccounts, postEodCashDeposit, setCashLedgerReconciled,
   ensurePettyCashAccount, topUpPettyCash,
-  fetchExpensePayees, upsertExpensePayee, archiveExpensePayee,
+  fetchExpensePayees, upsertExpensePayee, archiveExpensePayee, uploadExpenseReceipt,
   fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
   reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
   fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts,
@@ -25377,6 +25377,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const [form, setForm] = useState(null);
   const [recon, setRecon] = useState(null); // claim being reconciled
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const [receiptBusy, setReceiptBusy] = useState(false);
 
   const expName = (id) => expenseTypes.find(e=>e.id===id)?.name || "";
   const catName = (id) => categories.find(c=>c.id===id)?.name || "";
@@ -25386,7 +25387,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const byStatus = (st) => claims.filter(c => c.status === st);
   const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
 
-  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"" }); setTab("new"); };
+  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"", receiptUrl:null }); setTab("new"); };
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
 
   // Submit-form scoping: a regular employee only sees what they're granted.
@@ -25496,6 +25497,11 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
         </div>
         <div className="text-right flex-shrink-0">
           <div className="text-sm font-bold text-white">{money(c.amount)}</div>
+          {c.receiptUrl && (
+            <a href={c.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-block mt-1.5">
+              <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700 ml-auto"/>
+            </a>
+          )}
         </div>
       </div>
       {canReconcile && (
@@ -25544,6 +25550,32 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={form.expenseDate} onChange={e=>setF("expenseDate",e.target.value)} className={ec}/></div>
           </div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Reference</label><input value={form.reference} onChange={e=>setF("reference",e.target.value)} className={ec}/></div>
+          <div>
+            <label className="text-[11px] text-slate-500 uppercase font-semibold">Receipt / invoice photo</label>
+            {form.receiptUrl ? (
+              <div className="mt-1 flex items-center gap-3">
+                <a href={form.receiptUrl} target="_blank" rel="noopener noreferrer" className="block">
+                  <img src={form.receiptUrl} alt="receipt" className="h-20 w-20 object-cover rounded-lg border border-slate-700"/>
+                </a>
+                <div className="flex flex-col gap-1">
+                  <a href={form.receiptUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:text-indigo-300">View full size</a>
+                  <button onClick={()=>setF("receiptUrl", null)} className="text-xs text-red-400 hover:text-red-300 text-left">Remove</button>
+                </div>
+              </div>
+            ) : (
+              <label className={`mt-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl border border-dashed border-slate-700 text-xs ${receiptBusy?"text-slate-500":"text-slate-400 hover:border-indigo-500 hover:text-indigo-300 cursor-pointer"}`}>
+                {receiptBusy ? "Uploading…" : <><Camera size={14}/> Add a photo of the receipt or invoice</>}
+                <input type="file" accept="image/*" capture="environment" disabled={receiptBusy} className="hidden"
+                  onChange={async e => {
+                    const file = e.target.files?.[0]; if (!file) return;
+                    setReceiptBusy(true); setErr("");
+                    try { const url = await uploadExpenseReceipt(file, currentUser?.opsTeamMemberId || currentUser?.id || null); setF("receiptUrl", url); }
+                    catch (er) { setErr(er?.message || "Could not upload the photo."); }
+                    finally { setReceiptBusy(false); e.target.value = ""; }
+                  }}/>
+              </label>
+            )}
+          </div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Description *</label><textarea value={form.description} onChange={e=>setF("description",e.target.value)} placeholder="What was it for?" className={`${ec} min-h-[64px] resize-y`}/></div>
           {err && <div className="text-xs text-red-400">{err}</div>}
           <div className="flex gap-2 pt-1">

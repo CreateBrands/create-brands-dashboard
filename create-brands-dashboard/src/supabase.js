@@ -7225,7 +7225,7 @@ const mapExpenseClaim = (e) => ({
   id: e.id, description: e.description, amount: Number(e.amount)||0, expenseDate: e.expense_date,
   expenseTypeId: e.expense_type_id || null, categoryId: e.category_id || null, storeId: e.store_id || null,
   payeeId: e.payee_id || null,
-  vendor: e.vendor || "", reference: e.reference || "",
+  vendor: e.vendor || "", reference: e.reference || "", receiptUrl: e.receipt_url || null,
   status: e.status || "submitted", submittedBy: e.submitted_by || "", submittedById: e.submitted_by_id || null,
   approvedBy: e.approved_by || null, approvedAt: e.approved_at || null, rejectedReason: e.rejected_reason || null,
   reconcileType: e.reconcile_type || null, cashAccountId: e.cash_account_id || null, cashLedgerId: e.cash_ledger_id || null,
@@ -7241,6 +7241,18 @@ export async function fetchExpenseClaims({ status } = {}) {
   return (data || []).map(mapExpenseClaim);
 }
 
+// Upload an expense receipt/invoice image. Returns a public URL stored on the
+// claim. Uses the existing public photo bucket pattern.
+export async function uploadExpenseReceipt(file, submittedById) {
+  const ext = (file.name && file.name.includes(".")) ? file.name.split(".").pop().toLowerCase() : "jpg";
+  const random = Math.random().toString(36).slice(2, 10);
+  const filename = `${submittedById || "anon"}/${Date.now()}-${random}.${ext}`;
+  const { error } = await supabase.storage.from("expense-receipts").upload(filename, file, { upsert: false });
+  if (error) throw error;
+  const { data } = supabase.storage.from("expense-receipts").getPublicUrl(filename);
+  return data.publicUrl;
+}
+
 export async function submitExpenseClaim(claim) {
   const amt = Number(claim.amount);
   if (!(amt > 0)) throw new Error("Amount must be greater than zero.");
@@ -7251,6 +7263,7 @@ export async function submitExpenseClaim(claim) {
     expense_type_id: claim.expenseTypeId || null, category_id: claim.categoryId || null,
     payee_id: claim.payeeId || null,
     store_id: claim.storeId || null, vendor: claim.vendor || null, reference: claim.reference || null,
+    receipt_url: claim.receiptUrl || null,
     status: "submitted", submitted_by: claim.submittedBy || null, submitted_by_id: claim.submittedById || null,
     updated_at: new Date().toISOString(),
   };
