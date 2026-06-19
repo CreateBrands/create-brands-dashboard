@@ -25370,6 +25370,252 @@ function PettyCashView({ accounts = [], ledger = [], stores = [], target = 0, ha
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPENSE SPLIT FLOW — scan an invoice, extract line items (qty + price), assign
+// each item to a store, then submit ONE claim per store from the single receipt.
+// Mobile-first: big tap targets, per-store running totals, no tiny controls.
+// ─────────────────────────────────────────────────────────────────────────────
+function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], accountOptions = [], currentUser, onCancel, onDone, handlers = {} }) {
+  const [step, setStep] = useState("scan");     // scan | assign | review
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [receiptUrl, setReceiptUrl] = useState(null);
+  const [vendor, setVendor] = useState("");
+  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0,10));
+  const [expenseTypeId, setExpenseTypeId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [accountKey, setAccountKey] = useState("");
+  const [lines, setLines] = useState([]);       // [{ id, desc, qty, price, storeId }]
+  const [pickStores, setPickStores] = useState([]); // store ids selected for this split
+
+  const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
+  const lineTotal = (l) => (Number(l.qty)||0) * (Number(l.price)||0);
+  const grandTotal = lines.reduce((a,l)=>a+lineTotal(l), 0);
+
+  // Scan + extract. Uploads through the invoice extractor, then maps lines into
+  // an editable local model. Falls back to a manual blank line if nothing comes.
+  const scanAndExtract = async (file) => {
+    setBusy(true); setErr("");
+    try {
+      // Keep the image as the receipt on every resulting claim.
+      const rUrl = await uploadExpenseReceipt(file, currentUser?.opsTeamMemberId || currentUser?.id || null);
+      setReceiptUrl(rUrl);
+      // Route through the existing invoice extractor for OCR line items.
+      const inv = await uploadInvoiceFile(file, "expense", currentUser?.id);
+      try { await extractInvoice(inv.id); } catch { /* extractor best-effort */ }
+      const { invoice, lines: rawLines } = await getInvoiceWithLines(inv.id);
+      if (invoice?.supplier_name) setVendor(invoice.supplier_name);
+      const mapped = (rawLines || []).map((l, i) => ({
+        id: l.id || `ln-${i}`,
+        desc: l.raw_description || `Item ${i+1}`,
+        qty: l.pack_qty_base != null ? Number(l.pack_qty_base) : 1,
+        price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : 0,
+        storeId: "",
+      }));
+      setLines(mapped.length ? mapped : [{ id:"ln-0", desc:"", qty:1, price:0, storeId:"" }]);
+      setStep("assign");
+    } catch (e) { setErr(e?.message || "Could not scan the invoice. You can add items manually."); 
+      // Allow manual entry even if scan failed.
+      if (!lines.length) setLines([{ id:"ln-0", desc:"", qty:1, price:0, storeId:"" }]);
+      setStep("assign");
+    }
+    finally { setBusy(false); }
+  };
+
+  const setLine = (id, patch) => setLines(ls => ls.map(l => l.id===id ? { ...l, ...patch } : l));
+  const addLine = () => setLines(ls => [...ls, { id:`ln-${Date.now()}`, desc:"", qty:1, price:0, storeId:"" }]);
+  const removeLine = (id) => setLines(ls => ls.filter(l => l.id!==id));
+
+  // Stores that actually have items assigned → one claim each.
+  const perStore = useMemo(() => {
+    const m = {};
+    lines.forEach(l => { if (l.storeId) { (m[l.storeId] = m[l.storeId] || []).push(l); } });
+    return m;
+  }, [lines]);
+  const assignedStoreIds = Object.keys(perStore);
+  const unassigned = lines.filter(l => !l.storeId);
+  const storeName = (id) => { const s = stores.find(x=>x.id===id); return s?(s.shortName||s.name):id; };
+
+  // Quick helper: spread all currently-unassigned items evenly across the
+  // chosen stores (round-robin) — handy when you just want a rough split.
+  const autoSpread = () => {
+    if (!pickStores.length) { setErr("Pick the stores to split between first."); return; }
+    setErr("");
+    let i = 0;
+    setLines(ls => ls.map(l => l.storeId ? l : { ...l, storeId: pickStores[(i++) % pickStores.length] }));
+  };
+
+  const submitAll = async () => {
+    if (!assignedStoreIds.length) { setErr("Assign at least one item to a store."); return; }
+    if (unassigned.length) { setErr(`${unassigned.length} item(s) still have no store. Assign or remove them.`); return; }
+    setBusy(true); setErr("");
+    try {
+      const chosen = accountOptions.find(o => o.key === accountKey);
+      const claims = assignedStoreIds.map(sid => {
+        const items = perStore[sid];
+        const amount = items.reduce((a,l)=>a+lineTotal(l), 0);
+        const itemList = items.map(l => `${l.qty}× ${l.desc} @ ${money(l.price)}`).join("; ");
+        return {
+          description: `Split: ${vendor||"expense"} — ${storeName(sid)}`,
+          amount: Math.round(amount*100)/100,
+          expenseDate, expenseTypeId: expenseTypeId||null, categoryId: categoryId||null,
+          storeId: sid, vendor: vendor||null,
+          reference: `${chosen?`[${chosen.label}] `:""}${itemList}`.slice(0,500),
+          receiptUrl,
+        };
+      });
+      await handlers.submitMany?.(claims);
+      onDone?.();
+    } catch (e) { setErr(e?.message || "Could not submit the split."); }
+    finally { setBusy(false); }
+  };
+
+  const ec = "w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white";
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4 max-w-xl">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-bold text-white">Split expense across stores</div>
+        <button onClick={onCancel} className="text-slate-500 hover:text-white text-sm">Cancel</button>
+      </div>
+
+      {/* Step indicator */}
+      <div className="flex items-center gap-1.5 text-[11px]">
+        {[["scan","1 · Scan"],["assign","2 · Assign items"],["review","3 · Review & submit"]].map(([k,l],i)=>(
+          <div key={k} className={`flex-1 text-center py-1.5 rounded-lg font-semibold ${step===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-500"}`}>{l}</div>
+        ))}
+      </div>
+
+      {err && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-xl px-3 py-2">{err}</div>}
+
+      {step === "scan" && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-400">Take a photo of the invoice. We'll pull out the line items so you can assign each one to a store.</p>
+          {receiptUrl && <img src={receiptUrl} alt="receipt" className="h-32 w-32 object-cover rounded-xl border border-slate-700"/>}
+          <label className={`flex items-center justify-center gap-2 px-3 py-6 rounded-2xl border-2 border-dashed ${busy?"border-slate-700 text-slate-500":"border-indigo-500/50 text-indigo-300 hover:bg-indigo-950/20 cursor-pointer"} text-sm font-semibold`}>
+            {busy ? "Scanning…" : <><Camera size={18}/> Scan invoice / receipt</>}
+            <input type="file" accept="image/*" capture="environment" disabled={busy} className="hidden"
+              onChange={e=>{ const f=e.target.files?.[0]; if(f) scanAndExtract(f); e.target.value=""; }}/>
+          </label>
+          <button onClick={()=>{ setLines([{ id:"ln-0", desc:"", qty:1, price:0, storeId:"" }]); setStep("assign"); }}
+            className="w-full py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">Skip scan — enter items manually</button>
+        </div>
+      )}
+
+      {step === "assign" && (
+        <div className="space-y-4">
+          {/* Pick which stores are in this split */}
+          <div>
+            <div className="text-[11px] uppercase font-semibold text-slate-500 mb-1.5">Stores in this split</div>
+            <div className="flex flex-wrap gap-2">
+              {stores.map(s => {
+                const on = pickStores.includes(s.id);
+                return (
+                  <button key={s.id} onClick={()=>setPickStores(p => on ? p.filter(x=>x!==s.id) : [...p, s.id])}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border ${on?"bg-indigo-600 border-transparent text-white":"bg-slate-950 border-slate-700 text-slate-400"}`}>
+                    {s.shortName||s.name}
+                  </button>
+                );
+              })}
+            </div>
+            {pickStores.length>0 && <button onClick={autoSpread} className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300">↳ Spread unassigned items evenly across these stores</button>}
+          </div>
+
+          {/* Line items */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] uppercase font-semibold text-slate-500">Items ({lines.length}) · total {money(grandTotal)}</div>
+              <button onClick={addLine} className="text-[11px] text-indigo-400 hover:text-indigo-300">+ Add item</button>
+            </div>
+            {lines.map(l => (
+              <div key={l.id} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input value={l.desc} onChange={e=>setLine(l.id,{desc:e.target.value})} placeholder="Item description" className="flex-1 px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white"/>
+                  <button onClick={()=>removeLine(l.id)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={15}/></button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-slate-500">Qty</span>
+                    <input type="number" inputMode="decimal" value={l.qty} onChange={e=>setLine(l.id,{qty:e.target.value})} className="w-16 px-2 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-right"/>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-slate-500">£ each</span>
+                    <input type="number" inputMode="decimal" value={l.price} onChange={e=>setLine(l.id,{price:e.target.value})} className="w-20 px-2 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white text-right"/>
+                  </div>
+                  <div className="ml-auto text-sm font-bold text-white">{money(lineTotal(l))}</div>
+                </div>
+                {/* Store assignment chips — only the stores chosen for the split */}
+                <div className="flex flex-wrap gap-1.5">
+                  {(pickStores.length?pickStores:stores.map(s=>s.id)).map(sid => {
+                    const on = l.storeId===sid;
+                    return (
+                      <button key={sid} onClick={()=>setLine(l.id,{storeId:on?"":sid})}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border ${on?"bg-emerald-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-400"}`}>
+                        {storeName(sid)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Per-store running totals */}
+          {assignedStoreIds.length>0 && (
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-1">
+              <div className="text-[11px] uppercase font-semibold text-slate-500 mb-1">Per-store totals</div>
+              {assignedStoreIds.map(sid => (
+                <div key={sid} className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300">{storeName(sid)} <span className="text-slate-600">· {perStore[sid].length} item(s)</span></span>
+                  <span className="font-bold text-white">{money(perStore[sid].reduce((a,l)=>a+lineTotal(l),0))}</span>
+                </div>
+              ))}
+              {unassigned.length>0 && <div className="flex items-center justify-between text-xs text-amber-300"><span>Unassigned</span><span>{unassigned.length} item(s)</span></div>}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={()=>setStep("scan")} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Back</button>
+            <button onClick={()=>{ if(!assignedStoreIds.length){setErr("Assign at least one item to a store.");return;} if(unassigned.length){setErr(`${unassigned.length} item(s) still unassigned.`);return;} setErr(""); setStep("review"); }}
+              className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Review</button>
+          </div>
+        </div>
+      )}
+
+      {step === "review" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor</label><input value={vendor} onChange={e=>setVendor(e.target.value)} className={ec}/></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={expenseDate} onChange={e=>setExpenseDate(e.target.value)} className={ec}/></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Type</label><select value={expenseTypeId} onChange={e=>setExpenseTypeId(e.target.value)} className={ec}><option value="">—</option>{expenseTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={categoryId} onChange={e=>setCategoryId(e.target.value)} className={ec}><option value="">—</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          </div>
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Bank assigned</label><select value={accountKey} onChange={e=>setAccountKey(e.target.value)} className={ec}><option value="">—</option>{accountOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
+
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+            <div className="text-[11px] uppercase font-semibold text-slate-500">This will create {assignedStoreIds.length} claim(s)</div>
+            {assignedStoreIds.map(sid => (
+              <div key={sid} className="flex items-center justify-between text-sm">
+                <span className="text-slate-300">{storeName(sid)}</span>
+                <span className="font-bold text-white">{money(perStore[sid].reduce((a,l)=>a+lineTotal(l),0))}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-800"><span>Total</span><span>{money(grandTotal)}</span></div>
+          </div>
+          {receiptUrl && <div className="text-[11px] text-slate-500">Same receipt photo will be attached to each claim.</div>}
+
+          <div className="flex gap-2">
+            <button onClick={()=>setStep("assign")} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Back</button>
+            <button onClick={submitAll} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">{busy?"Submitting…":`Submit ${assignedStoreIds.length} claim(s)`}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], payees = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {} }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
@@ -25527,7 +25773,10 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           <h2 className="text-lg font-bold text-white">Expenses</h2>
           <p className="text-sm text-slate-500">Submit any payment or expense, then approve and reconcile it against a cash account or a bank transaction.</p>
         </div>
-        <button onClick={openNew} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">+ New expense</button>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setTab("split")} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold">Split across stores</button>
+          <button onClick={openNew} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">+ New expense</button>
+        </div>
       </div>
 
       <div className="flex gap-1 border-b border-slate-800 flex-wrap">
@@ -25536,7 +25785,15 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
         ))}
       </div>
 
-      {tab==="new" ? (
+      {tab==="split" ? (
+        <ExpenseSplitFlow
+          stores={expenseStores} categories={formCategories} expenseTypes={expenseTypes}
+          accountOptions={accountOptions} currentUser={currentUser}
+          onCancel={()=>setTab("submitted")}
+          onDone={()=>setTab("submitted")}
+          handlers={handlers}
+        />
+      ) : tab==="new" ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-w-lg">
           <div className="text-sm font-bold text-white">New expense</div>
           {cannotSubmit && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-xl px-3 py-2">You don't have any expense types or stores assigned yet. Ask an admin to assign them in Manage lists → Assign employee.</div>}
@@ -37339,6 +37596,11 @@ export default function App() {
 
   const expenseHandlers = useMemo(() => ({
     submit: async (c) => { await submitExpenseClaim({ ...c, submittedBy: c.submittedBy || currentUser?.name || null, submittedById: currentUser?.opsTeamMemberId || currentUser?.id || null }); await reloadExpenses(); },
+    submitMany: async (claims) => {
+      const by = currentUser?.name || null; const byId = currentUser?.opsTeamMemberId || currentUser?.id || null;
+      for (const c of claims) { await submitExpenseClaim({ ...c, submittedBy: by, submittedById: byId }); }
+      await reloadExpenses();
+    },
     approve: async (id) => { await approveExpenseClaim(id, currentUser?.name || null); await reloadExpenses(); },
     reject: async (id, reason) => { await rejectExpenseClaim(id, reason, currentUser?.name || null); await reloadExpenses(); },
     reconcileCash: async (claim, accId) => { await reconcileExpenseCash(claim, accId, currentUser?.name || null); await Promise.all([reloadExpenses(), reloadCash()]); },
