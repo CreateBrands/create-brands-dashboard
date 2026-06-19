@@ -6682,6 +6682,11 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
               className={`px-3 py-1.5 rounded-full text-xs font-semibold ${groupBy===k?"bg-slate-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>{l}</button>
           ))}
           <span className="w-px h-5 bg-slate-700 mx-1"/>
+          <button onClick={()=>setCollapsed(Object.fromEntries(sectionNames.map(s=>[s,false])))}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Expand all</button>
+          <button onClick={()=>setCollapsed({})}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Collapse all</button>
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
           <button onClick={()=>setShowValues(v=>!v)}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold ${showValues?"bg-amber-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>
             {showValues?"Hide values":"Show values"}
@@ -6699,10 +6704,10 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
         {sectionNames.map(sec => {
           const list = sections[sec];
           const secCounted = list.filter(isCounted).length;
-          const isOpen = !collapsed[sec];
+          const isOpen = collapsed[sec] === false; // collapsed by default; open only when explicitly expanded
           return (
             <div key={sec} className="rounded-2xl border border-slate-800 overflow-hidden">
-              <button onClick={()=>setCollapsed(c=>({...c,[sec]:!c[sec]}))}
+              <button onClick={()=>setCollapsed(c=>({...c,[sec]: c[sec]===false ? true : false}))}
                 className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 text-left">
                 <span className="text-sm font-bold text-white flex items-center gap-2">
                   <ChevronRight size={15} className={`transition-transform ${isOpen?"rotate-90":""}`}/>
