@@ -36108,6 +36108,12 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       .sort((a,b) => new Date(a.punchIn) - new Date(b.punchIn)),
     [punchRecords, dayPunches, isToday, storeSel]
   );
+  // On break = clocked in (open) with a break started and not yet ended.
+  const onBreak = useMemo(
+    () => onShift.filter(p => p.breakStart && !p.breakEnd)
+      .sort((a,b) => new Date(b.breakStart) - new Date(a.breakStart)),
+    [onShift]
+  );
   // Overdue = open and past scheduled end (forgotten clock-out).
   const overdue = useMemo(() => onShift.filter(p => {
     if (!p.scheduledEnd || !p.date) return false;
@@ -36129,7 +36135,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
   const TABS = [
     { key:"on", label:"On", list: onShift },
-    { key:"break", label:"Break", list: [] },
+    { key:"break", label:`Break${onBreak.length?` (${onBreak.length})`:""}`, list: onBreak },
     { key:"overdue", label:"Overdue punches", list: overdue },
     { key:"upcoming", label:"Upcoming", list: upcoming },
     { key:"out", label:"Out", list: out },
@@ -36203,7 +36209,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
   const TILES = [
     { key:"on", label:"On", icon: UserCheck, value: onShift.length, cls:"bg-emerald-500/10 text-emerald-300 border-emerald-500/20" },
-    { key:"break", label:"Break", icon: Coffee, value: 0, cls:"bg-slate-500/10 text-slate-300 border-slate-500/20" },
+    { key:"break", label:"Break", icon: Coffee, value: onBreak.length, cls: onBreak.length?"bg-amber-500/10 text-amber-300 border-amber-500/20":"bg-slate-500/10 text-slate-300 border-slate-500/20" },
     { key:"overdue", label:"Overdue", icon: AlertTriangle, value: overdue.length, cls: overdue.length? "bg-amber-500/10 text-amber-300 border-amber-500/20":"bg-slate-500/10 text-slate-400 border-slate-500/20" },
     { key:"upcoming", label:"Upcoming", icon: Clock, value: upcoming.length, cls:"bg-slate-500/10 text-slate-300 border-slate-500/20" },
     { key:"out", label:"Out", icon: LogOut, value: out.length, cls:"bg-indigo-500/10 text-indigo-300 border-indigo-500/20" },
@@ -36291,10 +36297,8 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
       {/* Employee list — borderless to free up space */}
       <div>
-        {tab === "break" ? (
-          <div className="text-center py-10 text-sm text-slate-500">Break tracking isn't enabled yet — no break data to show.</div>
-        ) : active.list.length === 0 ? (
-          <div className="text-center py-10 text-sm text-slate-500">No one in this list{isToday?" right now":""}.</div>
+        {active.list.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-500">{tab==="break" ? "No one on break right now." : `No one in this list${isToday?" right now":""}.`}</div>
         ) : active.list.map(renderRow)}
       </div>
 
