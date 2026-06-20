@@ -3548,12 +3548,15 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
     const file = e.target.files?.[0]; if (!file) return;
     setBulkBusy(true); setIoMsg(""); setErr("");
     try {
-      const text = await file.text();
+      const text = (await file.text()).replace(/^\uFEFF/, "");  // strip Excel BOM
       const lines = text.split(/\r?\n/).filter(l => l.trim());
       if (lines.length < 2) throw new Error("CSV has no data rows.");
-      const header = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
+      const header = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase().replace(/^\uFEFF/, ""));
       const ix = (k) => header.findIndex(h => h===k || h===k.replace(/_/g," "));
-      const iN=ix("name"),iU=ix("unit"),iC=ix("category"),iL=ix("location"),iPD=ix("pack_desc"),
+      // Accept common header names for the item name column.
+      let iN = ["name","item","ingredient","ingredient name","product","description"].map(ix).find(i => i>=0);
+      if (iN === undefined) iN = -1;
+      const iU=ix("unit"),iC=ix("category"),iL=ix("location"),iPD=ix("pack_desc"),
             iPQ=ix("pack_qty"),iPP=ix("pack_price"),iS=ix("supplier"),iR=ix("reorder_point"),
             iA=ix("allergens"),iMC=ix("may_contain");
       const rows = lines.slice(1).map(l => { const c = parseCsvLine(l); const g=(i)=>i>=0?(c[i]||"").trim():"";
@@ -3561,7 +3564,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           packDesc:g(iPD), packQty:g(iPQ), packPrice:g(iPP), defaultSupplier:g(iS), reorderPoint:g(iR),
           allergens:parseAllergens(g(iA)), mayContain:parseAllergens(g(iMC)) };
       }).filter(r => r.name);
-      if (!rows.length) throw new Error("No valid rows found (need a 'name' column).");
+      if (!rows.length) throw new Error(`No valid rows found — need a 'name' (or Item/Ingredient/Product) column. Headers detected: ${header.join(", ") || "none"}.`);
       const res = await upsertCkIngredientsByName(siteId, rows);
       setIoMsg(`Imported: ${res.updated} updated, ${res.created} created.`);
       load();
