@@ -6132,8 +6132,8 @@ export async function upsertCkIngredient(ing) {
     pack_desc: ing.packDesc || null,
     pack_qty: ing.packQty != null && ing.packQty !== "" ? Number(ing.packQty) : null,
     pack_price: ing.packPrice != null && ing.packPrice !== "" ? Number(ing.packPrice) : null,
-    cost_per_base_unit: (Number(ing.packQty) > 0 && ing.packPrice != null && ing.packPrice !== "")
-      ? Number(ing.packPrice) / Number(ing.packQty) : null,
+    // cost_per_base_unit is a GENERATED column (DB computes pack_price/pack_qty);
+    // it cannot be written, so it's intentionally omitted from this payload.
     site_id: ing.siteId || null,
   };
   if (ing.id) {
@@ -6252,7 +6252,7 @@ export async function upsertCkIngredientsByName(siteId, rows) {
       name: r.name.trim(), category: r.category?.trim() || null, base_unit: r.unit || "kg",
       location: r.location?.trim() || null, pack_desc: r.packDesc?.trim() || null,
       pack_qty: packQty, pack_price: packPrice,
-      cost_per_base_unit: (packQty > 0 && packPrice != null) ? packPrice / packQty : null,
+      // cost_per_base_unit is a GENERATED column — DB computes it; do not write it.
       supplier: r.defaultSupplier?.trim() || null,
       reorder_point: r.reorderPoint != null && r.reorderPoint !== "" ? Number(r.reorderPoint) : null,
       allergens: Array.isArray(r.allergens) ? r.allergens : [],
