@@ -3358,6 +3358,10 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
   const [savedAt, setSavedAt] = useState(null);
+  const [status, setStatus] = useState("all");       // all | uncounted | counted
+  const [groupBy, setGroupBy] = useState("category"); // category | location | none
+  const [collapsed, setCollapsed] = useState({});     // section -> bool (false = open)
+  const [savedKey, setSavedKey] = useState(null);     // last-saved ingredient id (green flash)
 
   const load = async () => {
     setLoading(true); setErr("");
@@ -3393,8 +3397,16 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
     if (!openId) return;
     try {
       await setStockCountLine(openId, "ck", String(ingredientId), value === "" ? null : value, null);
-      setSavedAt(Date.now());
+      setSavedAt(Date.now()); setSavedKey(String(ingredientId));
+      setTimeout(() => setSavedKey(k => k === String(ingredientId) ? null : k), 1200);
     } catch (e) { setErr(e?.message || "Couldn't save that line."); }
+  };
+  // Stepper: bump a count up/down by 1 and save.
+  const step = (ingredientId, delta) => {
+    const cur = Number(qtys[String(ingredientId)] || 0);
+    const next = Math.max(0, cur + delta);
+    setQtys(q => ({ ...q, [String(ingredientId)]: String(next) }));
+    saveQty(ingredientId, String(next));
   };
 
   const finalise = async () => {
@@ -3445,55 +3457,117 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
   }
 
   // ── Count editor (a count is open) ──
-  const list = (ingredients || []).filter(i => !search || (i.name || "").toLowerCase().includes(search.toLowerCase()));
-  const countedN = Object.values(qtys).filter(v => v !== "" && v != null).length;
-  // Group by category for easier counting.
-  const groups = {};
-  list.forEach(i => { const g = i.category || "Uncategorised"; (groups[g] = groups[g] || []).push(i); });
-  const groupNames = Object.keys(groups).sort();
+  const isCounted = (i) => { const v = qtys[String(i.id)]; return v !== "" && v != null; };
+  const sectionOf = (i) => groupBy === "location" ? (i.location || "Unassigned")
+    : groupBy === "category" ? (i.category || "Uncategorised") : "All items";
+  const filtered = (ingredients || []).filter(i => {
+    if (search && !(i.name || "").toLowerCase().includes(search.toLowerCase())) return false;
+    if (status === "uncounted" && isCounted(i)) return false;
+    if (status === "counted" && !isCounted(i)) return false;
+    return true;
+  });
+  const sections = {};
+  filtered.forEach(i => { const s = sectionOf(i); (sections[s] = sections[s] || []).push(i); });
+  const sectionNames = Object.keys(sections).sort();
+  const totalN = (ingredients || []).length;
+  const countedN = (ingredients || []).filter(isCounted).length;
+  const pct = totalN ? Math.round((countedN / totalN) * 100) : 0;
+  const finalised = (counts.find(c => c.id === openId)?.status) === "finalised";
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <button onClick={() => { setOpenId(null); load(); }} className="text-xs text-slate-400 hover:text-white flex items-center gap-1"><ChevronRight size={13} className="rotate-180"/> Back to counts</button>
+    <div className="space-y-3">
+      <button onClick={() => { setOpenId(null); load(); }} className="text-xs text-indigo-400">← Back to counts</button>
+      {err && <div className="text-xs text-red-400 bg-red-950/40 rounded-lg px-3 py-2">{err}</div>}
+
+      {/* Sticky progress header */}
+      <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur rounded-2xl border border-slate-800 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-white">Kitchen count{savedAt ? " · saved" : ""}</div>
+        </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">{countedN} of {ingredients.length} counted{savedAt ? " · saved" : ""}</span>
-          <button onClick={finalise} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold">Finalise count</button>
+          <div className="flex-1 h-2.5 rounded-full bg-slate-800 overflow-hidden">
+            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/>
+          </div>
+          <div className="text-xs font-semibold text-slate-300 whitespace-nowrap">{countedN} / {totalN} · {pct}%</div>
+        </div>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search ingredients…"
+          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white"/>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {[["all","All"],["uncounted","To do"],["counted","Done"]].map(([k,l]) => (
+            <button key={k} onClick={() => setStatus(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold ${status===k?"bg-indigo-600 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>
+              {l}{k==="uncounted"?` (${totalN-countedN})`:k==="counted"?` (${countedN})`:""}
+            </button>
+          ))}
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          {[["category","By category"],["location","By location"],["none","Flat list"]].map(([k,l]) => (
+            <button key={k} onClick={() => setGroupBy(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold ${groupBy===k?"bg-slate-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>{l}</button>
+          ))}
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          <button onClick={() => setCollapsed(Object.fromEntries(sectionNames.map(s => [s, false])))}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Expand all</button>
+          <button onClick={() => setCollapsed({})}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Collapse all</button>
+          {!finalised && <button onClick={finalise} disabled={busy}
+            className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs font-semibold ml-auto disabled:opacity-50">Finalise</button>}
         </div>
       </div>
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search ingredients…" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm"/>
-      {err && <div className="text-xs text-red-400">{err}</div>}
+
+      {finalised && <div className="text-[11px] text-emerald-400">This count is finalised (read-only).</div>}
+
       {ingredients.length === 0 ? (
         <div className="text-center py-10 text-sm text-slate-600">No ingredients in the kitchen yet. Add them in the Stock tab first.</div>
       ) : (
-        <div className="space-y-4">
-          {groupNames.map(g => (
-            <div key={g}>
-              <div className="text-[11px] uppercase font-semibold text-slate-500 mb-1.5">{g}</div>
-              <div className="space-y-1">
-                {groups[g].map(i => {
-                  const val = qtys[String(i.id)] ?? "";
-                  const done = val !== "" && val != null;
-                  return (
-                    <div key={i.id} className={`flex items-center gap-3 bg-slate-900 border rounded-xl px-3 py-2 ${done ? "border-emerald-700/40" : "border-slate-800"}`}>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-white truncate">{i.name}</div>
-                        {i.unit && <div className="text-[11px] text-slate-500">counted in {i.unit}</div>}
-                      </div>
-                      <input
-                        type="number" inputMode="decimal" step="any" value={val}
-                        onChange={e => setQtys(q => ({ ...q, [String(i.id)]: e.target.value }))}
-                        onBlur={e => saveQty(i.id, e.target.value)}
-                        placeholder="0"
-                        className="w-24 px-2.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm text-right"
-                      />
-                      <span className="text-xs text-slate-600 w-8">{i.unit || ""}</span>
-                    </div>
-                  );
-                })}
+        <div className="space-y-3 pb-20">
+          {sectionNames.length === 0 && <div className="text-xs text-slate-500 py-8 text-center">No items match. Try ‘All’ or clear the search.</div>}
+          {sectionNames.map(sec => {
+            const list = sections[sec];
+            const secCounted = list.filter(isCounted).length;
+            const isOpen = collapsed[sec] === false; // collapsed by default; open when expanded
+            return (
+              <div key={sec} className="rounded-2xl border border-slate-800 overflow-hidden">
+                <button onClick={() => setCollapsed(c => ({ ...c, [sec]: c[sec]===false ? true : false }))}
+                  className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 text-left">
+                  <span className="text-sm font-bold text-white flex items-center gap-2">
+                    <ChevronRight size={15} className={`transition-transform ${isOpen?"rotate-90":""}`}/>
+                    {sec}
+                  </span>
+                  <span className={`text-xs font-semibold ${secCounted===list.length?"text-emerald-400":"text-slate-400"}`}>{secCounted}/{list.length}</span>
+                </button>
+                {isOpen && (
+                  <div className="divide-y divide-slate-800/60">
+                    {list.map(i => {
+                      const key = String(i.id); const v = qtys[key]; const counted = v!==""&&v!=null;
+                      return (
+                        <div key={i.id} className={`flex items-center gap-3 px-4 py-3 ${counted?"bg-emerald-950/20":""}`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-white truncate flex items-center gap-2">
+                              {counted && <Check size={14} className="text-emerald-400 shrink-0"/>}
+                              {i.name}
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {i.packDesc?`${i.packDesc} · `:""}{i.unit?`counted in ${i.unit}`:""}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button disabled={finalised} onClick={() => step(i.id, -1)}
+                              className="w-9 h-9 rounded-lg bg-slate-800 text-white text-lg font-bold disabled:opacity-40 active:bg-slate-700">−</button>
+                            <input disabled={finalised} value={v??""} inputMode="decimal"
+                              onChange={e => setQtys(q => ({ ...q, [key]: e.target.value }))} onBlur={() => saveQty(i.id, qtys[key]??"")}
+                              className={`w-16 h-9 text-center bg-slate-800 border rounded-lg text-sm text-white ${savedKey===key?"border-emerald-500":"border-slate-700"}`}
+                              placeholder="0"/>
+                            <button disabled={finalised} onClick={() => step(i.id, 1)}
+                              className="w-9 h-9 rounded-lg bg-slate-800 text-white text-lg font-bold disabled:opacity-40 active:bg-slate-700">+</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
