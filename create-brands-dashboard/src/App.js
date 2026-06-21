@@ -8580,7 +8580,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
   );
 }
 
-function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits,
+function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
   hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
@@ -8898,6 +8898,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
                 checklistStates={checklistStates} onSignOff={onSignOff}
                 onChecklistItemToggle={onChecklistItemToggle} onTempLog={onTempLog} currentUser={currentUser}
+                storeRoles={storeRoles} opsTeam={opsTeam}
               />
             </>
           )}
@@ -16884,7 +16885,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 }
 
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [] }) {
   const { user } = useAuth();
 
   // visibleStores = the stores this user can see (already filtered upstream
@@ -16940,7 +16941,30 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     // until Stage 6 makes store_id NOT NULL.
     return visibleBrandIds.has(a.brandId);
   };
-  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a));
+  // ── Targeting: a non-manager should only see assignments aimed at them ──
+  // Managers/HQ/owner oversee everything and see all assignments in scope.
+  const isManager = isManagerOrAbove(user.role);
+  const me = useMemo(
+    () => (opsTeam || []).find(m => m.id === (currentUser?.opsTeamMemberId || currentUser?.id)),
+    [opsTeam, currentUser]
+  );
+  // Resolve the store-role NAMES this person holds (assignments store role by name).
+  const myRoleNames = useMemo(() => {
+    const ids = new Set(me?.roleIds || (me?.roleId ? [me.roleId] : []));
+    return new Set((storeRoles || []).filter(r => ids.has(r.id)).map(r => (r.name || "").toLowerCase()));
+  }, [me, storeRoles]);
+  const myDept = (me?.department || "").toLowerCase();
+  const myId = me?.id;
+  const targetedAtMe = (a) => {
+    if (isManager) return true;                  // managers see all in-scope tasks
+    const to = a.assignTo || (a.personId ? "employee" : (a.department ? "department" : "role"));
+    if (to === "employee") return a.personId === myId;
+    if (to === "department") return (a.department || "").toLowerCase() === myDept && !!myDept;
+    if (to === "role") return myRoleNames.has((a.role || "").toLowerCase());
+    return true;                                 // untargeted/legacy → visible to all
+  };
+
+  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a) && targetedAtMe(a));
   const overdue = bAssigns.filter(isOverdue);
 
   const getTaskName = (type, taskId) => {
@@ -38358,7 +38382,7 @@ export default function App() {
     return (
       <AuthContext.Provider value={{ user: currentUser }}>
         <EmployeeShell
-          currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users}
+          currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users} storeRoles={storeRoles}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
           cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
           tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
@@ -38609,7 +38633,7 @@ export default function App() {
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser}/>}
+            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
