@@ -17463,6 +17463,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   const [expandedId, setExpandedId] = useState(null);
   const [tempVal, setTempVal] = useState("");
   const [tempBusy, setTempBusy] = useState(false);
+  const [tempErr, setTempErr] = useState("");
 
   // If the chosen store falls out of scope (e.g. ownership filter narrows
   // and removes it), reset to "all" so we don't show a stale empty state.
@@ -17600,15 +17601,18 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                     {ok !== null && (
                       <div className={`rounded-xl border p-2.5 text-sm font-semibold ${ok ? "bg-emerald-950/20 border-emerald-500/30 text-emerald-300" : "bg-red-950/20 border-red-500/30 text-red-300"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>
                     )}
+                    {tempErr && <div className="rounded-xl border border-red-500/30 bg-red-950/30 p-2.5 text-xs text-red-300">{tempErr}</div>}
                     <button disabled={tempBusy || tempVal==="" || isNaN(num)} onClick={async()=>{
-                        setTempBusy(true);
+                        setTempBusy(true); setTempErr("");
                         try {
                           const breach = unit ? !checkTemp(unit, num) : false;
-                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: unit?.brandId || a.brandId, storeId: unit?.storeId || a.storeId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: getTodayStr(), loggedBy: currentUser?.name || "Staff" });
+                          const bId = unit?.brandId || a.brandId || currentUser?.brandIds?.[0] || null;
+                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: bId, storeId: unit?.storeId || a.storeId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: getTodayStr(), loggedBy: currentUser?.name || "Staff" });
                           // Mark the temp assignment done for today via sign-off path.
                           await onSignOff?.(a, taskName);
                           setExpandedId(null); setTempVal("");
-                        } finally { setTempBusy(false); }
+                        } catch (e) { setTempErr(e?.message || "Couldn't save the reading. Please try again."); }
+                        finally { setTempBusy(false); }
                       }} className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">{tempBusy ? "Saving…" : "Save reading"}</button>
                   </div>
                 );
@@ -38898,7 +38902,10 @@ export default function App() {
       );
     }
   }, [showToast]);
-  const handleTempLog     = useCallback(async l=>{const s=await insertTempLog(l);setTempLogs(ls=>[s,...ls]);}, []);
+  const handleTempLog     = useCallback(async l=>{
+    try { const s=await insertTempLog(l); setTempLogs(ls=>[s,...ls]); showToast("✓ Reading saved"); }
+    catch(e){ showToast(e?.message || "Couldn't save the reading", "error"); throw e; }
+  }, [showToast]);
   const handleDeliveryAdd = useCallback(async d=>{const s=await insertDelivery(d);setDeliveries(ds=>[s,...ds]);}, []);
   const handleChecklistItemToggle = useCallback(async (stateKey,itemId,val,assignment)=>{
     const newState={...(checklistStates[stateKey]||{}),[itemId]:val};
