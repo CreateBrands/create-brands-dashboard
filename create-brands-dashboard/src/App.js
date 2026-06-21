@@ -4309,26 +4309,32 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunPlanId(""); setRunModal(true); setErr(""); };
   const shortfalls = (runAlloc||[]).filter(a => a.shortfall);
   // ── Opening finished-goods stock (kitchen start-up) ──
-  // Records product you ALREADY have, as a production run with NO ingredient
-  // consumption — so it shows in Finished goods on-hand without touching inventory.
+  // Records product you ALREADY have, as production runs with NO ingredient
+  // consumption. Multi-row: add several products in one go.
   const [openStockModal, setOpenStockModal] = useState(false);
-  const [osProductId, setOsProductId] = useState("");
-  const [osQty, setOsQty] = useState("");
-  const [osUseBy, setOsUseBy] = useState("");
+  const [osRows, setOsRows] = useState([]);   // [{ productId, qty, useBy }]
   const [osBusy, setOsBusy] = useState(false);
-  const osProduct = ckProducts.find(p => String(p.id) === String(osProductId));
-  const openOpeningStock = () => { setOsProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setOsQty(""); setOsUseBy(""); setOpenStockModal(true); setErr(""); };
+  const osBlankRow = () => ({ productId: ckProducts[0]?.id ? String(ckProducts[0].id) : "", qty: "", useBy: "" });
+  const openOpeningStock = () => { setOsRows([osBlankRow()]); setOpenStockModal(true); setErr(""); };
+  const osSetRow = (idx, patch) => setOsRows(rs => rs.map((r,i) => i===idx ? { ...r, ...patch } : r));
+  const osAddRow = () => setOsRows(rs => [...rs, osBlankRow()]);
+  const osRemoveRow = (idx) => setOsRows(rs => rs.filter((_,i) => i!==idx));
   const doOpeningStock = async () => {
-    if (!osProduct) { setErr("Pick a product."); return; }
-    if (!(Number(osQty) > 0)) { setErr("Enter a quantity."); return; }
+    const valid = osRows.filter(r => r.productId && Number(r.qty) > 0);
+    if (!valid.length) { setErr("Add at least one product with a quantity."); return; }
     setOsBusy(true); setErr("");
     try {
-      const al = productAllergens(osProduct);
-      await createProductionRun({ siteId, product: osProduct, producedQty: Number(osQty),
-        runDate: new Date().toISOString().slice(0,10), useByDate: osUseBy || null,
-        allocations: [], // no ingredient consumption — this is existing stock
-        allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)],
-        runBy: currentUser?.name, note: "Opening stock (kitchen start-up)" });
+      const today = new Date().toISOString().slice(0,10);
+      for (const r of valid) {
+        const product = ckProducts.find(p => String(p.id) === String(r.productId));
+        if (!product) continue;
+        const al = productAllergens(product);
+        await createProductionRun({ siteId, product, producedQty: Number(r.qty),
+          runDate: today, useByDate: r.useBy || null,
+          allocations: [], // no ingredient consumption — existing stock
+          allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)],
+          runBy: currentUser?.name, note: "Opening stock (kitchen start-up)" });
+      }
       setOpenStockModal(false); load();
     } catch (e) { setErr(e?.message||String(e)); }
     setOsBusy(false);
@@ -5432,31 +5438,48 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
       )}
 
       {/* Production run modal */}
-      {openStockModal && (
-        <Modal title="Add opening stock" onClose={()=>setOpenStockModal(false)} maxW="max-w-md"
+      {openStockModal && (() => {
+        const validCount = osRows.filter(r => r.productId && Number(r.qty) > 0).length;
+        return (
+        <Modal title="Add opening stock" onClose={()=>setOpenStockModal(false)} maxW="max-w-lg"
           footer={<>
             <button onClick={()=>setOpenStockModal(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
-            <button onClick={doOpeningStock} disabled={osBusy||!osProduct||!(Number(osQty)>0)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40">{osBusy?"Adding…":"Add stock"}</button>
+            <button onClick={doOpeningStock} disabled={osBusy||!validCount} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40">{osBusy?"Adding…":`Add ${validCount||""} ${validCount===1?"item":"items"}`.trim()}</button>
           </>}>
           <div className="space-y-3">
-            <p className="text-xs text-slate-400">Record finished product you already have, before starting production. This adds to on-hand finished goods without using any ingredients.</p>
-            <div><label className={labelCls}>Product</label>
-              <select value={osProductId} onChange={e=>setOsProductId(e.target.value)} className={inputCls}>
-                {ckProducts.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
-              </select>
+            <p className="text-xs text-slate-400">Record finished product you already have, before starting production. Add a row per product. This adds to on-hand finished goods without using any ingredients.</p>
+            <div className="space-y-2">
+              {osRows.map((r, idx) => {
+                const prod = ckProducts.find(p => String(p.id) === String(r.productId));
+                return (
+                  <div key={idx} className="bg-slate-900/60 border border-slate-700 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-400">Item {idx+1}</span>
+                      {osRows.length > 1 && <button onClick={()=>osRemoveRow(idx)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>}
+                    </div>
+                    <div><label className="text-[10px] uppercase text-slate-500">Product</label>
+                      <select value={r.productId} onChange={e=>osSetRow(idx,{productId:e.target.value})} className={inputCls}>
+                        {ckProducts.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><label className="text-[10px] uppercase text-slate-500">Qty{prod?.outputUnit?` (${prod.outputUnit})`:""}</label>
+                        <input type="number" inputMode="decimal" value={r.qty} onChange={e=>osSetRow(idx,{qty:e.target.value})} placeholder="0" className={inputCls}/>
+                      </div>
+                      <div><label className="text-[10px] uppercase text-slate-500">Use-by (optional)</label>
+                        <input type="date" value={r.useBy} onChange={e=>osSetRow(idx,{useBy:e.target.value})} className={inputCls}/>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Quantity on hand{osProduct?.outputUnit?` (${osProduct.outputUnit})`:""}</label>
-                <input type="number" inputMode="decimal" value={osQty} onChange={e=>setOsQty(e.target.value)} placeholder="0" className={inputCls}/>
-              </div>
-              <div><label className={labelCls}>Use-by date (optional)</label>
-                <input type="date" value={osUseBy} onChange={e=>setOsUseBy(e.target.value)} className={inputCls}/>
-              </div>
-            </div>
+            <button onClick={osAddRow} className="w-full py-2 rounded-xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-indigo-500 text-xs font-semibold">+ Add another product</button>
             {err && <div className="text-xs text-red-400">{err}</div>}
           </div>
         </Modal>
-      )}
+        );
+      })()}
 
       {runModal && (
         <Modal title="New production run" onClose={()=>setRunModal(false)} maxW="max-w-lg"
