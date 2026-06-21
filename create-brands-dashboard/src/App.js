@@ -37240,6 +37240,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
       { key:"ops-temps", label:"Temperature", icon:Thermometer },
       { key:"ops-assigns", label:"Assignment", icon:Clipboard },
       { key:"ops-deliveries", label:"Deliveries", icon:Truck },
+      { key:"central-kitchen", label:"Central Kitchen", icon:ChefHat },
       { key:"invoices", label:"Invoices", icon:FileText },
       { key:"issues", label:"Issues", icon:Wrench },
       { key:"ops-network", label:"Ops Overview", icon:Activity },
