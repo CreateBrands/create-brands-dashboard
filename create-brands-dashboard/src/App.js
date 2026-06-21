@@ -311,6 +311,7 @@ function fmtDate(d) { return d.toISOString().split("T")[0]; }
 // Manager and Staff fall through both checks; they get store-scoped access.
 function isOwnerRole(role) { return role === "owner"; }
 function isHqOrAbove(role) { return role === "owner" || role === "hq_staff"; }
+function isManagerOrAbove(role) { return role === "owner" || role === "hq_staff" || role === "manager"; }
 
 // MANAGERS_IN_TEAM_V1 (updated): managers now have REAL ops_team rows (see the
 // managers Stage-1 migration). This mirror is kept only as a transitional
@@ -8896,7 +8897,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 assignments={assignments} checklists={checklists}
                 tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
                 checklistStates={checklistStates} onSignOff={onSignOff}
-                onChecklistItemToggle={onChecklistItemToggle}
+                onChecklistItemToggle={onChecklistItemToggle} onTempLog={onTempLog} currentUser={currentUser}
               />
             </>
           )}
@@ -16883,7 +16884,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 }
 
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser }) {
   const { user } = useAuth();
 
   // visibleStores = the stores this user can see (already filtered upstream
@@ -16912,6 +16913,8 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 
   const [selStore, setSelStore] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
+  const [tempVal, setTempVal] = useState("");
+  const [tempBusy, setTempBusy] = useState(false);
 
   // If the chosen store falls out of scope (e.g. ownership filter narrows
   // and removes it), reset to "all" so we don't show a stale empty state.
@@ -17001,8 +17004,9 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                       <div className="flex items-center gap-2 flex-shrink-0">
                         {od && <Badge label="OVERDUE" color="red"/>}
                         {doneToday && <Badge label="✓ Complete" color="emerald"/>}
-                        {cl && <button onClick={() => setExpandedId(isExp ? null : a.id)} className="text-xs text-indigo-400 hover:text-indigo-300">{isExp ? "Collapse" : "Open"}</button>}
-                        {!doneToday && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Sign off</button>}
+                        {cl && <button onClick={() => setExpandedId(isExp ? null : a.id)} className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${isExp ? "bg-indigo-600 text-white" : "bg-slate-800 text-indigo-300 hover:bg-slate-700"}`}><ChevronRight size={13} className={`transition-transform ${isExp ? "rotate-90" : ""}`}/>{isExp ? "Hide checklist" : `Open checklist${totalItems?` (${doneItems}/${totalItems})`:""}`}</button>}
+                        {a.type === "temp" && !doneToday && <button onClick={() => { setExpandedId(isExp ? null : a.id); setTempVal(""); }} className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${isExp ? "bg-indigo-600 text-white" : "bg-blue-700 text-white hover:bg-blue-600"}`}>🌡️ {isExp ? "Close" : "Enter reading"}</button>}
+                        {!doneToday && a.type !== "temp" && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Sign off</button>}
                       </div>
                     </div>
                     <div className="text-xs text-slate-500 mt-1">Window: {a.winStart}–{a.winEnd}{a.role ? ` · 🎭 ${a.role}` : ""}</div>
@@ -17010,6 +17014,33 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                   </div>
                 </div>
               </div>
+              {a.type === "temp" && isExp && (() => {
+                const unit = tempUnits.find(u => u.id === a.taskId);
+                const num = parseFloat(tempVal);
+                const ok = unit && tempVal !== "" && !isNaN(num) ? checkTemp(unit, num) : null;
+                return (
+                  <div className="border-t border-slate-700 p-4 space-y-3">
+                    <div className="text-xs text-slate-400">Enter the temperature reading for <span className="text-white font-semibold">{unit?.name || taskName}</span>{unit ? ` · limit ${tempLimitText(unit)}` : ""}.</div>
+                    <div className="flex items-center gap-2">
+                      <input type="number" step="0.1" inputMode="decimal" value={tempVal} onChange={e=>setTempVal(e.target.value)} placeholder="e.g. 4.5" className="flex-1 px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-lg"/>
+                      <span className="text-slate-500 text-sm">°C</span>
+                    </div>
+                    {ok !== null && (
+                      <div className={`rounded-xl border p-2.5 text-sm font-semibold ${ok ? "bg-emerald-950/20 border-emerald-500/30 text-emerald-300" : "bg-red-950/20 border-red-500/30 text-red-300"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>
+                    )}
+                    <button disabled={tempBusy || tempVal==="" || isNaN(num)} onClick={async()=>{
+                        setTempBusy(true);
+                        try {
+                          const breach = unit ? !checkTemp(unit, num) : false;
+                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: unit?.brandId || a.brandId, storeId: unit?.storeId || a.storeId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: getTodayStr(), loggedBy: currentUser?.name || "Staff" });
+                          // Mark the temp assignment done for today via sign-off path.
+                          await onSignOff?.(a, taskName);
+                          setExpandedId(null); setTempVal("");
+                        } finally { setTempBusy(false); }
+                      }} className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">{tempBusy ? "Saving…" : "Save reading"}</button>
+                  </div>
+                );
+              })()}
               {cl && isExp && (
                 <div className="border-t border-slate-700 p-4 space-y-2">
                   {cl.items.map(item => {
@@ -17449,7 +17480,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div><div className="text-sm font-bold text-white">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">Window: {a.winStart}–{a.winEnd}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
-                  {isHqOrAbove(user.role) && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button></div>}
+                  {isManagerOrAbove(user.role) && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button></div>}
                 </div>
               </div>
             </div>
@@ -38108,20 +38139,22 @@ export default function App() {
     try {
       const now=new Date().toISOString();
       const d=now.split("T")[0];
+      // Key MUST match how the task card derives it (storeId, falling back to
+      // brandId) — otherwise the card never sees the sign-off and "done" never
+      // shows. Brand-level tasks (no storeId) are valid and supported.
+      const scopeId = assignment.storeId || assignment.brandId;
+      const stateKey=`${scopeId}||${assignment.taskId}||${d}`;
+      const itemStates = checklistStates[stateKey]||{};
       if (!assignment.storeId) {
-        showToast("Cannot sign off: assignment has no store linked. Re-create it.", "error");
+        // The checklist_states table is keyed by store. A brand-level task with
+        // no store can't be persisted there — tell the user plainly instead of
+        // silently doing nothing.
+        showToast("This task isn't linked to a store, so it can't be signed off. Edit the assignment and pick a store.", "error");
         return;
       }
-      const stateKey=`${assignment.storeId}||${assignment.taskId}||${d}`;
-      const itemStates = checklistStates[stateKey]||{};
-      // Source of truth for "done": the checklist state write. This throws on
-      // failure (incl. permissions), so a real problem surfaces to the user.
       await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, itemStates, currentUser?.name||"Manager", now);
-      // Reflect immediately in local state with a sign-off marker so the card
-      // flips to "done" without waiting for a reload.
       setChecklistStates(s => ({ ...s, [stateKey]: { ...(s[stateKey]||{}), __signedOff: true, __signedOffAt: now, __signedOffBy: currentUser?.name||"Manager" } }));
-      // Audit is a best-effort log — never let it block or undo the sign-off.
-      try { await addAudit("sign-off",`${assignment.checklistName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId); } catch { /* logged server-side */ }
+      try { await addAudit("sign-off",`${assignment.checklistName||assignment.taskName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId||null); } catch { /* logged server-side */ }
       showToast("✓ Signed off");
     } catch(err){ showToast(err?.message || "Sign-off failed", "error"); }
   }, [checklistStates,currentUser,addAudit,showToast]);
@@ -38501,7 +38534,7 @@ export default function App() {
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}/>}
+            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
