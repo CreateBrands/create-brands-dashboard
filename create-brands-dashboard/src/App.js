@@ -16978,7 +16978,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
           const cl = a.type === "checklist" ? checklists.find(c => c.id === a.taskId) : null;
           // Stable key — includes storeId when present so per-store checklist
           // state doesn't collide across stores sharing a brand.
-          const stateKey = `${a.storeId || a.brandId}||${a.taskId}||${getTodayStr()}`;
+          const stateKey = `asg::${a.id}||${getTodayStr()}`;
           const clState = checklistStates[stateKey] || {};
           // Done if signed off (state marker) or, for legacy rows, an audit entry
           // mentions the task today.
@@ -17048,7 +17048,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                     const checked = !!clState[item.id];
                     return (
                       <div key={item.id} className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${checked ? "bg-emerald-950/20 border-emerald-500/20" : "bg-slate-800/40 border-slate-800/60"}`}>
-                        <button onClick={() => onChecklistItemToggle(stateKey, item.id, !checked)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border mt-0.5 transition-colors ${checked ? "bg-emerald-600 border-emerald-500" : "border-slate-600 hover:border-emerald-500"}`}>{checked && <Check size={11} className="text-white"/>}</button>
+                        <button onClick={() => onChecklistItemToggle(stateKey, item.id, !checked, a)} className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border mt-0.5 transition-colors ${checked ? "bg-emerald-600 border-emerald-500" : "border-slate-600 hover:border-emerald-500"}`}>{checked && <Check size={11} className="text-white"/>}</button>
                         <div className="flex-1 min-w-0"><div className={`text-sm ${checked ? "line-through text-slate-500" : "text-slate-200"}`}>{item.text}</div>{item.guide && <div className="text-xs text-slate-500 mt-0.5">{item.guide}</div>}</div>
                       </div>
                     );
@@ -38124,22 +38124,22 @@ export default function App() {
   }, [showToast]);
   const handleTempLog     = useCallback(async l=>{const s=await insertTempLog(l);setTempLogs(ls=>[s,...ls]);}, []);
   const handleDeliveryAdd = useCallback(async d=>{const s=await insertDelivery(d);setDeliveries(ds=>[s,...ds]);}, []);
-  const handleChecklistItemToggle = useCallback(async (stateKey,itemId,val)=>{
+  const handleChecklistItemToggle = useCallback(async (stateKey,itemId,val,assignment)=>{
     const newState={...(checklistStates[stateKey]||{}),[itemId]:val};
     setChecklistStates(s=>({...s,[stateKey]:newState}));
-    // stateKey first segment is "store_id || brand_id" — set by the
-    // consumer at the call site. After Stage 6, that means it's a storeId
-    // for all NEW assignments (they're store-keyed via NOT NULL). Resolve
-    // which kind it is by checking the stores list, so legacy brand-scoped
-    // checklists still work.
+    // New per-assignment key shape is "asg::<assignmentId>||<date>". When we
+    // have the assignment, write keyed by it so repeated tasks stay independent.
+    if (assignment && stateKey.startsWith("asg::")) {
+      const date = stateKey.split("||")[1];
+      if (!assignment.storeId) { console.warn("Skipping toggle: assignment has no store."); return; }
+      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, date, newState, "", null, assignment.id);
+      return;
+    }
+    // Legacy per-task key: "store_id||checklistId||date".
     const [scopeId,checklistId,date]=stateKey.split("||");
     const matchingStore=stores.find(s=>s.id===scopeId);
     if (!matchingStore) {
-      // Legacy/orphan path: scopeId is a brandId. Skip the write since
-      // checklist_states.store_id is now NOT NULL — we can't represent this
-      // record any more without a storeId. (In practice this branch is
-      // unreachable after Stage 6 since all assignments now require storeId.)
-      console.warn(`Skipping checklist toggle: no matching store for scope "${scopeId}". Assignment may pre-date Stage 5.`);
+      console.warn(`Skipping checklist toggle: no matching store for scope "${scopeId}".`);
       return;
     }
     await upsertChecklistState(matchingStore.id, matchingStore.brandId, checklistId, date, newState, "", null);
@@ -38148,18 +38148,16 @@ export default function App() {
     try {
       const now=new Date().toISOString();
       const d=now.split("T")[0];
-      // Key MUST match how the task card derives it (storeId, falling back to
-      // brandId) — otherwise the card never sees the sign-off and "done" never
-      // shows. Brand-level tasks (no storeId) are valid and supported.
-      const scopeId = assignment.storeId || assignment.brandId;
-      const stateKey=`${scopeId}||${assignment.taskId}||${d}`;
+      // Completion is keyed PER ASSIGNMENT so repeated tasks (e.g. 5× toilet
+      // checks, same task) are tracked independently. Key MUST match the card.
+      const stateKey=`asg::${assignment.id}||${d}`;
       const prev = checklistStates[stateKey] || {};
       if (!assignment.storeId) {
         showToast("This task isn't linked to a store, so it can't be signed off. Edit the assignment and pick a store.", "error");
         return;
       }
       const nextState = { ...prev, __signedOff: true, __signedOffAt: now, __signedOffBy: currentUser?.name||"Manager" };
-      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, nextState, currentUser?.name||"Manager", now);
+      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, nextState, currentUser?.name||"Manager", now, assignment.id);
       setChecklistStates(s => ({ ...s, [stateKey]: nextState }));
       try { await addAudit("sign-off",`${assignment.checklistName||assignment.taskName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId||null); } catch { /* logged server-side */ }
       showToast("✓ Signed off");

@@ -395,11 +395,15 @@ export async function fetchChecklistStates() {
   if (error) throw error;
   const result = {};
   data.forEach(row => {
-    // Key shape after Stage 6: storeId||checklistId||date (was brandId||...).
-    // Legacy rows with NULL store_id are still indexed under brand_id so
-    // they don't vanish from the UI; new rows are always store-keyed.
-    const scope = row.store_id || row.brand_id;
-    result[`${scope}||${row.checklist_id}||${row.date}`] = row.item_states || {};
+    // Per-assignment rows (repeated tasks) are keyed by assignmentId||date so
+    // each assignment is tracked independently. Legacy/per-task rows keep the
+    // store(or brand)||checklistId||date key.
+    if (row.assignment_id) {
+      result[`asg::${row.assignment_id}||${row.date}`] = row.item_states || {};
+    } else {
+      const scope = row.store_id || row.brand_id;
+      result[`${scope}||${row.checklist_id}||${row.date}`] = row.item_states || {};
+    }
   });
   return result;
 }
@@ -408,13 +412,24 @@ export async function fetchChecklistStates() {
 // the checklist, even though the checklist template itself is chain-wide.
 // This matches real operations: Evington Road completing morning open says
 // nothing about whether Gipsy Lane has done theirs.
-export async function upsertChecklistState(storeId, brandId, checklistId, date, itemStates, signedOffBy, signedOffAt) {
+export async function upsertChecklistState(storeId, brandId, checklistId, date, itemStates, signedOffBy, signedOffAt, assignmentId) {
   if (!storeId) throw new Error("upsertChecklistState requires storeId");
-  const { error } = await supabase.from("checklist_states").upsert({
+  const row = {
     store_id: storeId, brand_id: brandId, checklist_id: checklistId, date,
     item_states: itemStates, signed_off_by: signedOffBy || "",
     signed_off_at: signedOffAt || null, updated_at: new Date().toISOString(),
-  }, { onConflict: "store_id,checklist_id,date" });
+  };
+  // When an assignment id is supplied, completions are tracked PER ASSIGNMENT
+  // (so repeated tasks like 5× toilet checks are independent). Conflict target
+  // matches the per-assignment unique index. Without one, fall back to the
+  // legacy per-task key.
+  if (assignmentId) {
+    row.assignment_id = assignmentId;
+    const { error } = await supabase.from("checklist_states").upsert(row, { onConflict: "assignment_id,date" });
+    if (error) throw error;
+    return;
+  }
+  const { error } = await supabase.from("checklist_states").upsert(row, { onConflict: "store_id,checklist_id,date" });
   if (error) throw error;
 }
 
