@@ -16980,12 +16980,17 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
           // state doesn't collide across stores sharing a brand.
           const stateKey = `${a.storeId || a.brandId}||${a.taskId}||${getTodayStr()}`;
           const clState = checklistStates[stateKey] || {};
-          // Done if signed off (checklist-state marker — the reliable source) or,
-          // for legacy rows, if an audit entry mentions the task today.
-          const doneToday = clState.__signedOff === true
-            || auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName));
+          const timesPerDay = a.timesPerDay && a.timesPerDay > 0 ? a.timesPerDay : 1;
+          const completionCount = Array.isArray(clState.__completions)
+            ? clState.__completions.length
+            : (clState.__signedOff === true ? 1 : 0);
+          // Fully done when we've reached the required number of completions today.
+          const doneToday = completionCount >= timesPerDay
+            || (timesPerDay === 1 && auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName)));
           const totalItems = cl?.items?.length || 0;
-          const doneItems = totalItems ? Object.values(clState).filter(v => v === true).length : 0;
+          // Count only real item toggles — exclude metadata keys (__completions,
+          // __signedOff, etc.) which also live in this state object.
+          const doneItems = totalItems ? Object.entries(clState).filter(([k,v]) => !k.startsWith("__") && v === true).length : 0;
           const pct = totalItems ? Math.round((doneItems / totalItems) * 100) : 0;
           const isExp = expandedId === a.id;
           // Show the store name on each task when the dropdown is on "all" so
@@ -17004,9 +17009,10 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                       <div className="flex items-center gap-2 flex-shrink-0">
                         {od && <Badge label="OVERDUE" color="red"/>}
                         {doneToday && <Badge label="✓ Complete" color="emerald"/>}
+                        {!doneToday && timesPerDay > 1 && <Badge label={`${completionCount}/${timesPerDay} done`} color="amber"/>}
                         {cl && <button onClick={() => setExpandedId(isExp ? null : a.id)} className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${isExp ? "bg-indigo-600 text-white" : "bg-slate-800 text-indigo-300 hover:bg-slate-700"}`}><ChevronRight size={13} className={`transition-transform ${isExp ? "rotate-90" : ""}`}/>{isExp ? "Hide checklist" : `Open checklist${totalItems?` (${doneItems}/${totalItems})`:""}`}</button>}
-                        {a.type === "temp" && !doneToday && <button onClick={() => { setExpandedId(isExp ? null : a.id); setTempVal(""); }} className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${isExp ? "bg-indigo-600 text-white" : "bg-blue-700 text-white hover:bg-blue-600"}`}>🌡️ {isExp ? "Close" : "Enter reading"}</button>}
-                        {!doneToday && a.type !== "temp" && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Sign off</button>}
+                        {a.type === "temp" && !doneToday && <button onClick={() => { setExpandedId(isExp ? null : a.id); setTempVal(""); }} className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${isExp ? "bg-indigo-600 text-white" : "bg-blue-700 text-white hover:bg-blue-600"}`}>🌡️ {isExp ? "Close" : (timesPerDay > 1 ? `Reading ${completionCount+1}/${timesPerDay}` : "Enter reading")}</button>}
+                        {!doneToday && a.type !== "temp" && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">{timesPerDay > 1 ? `Log ${completionCount+1}/${timesPerDay}` : "Sign off"}</button>}
                       </div>
                     </div>
                     <div className="text-xs text-slate-500 mt-1">Window: {a.winStart}–{a.winEnd}{a.role ? ` · 🎭 ${a.role}` : ""}</div>
@@ -17273,6 +17279,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
     winStart: item?.winStart || "08:00",
     winEnd: item?.winEnd || "10:00",
     priority: item?.priority || "normal",
+    timesPerDay: item?.timesPerDay || 1,
     notes: item?.notes || "",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -17359,6 +17366,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
         </div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Task Type</label><select value={form.type} onChange={e => { set("type", e.target.value); set("taskId", ""); }} className={inputCls}><option value="checklist">Checklist</option><option value="cleaning">Cleaning</option><option value="temp">Temperature</option><option value="delivery">Delivery</option></select></div><div><label className={labelCls}>Task</label><select value={form.taskId} onChange={e => set("taskId", e.target.value)} className={inputCls}><option value="">— Select —</option>{taskOptions().map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Assign to *</label><select value={form.assignTo} onChange={e => { set("assignTo", e.target.value); set("role", ""); set("department", ""); set("personId", ""); }} className={inputCls}><option value="department">Department</option><option value="role">Role</option><option value="employee">Employee</option></select></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>
+        <div><label className={labelCls}>Times per day</label><select value={form.timesPerDay} onChange={e => set("timesPerDay", Number(e.target.value))} className={inputCls}>{[1,2,3,4,5,6].map(n => <option key={n} value={n}>{n} {n===1?"time":"times"} per day</option>)}</select><div className="text-[11px] text-slate-500 mt-1">For checks done more than once a day (e.g. fridge temps). Staff can complete it that many times; each completion is logged.</div></div>
         <div>
           {form.assignTo === "department" && (
             <><label className={labelCls}>Department *</label>
@@ -38144,18 +38152,22 @@ export default function App() {
       // shows. Brand-level tasks (no storeId) are valid and supported.
       const scopeId = assignment.storeId || assignment.brandId;
       const stateKey=`${scopeId}||${assignment.taskId}||${d}`;
-      const itemStates = checklistStates[stateKey]||{};
+      const prev = checklistStates[stateKey] || {};
       if (!assignment.storeId) {
-        // The checklist_states table is keyed by store. A brand-level task with
-        // no store can't be persisted there — tell the user plainly instead of
-        // silently doing nothing.
         showToast("This task isn't linked to a store, so it can't be signed off. Edit the assignment and pick a store.", "error");
         return;
       }
-      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, itemStates, currentUser?.name||"Manager", now);
-      setChecklistStates(s => ({ ...s, [stateKey]: { ...(s[stateKey]||{}), __signedOff: true, __signedOffAt: now, __signedOffBy: currentUser?.name||"Manager" } }));
-      try { await addAudit("sign-off",`${assignment.checklistName||assignment.taskName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId||null); } catch { /* logged server-side */ }
-      showToast("✓ Signed off");
+      const times = assignment.timesPerDay && assignment.timesPerDay > 0 ? assignment.timesPerDay : 1;
+      // Append this completion. For N-per-day tasks we accumulate a list of
+      // {by, at}; for once-a-day this is just a single entry.
+      const completions = Array.isArray(prev.__completions) ? prev.__completions.slice() : [];
+      completions.push({ by: currentUser?.name || "Staff", at: now });
+      const fully = completions.length >= times;
+      const nextState = { ...prev, __completions: completions, __signedOff: fully, __signedOffAt: now, __signedOffBy: currentUser?.name||"Manager" };
+      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, nextState, currentUser?.name||"Manager", now);
+      setChecklistStates(s => ({ ...s, [stateKey]: nextState }));
+      try { await addAudit("sign-off",`${assignment.checklistName||assignment.taskName||"Task"} completed (${completions.length}/${times})`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId||null); } catch { /* logged server-side */ }
+      showToast(fully ? "✓ All done for today" : `✓ Logged ${completions.length}/${times}`);
     } catch(err){ showToast(err?.message || "Sign-off failed", "error"); }
   }, [checklistStates,currentUser,addAudit,showToast]);
   const handleClearAudit = useCallback(async()=>{try{await clearAuditTrail();setAuditTrail([]);showToast("Cleared");}catch(err){showToast(err.message,"error");}}, [showToast]);
