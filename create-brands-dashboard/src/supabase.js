@@ -484,8 +484,8 @@ function dbCleanTaskToApp(t) {
   };
 }
 
-function appAssignmentToDb(a) { return { id: a.id, brand_id: a.brandId, store_id: a.storeId || null, type: a.type, task_id: a.taskId, role: a.role || "", person_id: a.personId || "", department: a.department || "", assign_to: a.assignTo || "role", freq: a.freq, weekday: a.weekday || null, once_date: a.date || null, custom_days: a.customDays || [], win_start: a.winStart, win_end: a.winEnd, priority: a.priority, times_per_day: a.timesPerDay && a.timesPerDay > 0 ? a.timesPerDay : 1, notes: a.notes || "", updated_at: new Date().toISOString() }; }
-function dbAssignmentToApp(a) { return { id: a.id, brandId: a.brand_id, storeId: a.store_id || null, type: a.type, taskId: a.task_id, role: a.role, personId: a.person_id, department: a.department || "", assignTo: a.assign_to || (a.person_id ? "employee" : (a.department ? "department" : "role")), freq: a.freq, weekday: a.weekday, date: a.once_date, customDays: a.custom_days || [], winStart: a.win_start, winEnd: a.win_end, priority: a.priority, timesPerDay: a.times_per_day || 1, notes: a.notes }; }
+function appAssignmentToDb(a) { return { id: a.id, brand_id: a.brandId, store_id: a.storeId || null, type: a.type, task_id: a.taskId, role: a.role || "", person_id: a.personId || "", department: a.department || "", assign_to: a.assignTo || "role", freq: a.freq, weekday: a.weekday || null, once_date: a.date || null, custom_days: a.customDays || [], win_start: a.winStart, win_end: a.winEnd, priority: a.priority, notes: a.notes || "", updated_at: new Date().toISOString() }; }
+function dbAssignmentToApp(a) { return { id: a.id, brandId: a.brand_id, storeId: a.store_id || null, type: a.type, taskId: a.task_id, role: a.role, personId: a.person_id, department: a.department || "", assignTo: a.assign_to || (a.person_id ? "employee" : (a.department ? "department" : "role")), freq: a.freq, weekday: a.weekday, date: a.once_date, customDays: a.custom_days || [], winStart: a.win_start, winEnd: a.win_end, priority: a.priority, notes: a.notes }; }
 
 function appOpsTeamToDb(m) {
   // ⚠ Partial-aware mapper. Same shape as appApplicationToDb after the
