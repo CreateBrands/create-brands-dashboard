@@ -3346,6 +3346,160 @@ function findSimilar(name, candidates, getName = (x) => x.name) {
 const CK_ALLERGENS = ["gluten","milk","egg","soya","nuts","peanuts","sesame","fish","crustaceans","molluscs","celery","mustard","lupin","sulphites"];
 const CK_UNITS = ["kg","g","L","ml","each"];
 
+// ─── Central Kitchen stock count ──────────────────────────────────────────────
+// Simple count: enter the counted quantity for each CK ingredient and save.
+// Reuses the shared stock-count tables with a "kitchen" header + "ck" line scope.
+function CkStockCount({ ingredients = [], siteId, currentUser }) {
+  const [counts, setCounts] = useState([]);   // past counts (header rows)
+  const [openId, setOpenId] = useState(null); // count currently being edited
+  const [qtys, setQtys] = useState({});       // ingredientId -> qty string
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [savedAt, setSavedAt] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr("");
+    try { setCounts(await fetchStockCounts("kitchen")); }
+    catch (e) { setErr(e?.message || "Couldn't load counts."); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const openCount = async (id) => {
+    setOpenId(id); setQtys({}); setErr("");
+    try {
+      const { lines } = await fetchStockCount(id);
+      const m = {};
+      (lines || []).forEach(l => { if (l.itemScope === "ck") m[String(l.itemId)] = l.qty == null ? "" : String(l.qty); });
+      setQtys(m);
+    } catch (e) { setErr(e?.message || "Couldn't open this count."); }
+  };
+
+  const startNew = async () => {
+    setBusy(true); setErr("");
+    try {
+      const today = getTodayStr();
+      const id = await createStockCount("kitchen", today, currentUser?.name || null);
+      await load();
+      await openCount(id);
+    } catch (e) { setErr(e?.message || "Couldn't start a new count."); }
+    finally { setBusy(false); }
+  };
+
+  // Save a single ingredient's counted qty (debounced-on-blur via direct call).
+  const saveQty = async (ingredientId, value) => {
+    if (!openId) return;
+    try {
+      await setStockCountLine(openId, "ck", String(ingredientId), value === "" ? null : value, null);
+      setSavedAt(Date.now());
+    } catch (e) { setErr(e?.message || "Couldn't save that line."); }
+  };
+
+  const finalise = async () => {
+    if (!openId) return;
+    setBusy(true);
+    try { await finaliseStockCount(openId, "finalised"); await load(); setOpenId(null); }
+    catch (e) { setErr(e?.message || "Couldn't finalise."); }
+    finally { setBusy(false); }
+  };
+  const removeCount = async (id) => {
+    if (!window.confirm("Delete this count and its lines?")) return;
+    try { await deleteStockCount(id); if (openId === id) setOpenId(null); await load(); }
+    catch (e) { setErr(e?.message || "Couldn't delete."); }
+  };
+
+  // ── Count list (no count open) ──
+  if (!openId) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-bold text-white">Stock counts</div>
+            <div className="text-xs text-slate-500">Count the kitchen's ingredients and save. Open a count to enter quantities.</div>
+          </div>
+          <button onClick={startNew} disabled={busy} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New count</button>
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {loading ? <div className="text-center py-10 text-sm text-slate-500">Loading…</div> : counts.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-600">No counts yet. Start one with “New count”.</div>
+        ) : (
+          <div className="space-y-2">
+            {counts.map(c => (
+              <div key={c.id} className="bg-slate-900 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-white">{c.countDate ? new Date(c.countDate).toLocaleDateString("en-GB") : "Count"} <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded ${c.status==="finalised"?"bg-emerald-900/40 text-emerald-300":"bg-amber-900/40 text-amber-300"}`}>{c.status || "draft"}</span></div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">{c.countedBy ? `By ${c.countedBy}` : ""}</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => openCount(c.id)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold hover:bg-slate-700">{c.status==="finalised"?"View":"Continue"}</button>
+                  <button onClick={() => removeCount(c.id)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 text-xs font-semibold">Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Count editor (a count is open) ──
+  const list = (ingredients || []).filter(i => !search || (i.name || "").toLowerCase().includes(search.toLowerCase()));
+  const countedN = Object.values(qtys).filter(v => v !== "" && v != null).length;
+  // Group by category for easier counting.
+  const groups = {};
+  list.forEach(i => { const g = i.category || "Uncategorised"; (groups[g] = groups[g] || []).push(i); });
+  const groupNames = Object.keys(groups).sort();
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <button onClick={() => { setOpenId(null); load(); }} className="text-xs text-slate-400 hover:text-white flex items-center gap-1"><ChevronRight size={13} className="rotate-180"/> Back to counts</button>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">{countedN} of {ingredients.length} counted{savedAt ? " · saved" : ""}</span>
+          <button onClick={finalise} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold">Finalise count</button>
+        </div>
+      </div>
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search ingredients…" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm"/>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {ingredients.length === 0 ? (
+        <div className="text-center py-10 text-sm text-slate-600">No ingredients in the kitchen yet. Add them in the Stock tab first.</div>
+      ) : (
+        <div className="space-y-4">
+          {groupNames.map(g => (
+            <div key={g}>
+              <div className="text-[11px] uppercase font-semibold text-slate-500 mb-1.5">{g}</div>
+              <div className="space-y-1">
+                {groups[g].map(i => {
+                  const val = qtys[String(i.id)] ?? "";
+                  const done = val !== "" && val != null;
+                  return (
+                    <div key={i.id} className={`flex items-center gap-3 bg-slate-900 border rounded-xl px-3 py-2 ${done ? "border-emerald-700/40" : "border-slate-800"}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-white truncate">{i.name}</div>
+                        {i.unit && <div className="text-[11px] text-slate-500">counted in {i.unit}</div>}
+                      </div>
+                      <input
+                        type="number" inputMode="decimal" step="any" value={val}
+                        onChange={e => setQtys(q => ({ ...q, [String(i.id)]: e.target.value }))}
+                        onBlur={e => saveQty(i.id, e.target.value)}
+                        placeholder="0"
+                        className="w-24 px-2.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm text-right"
+                      />
+                      <span className="text-xs text-slate-600 w-8">{i.unit || ""}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const { canFeature: ckCanFeature } = useAccess();
   // The central kitchen site.
@@ -3977,7 +4131,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
       <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-slate-800 pb-1">
         {[
-          { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"]] },
+          { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"],["count","Count"]] },
           { label: "Recipes",   tabs: [["preps","Preps"],["products","Products"]] },
           { label: "Planning",  tabs: [["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
           { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
@@ -4105,6 +4259,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           )}
         </div>
       )}
+
+      {!loading && tab === "count" && <CkStockCount ingredients={ingredients} siteId={siteId} currentUser={currentUser} />}
 
       {!loading && tab === "preps" && (
         <div className="space-y-3">
