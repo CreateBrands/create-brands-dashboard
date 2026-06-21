@@ -4308,6 +4308,32 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   }, [runProductId, runDate, runProduct]);
   const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunPlanId(""); setRunModal(true); setErr(""); };
   const shortfalls = (runAlloc||[]).filter(a => a.shortfall);
+  // ── Opening finished-goods stock (kitchen start-up) ──
+  // Records product you ALREADY have, as a production run with NO ingredient
+  // consumption — so it shows in Finished goods on-hand without touching inventory.
+  const [openStockModal, setOpenStockModal] = useState(false);
+  const [osProductId, setOsProductId] = useState("");
+  const [osQty, setOsQty] = useState("");
+  const [osUseBy, setOsUseBy] = useState("");
+  const [osBusy, setOsBusy] = useState(false);
+  const osProduct = ckProducts.find(p => String(p.id) === String(osProductId));
+  const openOpeningStock = () => { setOsProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setOsQty(""); setOsUseBy(""); setOpenStockModal(true); setErr(""); };
+  const doOpeningStock = async () => {
+    if (!osProduct) { setErr("Pick a product."); return; }
+    if (!(Number(osQty) > 0)) { setErr("Enter a quantity."); return; }
+    setOsBusy(true); setErr("");
+    try {
+      const al = productAllergens(osProduct);
+      await createProductionRun({ siteId, product: osProduct, producedQty: Number(osQty),
+        runDate: new Date().toISOString().slice(0,10), useByDate: osUseBy || null,
+        allocations: [], // no ingredient consumption — this is existing stock
+        allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)],
+        runBy: currentUser?.name, note: "Opening stock (kitchen start-up)" });
+      setOpenStockModal(false); load();
+    } catch (e) { setErr(e?.message||String(e)); }
+    setOsBusy(false);
+  };
+
   const doCreateRun = async () => {
     if (!runProduct) { setErr("Pick a product."); return; }
     if (!(Number(runQty) > 0)) { setErr("Enter a quantity."); return; }
@@ -4963,6 +4989,11 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
       {!loading && tab === "finished" && (
         <div className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="text-xs text-slate-500">Finished products held at the kitchen.</div>
+            <button onClick={openOpeningStock} disabled={!ckProducts.length} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> Add opening stock</button>
+          </div>
+          {!ckProducts.length && <div className="text-xs text-amber-400">Create a kitchen product first (Products tab) before adding opening stock.</div>}
           {fgExpiring.length > 0 && (
             <div className="text-xs text-red-300 bg-red-950/30 border border-red-500/30 rounded-xl px-3 py-2">
               {fgExpiring.length} finished batch{fgExpiring.length!==1?"es":""} expiring within 3 days — dispatch or use soon.
@@ -5401,6 +5432,32 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
       )}
 
       {/* Production run modal */}
+      {openStockModal && (
+        <Modal title="Add opening stock" onClose={()=>setOpenStockModal(false)} maxW="max-w-md"
+          footer={<>
+            <button onClick={()=>setOpenStockModal(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+            <button onClick={doOpeningStock} disabled={osBusy||!osProduct||!(Number(osQty)>0)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40">{osBusy?"Adding…":"Add stock"}</button>
+          </>}>
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400">Record finished product you already have, before starting production. This adds to on-hand finished goods without using any ingredients.</p>
+            <div><label className={labelCls}>Product</label>
+              <select value={osProductId} onChange={e=>setOsProductId(e.target.value)} className={inputCls}>
+                {ckProducts.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Quantity on hand{osProduct?.outputUnit?` (${osProduct.outputUnit})`:""}</label>
+                <input type="number" inputMode="decimal" value={osQty} onChange={e=>setOsQty(e.target.value)} placeholder="0" className={inputCls}/>
+              </div>
+              <div><label className={labelCls}>Use-by date (optional)</label>
+                <input type="date" value={osUseBy} onChange={e=>setOsUseBy(e.target.value)} className={inputCls}/>
+              </div>
+            </div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </div>
+        </Modal>
+      )}
+
       {runModal && (
         <Modal title="New production run" onClose={()=>setRunModal(false)} maxW="max-w-lg"
           footer={<>
