@@ -4931,6 +4931,51 @@ export async function upsertAppSetting(key, value) {
   return { key, value: String(value) };
 }
 
+// ── Announcements ───────────────────────────────────────────────────────────
+function dbAnnouncementToApp(a) {
+  return { id: a.id, title: a.title, body: a.body || "", createdBy: a.created_by || "", createdAt: a.created_at, active: a.active !== false };
+}
+export async function fetchAnnouncements() {
+  const { data, error } = await supabase.from("announcements").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(dbAnnouncementToApp);
+}
+export async function createAnnouncement({ title, body, createdBy }) {
+  const row = { id: `ann-${Date.now()}`, title, body: body || "", created_by: createdBy || null, active: true };
+  const { data, error } = await supabase.from("announcements").insert(row).select().single();
+  if (error) throw error;
+  return dbAnnouncementToApp(data);
+}
+export async function setAnnouncementActive(id, active) {
+  const { error } = await supabase.from("announcements").update({ active: !!active }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+export async function deleteAnnouncement(id) {
+  const { error } = await supabase.from("announcements").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+// Acks the current person has recorded — used to decide whether to pop.
+export async function fetchMyAnnouncementAcks(personId) {
+  if (!personId) return [];
+  const { data, error } = await supabase.from("announcement_acks").select("announcement_id").eq("person_id", personId);
+  if (error) throw error;
+  return (data || []).map(r => r.announcement_id);
+}
+export async function acknowledgeAnnouncement(announcementId, personId, personName) {
+  if (!announcementId || !personId) return;
+  const { error } = await supabase.from("announcement_acks")
+    .upsert({ announcement_id: announcementId, person_id: personId, person_name: personName || "", acknowledged_at: new Date().toISOString() }, { onConflict: "announcement_id,person_id" });
+  if (error) throw error;
+}
+// All acks for one announcement — for the owner's "who has read it" view.
+export async function fetchAnnouncementAcks(announcementId) {
+  const { data, error } = await supabase.from("announcement_acks").select("*").eq("announcement_id", announcementId).order("acknowledged_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(r => ({ personId: r.person_id, personName: r.person_name || "", acknowledgedAt: r.acknowledged_at }));
+}
+
 // ── Bank transactions (CSV import) ──────────────────────────────────────────
 export async function fetchBankTransactions({ from, to } = {}) {
   let q = supabase.from("bank_transactions").select("*").order("txn_date", { ascending: false });

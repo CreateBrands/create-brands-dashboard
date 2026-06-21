@@ -35,7 +35,7 @@ import {
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -150,7 +150,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, FolderOpen, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt
+  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -37090,6 +37090,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
     ]},
     { title: "Communication", items: [
       { key:"comms", label:"Helpdesk & Chat", icon:MessageSquare },
+      { key:"announcements", label:"Announcements", icon:Megaphone },
     ]},
     { title: "Human Resources", items: [
       { key:"team", label:"Team", icon:Users },
@@ -37290,6 +37291,134 @@ function EntityPicker({ brands, stores, user, onPick, onLogout, financeAvailable
             {comingSoon.map(t => <SoonTile key={t.id} t={t}/>)}
           </Slider>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Announcement pop-up ──────────────────────────────────────────────────────
+// Shows the latest active announcement once per person. Tapping "Got it" records
+// an acknowledgement (who + when) and never shows that announcement again for them.
+function AnnouncementGate({ currentUser }) {
+  const [ann, setAnn] = useState(null);     // the announcement to show, or null
+  const [busy, setBusy] = useState(false);
+  const personId = currentUser?.opsTeamMemberId || currentUser?.id;
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (!personId) return;
+        const [all, myAcks] = await Promise.all([fetchAnnouncements(), fetchMyAnnouncementAcks(personId)]);
+        const ackSet = new Set(myAcks || []);
+        // Most recent active announcement this person hasn't acknowledged yet.
+        const next = (all || []).find(a => a.active && !ackSet.has(a.id));
+        if (alive) setAnn(next || null);
+      } catch { /* fail quiet — never block the app on an announcement */ }
+    })();
+    return () => { alive = false; };
+  }, [personId]);
+
+  if (!ann) return null;
+  const dismiss = async () => {
+    setBusy(true);
+    try { await acknowledgeAnnouncement(ann.id, personId, currentUser?.name || ""); } catch { /* best-effort */ }
+    setAnn(null); setBusy(false);
+  };
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:9999, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", padding:"16px" }}>
+      <div style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:"18px", maxWidth:"480px", width:"100%", maxHeight:"85vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ padding:"20px 20px 0" }}>
+          <div style={{ fontSize:"11px", fontWeight:700, letterSpacing:"0.5px", textTransform:"uppercase", color:"#9A7B4F" }}>📢 Announcement</div>
+          <div style={{ fontSize:"20px", fontWeight:800, color:"#fff", marginTop:"6px" }}>{ann.title}</div>
+        </div>
+        <div style={{ padding:"12px 20px 20px", color:"#cbd5e1", fontSize:"14px", lineHeight:1.6, whiteSpace:"pre-wrap" }}>{ann.body}</div>
+        <div style={{ padding:"0 20px 20px" }}>
+          <button onClick={dismiss} disabled={busy} style={{ width:"100%", padding:"12px", borderRadius:"12px", background:"#4f46e5", color:"#fff", fontSize:"14px", fontWeight:700, border:"none", cursor:"pointer", opacity:busy?0.6:1 }}>
+            {busy ? "Saving…" : "Got it"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Announcements admin (owner/HQ) ──────────────────────────────────────────
+function AnnouncementsAdmin({ currentUser }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [acksFor, setAcksFor] = useState(null);   // announcement id whose acks are open
+  const [acks, setAcks] = useState([]);
+  const [err, setErr] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try { setList(await fetchAnnouncements()); } catch (e) { setErr(e?.message || "Couldn't load announcements."); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const post = async () => {
+    if (!title.trim()) { setErr("Give the announcement a title."); return; }
+    setBusy(true); setErr("");
+    try {
+      await createAnnouncement({ title: title.trim(), body: body.trim(), createdBy: currentUser?.name || "" });
+      setTitle(""); setBody(""); await load();
+    } catch (e) { setErr(e?.message || "Couldn't post the announcement."); }
+    finally { setBusy(false); }
+  };
+  const toggle = async (a) => { try { await setAnnouncementActive(a.id, !a.active); await load(); } catch (e) { setErr(e?.message || "Update failed."); } };
+  const remove = async (a) => { if (!window.confirm("Delete this announcement and its read records?")) return; try { await deleteAnnouncement(a.id); await load(); } catch (e) { setErr(e?.message || "Delete failed."); } };
+  const openAcks = async (a) => {
+    if (acksFor === a.id) { setAcksFor(null); return; }
+    setAcksFor(a.id); setAcks([]);
+    try { setAcks(await fetchAnnouncementAcks(a.id)); } catch { setAcks([]); }
+  };
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 space-y-3">
+        <div className="text-sm font-bold text-white flex items-center gap-2"><Megaphone size={16}/> New announcement</div>
+        <p className="text-xs text-slate-500">This pops up once for every staff member and manager. When they tap "Got it," it's recorded and won't show them again. A new announcement pops fresh.</p>
+        <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Title (e.g. Chocoberry app is live)" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm"/>
+        <textarea value={body} onChange={e=>setBody(e.target.value)} rows={6} placeholder="Write your announcement here…" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm resize-y"/>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        <button onClick={post} disabled={busy} className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy ? "Posting…" : "Post announcement"}</button>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-xs uppercase font-semibold text-slate-500">Announcements</div>
+        {loading && <div className="text-sm text-slate-500 py-4">Loading…</div>}
+        {!loading && list.length === 0 && <div className="text-sm text-slate-600 py-4">No announcements yet.</div>}
+        {list.map(a => (
+          <div key={a.id} className={`bg-slate-900 border rounded-2xl p-4 ${a.active ? "border-slate-700" : "border-slate-800 opacity-60"}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-white">{a.title} {!a.active && <span className="text-[10px] font-normal text-slate-500">· inactive</span>}</div>
+                <div className="text-xs text-slate-400 mt-1 whitespace-pre-wrap line-clamp-3">{a.body}</div>
+                <div className="text-[11px] text-slate-600 mt-1.5">{a.createdBy ? `By ${a.createdBy} · ` : ""}{a.createdAt ? new Date(a.createdAt).toLocaleString("en-GB") : ""}</div>
+              </div>
+              <div className="flex flex-col gap-1.5 flex-shrink-0">
+                <button onClick={()=>toggle(a)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold hover:bg-slate-700">{a.active ? "Deactivate" : "Reactivate"}</button>
+                <button onClick={()=>remove(a)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 text-[11px] font-semibold">Delete</button>
+              </div>
+            </div>
+            <button onClick={()=>openAcks(a)} className="mt-2 text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold">{acksFor===a.id ? "Hide read receipts" : "Who's read it?"}</button>
+            {acksFor===a.id && (
+              <div className="mt-2 border-t border-slate-800 pt-2">
+                {acks.length === 0 ? <div className="text-[11px] text-slate-600">No one has acknowledged this yet.</div> : (
+                  <div className="space-y-1">
+                    <div className="text-[11px] text-slate-500">{acks.length} {acks.length===1?"person has":"people have"} read it:</div>
+                    {acks.map(ak => <div key={ak.personId} className="flex items-center justify-between text-[11px]"><span className="text-slate-300">{ak.personName || ak.personId}</span><span className="text-slate-600">{ak.acknowledgedAt ? new Date(ak.acknowledgedAt).toLocaleString("en-GB") : ""}</span></div>)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -38413,6 +38542,7 @@ export default function App() {
     const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
     return (
       <AuthContext.Provider value={{ user: currentUser }}>
+        <AnnouncementGate currentUser={currentUser} />
         <EmployeeShell
           currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users} storeRoles={storeRoles}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
@@ -38572,7 +38702,7 @@ export default function App() {
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
     "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
-    admin:"Admin", comms:"Communication", "time-attend":"Time & Attendance",
+    admin:"Admin", comms:"Communication", announcements:"Announcements", "time-attend":"Time & Attendance",
     "employee-profile":"Employee Profile", hiring:"Hiring", team:"Team" };
 
   const currentUser_ctx = currentUser;
@@ -38596,6 +38726,7 @@ export default function App() {
       <div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
         <EmpThemeStyle/>
         <GlobalMobileStyle/>
+        <AnnouncementGate currentUser={currentUser_ctx} />
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
@@ -38767,6 +38898,7 @@ export default function App() {
               onUpdateBrand={updateBrand}
               isEmployee={false}
             />}
+            {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
           </main>
         </div>
         <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}
