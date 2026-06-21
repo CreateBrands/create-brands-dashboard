@@ -17252,7 +17252,7 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
 }
 
 // ─── Assignments View ─────────────────────────────────────────────────────────
-function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, opsTeam = [], storeRoles = [], storeDepartments = [], item, onSave, onSaveAndNew, onClose }) {
+function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, opsTeam = [], storeRoles = [], storeDepartments = [], item, onSave, onSaveMany, onClose }) {
   const allowedStores = useMemo(
     () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
@@ -17276,6 +17276,14 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
     priority: item?.priority || "normal",
     notes: item?.notes || "",
   });
+  // Multi-check builder: when creating, you can add several checks for the same
+  // task, each with its own time window + assignee. Editing works on a single
+  // assignment (one check), so this list is only used in create mode.
+  const blankCheck = () => ({ winStart: "09:00", winEnd: "10:00", assignTo: "role", role: "", department: "", personId: "" });
+  const [checks, setChecks] = useState(item ? [] : [blankCheck()]);
+  const setCheck = (i, patch) => setChecks(cs => cs.map((c, idx) => idx === i ? { ...c, ...patch } : c));
+  const addCheck = () => setChecks(cs => [...cs, blankCheck()]);
+  const removeCheck = (i) => setChecks(cs => cs.filter((_, idx) => idx !== i));
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const selectedStore = allowedStores.find(s => s.id === form.storeId);
 
@@ -17319,38 +17327,56 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
   const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
   const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
-  const handleSave = (keepOpen = false) => {
+  const handleSave = () => {
     if (!form.storeId) { alert("Please pick a store."); return; }
     if (!form.taskId) { alert("Please select a task."); return; }
-    // Validate the assignment target based on what it's assigned to.
-    if (form.assignTo === "role" && !form.role) { alert("Please pick a role."); return; }
-    if (form.assignTo === "department" && !form.department) { alert("Please pick a department."); return; }
-    if (form.assignTo === "employee" && !form.personId) { alert("Please pick an employee."); return; }
-    // Clear the non-selected target fields so only the chosen one is stored.
-    const cleaned = {
-      ...form,
-      role:       form.assignTo === "role" ? form.role : "",
-      department: form.assignTo === "department" ? form.department : "",
-      personId:   form.assignTo === "employee" ? form.personId : "",
-    };
-    const payload = {
-      id: item?.id || `as-${Date.now()}`,
-      ...cleaned,
+
+    // EDIT mode: single assignment, uses the top-level fields directly.
+    if (item) {
+      if (form.assignTo === "role" && !form.role) { alert("Please pick a role."); return; }
+      if (form.assignTo === "department" && !form.department) { alert("Please pick a department."); return; }
+      if (form.assignTo === "employee" && !form.personId) { alert("Please pick an employee."); return; }
+      onSave({
+        id: item.id,
+        ...form,
+        role:       form.assignTo === "role" ? form.role : "",
+        department: form.assignTo === "department" ? form.department : "",
+        personId:   form.assignTo === "employee" ? form.personId : "",
+        brandId: selectedStore?.brandId || form.brandId,
+      });
+      return;
+    }
+
+    // CREATE mode: build one assignment per check row.
+    if (!checks.length) { alert("Add at least one check."); return; }
+    for (let i = 0; i < checks.length; i++) {
+      const c = checks[i];
+      if (c.assignTo === "role" && !c.role) { alert(`Check ${i+1}: pick a role.`); return; }
+      if (c.assignTo === "department" && !c.department) { alert(`Check ${i+1}: pick a department.`); return; }
+      if (c.assignTo === "employee" && !c.personId) { alert(`Check ${i+1}: pick an employee.`); return; }
+      if (c.winStart && c.winEnd && c.winEnd <= c.winStart) { alert(`Check ${i+1}: end time must be after start time.`); return; }
+    }
+    const base = {
+      storeId: form.storeId, type: form.type, taskId: form.taskId,
+      freq: form.freq, weekday: form.weekday, date: form.date, customDays: form.customDays,
+      priority: form.priority, notes: form.notes,
       brandId: selectedStore?.brandId || form.brandId,
     };
-    if (keepOpen && onSaveAndNew) {
-      onSaveAndNew(payload);
-      // Reset the task so the next assignment is a fresh entry, but keep store
-      // and scheduling so adding several similar checks is quick.
-      setForm(f => ({ ...f, taskId: "" }));
-    } else {
-      onSave(payload);
-    }
+    const assignments = checks.map((c, i) => ({
+      ...base,
+      id: `as-${Date.now()}-${i}`,
+      winStart: c.winStart, winEnd: c.winEnd,
+      assignTo: c.assignTo,
+      role:       c.assignTo === "role" ? c.role : "",
+      department: c.assignTo === "department" ? c.department : "",
+      personId:   c.assignTo === "employee" ? c.personId : "",
+    }));
+    onSaveMany ? onSaveMany(assignments) : assignments.forEach(a => onSave(a));
   };
 
   return (
     <Modal title={item ? "Edit Assignment" : "New Assignment"} onClose={onClose} maxW="max-w-xl"
-      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>{!item && <button onClick={() => handleSave(true)} className="flex-1 py-2.5 rounded-xl bg-slate-700 text-white text-sm font-semibold hover:bg-slate-600">Save & add another</button>}<button onClick={() => handleSave(false)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : "Create"}</button></>}>
+      footer={<><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={handleSave} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">{item ? "Save" : (checks.length>1 ? "Create "+checks.length+" checks" : "Create")}</button></>}>
       <div className="space-y-4">
         <div>
           <label className={labelCls}>Store *</label>
@@ -17367,8 +17393,9 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
           )}
         </div>
         <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Task Type</label><select value={form.type} onChange={e => { set("type", e.target.value); set("taskId", ""); }} className={inputCls}><option value="checklist">Checklist</option><option value="cleaning">Cleaning</option><option value="temp">Temperature</option><option value="delivery">Delivery</option></select></div><div><label className={labelCls}>Task</label><select value={form.taskId} onChange={e => set("taskId", e.target.value)} className={inputCls}><option value="">— Select —</option>{taskOptions().map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div></div>
-        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Assign to *</label><select value={form.assignTo} onChange={e => { set("assignTo", e.target.value); set("role", ""); set("department", ""); set("personId", ""); }} className={inputCls}><option value="department">Department</option><option value="role">Role</option><option value="employee">Employee</option></select></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>
-        <div>
+        {item && <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Assign to *</label><select value={form.assignTo} onChange={e => { set("assignTo", e.target.value); set("role", ""); set("department", ""); set("personId", ""); }} className={inputCls}><option value="department">Department</option><option value="role">Role</option><option value="employee">Employee</option></select></div><div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div></div>}
+        {!item && <div><label className={labelCls}>Priority</label><select value={form.priority} onChange={e => set("priority", e.target.value)} className={inputCls}><option value="critical">Critical</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></div>}
+        {item && <div>
           {form.assignTo === "department" && (
             <><label className={labelCls}>Department *</label>
             <select value={form.department} onChange={e => set("department", e.target.value)} className={inputCls}>
@@ -17393,19 +17420,56 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
             </select>
             {assignTargets.employees.length === 0 && <div className="text-[10px] text-amber-400 mt-1">No employees at this store.</div>}</>
           )}
-        </div>
+        </div>}
         <div><label className={labelCls}>Frequency</label><select value={form.freq} onChange={e => set("freq", e.target.value)} className={inputCls}><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option><option value="weekly">Weekly</option><option value="once">One-off</option><option value="custom">Custom days</option></select></div>
         {form.freq === "weekly" && <div><label className={labelCls}>Day of week</label><select value={form.weekday} onChange={e => set("weekday", e.target.value)} className={inputCls}>{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d => <option key={d}>{d}</option>)}</select></div>}
         {form.freq === "once" && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
         {form.freq === "custom" && <div><label className={labelCls}>Custom days</label><div className="flex gap-2 flex-wrap">{days.map(d => <button key={d} onClick={() => set("customDays", form.customDays.includes(d) ? form.customDays.filter(x => x !== d) : [...form.customDays, d])} className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${form.customDays.includes(d) ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-600"}`}>{d}</button>)}</div></div>}
-        <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Window Start</label><input type="time" value={form.winStart} onChange={e => set("winStart", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Window End</label><input type="time" value={form.winEnd} onChange={e => set("winEnd", e.target.value)} className={inputCls}/></div></div>
+        {item && <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Window Start</label><input type="time" value={form.winStart} onChange={e => set("winStart", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Window End</label><input type="time" value={form.winEnd} onChange={e => set("winEnd", e.target.value)} className={inputCls}/></div></div>}
+
+        {!item && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className={labelCls}>Checks ({checks.length})</label>
+              <button onClick={addCheck} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"><Plus size={13}/> Add check</button>
+            </div>
+            <p className="text-[11px] text-slate-500 -mt-1">Add one row per time this task runs in a day. Each gets its own time window and assignee. Creates a separate assignment per row.</p>
+            {checks.map((c, i) => (
+              <div key={i} className="bg-slate-900/60 border border-slate-700 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300">Check {i+1}</span>
+                  {checks.length > 1 && <button onClick={() => removeCheck(i)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-[10px] uppercase text-slate-500">Start</label><input type="time" value={c.winStart} onChange={e => setCheck(i, { winStart: e.target.value })} className={inputCls}/></div>
+                  <div><label className="text-[10px] uppercase text-slate-500">End</label><input type="time" value={c.winEnd} onChange={e => setCheck(i, { winEnd: e.target.value })} className={inputCls}/></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase text-slate-500">Assign to</label>
+                    <select value={c.assignTo} onChange={e => setCheck(i, { assignTo: e.target.value, role: "", department: "", personId: "" })} className={inputCls}>
+                      <option value="department">Department</option><option value="role">Role</option><option value="employee">Employee</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase text-slate-500">{c.assignTo === "department" ? "Department" : c.assignTo === "employee" ? "Employee" : "Role"}</label>
+                    {c.assignTo === "department" && <select value={c.department} onChange={e => setCheck(i, { department: e.target.value })} className={inputCls}><option value="">— Select —</option>{assignTargets.departments.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}</select>}
+                    {c.assignTo === "role" && <select value={c.role} onChange={e => setCheck(i, { role: e.target.value })} className={inputCls}><option value="">— Select —</option>{assignTargets.roles.map(r => <option key={r.id} value={r.name}>{r.name}</option>)}</select>}
+                    {c.assignTo === "employee" && <select value={c.personId} onChange={e => setCheck(i, { personId: e.target.value })} className={inputCls}><option value="">— Select —</option>{assignTargets.employees.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName || ""}</option>)}</select>}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button onClick={addCheck} className="w-full py-2 rounded-xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-indigo-500 text-xs font-semibold">+ Add another check</button>
+          </div>
+        )}
         <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Any instructions…"/></div>
       </div>
     </Modal>
   );
 }
 
-function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, cleaningTasks, opsTeam, storeRoles = [], storeDepartments = [], auditTrail, onAdd, onEdit, onDelete }) {
+function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, cleaningTasks, opsTeam, storeRoles = [], storeDepartments = [], auditTrail, onAdd, onAddMany, onEdit, onDelete }) {
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filter, setFilter] = useState("all");
@@ -17496,7 +17560,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
           </div>
         );
       })}</div>
-      {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onSaveAndNew={item => { onAdd(item); }} onClose={() => setShowForm(false)}/>}
+      {showForm && <AssignmentFormModal brands={vb} stores={stores} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} item={editItem} onSave={item => { editItem ? onEdit(item) : onAdd(item); setShowForm(false); }} onSaveMany={items => { (onAddMany ? onAddMany(items) : items.forEach(onAdd)); setShowForm(false); }} onClose={() => setShowForm(false)}/>}
       {deleteId && <OpsConfirmModal message="Delete this assignment?" onConfirm={() => onDelete(deleteId)} onClose={() => setDeleteId(null)}/>}
     </div>
   );
@@ -38078,6 +38142,12 @@ export default function App() {
       notifyOpsMember(s.personId, { kind: "task", title: "New task assigned to you", body: s.notes || "Open your tasks to see the details.", linkView: "ops-tasks" });
     }
   }, [showToast]);
+  const addAssignments = useCallback(async list => {
+    const saved = [];
+    for (const a of list) { const s = await upsertAssignment(a); saved.push(s); if (s.assignTo === "employee" && s.personId) { notifyOpsMember(s.personId, { kind: "task", title: "New task assigned to you", body: s.notes || "Open your tasks to see the details.", linkView: "ops-tasks" }); } }
+    setAssignments(as => { const ids = new Set(saved.map(x=>x.id)); return [...as.filter(x=>!ids.has(x.id)), ...saved]; });
+    showToast(`Created ${saved.length} ${saved.length===1?"check":"checks"}`);
+  }, [showToast]);
   const updateAssignment = useCallback(async a=>{const s=await upsertAssignment(a);setAssignments(as=>as.map(x=>x.id===s.id?s:x));showToast("Updated");}, [showToast]);
   const deleteAssignment = useCallback(async id=>{await removeAssignment(id);setAssignments(as=>as.filter(x=>x.id!==id));showToast("Deleted");}, [showToast]);
   const addOpsTeam    = useCallback(async m=>{const s=await upsertOpsTeamMember(m);setOpsTeam(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[...ts,s]);showToast("Saved"); return s;}, [showToast]);
@@ -38545,7 +38615,7 @@ export default function App() {
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "hiring"         && <HiringView
               brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
               applications={applications} opsTeam={opsTeam} currentUser={currentUser}
