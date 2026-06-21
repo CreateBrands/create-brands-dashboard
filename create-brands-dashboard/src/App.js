@@ -1566,6 +1566,7 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
       name: `${member.firstName} ${member.lastName}`.trim(),
       role: "employee",
       brandIds: [member.brandId],
+      storeIds: member.storeIds || [],
       avatar: (member.firstName[0] + (member.lastName?.[0] || "")).toUpperCase(),
       opsTeamMemberId: member.id,
       employeeRole: member.role,
@@ -8622,7 +8623,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // scoped to their assigned store_ids. Fallback to the brand-wide set ONLY when
   // a user has no assigned stores at all, so no one is ever locked out.
   const myVisibleStoreIds = useMemo(() => {
-    const assigned = myOpsMember?.storeIds || [];
+    // Prefer the live opsTeam record, but fall back to the storeIds captured on
+    // the login user — so store scope works even before the async opsTeam fetch
+    // completes (was causing intermittent "No stores assigned" on temp logs).
+    const assigned = (myOpsMember?.storeIds && myOpsMember.storeIds.length)
+      ? myOpsMember.storeIds
+      : (currentUser.storeIds || []);
     if (!isHqOrAbove(currentUser.role) && assigned.length > 0) {
       return [...assigned];
     }
@@ -8630,7 +8636,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     (stores || []).forEach(s => { if (currentUser.brandIds?.includes(s.brandId)) ids.add(s.id); });
     assigned.forEach(id => ids.add(id));
     return [...ids];
-  }, [stores, currentUser.brandIds, currentUser.role, myOpsMember]);
+  }, [stores, currentUser.brandIds, currentUser.storeIds, currentUser.role, myOpsMember]);
   const [activeView, setActiveView] = useState("ops-tasks");
   const [moreOpen, setMoreOpen] = useState(false); // EMP_BOTTOMNAV_V1: "More" sheet
 
@@ -17137,10 +17143,15 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   if (allVisibleStores.length === 0) {
+    // Stores still loading → don't flash the alarming message; wait.
+    if (!stores || stores.length === 0) {
+      return <div className="flex items-center justify-center py-16 text-slate-600 text-sm">Loading…</div>;
+    }
     return (
       <div className="flex flex-col items-center justify-center py-16 text-slate-500">
         <Thermometer size={32} className="mb-3 text-slate-700"/>
         <div className="text-sm font-semibold">No stores assigned to your account.</div>
+        <div className="text-xs text-slate-600 mt-1">If a store was just assigned, fully close and reopen the app.</div>
       </div>
     );
   }
