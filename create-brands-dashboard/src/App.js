@@ -38634,6 +38634,7 @@ export default function App() {
       { key: "time-attend",  label: "Time & Attendance", icon: Clock },
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
+      { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
       { key: "notifications", label: "Notifications",    icon: Bell },
       { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, badgeClearOnView: true },
