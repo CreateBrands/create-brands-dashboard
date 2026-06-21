@@ -150,7 +150,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt
+  Globe, FileText, FolderOpen, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -8711,6 +8711,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Hours",        icon: Clock },
     { key: "my-payslips",    label: "My Payslips",     icon: FileText },
+    { key: "my-documents",   label: "My Documents",    icon: FolderOpen },
     { key: "my-loans",       label: "My Loans",        icon: PoundSterling },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
     { key: "review-qr",      label: "Review QR",       icon: QrCode },
@@ -8970,6 +8971,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <div className="max-w-xl">
               <h2 className="text-base font-bold text-white flex items-center gap-2 mb-3"><FileText size={18}/> My Payslips</h2>
               <PayslipsSection employeeId={currentUser.opsTeamMemberId || currentUser.id} currentUser={currentUser} canUpload={false}/>
+            </div>
+          )}
+
+          {activeView === "my-documents" && (
+            <div className="max-w-xl">
+              <h2 className="text-base font-bold text-white flex items-center gap-2 mb-3"><FolderOpen size={18}/> My Documents</h2>
+              <p className="text-xs text-slate-400 mb-3">Upload your right-to-work, ID, certificates and other documents. Uploads are sent for review.</p>
+              <DocumentsTab employeeId={currentUser.opsTeamMemberId || currentUser.id} currentUser={currentUser}/>
             </div>
           )}
 
