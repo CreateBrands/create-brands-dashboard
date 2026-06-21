@@ -8684,9 +8684,30 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       setClockMsg({ type: "error", msg: e.message || String(e) });
     } finally { setClockBusy(false); }
   };
-  const overdueCount = assignments.filter(a =>
-    currentUser.brandIds.includes(a.brandId) && isActiveToday(a) && isOverdue(a)
-  ).length;
+  // Match the employee's actual task list: same store scope + role/person
+  // targeting as TodaysTasks, so the nav badge count agrees with the banner.
+  const overdueCount = useMemo(() => {
+    const visibleSet = new Set(myVisibleStoreIds || []);
+    const isMgr = isManagerOrAbove(currentUser.role);
+    const myRoleNames = (() => {
+      const ids = new Set(myOpsMember?.roleIds || (myOpsMember?.roleId ? [myOpsMember.roleId] : []));
+      return new Set((storeRoles || []).filter(r => ids.has(r.id)).map(r => (r.name || "").toLowerCase()));
+    })();
+    const myDept = (myOpsMember?.department || "").toLowerCase();
+    const myId = myOpsMember?.id;
+    const targetedAtMe = (a) => {
+      if (isMgr) return true;
+      const to = a.assignTo || (a.personId ? "employee" : (a.department ? "department" : "role"));
+      if (to === "employee") return a.personId === myId;
+      if (to === "department") return (a.department || "").toLowerCase() === myDept && !!myDept;
+      if (to === "role") return myRoleNames.has((a.role || "").toLowerCase());
+      return true;
+    };
+    return (assignments || []).filter(a =>
+      (a.storeId ? visibleSet.has(a.storeId) : currentUser.brandIds.includes(a.brandId))
+      && isActiveToday(a) && isOverdue(a) && targetedAtMe(a)
+    ).length;
+  }, [assignments, myVisibleStoreIds, myOpsMember, storeRoles, currentUser.role, currentUser.brandIds]);
 
   // EMP_BOTTOMNAV_V1: unread chat count (used by header Chat icon)
   const chatUnread = (() => {
