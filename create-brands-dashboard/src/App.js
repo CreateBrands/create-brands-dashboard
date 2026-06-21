@@ -3361,11 +3361,12 @@ function CkAllergenTagger({ ingredients = [], siteId, onSaved }) {
   const [collapsed, setCollapsed] = useState({});
   const [expandedId, setExpandedId] = useState(null);
   const [savingId, setSavingId] = useState(null);
+  const [scanId, setScanId] = useState(null);       // ingredient being scanned
   const [err, setErr] = useState("");
   // Local working copy so toggles feel instant; persisted on each change.
-  const [draft, setDraft] = useState({});  // id -> { allergens:[], confirmedNoAllergens:bool }
+  const [draft, setDraft] = useState({});  // id -> { allergens:[], mayContain:[], confirmedNoAllergens:bool }
 
-  const get = (i) => draft[i.id] || { allergens: i.allergens || [], confirmedNoAllergens: i.confirmedNoAllergens === true };
+  const get = (i) => draft[i.id] || { allergens: i.allergens || [], mayContain: i.mayContain || [], confirmedNoAllergens: i.confirmedNoAllergens === true };
   // "Reviewed" = has at least one allergen, OR explicitly confirmed none.
   const isTagged = (i) => { const d = get(i); return (d.allergens && d.allergens.length > 0) || d.confirmedNoAllergens; };
 
@@ -3373,7 +3374,7 @@ function CkAllergenTagger({ ingredients = [], siteId, onSaved }) {
     setDraft(s => ({ ...s, [i.id]: next }));
     setSavingId(i.id); setErr("");
     try {
-      await upsertCkIngredient({ ...i, allergens: next.allergens, confirmedNoAllergens: next.confirmedNoAllergens, siteId });
+      await upsertCkIngredient({ ...i, allergens: next.allergens, mayContain: next.mayContain, confirmedNoAllergens: next.confirmedNoAllergens, siteId });
     } catch (e) { setErr(e?.message || "Couldn't save."); }
     finally { setSavingId(null); }
   };
@@ -3381,14 +3382,37 @@ function CkAllergenTagger({ ingredients = [], siteId, onSaved }) {
     const d = get(i);
     const has = d.allergens.includes(a);
     const allergens = has ? d.allergens.filter(x => x !== a) : [...d.allergens, a];
-    // Adding an allergen clears the "confirmed none" flag automatically.
-    persist(i, { allergens, confirmedNoAllergens: allergens.length ? false : d.confirmedNoAllergens });
+    persist(i, { ...d, allergens, confirmedNoAllergens: allergens.length ? false : d.confirmedNoAllergens });
+  };
+  const toggleMayContain = (i, a) => {
+    const d = get(i);
+    const has = d.mayContain.includes(a);
+    const mayContain = has ? d.mayContain.filter(x => x !== a) : [...d.mayContain, a];
+    persist(i, { ...d, mayContain });
   };
   const toggleNone = (i) => {
     const d = get(i);
     const confirmedNoAllergens = !d.confirmedNoAllergens;
-    // Confirming "none" clears any tagged allergens.
-    persist(i, { allergens: confirmedNoAllergens ? [] : d.allergens, confirmedNoAllergens });
+    // Confirming "none" clears tagged allergens (but leaves may-contain as-is).
+    persist(i, { ...d, allergens: confirmedNoAllergens ? [] : d.allergens, confirmedNoAllergens });
+  };
+
+  // Scan a label photo → OCR → detect allergens + may-contain → pre-fill chips.
+  const scanLabel = async (i, file) => {
+    if (!file) return;
+    setScanId(i.id); setErr("");
+    try {
+      const { text } = await scanLabelText(file, { uploadInvoiceFile, extractInvoice, getInvoiceWithLines, entity: "central_kitchen" });
+      const det = detectAllergensInText(text || "");
+      if (det.empty) { setErr("Couldn't read allergens from that image — tag manually or try a clearer photo."); return; }
+      const d = get(i);
+      // Merge detected into existing (union), so a scan adds rather than wipes.
+      const allergens = Array.from(new Set([...(d.allergens||[]), ...(det.contains||[])]));
+      const mayContain = Array.from(new Set([...(d.mayContain||[]), ...(det.mayContain||[])]));
+      await persist(i, { ...d, allergens, mayContain, confirmedNoAllergens: false });
+      setExpandedId(i.id);
+    } catch (e) { setErr(e?.message || "Scan failed. Tag manually."); }
+    finally { setScanId(null); }
   };
 
   // Filtering + grouping
@@ -3475,21 +3499,44 @@ function CkAllergenTagger({ ingredients = [], siteId, onSaved }) {
                                 {d.confirmedNoAllergens ? "No allergens (confirmed)"
                                   : d.allergens.length ? d.allergens.join(", ")
                                   : "Not reviewed yet"}
+                                {d.mayContain.length ? ` · may contain: ${d.mayContain.join(", ")}` : ""}
                               </div>
                             </div>
                             {savingId===i.id && <span className="text-[10px] text-emerald-400">saving…</span>}
                             <ChevronRight size={15} className={`text-slate-500 transition-transform ${open?"rotate-90":""}`}/>
                           </button>
                           {open && (
-                            <div className="px-4 pb-3 space-y-2">
-                              <div className="flex flex-wrap gap-1.5">
-                                {CK_ALLERGENS.map(a => {
-                                  const on = d.allergens.includes(a);
-                                  return (
-                                    <button key={a} onClick={() => toggleAllergen(i, a)}
-                                      className={`px-2.5 py-1.5 rounded-full text-xs font-semibold capitalize border ${on?"bg-red-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-400"}`}>{a}</button>
-                                  );
-                                })}
+                            <div className="px-4 pb-3 space-y-3">
+                              {/* Scan label */}
+                              <label className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border cursor-pointer ${scanId===i.id?"bg-slate-800 border-slate-700 text-slate-400":"bg-indigo-600 border-transparent text-white hover:bg-indigo-500"}`}>
+                                {scanId===i.id ? "Scanning…" : "📷 Scan allergen label"}
+                                <input type="file" accept="image/*" capture="environment" disabled={scanId===i.id} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; scanLabel(i, f); }} className="hidden"/>
+                              </label>
+                              {/* Contains */}
+                              <div>
+                                <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1.5">Contains</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {CK_ALLERGENS.map(a => {
+                                    const on = d.allergens.includes(a);
+                                    return (
+                                      <button key={a} onClick={() => toggleAllergen(i, a)}
+                                        className={`px-2.5 py-1.5 rounded-full text-xs font-semibold capitalize border ${on?"bg-red-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-400"}`}>{a}</button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              {/* May contain */}
+                              <div>
+                                <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1.5">May contain (traces)</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {CK_ALLERGENS.map(a => {
+                                    const on = d.mayContain.includes(a);
+                                    return (
+                                      <button key={a} onClick={() => toggleMayContain(i, a)}
+                                        className={`px-2.5 py-1.5 rounded-full text-xs font-semibold capitalize border ${on?"bg-amber-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-400"}`}>{a}</button>
+                                    );
+                                  })}
+                                </div>
                               </div>
                               <button onClick={() => toggleNone(i)}
                                 className={`w-full px-3 py-2 rounded-xl text-xs font-semibold border ${d.confirmedNoAllergens?"bg-emerald-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-300"}`}>
