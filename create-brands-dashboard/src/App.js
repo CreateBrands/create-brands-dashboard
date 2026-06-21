@@ -3349,6 +3349,168 @@ const CK_UNITS = ["kg","g","L","ml","each"];
 // ─── Central Kitchen stock count ──────────────────────────────────────────────
 // Simple count: enter the counted quantity for each CK ingredient and save.
 // Reuses the shared stock-count tables with a "kitchen" header + "ck" line scope.
+// ─── Central Kitchen allergen tagger ─────────────────────────────────────────
+// Mobile-friendly screen to tag the 14 UK allergens on each ingredient. Tracks
+// progress (tagged vs pending), lets you confirm "no allergens" separately so
+// reviewed-none is distinct from not-yet-reviewed, with category grouping,
+// search, status filters and collapsible sections.
+function CkAllergenTagger({ ingredients = [], siteId, onSaved }) {
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("pending");   // all | tagged | pending
+  const [groupBy, setGroupBy] = useState("category"); // category | none
+  const [collapsed, setCollapsed] = useState({});
+  const [expandedId, setExpandedId] = useState(null);
+  const [savingId, setSavingId] = useState(null);
+  const [err, setErr] = useState("");
+  // Local working copy so toggles feel instant; persisted on each change.
+  const [draft, setDraft] = useState({});  // id -> { allergens:[], confirmedNoAllergens:bool }
+
+  const get = (i) => draft[i.id] || { allergens: i.allergens || [], confirmedNoAllergens: i.confirmedNoAllergens === true };
+  // "Reviewed" = has at least one allergen, OR explicitly confirmed none.
+  const isTagged = (i) => { const d = get(i); return (d.allergens && d.allergens.length > 0) || d.confirmedNoAllergens; };
+
+  const persist = async (i, next) => {
+    setDraft(s => ({ ...s, [i.id]: next }));
+    setSavingId(i.id); setErr("");
+    try {
+      await upsertCkIngredient({ ...i, allergens: next.allergens, confirmedNoAllergens: next.confirmedNoAllergens, siteId });
+    } catch (e) { setErr(e?.message || "Couldn't save."); }
+    finally { setSavingId(null); }
+  };
+  const toggleAllergen = (i, a) => {
+    const d = get(i);
+    const has = d.allergens.includes(a);
+    const allergens = has ? d.allergens.filter(x => x !== a) : [...d.allergens, a];
+    // Adding an allergen clears the "confirmed none" flag automatically.
+    persist(i, { allergens, confirmedNoAllergens: allergens.length ? false : d.confirmedNoAllergens });
+  };
+  const toggleNone = (i) => {
+    const d = get(i);
+    const confirmedNoAllergens = !d.confirmedNoAllergens;
+    // Confirming "none" clears any tagged allergens.
+    persist(i, { allergens: confirmedNoAllergens ? [] : d.allergens, confirmedNoAllergens });
+  };
+
+  // Filtering + grouping
+  const filtered = (ingredients || []).filter(i => {
+    if (search && !(i.name || "").toLowerCase().includes(search.toLowerCase())) return false;
+    if (status === "tagged" && !isTagged(i)) return false;
+    if (status === "pending" && isTagged(i)) return false;
+    return true;
+  });
+  const sectionOf = (i) => groupBy === "category" ? (i.category || "Uncategorised") : "All ingredients";
+  const sections = {};
+  filtered.forEach(i => { const s = sectionOf(i); (sections[s] = sections[s] || []).push(i); });
+  const sectionNames = Object.keys(sections).sort();
+  const totalN = (ingredients || []).length;
+  const taggedN = (ingredients || []).filter(isTagged).length;
+  const pendingN = totalN - taggedN;
+  const pct = totalN ? Math.round((taggedN / totalN) * 100) : 0;
+
+  return (
+    <div className="space-y-3">
+      {/* Sticky progress header */}
+      <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur rounded-2xl border border-slate-800 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-white">Allergen tagging</div>
+          <div className="text-xs font-semibold text-slate-300">{taggedN} / {totalN} · {pct}%</div>
+        </div>
+        <div className="h-2.5 rounded-full bg-slate-800 overflow-hidden">
+          <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/>
+        </div>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search ingredients…"
+          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white"/>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {[["pending","To review"],["tagged","Done"],["all","All"]].map(([k,l]) => (
+            <button key={k} onClick={() => setStatus(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold ${status===k?"bg-indigo-600 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>
+              {l}{k==="pending"?` (${pendingN})`:k==="tagged"?` (${taggedN})`:""}
+            </button>
+          ))}
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          {[["category","By category"],["none","Flat list"]].map(([k,l]) => (
+            <button key={k} onClick={() => setGroupBy(k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold ${groupBy===k?"bg-slate-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>{l}</button>
+          ))}
+          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          <button onClick={() => setCollapsed(Object.fromEntries(sectionNames.map(s => [s, false])))}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Expand all</button>
+          <button onClick={() => setCollapsed({})}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Collapse all</button>
+        </div>
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+
+      {totalN === 0 ? (
+        <div className="text-center py-10 text-sm text-slate-600">No ingredients yet. Add them in the Stock tab first.</div>
+      ) : (
+        <div className="space-y-3 pb-20">
+          {sectionNames.length === 0 && <div className="text-xs text-slate-500 py-8 text-center">Nothing here. Try ‘All’ or clear the search.</div>}
+          {sectionNames.map(sec => {
+            const list = sections[sec];
+            const secDone = list.filter(isTagged).length;
+            const isOpen = collapsed[sec] === false;
+            return (
+              <div key={sec} className="rounded-2xl border border-slate-800 overflow-hidden">
+                <button onClick={() => setCollapsed(c => ({ ...c, [sec]: c[sec]===false ? true : false }))}
+                  className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 text-left">
+                  <span className="text-sm font-bold text-white flex items-center gap-2">
+                    <ChevronRight size={15} className={`transition-transform ${isOpen?"rotate-90":""}`}/>{sec}
+                  </span>
+                  <span className={`text-xs font-semibold ${secDone===list.length?"text-emerald-400":"text-slate-400"}`}>{secDone}/{list.length}</span>
+                </button>
+                {isOpen && (
+                  <div className="divide-y divide-slate-800/60">
+                    {list.map(i => {
+                      const d = get(i); const tagged = isTagged(i); const open = expandedId === i.id;
+                      return (
+                        <div key={i.id} className={tagged ? "bg-emerald-950/10" : ""}>
+                          <button onClick={() => setExpandedId(open ? null : i.id)} className="w-full flex items-center gap-3 px-4 py-3 text-left">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-white truncate flex items-center gap-2">
+                                {tagged ? <Check size={14} className="text-emerald-400 shrink-0"/> : <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"/>}
+                                {i.name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 truncate">
+                                {d.confirmedNoAllergens ? "No allergens (confirmed)"
+                                  : d.allergens.length ? d.allergens.join(", ")
+                                  : "Not reviewed yet"}
+                              </div>
+                            </div>
+                            {savingId===i.id && <span className="text-[10px] text-emerald-400">saving…</span>}
+                            <ChevronRight size={15} className={`text-slate-500 transition-transform ${open?"rotate-90":""}`}/>
+                          </button>
+                          {open && (
+                            <div className="px-4 pb-3 space-y-2">
+                              <div className="flex flex-wrap gap-1.5">
+                                {CK_ALLERGENS.map(a => {
+                                  const on = d.allergens.includes(a);
+                                  return (
+                                    <button key={a} onClick={() => toggleAllergen(i, a)}
+                                      className={`px-2.5 py-1.5 rounded-full text-xs font-semibold capitalize border ${on?"bg-red-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-400"}`}>{a}</button>
+                                  );
+                                })}
+                              </div>
+                              <button onClick={() => toggleNone(i)}
+                                className={`w-full px-3 py-2 rounded-xl text-xs font-semibold border ${d.confirmedNoAllergens?"bg-emerald-700 border-transparent text-white":"bg-slate-900 border-slate-700 text-slate-300"}`}>
+                                {d.confirmedNoAllergens ? "✓ No allergens (confirmed)" : "Mark as: No allergens (confirmed)"}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CkStockCount({ ingredients = [], siteId, currentUser }) {
   const [counts, setCounts] = useState([]);   // past counts (header rows)
   const [openId, setOpenId] = useState(null); // count currently being edited
@@ -4205,7 +4367,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
       <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-slate-800 pb-1">
         {[
-          { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"],["count","Count"]] },
+          { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"],["count","Count"],["allergens","Allergens"]] },
           { label: "Recipes",   tabs: [["preps","Preps"],["products","Products"]] },
           { label: "Planning",  tabs: [["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
           { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
@@ -4335,6 +4497,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
       )}
 
       {!loading && tab === "count" && <CkStockCount ingredients={ingredients} siteId={siteId} currentUser={currentUser} />}
+      {!loading && tab === "allergens" && <CkAllergenTagger ingredients={ingredients} siteId={siteId} onSaved={load} />}
 
       {!loading && tab === "preps" && (
         <div className="space-y-3">
