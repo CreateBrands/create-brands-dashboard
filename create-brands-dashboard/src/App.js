@@ -3789,6 +3789,19 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const kitchen = useMemo(() => (stores || []).find(s => s.siteType === "central_kitchen" && !s.archivedAt), [stores]);
   const siteId = kitchen?.id || null;
   const [tab, setTab] = useState("stock");
+  // The full tab order, with their permission keys. Tabs without a feat key
+  // (count, allergens) are always visible. Used to land on a permitted tab so a
+  // user without Stock access doesn't open to a hidden tab (blank page).
+  const CK_TAB_ORDER = ["stock","goods","count","allergens","preps","products","planner","production","finished","dispatch","categories","suppliers"];
+  const ckTabAllowed = (k) => (k === "count" || k === "allergens") ? true : ckCanFeature(`feat.ck.${k}`);
+  useEffect(() => {
+    // If the current tab isn't permitted, jump to the first one that is.
+    if (!ckTabAllowed(tab)) {
+      const firstOk = CK_TAB_ORDER.find(k => ckTabAllowed(k));
+      if (firstOk && firstOk !== tab) setTab(firstOk);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, ckCanFeature]);
   const [ingredients, setIngredients] = useState([]);
   const [goodsIn, setGoodsIn] = useState([]);
   const [categories, setCategories] = useState([]);
