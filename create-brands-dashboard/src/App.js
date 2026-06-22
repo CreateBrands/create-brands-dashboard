@@ -38415,11 +38415,21 @@ export default function App() {
 
   // ── Login / logout / impersonation ─────────────────────────────────────────
   const handleLogin  = useCallback(user => {
-    setActualUser(user);
+    // A manager/owner logs in via the `users` account. If they also have an
+    // ops_team profile (matched by email), link it so their custom access role
+    // (e.g. a "Central Kitchen" role) resolves — otherwise they fall back to the
+    // built-in role and get whatever that role can see (incl. Finance).
+    let u = user;
+    if (user && !user.opsTeamMemberId && user.email) {
+      const e = user.email.trim().toLowerCase();
+      const m = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+      if (m) u = { ...user, opsTeamMemberId: m.id, storeIds: (m.storeIds && m.storeIds.length) ? m.storeIds : (user.storeIds || []) };
+    }
+    setActualUser(u);
     setImpersonatedUserId(null);
-    localStorage.setItem("cb_session", JSON.stringify(user));
+    localStorage.setItem("cb_session", JSON.stringify(u));
     localStorage.removeItem("cb_impersonate");
-  }, []);
+  }, [opsTeam]);
   const handleLogout = useCallback(() => {
     setActualUser(null);
     setImpersonatedUserId(null);
@@ -38450,7 +38460,14 @@ export default function App() {
     const builtIn = currentUser?.role || null;
     if (!currentUser) return { builtIn: null, matrixRole: null, baseRole: null, customRoleId: null };
     const memberId = currentUser.opsTeamMemberId || currentUser.id;
-    const member = (opsTeam || []).find(mm => mm.id === memberId);
+    // Match by id first; if that fails (e.g. a manager whose users-id differs
+    // from their ops_team id and the login link hadn't resolved), fall back to
+    // matching their ops_team profile by email so the custom role still applies.
+    let member = (opsTeam || []).find(mm => mm.id === memberId);
+    if (!member && currentUser.email) {
+      const e = currentUser.email.trim().toLowerCase();
+      member = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+    }
     const roleId = member?.accessRoleId || null;
     const crole = roleId ? customRoleById[roleId] : null;
     return {
