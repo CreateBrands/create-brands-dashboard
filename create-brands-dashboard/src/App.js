@@ -25422,6 +25422,13 @@ function OpsTeamView({
                         <div className="text-xs text-slate-600">{[roleLabel, deptLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click to complete setup" : "")}</div>
                       </div>
                       <div className="flex gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                        {m.isManager && <button onClick={() => setTmModal({
+                          _seedFromManager: true,
+                          firstName: m.firstName || "", lastName: m.lastName || "",
+                          email: (users.find(u => u.id === m.id)?.email) || "",
+                          brandId: m.brandId || null, storeIds: m.storeIds || [],
+                          role: "", department: "", pin: "",
+                        })} className="px-2.5 py-2 rounded-xl bg-indigo-600/80 text-white hover:bg-indigo-600 text-[11px] font-semibold whitespace-nowrap">+ Create profile</button>}
                         {!m.isManager && <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>}
                         {!m.isManager && <button onClick={() => setDelTarget({ msg: `Delete "${m.firstName} ${m.lastName}"? This removes the team member.`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>}
                       </div>
@@ -25436,13 +25443,14 @@ function OpsTeamView({
 
       {tmModal && (
         <OpsTeamMemberFormModal
-          item={tmModal === "new" ? null : tmModal}
+          item={(tmModal === "new") ? null : (tmModal._seedFromManager ? tmModal : tmModal)}
           brands={brands} stores={stores} visibleStoreIds={visibleStoreIds}
           storeDepartments={storeDepartments} storeRoles={storeRoles}
           opsTeam={opsTeam} customRoles={customRoles}
           onSave={async (data) => {
             try {
-              if (tmModal === "new") await onAddOpsTeam(data);
+              // "new" or a manager-seed both create a fresh employee profile.
+              if (tmModal === "new" || tmModal._seedFromManager) await onAddOpsTeam(data);
               else await onUpdateOpsTeam({ ...data, id: tmModal.id });
               setTmModal(null);
             } catch (err) { alert(`Could not save: ${err?.message || err}`); }
