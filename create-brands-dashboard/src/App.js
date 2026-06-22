@@ -24076,11 +24076,20 @@ function OpsTeamMemberFormModal({
   // owned stores only if no scope is provided.
   const allowedStores = useMemo(() => {
     const nonArchived = (stores || []).filter(s => !s.archivedAt);
+    // The Central Kitchen (and other facility sites) are real workplaces — staff
+    // and managers can be based there — so they must be pickable as a primary
+    // store even though they're a separate entity type from shops.
+    const facilities = nonArchived.filter(s => !isShopSite(s));
+    let base;
     if (visibleStoreIds && visibleStoreIds.length) {
       const set = new Set(visibleStoreIds);
-      return nonArchived.filter(s => set.has(s.id));
+      base = nonArchived.filter(s => set.has(s.id));
+    } else {
+      base = nonArchived.filter(s => s.ownershipModel === "owned");
     }
-    return nonArchived.filter(s => s.ownershipModel === "owned");
+    // Merge in any facility sites not already included (de-duped by id).
+    const seen = new Set(base.map(s => s.id));
+    return [...base, ...facilities.filter(s => !seen.has(s.id))];
   }, [stores, visibleStoreIds]);
 
   // Initial form. Three sources of seed data, in priority order:
