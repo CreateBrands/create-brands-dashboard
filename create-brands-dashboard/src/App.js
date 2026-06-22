@@ -17607,8 +17607,9 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                         try {
                           const breach = unit ? !checkTemp(unit, num) : false;
                           const bId = unit?.brandId || a.brandId || currentUser?.brandIds?.[0] || null;
-                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: bId, storeId: unit?.storeId || a.storeId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: getTodayStr(), loggedBy: currentUser?.name || "Staff" });
-                          // Mark the temp assignment done for today via sign-off path.
+                          const sId = unit?.storeId || a.storeId || null;
+                          if (!sId) { setTempErr("This temperature unit isn't linked to a store. Ask a manager to edit the unit and set its store."); setTempBusy(false); return; }
+                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: bId, storeId: sId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: getTodayStr(), loggedBy: currentUser?.name || "Staff" });
                           await onSignOff?.(a, taskName);
                           setExpandedId(null); setTempVal("");
                         } catch (e) { setTempErr(e?.message || "Couldn't save the reading. Please try again."); }
