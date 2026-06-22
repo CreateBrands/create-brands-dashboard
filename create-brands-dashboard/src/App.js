@@ -9457,14 +9457,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
           {activeView === "ops-deliveries" && (
             <DeliveriesView
-              brands={myBrands} deliveries={deliveries} onAdd={onDeliveryAdd}
+              brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} deliveries={deliveries} onAdd={onDeliveryAdd}
             />
           )}
           {activeView === "ops-network" && (
             <OpsNetworkDashboard
               brands={myBrands}
               stores={stores}
-              visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)}
+              visibleStoreIds={myVisibleStoreIds}
               assignments={assignments} auditTrail={auditTrail}
               opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits}
               cleaningTasks={cleaningTasks}
