@@ -39253,6 +39253,16 @@ export default function App() {
     ) }))
     .filter(g => g.items.length > 0);
 
+  // True if the current user is permitted to see a given view key, using the
+  // SAME rule as the sidebar (canRoleSeeSection). This keeps page content in
+  // step with nav visibility for custom roles — owner/HQ always allowed.
+  const canSeeView = (viewKey) => {
+    if (["owner","hq_staff"].includes(currentUser?.role)) return true;
+    const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
+    if (!item) return false;
+    return canRoleSeeSection(currentUserRole.matrixRole, item);
+  };
+
   // Finance entity — a focused accounts-only workspace. When the user has
   // stepped into the Finance tile, the sidebar shows just the accounts hub.
   const isFinanceEntity = selectedEntityBrand === "finance";
@@ -39378,7 +39388,7 @@ export default function App() {
             {effectiveActiveView === "dashboard" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
             {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
-            {effectiveActiveView === "store-analytics" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
+            {effectiveActiveView === "store-analytics" && canSeeView("store-analytics") && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
             {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
@@ -39465,8 +39475,8 @@ export default function App() {
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
-            {effectiveActiveView === "onboarding-board" && ["owner","hq_staff","manager"].includes(currentUser.role) && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "invoices" && currentUser.role === "manager" && <InvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
@@ -39475,7 +39485,7 @@ export default function App() {
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
-            {effectiveActiveView === "reports" && ["owner","hq_staff","manager"].includes(currentUser.role) && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
+            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
