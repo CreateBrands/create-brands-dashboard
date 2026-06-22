@@ -38917,7 +38917,8 @@ export default function App() {
     if (assignment && stateKey.startsWith("asg::")) {
       const date = stateKey.split("||")[1];
       if (!assignment.storeId) { console.warn("Skipping toggle: assignment has no store."); return; }
-      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, date, newState, "", null, assignment.id);
+      const ckId = assignment.type === "checklist" ? assignment.taskId : null;
+      await upsertChecklistState(assignment.storeId, assignment.brandId, ckId, date, newState, "", null, assignment.id);
       return;
     }
     // Legacy per-task key: "store_id||checklistId||date".
@@ -38942,7 +38943,11 @@ export default function App() {
         return;
       }
       const nextState = { ...prev, __signedOff: true, __signedOffAt: now, __signedOffBy: currentUser?.name||"Manager" };
-      await upsertChecklistState(assignment.storeId, assignment.brandId, assignment.taskId, d, nextState, currentUser?.name||"Manager", now, assignment.id);
+      // checklist_id has a FK to the checklists table. Temp/cleaning tasks use a
+      // unit/task id as taskId which is NOT a checklist row — pass null for those
+      // (per-assignment rows are keyed by assignment_id, so checklist_id is unused).
+      const ckId = assignment.type === "checklist" ? assignment.taskId : null;
+      await upsertChecklistState(assignment.storeId, assignment.brandId, ckId, d, nextState, currentUser?.name||"Manager", now, assignment.id);
       setChecklistStates(s => ({ ...s, [stateKey]: nextState }));
       try { await addAudit("sign-off",`${assignment.checklistName||assignment.taskName||"Task"} completed`,currentUser?.name||"Manager",assignment.brandId,assignment.storeId||null); } catch { /* logged server-side */ }
       showToast("✓ Signed off");
@@ -39092,6 +39097,11 @@ export default function App() {
           onSubmitExpense={expenseHandlers.submit}
           onLogout={handleLogout}
         />
+        {toast && (
+          <div className={`fixed bottom-6 right-6 z-[100] px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl flex items-center gap-3 ${toast.type==="error"?"bg-red-600 text-white":"bg-emerald-600 text-white"}`}>
+            {toast.type==="error"?"✗":"✓"} {toast.msg}
+          </div>
+        )}
       </AuthContext.Provider>
     );
   }
