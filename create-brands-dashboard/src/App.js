@@ -38776,6 +38776,16 @@ export default function App() {
   // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
+  // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
+  // are now tabs inside Dashboard to slim the sidebar. "overview" = the main
+  // dashboard. Gated per-tab by the same role/matrix checks as before.
+  const [dashTab, setDashTab] = useState("overview");
+  // If something routes to the legacy "chain"/"store-analytics" keys, open the
+  // matching Dashboard tab (effectiveActiveView redirects the view to dashboard).
+  useEffect(() => {
+    if (activeView === "chain") setDashTab("chain");
+    else if (activeView === "store-analytics") setDashTab("store-analytics");
+  }, [activeView]);
   const [whosWorkingOpen, setWhosWorkingOpen] = useState(false);   // "Who's working" popup
   const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
   const [appSettings, setAppSettings] = useState({});
@@ -39972,16 +39982,14 @@ export default function App() {
   const NAV_GROUPS_RAW = [
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
-      { key: "chain",       label: "Chain Performance", icon: Globe, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"] },
       { key: "payslip-inbox", label: "Payslips Inbox", icon: FileText, roles: ["owner", "hq_staff"] },
-      { key: "store-analytics", label: "Store Analytics", icon: BarChart2, roles: ["owner", "hq_staff", "manager"], hideForCK: true },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
-      { key: "ops-network", label: "Ops Overview",  icon: Activity },
     ]},
-    { group: "TODAY", items: [
+    { group: "OPERATIONS", items: [
+      { key: "ops-network",    label: "Ops Overview",    icon: Activity },
       { key: "ops-tasks",      label: "Today's Tasks",   icon: CheckSquare },
       { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
       { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
@@ -40055,6 +40063,9 @@ export default function App() {
   // we just pick a different view to render this pass. The user can click the
   // sidebar to "stick" a different view if they want.
   const effectiveActiveView = (() => {
+    // Legacy keys: chain & store-analytics are now Dashboard sub-tabs. If anything
+    // still routes to them (old deep link, saved state), land on Dashboard.
+    if (activeView === "chain" || activeView === "store-analytics") return "dashboard";
     const allowedKeys = effectiveNavGroups.flatMap(g => g.items.map(i => i.key));
     if (isFinanceEntity) return allowedKeys.includes(activeView) ? activeView : "accounts";
     if (allowedKeys.length === 0) return activeView;
@@ -40159,10 +40170,34 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
-            {effectiveActiveView === "dashboard" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
-            {effectiveActiveView === "dashboard" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
-            {effectiveActiveView === "chain"           && (currentUser.role === "owner" || currentUser.role === "hq_staff") && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
-            {effectiveActiveView === "store-analytics" && canSeeView("store-analytics") && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
+            {effectiveActiveView === "dashboard" && (() => {
+              const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
+              // Build the dashboard tabs available to this user. Same gates as the
+              // old top-level views: Chain = owner/HQ; Store Analytics = canSeeView.
+              const dashTabs = [
+                { key: "overview", label: "Dashboard" },
+                ...(isHqOrOwner && !ckOnly ? [{ key: "chain", label: "Chain Performance" }] : []),
+                ...(canSeeView("store-analytics") && !ckOnly ? [{ key: "store-analytics", label: "Store Analytics" }] : []),
+              ];
+              const dashKeys = dashTabs.map(t => t.key);
+              const effDashTab = dashKeys.includes(dashTab) ? dashTab : "overview";
+              return (
+                <div className="space-y-4">
+                  {dashTabs.length > 1 && (
+                    <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
+                      {dashTabs.map(t => (
+                        <button key={t.key} onClick={() => setDashTab(t.key)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effDashTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
+                      ))}
+                    </div>
+                  )}
+                  {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
+                  {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
+                  {effDashTab === "chain" && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
+                  {effDashTab === "store-analytics" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
+                </div>
+              );
+            })()}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
             {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
