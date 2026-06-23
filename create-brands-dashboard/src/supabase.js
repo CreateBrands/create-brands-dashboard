@@ -6297,7 +6297,41 @@ export async function deleteCkGoodsIn(id) {
   return id;
 }
 
-// Current stock per ingredient = sum of remaining across goods-in batches.
+// Edit a goods-in line. Patch may include qtyReceived, batchNo, expiryDate,
+// unitCost, supplier, receivedDate, invoiceRef, note. If qtyReceived changes we
+// also adjust qty_remaining by the same delta so stock stays consistent (never
+// below zero). totalCost recomputes from unitCost*qtyReceived when both known.
+export async function updateCkGoodsIn(id, patch) {
+  const { data: cur } = await supabase.from("ck_goods_in").select("qty_received, qty_remaining").eq("id", id).maybeSingle();
+  const row = {};
+  if ("batchNo" in patch)     row.batch_no = patch.batchNo || null;
+  if ("expiryDate" in patch)  row.expiry_date = patch.expiryDate || null;
+  if ("supplier" in patch)    row.supplier = patch.supplier || null;
+  if ("receivedDate" in patch) row.received_date = patch.receivedDate || null;
+  if ("invoiceRef" in patch)  row.invoice_ref = patch.invoiceRef || null;
+  if ("note" in patch)        row.note = patch.note || null;
+  if ("receivedBy" in patch)  row.received_by = patch.receivedBy || null;
+  let newQty = null, newUnitCost = null;
+  if ("qtyReceived" in patch && patch.qtyReceived !== "" && patch.qtyReceived != null) {
+    newQty = Number(patch.qtyReceived);
+    row.qty_received = newQty;
+    if (cur) {
+      const delta = newQty - Number(cur.qty_received || 0);
+      row.qty_remaining = Math.max(0, Number(cur.qty_remaining || 0) + delta);
+    }
+  }
+  if ("unitCost" in patch) {
+    newUnitCost = patch.unitCost === "" || patch.unitCost == null ? null : Number(patch.unitCost);
+    row.unit_cost = newUnitCost;
+  }
+  // recompute total cost if we have both unit cost and qty
+  const effQty = newQty != null ? newQty : (cur ? Number(cur.qty_received) : null);
+  if (newUnitCost != null && effQty != null) row.total_cost = +(newUnitCost * effQty).toFixed(2);
+  const { error } = await supabase.from("ck_goods_in").update(row).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
 export function computeCkStock(ingredients, goodsIn) {
   const byIng = {};
   (goodsIn || []).forEach(g => { byIng[g.ingredientId] = (byIng[g.ingredientId] || 0) + (g.qtyRemaining || 0); });

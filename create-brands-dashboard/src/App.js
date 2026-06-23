@@ -64,7 +64,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3857,6 +3857,10 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
   // Goods-in editor
   const [ginModal, setGinModal] = useState(false);
+  // Goods-in log grouping: which delivery groups are expanded, and which line is being edited.
+  const [ginOpenGroups, setGinOpenGroups] = useState({});
+  const [ginEditLine, setGinEditLine] = useState(null); // line id being edited
+  const [ginEditForm, setGinEditForm] = useState({});
   const [ginSupplier, setGinSupplier] = useState("");
   const [ginDate, setGinDate] = useState(()=>new Date().toISOString().split("T")[0]);
   const [ginLines, setGinLines] = useState([]); // {ingredientId, ingredientName, qtyReceived, unit, batchNo, expiryDate, unitCost, raw, needsCreate}
@@ -3928,7 +3932,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
       setGinLine(idx, { ingredientId: String(created.id), ingredientName: created.name, needsCreate: false });
     } catch (e) { setErr(e?.message || String(e)); }
   };
-  const ingName = (id) => ingredients.find(i=>i.id===id)?.name || "—";
+  const ingName = (id) => ingredients.find(i=>String(i.id)===String(id))?.name || "—";
 
   // Allergen label check (scan label → compare to stored → confirm)
   const [allergenCheck, setAllergenCheck] = useState(null); // { ingredient, stored, detected, mayContain, diff, source, busy }
@@ -4606,26 +4610,73 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           </div>
         )
       ) : tab === "goods" ? (
-        goodsIn.length === 0 ? <div className="text-center py-10 text-sm text-slate-500">No deliveries logged yet.</div> : (
-          <div className="space-y-2">
-            {goodsIn.map(g => (
-              <div key={g.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-200">{ingName(g.ingredientId)} · {g.qtyReceived} {g.unit}</div>
-                  <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
-                    <span>{g.receivedDate}</span>
-                    {g.batchNo && <span>batch {g.batchNo}</span>}
-                    {g.supplier && <span>· {g.supplier}</span>}
-                    {g.expiryDate && <span>· exp {g.expiryDate}</span>}
-                    {g.unitCost!=null && <span>· {money(g.unitCost)}/{g.unit}</span>}
-                    <span className="text-slate-600">· {g.qtyRemaining} left</span>
+        goodsIn.length === 0 ? <div className="text-center py-10 text-sm text-slate-500">No deliveries logged yet.</div> : (() => {
+          // Group goods-in lines into deliveries by supplier + date + invoice ref.
+          const groups = {};
+          (goodsIn||[]).forEach(g => {
+            const key = `${g.supplier||"—"}|${g.receivedDate||"—"}|${g.invoiceRef||""}`;
+            (groups[key] = groups[key] || { supplier: g.supplier||"—", date: g.receivedDate||"—", invoiceRef: g.invoiceRef||"", lines: [] }).lines.push(g);
+          });
+          const sorted = Object.entries(groups).sort((a,b) => String(b[1].date).localeCompare(String(a[1].date)));
+          return (
+            <div className="space-y-2">
+              {sorted.map(([key, grp]) => {
+                const open = !!ginOpenGroups[key];
+                const totalCost = grp.lines.reduce((s,l)=> s + (l.totalCost!=null ? l.totalCost : (l.unitCost!=null ? l.unitCost*l.qtyReceived : 0)), 0);
+                return (
+                  <div key={key} className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    {/* Delivery header */}
+                    <button onClick={()=>setGinOpenGroups(s=>({...s,[key]:!s[key]}))} className="w-full flex items-center justify-between gap-2 p-3 hover:bg-slate-800/50 text-left">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                          <span className="text-slate-500">{open?"▾":"▸"}</span>
+                          {grp.supplier}{grp.invoiceRef ? <span className="text-slate-500 font-normal">· {grp.invoiceRef}</span> : null}
+                        </div>
+                        <div className="text-[11px] text-slate-500 pl-4">{grp.date} · {grp.lines.length} {grp.lines.length===1?"item":"items"}{totalCost>0 ? ` · ${money(totalCost)}` : ""}</div>
+                      </div>
+                    </button>
+                    {/* Delivery lines */}
+                    {open && (
+                      <div className="border-t border-slate-800 divide-y divide-slate-800/60">
+                        {grp.lines.map(g => ginEditLine === g.id ? (
+                          <div key={g.id} className="p-3 bg-slate-950/40 space-y-2">
+                            <div className="text-xs font-semibold text-slate-300">{ingName(g.ingredientId)}</div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div><label className="text-[10px] text-slate-500">Qty received</label><input type="number" value={ginEditForm.qtyReceived} onChange={e=>setGinEditForm(f=>({...f,qtyReceived:e.target.value}))} className={inputCls}/></div>
+                              <div><label className="text-[10px] text-slate-500">Unit cost /{g.unit}</label><input type="number" value={ginEditForm.unitCost} onChange={e=>setGinEditForm(f=>({...f,unitCost:e.target.value}))} className={inputCls}/></div>
+                              <div><label className="text-[10px] text-slate-500">Batch no</label><input value={ginEditForm.batchNo} onChange={e=>setGinEditForm(f=>({...f,batchNo:e.target.value}))} className={inputCls}/></div>
+                              <div><label className="text-[10px] text-slate-500">Expiry</label><input type="date" value={ginEditForm.expiryDate} onChange={e=>setGinEditForm(f=>({...f,expiryDate:e.target.value}))} className={inputCls}/></div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={async()=>{ try{ await updateCkGoodsIn(g.id, ginEditForm); setGinEditLine(null); load(); }catch(e){setErr(e?.message||String(e));} }} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Save</button>
+                              <button onClick={()=>setGinEditLine(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div key={g.id} className="p-3 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-sm text-slate-200">{ingName(g.ingredientId)} · {g.qtyReceived} {g.unit}</div>
+                              <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
+                                {g.batchNo && <span>batch {g.batchNo}</span>}
+                                {g.expiryDate && <span>· exp {g.expiryDate}</span>}
+                                {g.unitCost!=null && <span>· {money(g.unitCost)}/{g.unit}</span>}
+                                <span className="text-slate-600">· {g.qtyRemaining} left</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <button onClick={()=>{ setGinEditLine(g.id); setGinEditForm({ qtyReceived: g.qtyReceived??"", unitCost: g.unitCost??"", batchNo: g.batchNo||"", expiryDate: g.expiryDate||"" }); }} className="text-slate-500 hover:text-white"><Edit size={13}/></button>
+                              <button onClick={async()=>{ if(window.confirm("Delete this goods-in entry?")){ try{await deleteCkGoodsIn(g.id); load();}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-                <button onClick={async()=>{ if(window.confirm("Delete this goods-in entry?")){ try{await deleteCkGoodsIn(g.id); load();}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
-              </div>
-            ))}
-          </div>
-        )
+                );
+              })}
+            </div>
+          );
+        })()
       ) : null}
 
       {!loading && tab === "categories" && (
