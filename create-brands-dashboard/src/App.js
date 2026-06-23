@@ -39373,15 +39373,20 @@ export default function App() {
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
   const entityBrands = useMemo(() => {
     if (!currentUser) return [];
-    // Note: we no longer short-circuit on financeOnly. A finance-scoped role can
-    // still be assigned to operational entities (e.g. Distribution); those must
-    // appear so the user can switch to them.
+    // A finance-only role is back-office: it should only ever surface operational
+    // entities the person is ACTUALLY assigned to (via store_ids), never the
+    // estate-wide HQ bypass. Without this, a finance-only role built on an
+    // hq_staff base would wrongly see every brand (the HQ all-stores rule would
+    // override the finance-only scope). So finance-only users skip the HQ bypass.
     const nonArchived = stores.filter(s => !s.archivedAt);
-    const mine = isHQ ? nonArchived.filter(s => canAccessStore(s)) : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
+    const useHqBypass = isHQ && !financeOnly;
+    const mine = useHqBypass
+      ? nonArchived.filter(s => canAccessStore(s))
+      : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
     const ids = new Set(mine.map(s => s.brandId));
     // base = store-derived; then restrict by role/person entity access.
     return brands.filter(b => ids.has(b.id) && canAccessEntity(`entity.${b.id}`));
-  }, [brands, stores, isHQ, currentUser, canAccessEntity, canAccessStore]);
+  }, [brands, stores, isHQ, financeOnly, currentUser, canAccessEntity, canAccessStore]);
 
   // A user is *effectively* finance-only only when their role is finance-scoped
   // AND they have no other entity to switch to. Someone assigned to Finance plus
