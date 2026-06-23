@@ -4313,6 +4313,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const [runProductId, setRunProductId] = useState("");
   const [runPlanId, setRunPlanId] = useState("");
   const [runQty, setRunQty] = useState("");
+  const [runPlanned, setRunPlanned] = useState("");
   const [runDate, setRunDate] = useState(()=>new Date().toISOString().slice(0,10));
   const [runUseBy, setRunUseBy] = useState("");
   const [runAlloc, setRunAlloc] = useState([]);
@@ -4326,7 +4327,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   useEffect(() => {
     if (runProduct?.shelfLifeDays && runDate) { const d = new Date(runDate); d.setDate(d.getDate()+runProduct.shelfLifeDays); setRunUseBy(d.toISOString().slice(0,10)); }
   }, [runProductId, runDate, runProduct]);
-  const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunPlanId(""); setRunModal(true); setErr(""); };
+  const openRun = () => { setRunProductId(ckProducts[0]?.id ? String(ckProducts[0].id) : ""); setRunQty(""); setRunPlanned(""); setRunDate(new Date().toISOString().slice(0,10)); setRunUseBy(""); setRunAlloc([]); setRunPlanId(""); setRunModal(true); setErr(""); };
   const shortfalls = (runAlloc||[]).filter(a => a.shortfall);
   // ── Opening finished-goods stock (kitchen start-up) ──
   // Records product you ALREADY have, as production runs with NO ingredient
@@ -4367,6 +4368,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
     try {
       const al = productAllergens(runProduct);
       await createProductionRun({ siteId, product: runProduct, producedQty: Number(runQty),
+        plannedQty: runPlanned !== "" ? Number(runPlanned) : Number(runQty),
         runDate, useByDate: runUseBy || null, allocations: runAlloc.filter(a=>!a.shortfall),
         allergens: [...al.derived, ...al.mayContain.map(a=>`may contain ${a}`)], runBy: currentUser?.name,
         planId: runPlanId || null });
@@ -4548,8 +4550,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
             )}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {card("Low on stock", lowStock.length, lowStock.length ? "ingredients at/below reorder" : "all above reorder", lowStock.length ? "border-amber-700/50" : "border-slate-800", () => ckCanFeature("feat.ck.stock") && setTab("stock"))}
-              {card("Expiring soon", expiringSoon.length, "raw batches \u2264 3 days", expiringSoon.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.goods") && setTab("goods"))}
-              {card("Finished on hand", finishedOnHand.length, `${fgUnits.toFixed(0)} units${fgExpiring.length ? ` \u00b7 ${fgExpiring.length} use-by soon` : ""}`, fgExpiring.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.finished") && setTab("finished"))}
+              {card("Expiring soon", expiringSoon.length, "raw batches ≤ 3 days", expiringSoon.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.goods") && setTab("goods"))}
+              {card("Finished on hand", finishedOnHand.length, `${fgUnits.toFixed(0)} units${fgExpiring.length ? ` · ${fgExpiring.length} use-by soon` : ""}`, fgExpiring.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.finished") && setTab("finished"))}
               {card("Pending dispatch", pendingDispatch.length, pendingDispatch.length ? "sent, awaiting receipt" : "none in transit", pendingDispatch.length ? "border-sky-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.dispatch") && setTab("dispatch"))}
             </div>
 
@@ -4565,7 +4567,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                         try {
                           const plan = planRunConsumption({ product: x.product, components: componentsFor(x.product.id), preps: ckPreps, prepCompsByPrep, producedQty: x.toMake, goodsIn });
                           const useBy = x.product.shelfLifeDays ? (() => { const d=new Date(); d.setDate(d.getDate()+x.product.shelfLifeDays); return d.toISOString().slice(0,10); })() : null;
-                          await createProductionRun({ siteId, product: x.product, producedQty: x.toMake, runDate: new Date().toISOString().slice(0,10), useByDate: useBy, allocations: (plan?.allocations||[]).filter(a=>!a.shortfall), allergens: x.product.mayContainAllergens||[], note: "Replenish to par", runBy: currentUser?.name||"", planId: null });
+                          await createProductionRun({ siteId, product: x.product, producedQty: x.toMake, plannedQty: x.toMake, runDate: new Date().toISOString().slice(0,10), useByDate: useBy, allocations: (plan?.allocations||[]).filter(a=>!a.shortfall), allergens: x.product.mayContainAllergens||[], note: "Replenish to par", runBy: currentUser?.name||"", planId: null });
                           load();
                         } catch (e) { setErr(e?.message || String(e)); }
                       }} className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold flex-shrink-0">Make {x.toMake} {x.product.outputUnit}</button>
@@ -4577,7 +4579,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
             {lowStock.length > 0 && (
               <div className="rounded-2xl border border-amber-800/40 bg-amber-950/10 p-4">
-                <div className="text-sm font-bold text-amber-300 mb-2">\u26a0 Below reorder point</div>
+                <div className="text-sm font-bold text-amber-300 mb-2">⚠ Below reorder point</div>
                 <div className="space-y-1">
                   {lowStock.slice(0, 8).map(s => (
                     <div key={s.id} className="flex justify-between text-xs">
@@ -4592,12 +4594,12 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
             {expiringSoon.length > 0 && (
               <div className="rounded-2xl border border-red-800/40 bg-red-950/10 p-4">
-                <div className="text-sm font-bold text-red-300 mb-2">\u23f0 Raw batches expiring soon</div>
+                <div className="text-sm font-bold text-red-300 mb-2">⏰ Raw batches expiring soon</div>
                 <div className="space-y-1">
                   {expiringSoon.slice(0, 8).map(g => (
                     <div key={g.id} className="flex justify-between text-xs">
-                      <span className="text-slate-300">{g.ingredientName || g.ingredientId} {g.batchNo ? `\u00b7 ${g.batchNo}` : ""}</span>
-                      <span className="text-red-400 font-semibold">{g.qtyRemaining} {g.unit} \u00b7 {g.expiryDate}</span>
+                      <span className="text-slate-300">{g.ingredientName || g.ingredientId} {g.batchNo ? `· ${g.batchNo}` : ""}</span>
+                      <span className="text-red-400 font-semibold">{g.qtyRemaining} {g.unit} · {g.expiryDate}</span>
                     </div>
                   ))}
                 </div>
@@ -4606,14 +4608,14 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
             {recentRuns.length > 0 && (
               <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
-                <div className="text-sm font-bold text-slate-200 mb-2">Recent production \u2014 yield</div>
+                <div className="text-sm font-bold text-slate-200 mb-2">Recent production — yield</div>
                 <div className="space-y-1.5">
                   {recentRuns.map(r => {
                     const yieldPct = (r.plannedQty && r.plannedQty > 0) ? (r.producedQty / r.plannedQty) * 100 : null;
                     const yColor = yieldPct == null ? "text-slate-500" : yieldPct >= 98 ? "text-emerald-400" : yieldPct >= 90 ? "text-amber-400" : "text-red-400";
                     return (
                       <div key={r.id} className="flex justify-between items-center text-xs">
-                        <span className="text-slate-300">{r.productName} <span className="text-slate-600">\u00b7 {r.runDate}</span></span>
+                        <span className="text-slate-300">{r.productName} <span className="text-slate-600">· {r.runDate}</span></span>
                         <span className="flex items-center gap-2">
                           <span className="text-slate-400">{r.producedQty}{r.plannedQty ? ` / ${r.plannedQty}` : ""} {r.outputUnit}</span>
                           {yieldPct != null && <span className={`font-bold ${yColor}`}>{yieldPct.toFixed(0)}%</span>}
@@ -4622,7 +4624,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                     );
                   })}
                 </div>
-                <div className="text-[11px] text-slate-600 mt-2">Yield = produced \u00f7 planned. Below 90% (red) means significant loss on that batch.</div>
+                <div className="text-[11px] text-slate-600 mt-2">Yield = produced ÷ planned. Below 90% (red) means significant loss on that batch.</div>
               </div>
             )}
 
@@ -4868,7 +4870,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                                 try {
                                   const plan = planRunConsumption({ product, components: componentsFor(product.id), preps: ckPreps, prepCompsByPrep, producedQty: toProduce, goodsIn });
                                   const useBy = product.shelfLifeDays ? (() => { const x=new Date(); x.setDate(x.getDate()+product.shelfLifeDays); return x.toISOString().slice(0,10); })() : null;
-                                  await createProductionRun({ siteId, product, producedQty: toProduce, runDate: new Date().toISOString().slice(0,10), useByDate: useBy, allocations: (plan?.allocations||[]).filter(a=>!a.shortfall), allergens: product.mayContainAllergens||[], note: `From outlet demand`, runBy: currentUser?.name||"", planId: null });
+                                  await createProductionRun({ siteId, product, producedQty: toProduce, plannedQty: toProduce, runDate: new Date().toISOString().slice(0,10), useByDate: useBy, allocations: (plan?.allocations||[]).filter(a=>!a.shortfall), allergens: product.mayContainAllergens||[], note: `From outlet demand`, runBy: currentUser?.name||"", planId: null });
                                   load();
                                 } catch (e) { setErr(e?.message || String(e)); }
                               }} className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-semibold">→ Produce {toProduce} {d.unit}</button>
@@ -5861,6 +5863,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                   {ckProducts.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
+              <div><label className={labelCls}>Planned qty <span className="text-slate-600 normal-case">(for yield)</span></label><input type="number" value={runPlanned} onChange={e=>setRunPlanned(e.target.value)} placeholder="target" className={inputCls}/></div>
               <div><label className={labelCls}>Quantity made</label><input type="number" value={runQty} onChange={e=>setRunQty(e.target.value)} className={inputCls}/></div>
             </div>
             <div className="grid grid-cols-2 gap-3">

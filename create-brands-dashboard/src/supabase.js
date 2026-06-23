@@ -6661,12 +6661,12 @@ export function planRunConsumption({ product, components, preps = [], prepCompsB
 // Create a production run: writes the run, the consumption rows, and decrements
 // goods-in qty_remaining for each allocated batch. `allocations` is the final
 // (possibly overridden) list from planRunConsumption.
-export async function createProductionRun({ siteId, product, producedQty, runDate, useByDate, allocations, allergens, note, runBy, planId, planLineId }) {
+export async function createProductionRun({ siteId, product, producedQty, plannedQty, runDate, useByDate, allocations, allergens, note, runBy, planId, planLineId }) {
   const batchCode = `${(product.name||"PRD").replace(/[^A-Za-z0-9]/g,"").slice(0,6).toUpperCase()}-${(runDate||new Date().toISOString().slice(0,10)).replace(/-/g,"")}-${Math.random().toString(36).slice(2,5).toUpperCase()}`;
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
   const { error: rErr } = await supabase.from("ck_production_runs").insert({
     id: runId, site_id: siteId || null, product_id: product.id, product_name: product.name,
-    produced_qty: producedQty, output_unit: product.outputUnit || null,
+    produced_qty: producedQty, planned_qty: plannedQty != null && plannedQty !== "" ? Number(plannedQty) : null, output_unit: product.outputUnit || null,
     run_date: runDate || new Date().toISOString().slice(0,10), use_by_date: useByDate || null,
     finished_batch_no: batchCode, allergens: allergens || [], status: "completed",
     note: note || null, run_by: runBy || null, plan_id: planId || null, plan_line_id: planLineId || null,
