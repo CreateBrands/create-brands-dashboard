@@ -7269,14 +7269,14 @@ export async function setMemberCustomRole(memberId, roleId) {
 }
 
 // ── CASH ACCOUNTS (double-entry cash ledger, Finance entity) ─────────────────
-const mapCashAccount = (a) => ({ id: a.id, name: a.name, kind: a.kind, storeId: a.store_id || null, description: a.description || "", isPetty: a.is_petty ?? false, archivedAt: a.archived_at || null });
+const mapCashAccount = (a) => ({ id: a.id, name: a.name, kind: a.kind, storeId: a.store_id || null, entityId: a.entity_id || null, description: a.description || "", isPetty: a.is_petty ?? false, archivedAt: a.archived_at || null });
 const mapCashSource = (s) => ({ id: s.id, name: s.name, categoryId: s.category_id || null });
 const mapCashExpenseType = (e) => ({ id: e.id, name: e.name, categoryId: e.category_id || null });
 const mapCashLedger = (t) => ({
   id: t.id, txnDate: t.txn_date, type: t.type, amount: Number(t.amount) || 0,
   fromAccountId: t.from_account_id || null, toAccountId: t.to_account_id || null,
   sourceId: t.source_id || null, expenseTypeId: t.expense_type_id || null,
-  storeId: t.store_id || null, reference: t.reference || "", createdBy: t.created_by || null,
+  storeId: t.store_id || null, entityId: t.entity_id || null, reference: t.reference || "", createdBy: t.created_by || null,
   sourceRef: t.source_ref || null,
   reconciled: t.reconciled ?? false,
   reconciledAt: t.reconciled_at || null,
@@ -7284,13 +7284,28 @@ const mapCashLedger = (t) => ({
   createdAt: t.created_at,
 });
 
+// ============================================================================
+// ENTITIES — legal entities for management accounting (Phase 1)
+// A store belongs to one entity via its brand_id (entity id == brand id, 1:1).
+// Financial tables carry entity_id so P&L / balance sheet report per entity.
+// ============================================================================
+const mapEntity = (e) => ({
+  id: e.id, name: e.name, legalName: e.legal_name || "", baseCurrency: e.base_currency || "GBP",
+  accountantRef: e.accountant_ref || "", active: e.active !== false,
+});
+export async function fetchEntities() {
+  const { data, error } = await supabase.from("entities").select("*").order("name");
+  if (error) throw error;
+  return (data || []).map(mapEntity);
+}
+
 export async function fetchCashAccounts() {
   const { data, error } = await supabase.from("cash_accounts").select("*").is("archived_at", null).order("name");
   if (error) throw error;
   return (data || []).map(mapCashAccount);
 }
 export async function upsertCashAccount(acc) {
-  const row = { name: (acc.name||"").trim(), kind: acc.kind, store_id: acc.storeId || null, description: acc.description || null, updated_at: new Date().toISOString() };
+  const row = { name: (acc.name||"").trim(), kind: acc.kind, store_id: acc.storeId || null, entity_id: acc.entityId || null, description: acc.description || null, updated_at: new Date().toISOString() };
   if (acc.isPetty !== undefined) row.is_petty = !!acc.isPetty;
   if (acc.id) row.id = acc.id;
   const { data, error } = await supabase.from("cash_accounts").upsert(row).select().maybeSingle();
@@ -7374,6 +7389,7 @@ export async function addCashLedgerEntry(tx) {
     source_id: tx.sourceId || null,
     expense_type_id: tx.expenseTypeId || null,
     store_id: tx.storeId || null,
+    entity_id: tx.entityId || null,
     reference: tx.reference || null,
     created_by: tx.createdBy || null,
     source_ref: tx.sourceRef || null,
@@ -7439,7 +7455,7 @@ export async function postEodCashDeposit(eodEntry, stores = [], createdBy = null
     const st = (stores || []).find(s => s.id === storeId);
     const nm = st ? `${st.shortName || st.name} — Cash` : "Store — Cash";
     const { data: created, error: cErr } = await supabase.from("cash_accounts")
-      .insert({ name: nm, kind: "revenue", store_id: storeId, description: "Store cash sales" })
+      .insert({ name: nm, kind: "revenue", store_id: storeId, entity_id: (st?.brandId) || null, description: "Store cash sales" })
       .select("id").maybeSingle();
     if (cErr) {
       // Race / pre-existing: re-query rather than fail.
@@ -7454,6 +7470,7 @@ export async function postEodCashDeposit(eodEntry, stores = [], createdBy = null
     txn_date: eodEntry.date || new Date().toISOString().slice(0,10),
     type: "income", amount: cash,
     to_account_id: accountId, store_id: storeId,
+    entity_id: ((stores || []).find(s => s.id === storeId)?.brandId) || null,
     reference: `EOD cash ${eodEntry.date || ""}`.trim(),
     created_by: createdBy || null,
     source_ref: ref,

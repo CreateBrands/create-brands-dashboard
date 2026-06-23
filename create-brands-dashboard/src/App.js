@@ -14,6 +14,7 @@ import {
   fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
   fetchEntityOverrides, setEntityOverride,
   fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
+  fetchEntities,
   fetchCashAccounts, upsertCashAccount, archiveCashAccount,
   fetchCashSources, upsertCashSource, archiveCashSource,
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
@@ -27609,9 +27610,14 @@ function AccountsHubView(props) {
     onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
     sharedFile, onConsumeSharedFile, initialTab,
     customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, accessPerms = {}, onSetPerm,
-    cashAccounts = [], cashLedger = [], cashHandlers = {} } = props;
+    cashAccounts = [], cashLedger = [], cashHandlers = {}, entities = [] } = props;
   const [tab, setTab] = useState(initialTab || "pnl");
   const [storeFilter, setStoreFilter] = useState("all");
+  const [entityFilter, setEntityFilter] = useState("all");
+  // Stores belonging to the selected entity (entity id == store.brandId, 1:1).
+  const entityStores = entityFilter === "all" ? stores : stores.filter(s => s.brandId === entityFilter);
+  // If the chosen store isn't in the selected entity, reset to "all".
+  useEffect(() => { if (storeFilter !== "all" && storeFilter !== "kitchen" && !entityStores.some(s => s.id === storeFilter)) setStoreFilter("all"); }, [entityFilter]); // eslint-disable-line
   // If a Tide statement was shared in, jump straight to the Bank tab.
   useEffect(() => { if (sharedFile) setTab("bank"); }, [sharedFile]);
 
@@ -27642,11 +27648,16 @@ function AccountsHubView(props) {
 
       {effTab !== "roles" && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Finance scope</span>
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Entity</span>
+          <select value={entityFilter} onChange={e=>setEntityFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+            <option value="all">All entities (group)</option>
+            {entities.filter(en=>en.active).map(en => <option key={en.id} value={en.id}>{en.name}{en.baseCurrency && en.baseCurrency !== "GBP" ? ` (${en.baseCurrency})` : ""}</option>)}
+          </select>
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide ml-2">Scope</span>
           <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
-            <option value="all">All stores (group)</option>
-            <option value="kitchen">Central Kitchen</option>
-            {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            <option value="all">{entityFilter === "all" ? "All stores (group)" : "All stores in entity"}</option>
+            {entityFilter === "all" && <option value="kitchen">Central Kitchen</option>}
+            {entityStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
           </select>
           <span className="text-[11px] text-slate-500">applies to all Finance tabs</span>
         </div>
@@ -27654,7 +27665,7 @@ function AccountsHubView(props) {
 
       {effTab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} accessPerms={accessPerms} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole} onSetPerm={onSetPerm}/>}
 
-      {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter}/>}
+      {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)}/>}
       {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter}/>}
       {effTab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
@@ -27989,7 +28000,10 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   );
 }
 
-function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [], storeFilter: storeFilterProp }) {
+function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [], storeFilter: storeFilterProp, entityFilter = "all", entityStoreIds = null }) {
+  // entityStoreIds (when set) limits everything to the selected entity's stores.
+  const entitySet = entityStoreIds ? new Set(entityStoreIds) : null;
+  const inEntity = (sid) => !entitySet || entitySet.has(sid);
   const [period, setPeriod] = useState("month");   // month | week
   const [vatMode, setVatMode] = useState("ex");     // ex | inc
   const [anchor, setAnchor] = useState(() => new Date());
@@ -28007,7 +28021,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     return m;
   }, [bankAccounts]);
   const txnStore = (t) => t.storeId || bankAcctStore[t.accountId] || "";
-  const txnInStore = (t) => storeFilter === "all" || txnStore(t) === storeFilter;
+  const txnInStore = (t) => (storeFilter === "all" ? inEntity(txnStore(t)) : txnStore(t) === storeFilter);
 
   // Period bounds.
   const bounds = useMemo(() => {
@@ -28079,6 +28093,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     const ensure = (sid) => { if (!byStore[sid]) byStore[sid] = { storeId: sid, revenue: 0, labour: 0, cogs: 0, otherSpend: 0 }; return byStore[sid]; };
     // Revenue + labour + cogs from EOD.
     eod.forEach(e => {
+      if (!inEntity(e.storeId)) return;
       const r = ensure(e.storeId || "unassigned");
       r.revenue += e.netSales;
       r.labour  += e.laborCost;
@@ -28087,6 +28102,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     // Supplier invoices add to cost (ex-VAT basis). Map by entity≈store if it matches a store id/name.
     invoices.forEach(inv => {
       const match = stores.find(s => s.id === inv.entity || s.name === inv.entity || s.shortName === inv.entity);
+      if (entitySet && !(match && entitySet.has(match.id))) return;
       const r = ensure(match ? match.id : "unassigned");
       r.cogs += inv.totalExVat;   // treat supplier invoices as cost of goods/supplies
     });
@@ -28094,11 +28110,12 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     bankTransactions.forEach(t => {
       if (!inRange(t.txnDate)) return;
       if (t.amount >= 0) return;            // only outflows count as spend here
+      if (!inEntity(t.storeId)) return;
       const r = ensure(t.storeId || "unassigned");
       r.otherSpend += Math.abs(t.amount);
     });
     return Object.values(byStore);
-  }, [eod, invoices, bankTransactions, stores]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [eod, invoices, bankTransactions, stores, entityStoreIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply VAT presentation. Revenue (gross) & otherSpend (gross) convert if ex.
   const present = (r) => {
@@ -38566,13 +38583,14 @@ export default function App() {
 
   // ── Cash accounts (double-entry cash ledger, Finance) ──────────────────────
   const [cashAccounts, setCashAccounts] = useState([]);
+  const [entities, setEntities] = useState([]);
   const [cashSources, setCashSources] = useState([]);
   const [cashExpenseTypes, setCashExpenseTypes] = useState([]);
   const [cashLedger, setCashLedger] = useState([]);
   const reloadCash = useCallback(async () => {
     try {
-      const [accs, srcs, exps, led] = await Promise.all([fetchCashAccounts(), fetchCashSources(), fetchCashExpenseTypes(), fetchCashLedger()]);
-      setCashAccounts(accs); setCashSources(srcs); setCashExpenseTypes(exps); setCashLedger(led);
+      const [accs, srcs, exps, led, ents] = await Promise.all([fetchCashAccounts(), fetchCashSources(), fetchCashExpenseTypes(), fetchCashLedger(), fetchEntities().catch(()=>[])]);
+      setCashAccounts(accs); setCashSources(srcs); setCashExpenseTypes(exps); setCashLedger(led); setEntities(ents);
     } catch (e) { /* surfaced in view */ }
   }, []);
   useEffect(() => { reloadCash(); }, [reloadCash]);
@@ -39987,7 +40005,7 @@ export default function App() {
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
