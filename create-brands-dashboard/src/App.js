@@ -3788,12 +3788,12 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   // The central kitchen site.
   const kitchen = useMemo(() => (stores || []).find(s => s.siteType === "central_kitchen" && !s.archivedAt), [stores]);
   const siteId = kitchen?.id || null;
-  const [tab, setTab] = useState("stock");
+  const [tab, setTab] = useState("overview");
   // The full tab order, with their permission keys. Tabs without a feat key
-  // (count, allergens) are always visible. Used to land on a permitted tab so a
-  // user without Stock access doesn't open to a hidden tab (blank page).
-  const CK_TAB_ORDER = ["stock","goods","count","allergens","preps","products","planner","production","finished","dispatch","categories","suppliers"];
-  const ckTabAllowed = (k) => (k === "count" || k === "allergens") ? true : ckCanFeature(`feat.ck.${k}`);
+  // (overview, count, allergens) are always visible. Used to land on a permitted
+  // tab so a user without Stock access doesn't open to a hidden tab (blank page).
+  const CK_TAB_ORDER = ["overview","stock","goods","count","allergens","preps","products","planner","production","finished","dispatch","categories","suppliers"];
+  const ckTabAllowed = (k) => (k === "overview" || k === "count" || k === "allergens") ? true : ckCanFeature(`feat.ck.${k}`);
   useEffect(() => {
     // If the current tab isn't permitted, jump to the first one that is.
     if (!ckTabAllowed(tab)) {
@@ -4459,12 +4459,13 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
       <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-slate-800 pb-1">
         {[
+          { label: "", tabs: [["overview","🏠 Today"]] },
           { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"],["count","Count"],["allergens","Allergens"]] },
           { label: "Recipes",   tabs: [["preps","Preps"],["products","Products"]] },
           { label: "Planning",  tabs: [["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
           { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
         ].map((grp, gi) => {
-          const visible = grp.tabs.filter(([k]) => ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
+          const visible = grp.tabs.filter(([k]) => k === "overview" || ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
           if (!visible.length) return null;
           return (
             <div key={grp.label} className="flex items-center gap-1">
@@ -4477,6 +4478,86 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           );
         })}
       </div>
+
+      {!loading && tab === "overview" && (() => {
+        const lowStock = stock.filter(s => s.low);
+        const pendingDispatch = (dispatches || []).filter(d => d.status === "sent");
+        const recentRuns = [...(runs || [])].sort((a,b) => String(b.runDate||"").localeCompare(String(a.runDate||""))).slice(0, 6);
+        const fgUnits = finishedOnHand.reduce((a,f) => a + (f.onHand||0), 0);
+        const card = (label, value, sub, accent, onClick) => (
+          <button onClick={onClick} className={`text-left p-4 rounded-2xl border bg-slate-900/40 hover:bg-slate-900/70 transition ${accent}`}>
+            <div className="text-3xl font-bold text-white leading-none">{value}</div>
+            <div className="text-sm font-semibold text-slate-300 mt-1.5">{label}</div>
+            {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+          </button>
+        );
+        return (
+          <div className="space-y-4">
+            <div className="text-sm text-slate-400">Today at the Central Kitchen — {new Date().toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" })}</div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {card("Low on stock", lowStock.length, lowStock.length ? "ingredients at/below reorder" : "all above reorder", lowStock.length ? "border-amber-700/50" : "border-slate-800", () => ckCanFeature("feat.ck.stock") && setTab("stock"))}
+              {card("Expiring soon", expiringSoon.length, "raw batches \u2264 3 days", expiringSoon.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.goods") && setTab("goods"))}
+              {card("Finished on hand", finishedOnHand.length, `${fgUnits.toFixed(0)} units${fgExpiring.length ? ` \u00b7 ${fgExpiring.length} use-by soon` : ""}`, fgExpiring.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.finished") && setTab("finished"))}
+              {card("Pending dispatch", pendingDispatch.length, pendingDispatch.length ? "sent, awaiting receipt" : "none in transit", pendingDispatch.length ? "border-sky-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.dispatch") && setTab("dispatch"))}
+            </div>
+
+            {lowStock.length > 0 && (
+              <div className="rounded-2xl border border-amber-800/40 bg-amber-950/10 p-4">
+                <div className="text-sm font-bold text-amber-300 mb-2">\u26a0 Below reorder point</div>
+                <div className="space-y-1">
+                  {lowStock.slice(0, 8).map(s => (
+                    <div key={s.id} className="flex justify-between text-xs">
+                      <span className="text-slate-300">{s.name}</span>
+                      <span className="text-amber-400 font-semibold">{(s.stock||0).toFixed(2)} / {s.reorderPoint} {s.unit}</span>
+                    </div>
+                  ))}
+                  {lowStock.length > 8 && <div className="text-[11px] text-slate-500 pt-1">+{lowStock.length - 8} more</div>}
+                </div>
+              </div>
+            )}
+
+            {expiringSoon.length > 0 && (
+              <div className="rounded-2xl border border-red-800/40 bg-red-950/10 p-4">
+                <div className="text-sm font-bold text-red-300 mb-2">\u23f0 Raw batches expiring soon</div>
+                <div className="space-y-1">
+                  {expiringSoon.slice(0, 8).map(g => (
+                    <div key={g.id} className="flex justify-between text-xs">
+                      <span className="text-slate-300">{g.ingredientName || g.ingredientId} {g.batchNo ? `\u00b7 ${g.batchNo}` : ""}</span>
+                      <span className="text-red-400 font-semibold">{g.qtyRemaining} {g.unit} \u00b7 {g.expiryDate}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {recentRuns.length > 0 && (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
+                <div className="text-sm font-bold text-slate-200 mb-2">Recent production \u2014 yield</div>
+                <div className="space-y-1.5">
+                  {recentRuns.map(r => {
+                    const yieldPct = (r.plannedQty && r.plannedQty > 0) ? (r.producedQty / r.plannedQty) * 100 : null;
+                    const yColor = yieldPct == null ? "text-slate-500" : yieldPct >= 98 ? "text-emerald-400" : yieldPct >= 90 ? "text-amber-400" : "text-red-400";
+                    return (
+                      <div key={r.id} className="flex justify-between items-center text-xs">
+                        <span className="text-slate-300">{r.productName} <span className="text-slate-600">\u00b7 {r.runDate}</span></span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-slate-400">{r.producedQty}{r.plannedQty ? ` / ${r.plannedQty}` : ""} {r.outputUnit}</span>
+                          {yieldPct != null && <span className={`font-bold ${yColor}`}>{yieldPct.toFixed(0)}%</span>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-slate-600 mt-2">Yield = produced \u00f7 planned. Below 90% (red) means significant loss on that batch.</div>
+              </div>
+            )}
+
+            {lowStock.length === 0 && expiringSoon.length === 0 && finishedOnHand.length === 0 && pendingDispatch.length === 0 && (
+              <div className="text-center py-8 text-sm text-slate-500">Nothing needs attention right now. Stock is above reorder, nothing expiring, no pending dispatch.</div>
+            )}
+          </div>
+        );
+      })()}
 
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : tab === "stock" ? (
         stock.length === 0 ? <div className="text-center py-10 text-sm text-slate-500">No ingredients yet. Add your first with “Ingredient”.</div> : (
@@ -4524,7 +4605,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
             ))}
           </div>
         )
-      ) : (
+      ) : tab === "goods" ? (
         goodsIn.length === 0 ? <div className="text-center py-10 text-sm text-slate-500">No deliveries logged yet.</div> : (
           <div className="space-y-2">
             {goodsIn.map(g => (
@@ -4545,7 +4626,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
             ))}
           </div>
         )
-      )}
+      ) : null}
 
       {!loading && tab === "categories" && (
         <div className="space-y-3 max-w-lg">
