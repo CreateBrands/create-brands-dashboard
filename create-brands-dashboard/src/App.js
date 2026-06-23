@@ -4731,9 +4731,44 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
         const onHandByProduct = {};
         finishedOnHand.forEach(f => { onHandByProduct[String(f.productId)] = (onHandByProduct[String(f.productId)]||0) + (f.onHand||0); });
         const doFulfil = async (o) => {
-          if (!window.confirm(`Mark order from ${o.fromStoreName||"outlet"} as fulfilled? This records it as sent — create the dispatch separately on the Dispatch tab.`)) return;
-          try { await fulfilCkOrder(o.id, (o.lines||[]).map(l => ({ lineId: l.id, qtyFulfilled: l.qty }))); load(); }
-          catch (e) { setErr(e?.message || String(e)); }
+          // Allocate finished-goods runs (FEFO by use-by) to cover each order line,
+          // build dispatch lines, create the dispatch to the ordering outlet, then
+          // mark the order fulfilled. Short lines dispatch what's available.
+          const dispatchLines = [];
+          const lineFulfilments = [];
+          const shortMsgs = [];
+          // Work on a mutable copy of remaining-by-run so multiple lines don't double-allocate.
+          const remainByRun = {}; dispatchableRuns.forEach(r => { remainByRun[r.id] = runRemaining(r); });
+          (o.lines || []).forEach(l => {
+            let need = Number(l.qty) || 0;
+            const runsForProduct = dispatchableRuns
+              .filter(r => String(r.productId) === String(l.productId) && remainByRun[r.id] > 0.00001)
+              .sort((a,b) => { const ax=a.useByDate?new Date(a.useByDate).getTime():Infinity, bx=b.useByDate?new Date(b.useByDate).getTime():Infinity; return ax-bx; });
+            let allocated = 0;
+            for (const r of runsForProduct) {
+              if (need <= 0.00001) break;
+              const take = Math.min(need, remainByRun[r.id]);
+              if (take > 0) {
+                dispatchLines.push({ runId: r.id, productId: r.productId, productName: r.productName, finishedBatchNo: r.finishedBatchNo, useByDate: r.useByDate, allergens: r.allergens, qtySent: take, unit: r.outputUnit || l.unit });
+                remainByRun[r.id] -= take; need -= take; allocated += take;
+              }
+            }
+            lineFulfilments.push({ lineId: l.id, qtyFulfilled: allocated });
+            if (allocated + 0.00001 < (Number(l.qty)||0)) shortMsgs.push(`${l.productName}: only ${allocated}/${l.qty} ${l.unit} in stock`);
+          });
+
+          if (!dispatchLines.length) {
+            if (!window.confirm("No finished-goods stock available to dispatch for this order. Mark it fulfilled anyway (no dispatch created)?")) return;
+            try { await fulfilCkOrder(o.id, lineFulfilments); load(); } catch (e) { setErr(e?.message || String(e)); }
+            return;
+          }
+          const warn = shortMsgs.length ? `\n\nNote: ${shortMsgs.join("; ")}. Short lines will dispatch what's on hand.` : "";
+          if (!window.confirm(`Fulfil order from ${o.fromStoreName||"outlet"} — create a dispatch of ${dispatchLines.length} batch${dispatchLines.length>1?"es":""} and mark it fulfilled?${warn}`)) return;
+          try {
+            await createDispatch({ fromSiteId: siteId, toSiteId: o.fromStoreId, toSiteName: o.fromStoreName, sentDate: new Date().toISOString().slice(0,10), sentBy: currentUser?.name || "", note: `Auto-dispatch for order ${o.id}`, lines: dispatchLines });
+            await fulfilCkOrder(o.id, lineFulfilments);
+            load();
+          } catch (e) { setErr(e?.message || String(e)); }
         };
         return (
           <div className="space-y-4">
@@ -4754,10 +4789,20 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                         <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap gap-x-2">
                           {d.byStore.map((b,i)=><span key={i}>{b.storeName}: {b.qty}</span>)}
                         </div>
-                        <div className="text-[11px] mt-1.5 flex gap-3">
+                        <div className="text-[11px] mt-1.5 flex gap-3 items-center">
                           <span className="text-slate-400">on hand: {onHand} {d.unit}</span>
                           {toProduce > 0
-                            ? <span className="text-amber-300 font-semibold">→ produce {toProduce} {d.unit}</span>
+                            ? <button onClick={async()=>{
+                                const product = ckProducts.find(p => String(p.id) === String(d.productId));
+                                if (!product) { setErr("Product not found for production."); return; }
+                                if (!window.confirm(`Create a production run for ${toProduce} ${d.unit} of ${d.productName}? Ingredients will be consumed from stock (FEFO).`)) return;
+                                try {
+                                  const plan = planRunConsumption({ product, components: componentsFor(product.id), preps: ckPreps, prepCompsByPrep, producedQty: toProduce, goodsIn });
+                                  const useBy = product.shelfLifeDays ? (() => { const x=new Date(); x.setDate(x.getDate()+product.shelfLifeDays); return x.toISOString().slice(0,10); })() : null;
+                                  await createProductionRun({ siteId, product, producedQty: toProduce, runDate: new Date().toISOString().slice(0,10), useByDate: useBy, allocations: (plan?.allocations||[]).filter(a=>!a.shortfall), allergens: product.mayContainAllergens||[], note: `From outlet demand`, runBy: currentUser?.name||"", planId: null });
+                                  load();
+                                } catch (e) { setErr(e?.message || String(e)); }
+                              }} className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-semibold">→ Produce {toProduce} {d.unit}</button>
                             : <span className="text-emerald-400 font-semibold">✓ covered by stock</span>}
                         </div>
                       </div>
