@@ -4787,14 +4787,31 @@ export async function rejectLoanPayment({ paymentId, confirmedBy, rejectReason }
 
 
 // ===== INVOICE_HELPERS_V1: invoice capture (upload → extract → review → approve) =====
+// Resolve a free-text invoice "entity" value (a store id/name, or "kitchen"/
+// "central_kitchen") to a real entities.id. Returns null if it can't be resolved.
+async function resolveEntityId(entityText) {
+  if (!entityText) return null;
+  const t = String(entityText).trim();
+  if (t === "kitchen" || t === "central_kitchen" || t === "central-kitchen") return "central-kitchen";
+  // Try as a store id first, then by name/shortName → store.brand_id is the entity id.
+  const { data: byId } = await supabase.from("stores").select("brand_id").eq("id", t).maybeSingle();
+  if (byId?.brand_id) return byId.brand_id;
+  const { data: byName } = await supabase.from("stores").select("brand_id").or(`name.eq.${t},short_name.eq.${t}`).limit(1).maybeSingle();
+  if (byName?.brand_id) return byName.brand_id;
+  // Finally, maybe it's already a valid entity id.
+  const { data: ent } = await supabase.from("entities").select("id").eq("id", t).maybeSingle();
+  return ent?.id || null;
+}
+
 export async function uploadInvoiceFile(file, entity, userId) {
   const safe = (file.name || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "_");
   const path = `${entity}/${Date.now()}_${safe}`;
   const { error: upErr } = await supabase.storage.from("invoices").upload(path, file, { upsert: false });
   if (upErr) throw upErr;
+  const entityId = await resolveEntityId(entity);
   const { data, error } = await supabase
     .from("invoices")
-    .insert({ entity, image_path: path, uploaded_by: userId, status: "uploaded" })
+    .insert({ entity, entity_id: entityId, image_path: path, uploaded_by: userId, status: "uploaded" })
     .select()
     .single();
   if (error) throw error;
@@ -4816,7 +4833,7 @@ export async function extractInvoice(invoiceId) {
 export async function listInvoices() {
   const { data, error } = await supabase
     .from("invoices")
-    .select("id, entity, supplier_name, invoice_number, invoice_date, due_date, paid_date, total_ex_vat, total_vat, status, payment_status, amount_paid, category, created_at")
+    .select("id, entity, entity_id, supplier_name, invoice_number, invoice_date, due_date, paid_date, total_ex_vat, total_vat, status, payment_status, amount_paid, category, created_at")
     .order("created_at", { ascending: false })
     .limit(1000);
   if (error) throw error;
@@ -5072,14 +5089,14 @@ export async function fetchEodForAccounts({ from, to } = {}) {
 // Invoices within a date range (supplier costs).
 export async function fetchInvoicesForAccounts({ from, to } = {}) {
   let q = supabase.from("invoices")
-    .select("id, entity, supplier_name, invoice_number, invoice_date, total_ex_vat, total_vat, status, payment_status, category")
+    .select("id, entity, entity_id, supplier_name, invoice_number, invoice_date, total_ex_vat, total_vat, status, payment_status, category")
     .order("invoice_date", { ascending: false });
   if (from) q = q.gte("invoice_date", from);
   if (to)   q = q.lte("invoice_date", to);
   const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(i => ({
-    id: i.id, entity: i.entity || "", supplier: i.supplier_name || "",
+    id: i.id, entity: i.entity || "", entityId: i.entity_id || null, supplier: i.supplier_name || "",
     number: i.invoice_number || "", date: i.invoice_date,
     totalExVat: Number(i.total_ex_vat) || 0, totalVat: Number(i.total_vat) || 0,
     status: i.status || "", paymentStatus: i.payment_status || "unpaid", category: i.category || "",

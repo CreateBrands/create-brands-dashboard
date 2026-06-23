@@ -10285,7 +10285,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   );
 }
 
-function InvoicesView({ currentUser, categories = [], storeFilter = "all" }) {
+function InvoicesView({ currentUser, categories = [], storeFilter = "all", entityFilter = "all", entities = [] }) {
   const [invoices, setInvoices] = useState([]);
   const [stores, setStores] = useState([]);
   const [entity, setEntity] = useState("kitchen");
@@ -10404,6 +10404,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all" }) {
       if (payF === "overdue" ? !isOverdue(inv) : (inv.payment_status || "unpaid") !== payF) return false;
     }
     if (storeFilter !== "all" && inv.entity !== storeFilter) return false;
+    if (entityFilter && entityFilter !== "all" && (inv.entityId || inv.entity_id) !== entityFilter) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       const hay = `${inv.supplier_name||""} ${inv.invoice_number||""}`.toLowerCase();
@@ -27667,7 +27668,7 @@ function AccountsHubView(props) {
 
       {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)}/>}
       {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
-      {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter}/>}
+      {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entities={entities}/>}
       {effTab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
       {effTab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
       {effTab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter}/>}
@@ -28099,10 +28100,15 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
       r.labour  += e.laborCost;
       r.cogs    += e.cogsCost;
     });
-    // Supplier invoices add to cost (ex-VAT basis). Map by entity≈store if it matches a store id/name.
+    // Supplier invoices add to cost (ex-VAT basis). Prefer the structured
+    // entityId; fall back to matching the free-text entity against a store.
     invoices.forEach(inv => {
       const match = stores.find(s => s.id === inv.entity || s.name === inv.entity || s.shortName === inv.entity);
-      if (entitySet && !(match && entitySet.has(match.id))) return;
+      // Entity scope: use entityId directly if present, else the matched store's entity.
+      if (entityFilter && entityFilter !== "all") {
+        const invEntity = inv.entityId || (match ? match.brandId : null);
+        if (invEntity !== entityFilter) return;
+      }
       const r = ensure(match ? match.id : "unassigned");
       r.cogs += inv.totalExVat;   // treat supplier invoices as cost of goods/supplies
     });
@@ -28115,7 +28121,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
       r.otherSpend += Math.abs(t.amount);
     });
     return Object.values(byStore);
-  }, [eod, invoices, bankTransactions, stores, entityStoreIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [eod, invoices, bankTransactions, stores, entityStoreIds, entityFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply VAT presentation. Revenue (gross) & otherSpend (gross) convert if ex.
   const present = (r) => {
