@@ -39363,7 +39363,16 @@ export default function App() {
           return nonArchived.filter(s => ids.includes(s.id));
         })();
     // Entity landing: once an entity is chosen, scope everything to its brand.
-    if (selectedEntityBrand && selectedEntityBrand !== "finance") scoped = scoped.filter(s => s.brandId === selectedEntityBrand);
+    // Guard against a stale/mismatched stored entity (e.g. an old localStorage
+    // "cb_entity" value, or an entity key that doesn't match the store's brandId):
+    // if filtering to the selected entity would remove ALL of the user's stores,
+    // ignore the filter and keep their full assigned set. Without this, a CK
+    // manager whose stored entity didn't match "central-kitchen" lost every store
+    // (and so saw no CK staff).
+    if (selectedEntityBrand && selectedEntityBrand !== "finance") {
+      const narrowed = scoped.filter(s => s.brandId === selectedEntityBrand);
+      if (narrowed.length > 0) scoped = narrowed;
+    }
     return scoped;
   }, [currentUser, stores, isHQ, selectedEntityBrand, canAccessStore]);
 
