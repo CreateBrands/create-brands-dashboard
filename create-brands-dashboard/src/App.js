@@ -27632,11 +27632,16 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
     if (!entityId) { setLoading(false); return; }
     setLoading(true); setErr("");
     try {
-      const [accs, trial, sheet] = await Promise.all([fetchAccounts(entityId), computeTrialBalance(entityId), computeBalanceSheet(entityId)]);
-      setAccounts(accs); setTb(trial); setBs(sheet);
+      if (entityId === "__consolidated__") {
+        const sheet = await computeConsolidatedBalanceSheet(entities.map(e => e.id));
+        setAccounts([]); setTb(null); setBs(sheet); setViewMode("bs");
+      } else {
+        const [accs, trial, sheet] = await Promise.all([fetchAccounts(entityId), computeTrialBalance(entityId), computeBalanceSheet(entityId)]);
+        setAccounts(accs); setTb(trial); setBs(sheet);
+      }
     } catch (e) { setErr(e?.message || String(e)); }
     setLoading(false);
-  }, [entityId]);
+  }, [entityId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
 
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -27665,9 +27670,10 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Entity</span>
           <select value={entityId} onChange={e=>setEntityId(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
             {entities.map(en => <option key={en.id} value={en.id}>{en.name}</option>)}
+            <option value="__consolidated__">— Consolidated (all entities) —</option>
           </select>
         </div>
-        <button onClick={()=>setShowJE(s=>!s)} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">{showJE ? "Close" : "+ Journal entry"}</button>
+        {entityId !== "__consolidated__" && <button onClick={()=>setShowJE(s=>!s)} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">{showJE ? "Close" : "+ Journal entry"}</button>}
       </div>
 
       {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
@@ -27701,7 +27707,7 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
       )}
 
       <div className="flex items-center gap-2">
-        <button onClick={()=>setViewMode("tb")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${viewMode==="tb"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>Trial balance</button>
+        {entityId !== "__consolidated__" && <button onClick={()=>setViewMode("tb")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${viewMode==="tb"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>Trial balance</button>}
         <button onClick={()=>setViewMode("bs")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${viewMode==="bs"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>Balance sheet</button>
       </div>
 
@@ -27737,6 +27743,22 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
           </div>
           {(bs.totalAssets === 0 && bs.totalLiabilities === 0 && bs.totalEquity === 0) ? (
             <div className="p-8 text-center text-sm text-slate-500">No balances yet. As cash, invoices and EOD takings post to the journal, the position builds here.</div>
+          ) : bs.perEntity ? (
+            // Consolidated view: totals + per-entity breakdown (no account-level lines).
+            <div className="p-3 space-y-4 text-sm">
+              <div className="text-[11px] text-amber-300/80">Consolidated = simple sum across entities. Inter-company elimination (Phase 4) is not yet applied, so internal trade is not removed.</div>
+              <div className="space-y-1">
+                <div className="flex justify-between"><span className="text-sky-300 font-semibold">Total assets</span><span className="text-slate-100 font-bold">{money(bs.totalAssets)}</span></div>
+                <div className="flex justify-between"><span className="text-amber-300 font-semibold">Total liabilities</span><span className="text-slate-100 font-bold">{money(bs.totalLiabilities)}</span></div>
+                <div className="flex justify-between"><span className="text-purple-300 font-semibold">Total equity (incl. retained {money(bs.retainedEarnings)})</span><span className="text-slate-100 font-bold">{money(bs.totalEquity)}</span></div>
+              </div>
+              <div className="border-t border-slate-800 pt-2">
+                <div className="text-[11px] uppercase font-bold text-slate-500 mb-1">Per entity</div>
+                {bs.perEntity.map(pe => { const en = entities.find(e=>e.id===pe.entityId); return (
+                  <div key={pe.entityId} className="flex justify-between py-0.5 text-xs"><span className="text-slate-300">{en?.name||pe.entityId}</span><span className="text-slate-400">A {money(pe.sheet.totalAssets)} · L {money(pe.sheet.totalLiabilities)} · E {money(pe.sheet.totalEquity)}</span></div>
+                ); })}
+              </div>
+            </div>
           ) : (
             <div className="p-3 space-y-4 text-sm">
               {/* Assets */}

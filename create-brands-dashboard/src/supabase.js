@@ -4886,7 +4886,7 @@ export async function approveInvoiceRpc(invoiceId, userId) {
   if (error) throw error;
   // Mirror the approved invoice into the journal: Dr expense, Cr trade creditors.
   try {
-    const { data: inv } = await supabase.from("invoices").select("id, entity_id, invoice_number, invoice_date, supplier_name, total_ex_vat, total_vat").eq("id", invoiceId).maybeSingle();
+    const { data: inv } = await supabase.from("invoices").select("id, entity_id, invoice_number, invoice_date, supplier_name, total_ex_vat, total_vat, category").eq("id", invoiceId).maybeSingle();
     if (inv?.entity_id) await postInvoiceJournal(inv, inv.entity_id);
   } catch (e) { /* journal mirror is non-critical */ }
   return Array.isArray(data) ? data[0] : data;
@@ -7492,16 +7492,34 @@ export async function computeConsolidatedBalanceSheet(entityIds = [], { asOf } =
 //   EOD takings   : Dr Cash on hand(1000) Cr Sales(4000)
 //   Invoice (appr): Dr Expense(5xxx/COGS) Cr Trade creditors(2000)
 //   Invoice paid  : Dr Trade creditors    Cr Cash(1010)
+// Resolve the precise expense account code for a cash movement, by walking
+// expense_type → category → account, then mapping to THIS entity's chart by
+// code. Falls back to 5000 (COGS) if the chain is incomplete.
+async function resolveExpenseCodeForType(expenseTypeId) {
+  if (!expenseTypeId) return "5000";
+  const { data: et } = await supabase.from("cash_expense_types").select("category_id").eq("id", expenseTypeId).maybeSingle();
+  if (!et?.category_id) return "5000";
+  const { data: cat } = await supabase.from("transaction_categories").select("account_id").eq("id", et.category_id).maybeSingle();
+  if (!cat?.account_id) return "5000";
+  // account_id is "<entity>-<code>"; pull the code suffix.
+  const m = String(cat.account_id).match(/-(\d+)$/);
+  return m ? m[1] : "5000";
+}
+
 export async function postCashMovementJournal(tx, entityId) {
   if (!entityId) return { posted: false, skipped: true, reason: "no entity" };
   const amt = Number(tx.amount); if (!(amt > 0)) return { posted: false, skipped: true, reason: "zero" };
   const cash = await resolveAccountForEntity(entityId, "1010");
   const sales = await resolveAccountForEntity(entityId, "4000");
-  const expense = await resolveAccountForEntity(entityId, "5000"); // COGS as default expense
   let lines = null;
   if (tx.type === "income" || tx.type === "opening") lines = [{ accountId: cash, amount: amt }, { accountId: sales, amount: -amt }];
-  else if (tx.type === "expense") lines = [{ accountId: expense, amount: amt }, { accountId: cash, amount: -amt }];
-  else return { posted: false, skipped: true, reason: `type ${tx.type} not auto-posted` }; // transfers/adjustments net within cash
+  else if (tx.type === "expense") {
+    // Route to the precise expense account from the movement's category.
+    const code = await resolveExpenseCodeForType(tx.expenseTypeId);
+    const expense = await resolveAccountForEntity(entityId, code) || await resolveAccountForEntity(entityId, "5000");
+    lines = [{ accountId: expense, amount: amt }, { accountId: cash, amount: -amt }];
+  }
+  else return { posted: false, skipped: true, reason: `type ${tx.type} not auto-posted` };
   if (!lines.every(l => l.accountId)) return { posted: false, skipped: true, reason: "accounts not found" };
   return postJournalEntry({ entityId, entryDate: tx.txnDate, memo: tx.reference || `Cash ${tx.type}`, sourceKind: "cash_ledger", sourceRef: `cashmv:${tx.id || tx.sourceRef || Date.now()}`, createdBy: tx.createdBy, lines });
 }
@@ -7524,7 +7542,15 @@ export async function postInvoiceJournal(invoice, entityId, { paid = false } = {
     if (!creditors || !cash) return { posted: false, skipped: true, reason: "accounts not found" };
     return postJournalEntry({ entityId, entryDate: invoice.paid_date || new Date().toISOString().slice(0,10), memo: `Paid invoice ${invoice.invoice_number || invoice.id}`, sourceKind: "invoice_paid", sourceRef: `invpaid:${invoice.id}`, lines: [{ accountId: creditors, amount: amt }, { accountId: cash, amount: -amt }] });
   }
-  const expense = await resolveAccountForEntity(entityId, "5000"); // default to COGS
+  // Route the expense to the account matching the invoice's category (by name
+  // against transaction_categories → account), falling back to COGS (5000).
+  let expCode = "5000";
+  if (invoice.category) {
+    const { data: cat } = await supabase.from("transaction_categories").select("account_id").ilike("name", String(invoice.category).trim()).maybeSingle();
+    const m = cat?.account_id ? String(cat.account_id).match(/-(\d+)$/) : null;
+    if (m) expCode = m[1];
+  }
+  const expense = await resolveAccountForEntity(entityId, expCode) || await resolveAccountForEntity(entityId, "5000");
   if (!creditors || !expense) return { posted: false, skipped: true, reason: "accounts not found" };
   // Split VAT out to the VAT control account so it shows on the balance sheet:
   //   Dr Expense (ex-VAT) + Dr VAT control (VAT) ; Cr Trade creditors (gross).
