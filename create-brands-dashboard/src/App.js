@@ -11212,7 +11212,7 @@ function OnboardingBoard({ stores, opsTeam }) {
 // table and the styled ExcelJS export, so they can never drift apart.
 // Reports hub — tabs for the timesheet/sales report generator plus the
 // Google Reviews, Weekly Reports and Review Scans views (moved here from nav).
-function ReportsView({ stores, brands, opsTeam, currentUser }) {
+function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [], assignments = [], auditTrail = [], onClearAudit }) {
   const role = currentUser?.role;
   const { canFeature } = useAccess();
   const TABS = [
@@ -11221,6 +11221,9 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
     { key: "reviews",    label: "Google Reviews",     feat: "feat.reports.reviews" },
     { key: "scans",      label: "Review Scans",       feat: "feat.reports.scans" },
   ].filter(t => canFeature(t.feat));
+  // Compliance + Audit Trail folded in as report tabs (were their own nav group).
+  TABS.push({ key: "compliance", label: "Compliance" });
+  TABS.push({ key: "audit",      label: "Audit Trail" });
   const [tab, setTab] = useState(TABS[0]?.key || "timesheets");
   return (
     <div className="space-y-4">
@@ -11236,6 +11239,8 @@ function ReportsView({ stores, brands, opsTeam, currentUser }) {
       {tab === "weekly"  && canFeature("feat.reports.weekly") && <WeeklyReportsView/>}
       {tab === "reviews" && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
       {tab === "scans"   && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
+      {tab === "compliance" && <ComplianceView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
+      {tab === "audit"   && <AuditTrailView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={onClearAudit}/>}
     </div>
   );
 }
@@ -38795,6 +38800,13 @@ export default function App() {
   useEffect(() => {
     if (TEAM_TAB_KEYS.includes(activeView)) setTeamTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Setup is a single tabbed page: Ops Setup, Admin, Access Control,
+  // COGS/Inventory, Notifications, Payslip Inbox. Legacy keys redirect.
+  const [setupTab, setSetupTab] = useState("ops-settings");
+  const SETUP_TAB_KEYS = ["ops-settings", "admin", "access-control", "cogs", "notifications", "payslip-inbox"];
+  useEffect(() => {
+    if (SETUP_TAB_KEYS.includes(activeView)) setSetupTab(activeView);
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
   // If something routes to the legacy "chain"/"store-analytics" keys, open the
   // matching Dashboard tab (effectiveActiveView redirects the view to dashboard).
   useEffect(() => {
@@ -39998,9 +40010,7 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
-      { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"], hideForCK: true },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
-      { key: "payslip-inbox", label: "Payslips Inbox", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
     ]},
     { group: "OPERATIONS", items: [
@@ -40013,16 +40023,9 @@ export default function App() {
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
-      { key: "notifications", label: "Notifications",    icon: Bell },
-    ]},
-    { group: "COMPLIANCE", items: [
-      { key: "ops-compliance", label: "Compliance",  icon: Shield },
-      { key: "ops-audit",      label: "Audit Trail", icon: ScrollText },
     ]},
     { group: "SETUP", items: [
-      { key: "ops-settings", label: "Ops Setup", icon: Settings, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
-      { key: "admin",        label: "Admin",     icon: Users, roles: ["owner"] },
-      { key: "access-control", label: "Access Control", icon: Lock, roles: ["owner"] },
+      { key: "setup", label: "Setup", icon: Settings, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
     ]},
   ];
 
@@ -40076,6 +40079,9 @@ export default function App() {
     // opsTab sync effect selects the matching tab).
     if (OPS_TAB_KEYS.includes(activeView)) return "operations";
     if (TEAM_TAB_KEYS.includes(activeView)) return "team";
+    if (SETUP_TAB_KEYS.includes(activeView)) return "setup";
+    // Compliance + Audit Trail are now tabs inside Reports.
+    if (activeView === "ops-compliance" || activeView === "ops-audit") return "reports";
     const allowedKeys = effectiveNavGroups.flatMap(g => g.items.map(i => i.key));
     if (isFinanceEntity) return allowedKeys.includes(activeView) ? activeView : "accounts";
     if (allowedKeys.length === 0) return activeView;
@@ -40298,7 +40304,29 @@ export default function App() {
               onOpenEmployeeProfile={openEmployeeProfile}
               currentUser={currentUser}
             />}
-            {effectiveActiveView === "ops-settings"   && <OpsSettingsView
+            {effectiveActiveView === "setup" && (() => {
+              const isOwner = currentUser.role === "owner";
+              const isHqOrOwner = isOwner || currentUser.role === "hq_staff";
+              const setupTabs = [
+                { key: "ops-settings",  label: "Ops Setup" },
+                { key: "cogs",          label: "COGS / Inventory", gate: () => canSeeView("cogs") },
+                { key: "payslip-inbox", label: "Payslip Inbox", gate: () => isHqOrOwner },
+                { key: "notifications", label: "Notifications" },
+                { key: "admin",         label: "Admin", gate: () => isOwner },
+                { key: "access-control",label: "Access Control", gate: () => isOwner },
+              ].filter(t => !t.gate || t.gate());
+              const setupKeys = setupTabs.map(t => t.key);
+              const effSetupTab = setupKeys.includes(setupTab) ? setupTab : "ops-settings";
+              return (
+                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
+                  {setupTabs.map(t => (
+                    <button key={t.key} onClick={() => setSetupTab(t.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effSetupTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
+                  ))}
+                </div>
+              );
+            })()}
+            {effectiveActiveView === "setup" && !["admin","access-control","cogs","notifications","payslip-inbox"].includes(setupTab) && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
               checklists={checklists} tempUnits={tempUnits}
@@ -40324,7 +40352,7 @@ export default function App() {
               onAddComment={handleAddPunchComment}
               payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
             />}
-            {effectiveActiveView === "admin"          && currentUser.role === "owner" && <AdminPanelView
+            {effectiveActiveView === "setup" && setupTab === "admin" && currentUser.role === "owner" && <AdminPanelView
               brands={brands} users={users} entries={entries}
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
@@ -40336,19 +40364,19 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
-            {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
+            {effectiveActiveView === "setup" && setupTab === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "setup" && setupTab === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
             {effectiveActiveView === "team" && teamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
+            {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
-            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser}/>}
+            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
