@@ -5975,8 +5975,55 @@ export async function setStockCountLine(countId, itemScope, itemId, qty, costPer
 }
 
 export async function finaliseStockCount(countId, status = "finalised") {
+  // Mark the count finalised.
   const { error } = await supabase.from("cogs_stock_counts").update({ status }).eq("id", countId);
   if (error) throw error;
+
+  // Count = truth: reconcile CK ingredient stock to the counted quantities so the
+  // Planner / production see real stock. Only runs on finalise (not un-finalise),
+  // and only for CK-scoped ingredient lines (item_scope 'ck').
+  if (status !== "finalised") return;
+  try {
+    const { data: head } = await supabase.from("cogs_stock_counts").select("store_id, count_date").eq("id", countId).maybeSingle();
+    const { data: lines } = await supabase.from("cogs_stock_count_lines").select("item_scope, item_id, qty, cost_per_unit").eq("count_id", countId);
+    const ckLines = (lines || []).filter(l => (l.item_scope === "ck" || l.item_scope == null) && l.item_id != null && l.qty != null);
+    if (!ckLines.length) return;
+
+    // The Planner reads CK goods-in filtered by the real central-kitchen site id,
+    // NOT the count's store_id (which is the logical "kitchen"). Resolve it so the
+    // reconciled stock is visible to production/planner.
+    const { data: ckSite } = await supabase.from("stores").select("id").eq("site_type", "central_kitchen").is("archived_at", null).limit(1).maybeSingle();
+    const siteId = ckSite?.id || null;
+    const countDate = head?.count_date || new Date().toISOString().slice(0,10);
+    // Pull each counted ingredient's base_unit so the stock row carries the right unit.
+    const ids = [...new Set(ckLines.map(l => String(l.item_id)))];
+    const { data: items } = await supabase.from("cogs_ck_items").select("id, base_unit").in("id", ids);
+    const unitById = {}; (items || []).forEach(i => { unitById[String(i.id)] = i.base_unit || "kg"; });
+
+    for (const l of ckLines) {
+      const ingId = String(l.item_id);
+      const countedQty = Number(l.qty) || 0;
+      // Zero out existing remaining for this ingredient (count overwrites).
+      await supabase.from("ck_goods_in").update({ qty_remaining: 0 }).eq("ingredient_id", ingId).gt("qty_remaining", 0);
+      // Insert a single reconciliation batch = counted qty (skip zero counts).
+      if (countedQty > 0) {
+        await supabase.from("ck_goods_in").insert({
+          id: `gin-cnt-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+          site_id: siteId, ingredient_id: ingId,
+          qty_received: countedQty, qty_remaining: countedQty,
+          unit: unitById[ingId] || "kg",
+          batch_no: `COUNT-${countDate}`, supplier: "Stock count",
+          received_date: countDate, expiry_date: null,
+          unit_cost: l.cost_per_unit != null ? Number(l.cost_per_unit) : null,
+          total_cost: null, invoice_ref: null,
+          received_by: null, note: `Set by finalised stock count ${countId}`,
+        });
+      }
+    }
+  } catch (e) {
+    // Don't fail the finalise if reconciliation hits an issue; surface for debugging.
+    console.error("Count→stock reconciliation failed:", e);
+  }
 }
 
 export async function deleteStockCount(countId) {
