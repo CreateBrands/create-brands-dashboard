@@ -39212,10 +39212,8 @@ export default function App() {
   // Finance-only role: routes to dashboard (base hq_staff) but is scoped to the
   // Finance entity only — no brands/stores/team/ops, lands straight in Finance.
   const financeOnly = currentUserRole.scope === "finance_only";
-  // Finance-only users have no other entity — enter Finance automatically.
-  useEffect(() => {
-    if (financeOnly && !selectedEntityBrand) setSelectedEntityBrand("finance");
-  }, [financeOnly, selectedEntityBrand]);
+  // NOTE: the auto-enter-Finance effect lives after entityBrands is computed,
+  // so a finance-only user who ALSO has entity access isn't trapped in Finance.
 
   // Cash-ledger handlers (defined after currentUser/stores to avoid TDZ).
   const cashHandlers = useMemo(() => ({
@@ -39375,13 +39373,25 @@ export default function App() {
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
   const entityBrands = useMemo(() => {
     if (!currentUser) return [];
-    if (financeOnly) return []; // finance-only: no brand/store entities at all
+    // Note: we no longer short-circuit on financeOnly. A finance-scoped role can
+    // still be assigned to operational entities (e.g. Distribution); those must
+    // appear so the user can switch to them.
     const nonArchived = stores.filter(s => !s.archivedAt);
     const mine = isHQ ? nonArchived.filter(s => canAccessStore(s)) : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
     const ids = new Set(mine.map(s => s.brandId));
     // base = store-derived; then restrict by role/person entity access.
     return brands.filter(b => ids.has(b.id) && canAccessEntity(`entity.${b.id}`));
   }, [brands, stores, isHQ, currentUser, canAccessEntity, canAccessStore]);
+
+  // A user is *effectively* finance-only only when their role is finance-scoped
+  // AND they have no other entity to switch to. Someone assigned to Finance plus
+  // an operational entity (e.g. Ahmad: Finance + Distribution) is NOT trapped —
+  // they get the picker/switcher like anyone with multiple entities.
+  const effectiveFinanceOnly = financeOnly && entityBrands.length === 0;
+  // Auto-enter Finance only for the genuinely finance-only (no other entity).
+  useEffect(() => {
+    if (effectiveFinanceOnly && !selectedEntityBrand) setSelectedEntityBrand("finance");
+  }, [effectiveFinanceOnly, selectedEntityBrand]);
 
   const addAudit = useCallback(async (action, detail, who, brandId, storeId) => {
     try {
@@ -40025,7 +40035,9 @@ export default function App() {
   // ── Entity landing screen ────────────────────────────────────────────────
   // Show the picker when no entity chosen yet and there's a real choice to make.
   const financeAvailable = financeGranted();
-  if (!selectedEntityBrand && !financeOnly && (entityBrands.length > 1 || financeAvailable)) {
+  // Destinations the user can choose between = their entities + Finance (if available).
+  const destinationCount = entityBrands.length + (financeAvailable ? 1 : 0);
+  if (!selectedEntityBrand && !effectiveFinanceOnly && destinationCount > 1) {
     return (
       <AuthContext.Provider value={{ user: currentUser_ctx }}>
         <EntityPicker brands={entityBrands} stores={stores} user={currentUser} onPick={chooseEntity} onLogout={handleLogout} financeAvailable={financeAvailable}/>
@@ -40045,7 +40057,7 @@ export default function App() {
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
-          onSwitchEntity={(!financeOnly && (entityBrands.length > 1 || financeAvailable)) ? (() => chooseEntity(null)) : null}
+          onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
           actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}
