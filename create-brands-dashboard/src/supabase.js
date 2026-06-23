@@ -7316,6 +7316,109 @@ export async function fetchEntities() {
   return (data || []).map(mapEntity);
 }
 
+// ============================================================================
+// CHART OF ACCOUNTS + GENERALISED JOURNAL ENTRIES (Phase 2)
+// Generalises the cash_ledger two-sided pattern into full double-entry that can
+// touch any account type. Convention: debit > 0, credit < 0; a journal entry's
+// lines must sum to zero. Trial balance = sum of lines per account per entity.
+// ============================================================================
+const mapAccount = (a) => ({
+  id: a.id, entityId: a.entity_id || null, code: a.code || "", name: a.name,
+  type: a.type, parentId: a.parent_id || null, sourceKind: a.source_kind || null,
+  sourceId: a.source_id || null, active: a.active !== false,
+});
+export async function fetchAccounts(entityId) {
+  let q = supabase.from("accounts").select("*").eq("active", true).order("code");
+  if (entityId) q = q.eq("entity_id", entityId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapAccount);
+}
+
+// Resolve a chart account for a given entity by its code (e.g. "5010"). The
+// category mapping stores a chocoberry-<code> reference; at posting time we
+// point at the CORRECT entity's account with the same code.
+export async function resolveAccountForEntity(entityId, code) {
+  if (!entityId || !code) return null;
+  const { data } = await supabase.from("accounts").select("id").eq("entity_id", entityId).eq("code", code).maybeSingle();
+  return data?.id || null;
+}
+
+const mapJournalEntry = (j) => ({
+  id: j.id, entityId: j.entity_id || null, entryDate: j.entry_date, memo: j.memo || "",
+  sourceKind: j.source_kind || null, sourceRef: j.source_ref || null, createdBy: j.created_by || null,
+  createdAt: j.created_at, lines: (j.journal_lines || []).map(mapJournalLine),
+});
+const mapJournalLine = (l) => ({
+  id: l.id, journalId: l.journal_id, accountId: l.account_id,
+  amount: Number(l.amount) || 0, storeId: l.store_id || null, memo: l.memo || "",
+});
+
+// Post a balanced journal entry. lines = [{accountId, amount, storeId?, memo?}].
+// Debits positive, credits negative; the lines MUST sum to (approximately) zero.
+// sourceRef makes posting idempotent (skips if one already exists).
+export async function postJournalEntry({ entityId, entryDate, memo, sourceKind, sourceRef, createdBy, lines }) {
+  const valid = (lines || []).filter(l => l.accountId && Number(l.amount) !== 0);
+  if (valid.length < 2) throw new Error("A journal entry needs at least two lines.");
+  const sum = valid.reduce((a, l) => a + Number(l.amount), 0);
+  if (Math.abs(sum) > 0.005) throw new Error(`Journal does not balance (sum = ${sum.toFixed(2)}). Debits must equal credits.`);
+  if (sourceRef) {
+    const { data: existing } = await supabase.from("journal_entries").select("id").eq("source_ref", sourceRef).limit(1);
+    if ((existing || []).length) return { posted: false, skipped: true, reason: "already posted", id: existing[0].id };
+  }
+  const jid = `je-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const { error: hErr } = await supabase.from("journal_entries").insert({
+    id: jid, entity_id: entityId || null, entry_date: entryDate || new Date().toISOString().slice(0,10),
+    memo: memo || null, source_kind: sourceKind || "manual", source_ref: sourceRef || null, created_by: createdBy || null,
+  });
+  if (hErr) throw hErr;
+  const rows = valid.map(l => ({
+    id: `jl-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+    journal_id: jid, account_id: l.accountId, amount: Number(l.amount),
+    store_id: l.storeId || null, memo: l.memo || null,
+  }));
+  const { error: lErr } = await supabase.from("journal_lines").insert(rows);
+  if (lErr) throw lErr;
+  return { posted: true, skipped: false, id: jid };
+}
+
+export async function fetchJournalEntries({ entityId, from, to } = {}) {
+  let q = supabase.from("journal_entries").select("*, journal_lines(*)").order("entry_date", { ascending: false });
+  if (entityId) q = q.eq("entity_id", entityId);
+  if (from) q = q.gte("entry_date", from);
+  if (to) q = q.lte("entry_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapJournalEntry);
+}
+
+export async function deleteJournalEntry(id) {
+  const { error } = await supabase.from("journal_entries").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Trial balance for an entity: net movement per account. Each row { account, debit,
+// credit, balance }. If double-entry holds, total debits == total credits.
+export async function computeTrialBalance(entityId, { from, to } = {}) {
+  const [accounts, entries] = await Promise.all([
+    fetchAccounts(entityId),
+    fetchJournalEntries({ entityId, from, to }),
+  ]);
+  const byAccount = {};
+  accounts.forEach(a => { byAccount[a.id] = { account: a, net: 0 }; });
+  entries.forEach(j => (j.lines || []).forEach(l => {
+    if (byAccount[l.accountId]) byAccount[l.accountId].net += l.amount;
+  }));
+  const rows = Object.values(byAccount)
+    .filter(r => Math.abs(r.net) > 0.005)
+    .map(r => ({ account: r.account, debit: r.net > 0 ? r.net : 0, credit: r.net < 0 ? -r.net : 0, balance: r.net }))
+    .sort((a, b) => a.account.code.localeCompare(b.account.code));
+  const totalDebit = rows.reduce((a, r) => a + r.debit, 0);
+  const totalCredit = rows.reduce((a, r) => a + r.credit, 0);
+  return { rows, totalDebit, totalCredit, balanced: Math.abs(totalDebit - totalCredit) < 0.01 };
+}
+
 export async function fetchCashAccounts() {
   const { data, error } = await supabase.from("cash_accounts").select("*").is("archived_at", null).order("name");
   if (error) throw error;

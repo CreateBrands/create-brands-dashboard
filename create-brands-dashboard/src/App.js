@@ -15,6 +15,7 @@ import {
   fetchEntityOverrides, setEntityOverride,
   fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
   fetchEntities,
+  fetchAccounts, resolveAccountForEntity, postJournalEntry, fetchJournalEntries, deleteJournalEntry, computeTrialBalance,
   fetchCashAccounts, upsertCashAccount, archiveCashAccount,
   fetchCashSources, upsertCashSource, archiveCashSource,
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
@@ -27605,6 +27606,125 @@ function FinanceRolesTab({ customRoles = [], opsTeam = [], accessPerms = {}, onS
   );
 }
 
+// ─── Ledger (trial balance + manual journal entries) ──────────────────────────
+// Phase 2: the double-entry integrity view. Shows a per-entity trial balance
+// (must net to zero) and lets you post a balanced manual journal entry.
+function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
+  const [entityId, setEntityId] = useState(entityFilter !== "all" ? entityFilter : (entities[0]?.id || ""));
+  const [accounts, setAccounts] = useState([]);
+  const [tb, setTb] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [showJE, setShowJE] = useState(false);
+  const [jeDate, setJeDate] = useState(new Date().toISOString().slice(0,10));
+  const [jeMemo, setJeMemo] = useState("");
+  const [jeLines, setJeLines] = useState([{ accountId: "", amount: "" }, { accountId: "", amount: "" }]);
+  const [busy, setBusy] = useState(false);
+  const inputCls = "w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none";
+
+  useEffect(() => { if (entityFilter !== "all") setEntityId(entityFilter); }, [entityFilter]);
+
+  const load = useCallback(async () => {
+    if (!entityId) { setLoading(false); return; }
+    setLoading(true); setErr("");
+    try {
+      const [accs, trial] = await Promise.all([fetchAccounts(entityId), computeTrialBalance(entityId)]);
+      setAccounts(accs); setTb(trial);
+    } catch (e) { setErr(e?.message || String(e)); }
+    setLoading(false);
+  }, [entityId]);
+  useEffect(() => { load(); }, [load]);
+
+  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const jeSum = jeLines.reduce((a, l) => a + (Number(l.amount) || 0), 0);
+  const jeBalanced = Math.abs(jeSum) < 0.005 && jeLines.filter(l => l.accountId && Number(l.amount) !== 0).length >= 2;
+
+  const postJE = async () => {
+    setBusy(true); setErr("");
+    try {
+      await postJournalEntry({
+        entityId, entryDate: jeDate, memo: jeMemo, sourceKind: "manual",
+        lines: jeLines.filter(l => l.accountId && Number(l.amount) !== 0).map(l => ({ accountId: l.accountId, amount: Number(l.amount) })),
+      });
+      setShowJE(false); setJeMemo(""); setJeLines([{ accountId: "", amount: "" }, { accountId: "", amount: "" }]);
+      load();
+    } catch (e) { setErr(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  const typeColor = { asset:"text-sky-300", liability:"text-amber-300", equity:"text-purple-300", income:"text-emerald-300", expense:"text-rose-300" };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Entity</span>
+          <select value={entityId} onChange={e=>setEntityId(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
+            {entities.map(en => <option key={en.id} value={en.id}>{en.name}</option>)}
+          </select>
+        </div>
+        <button onClick={()=>setShowJE(s=>!s)} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">{showJE ? "Close" : "+ Journal entry"}</button>
+      </div>
+
+      {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+
+      {showJE && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="text-sm font-bold text-slate-200">New journal entry</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-[10px] text-slate-500">Date</label><input type="date" value={jeDate} onChange={e=>setJeDate(e.target.value)} className={inputCls}/></div>
+            <div><label className="text-[10px] text-slate-500">Memo</label><input value={jeMemo} onChange={e=>setJeMemo(e.target.value)} placeholder="description" className={inputCls}/></div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-[10px] text-slate-500 uppercase">Lines (debit positive, credit negative — must sum to zero)</div>
+            {jeLines.map((l, i) => (
+              <div key={i} className="flex gap-2">
+                <select value={l.accountId} onChange={e=>setJeLines(ls=>ls.map((x,j)=>j===i?{...x,accountId:e.target.value}:x))} className={inputCls + " flex-1"}>
+                  <option value="">— account —</option>
+                  {accounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                </select>
+                <input type="number" value={l.amount} onChange={e=>setJeLines(ls=>ls.map((x,j)=>j===i?{...x,amount:e.target.value}:x))} placeholder="0.00" className={inputCls + " w-32 text-right"}/>
+                <button onClick={()=>setJeLines(ls=>ls.filter((_,j)=>j!==i))} className="text-slate-600 hover:text-red-400 px-1">×</button>
+              </div>
+            ))}
+            <button onClick={()=>setJeLines(ls=>[...ls,{accountId:"",amount:""}])} className="text-xs text-indigo-400 hover:text-indigo-300">+ add line</button>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className={`text-xs font-semibold ${jeBalanced ? "text-emerald-400" : "text-amber-400"}`}>{jeBalanced ? "✓ balanced" : `unbalanced: ${money(jeSum)}`}</span>
+            <button disabled={!jeBalanced || busy} onClick={postJE} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy ? "Posting…" : "Post entry"}</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : !tb ? null : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="flex items-center justify-between p-3 border-b border-slate-800">
+            <div className="text-sm font-bold text-slate-200">Trial balance</div>
+            <div className={`text-xs font-bold ${tb.balanced ? "text-emerald-400" : "text-red-400"}`}>{tb.balanced ? "✓ balanced" : "⚠ does not balance"}</div>
+          </div>
+          {tb.rows.length === 0 ? (
+            <div className="p-8 text-center text-sm text-slate-500">No journal entries yet. Post one, or wait for cash/invoice postings to flow through.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead><tr className="text-[10px] uppercase text-slate-500 border-b border-slate-800"><th className="text-left p-2 pl-3">Account</th><th className="text-right p-2">Debit</th><th className="text-right p-2 pr-3">Credit</th></tr></thead>
+              <tbody>
+                {tb.rows.map(r => (
+                  <tr key={r.account.id} className="border-b border-slate-800/40">
+                    <td className="p-2 pl-3"><span className="text-slate-500">{r.account.code}</span> <span className="text-slate-200">{r.account.name}</span> <span className={`text-[10px] ${typeColor[r.account.type]||"text-slate-500"}`}>{r.account.type}</span></td>
+                    <td className="p-2 text-right text-slate-300">{r.debit ? money(r.debit) : ""}</td>
+                    <td className="p-2 pr-3 text-right text-slate-300">{r.credit ? money(r.credit) : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr className="font-bold text-slate-200"><td className="p-2 pl-3 text-right">Totals</td><td className="p-2 text-right">{money(tb.totalDebit)}</td><td className="p-2 pr-3 text-right">{money(tb.totalCredit)}</td></tr></tfoot>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccountsHubView(props) {
   const { stores, bankTransactions, bankAccounts, categories, categoryRules, currentUser, opsTeam = [],
     onImport, onUpdateTxn, onDeleteTxn, onSaveAccount, onDeleteAccount,
@@ -27632,8 +27752,9 @@ function AccountsHubView(props) {
     ["suppliers", "Suppliers"],
     ["reconcile", "Reconcile"],
     ["export", "Export"],
+    ...(isAdmin ? [["ledger", "Ledger"]] : []),
     ...(isAdmin ? [["roles", "Team & Roles"]] : []),
-  ].filter(([k]) => k === "roles" ? true : acctCanFeature(TAB_FEAT[k]));
+  ].filter(([k]) => (k === "roles" || k === "ledger") ? true : acctCanFeature(TAB_FEAT[k]));
   // If the active tab isn't permitted, fall back to the first allowed tab.
   const allowedTabKeys = TABS.map(([k]) => k);
   const effTab = allowedTabKeys.includes(tab) ? tab : (allowedTabKeys[0] || "pnl");
@@ -27665,6 +27786,7 @@ function AccountsHubView(props) {
       )}
 
       {effTab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} accessPerms={accessPerms} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole} onSetPerm={onSetPerm}/>}
+      {effTab === "ledger" && isAdmin && <LedgerView entities={entities} entityFilter={entityFilter} stores={stores}/>}
 
       {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)}/>}
       {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
