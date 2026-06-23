@@ -245,6 +245,17 @@ const FEATURE_REGISTRY = [
   { key: "feat.docs.approve", label: "Approve RTW / contract docs", section: "team", defaultRoles: ["owner","hq_staff"] },
   // EOD
   { key: "feat.eod.submit", label: "Submit EOD report", section: "eod", defaultRoles: ["owner","hq_staff","manager"] },
+  // COGS / Inventory tabs
+  { key: "feat.cogs.inventory",  label: "COGS · Inventory",         section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.preps",      label: "COGS · Preps",             section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.modifiers",  label: "COGS · Modifiers",         section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.products",   label: "COGS · Products",          section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.mapping",    label: "COGS · POS Mapping",       section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.discover",   label: "COGS · Discover Modifiers",section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.reconcile",  label: "COGS · Reconcile",         section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.tillaudit",  label: "COGS · Till Audit",        section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.modmapper",  label: "COGS · Modifier Mapper",   section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.actualcogs", label: "COGS · Stock & Actual COGS",section: "cogs", defaultRoles: ["owner","hq_staff"] },
   // Accounts / Finance
   { key: "feat.accounts.pnl",       label: "View P&L",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.accounts.bank",      label: "Bank & Cash",         section: "accounts", defaultRoles: ["owner","hq_staff"] },
@@ -5983,9 +5994,9 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   );
 }
 
-function CogsView({ stores = [] }) {
+function CogsView({ stores = [], canFeature = () => true }) {
   const [tab, setTab] = useState("inventory");
-  const TABS = [
+  const ALL_TABS = [
     { key: "inventory", label: "Inventory" },
     { key: "preps",     label: "Preps" },
     { key: "modifiers", label: "Modifiers" },
@@ -5997,28 +6008,34 @@ function CogsView({ stores = [] }) {
     { key: "modmapper", label: "Modifier Mapper" },
     { key: "actualcogs", label: "Stock & Actual COGS" },
   ];
+  // Each tab is matrix-controlled via feat.cogs.<key>. Only show granted tabs.
+  const TABS = ALL_TABS.filter(t => canFeature(`feat.cogs.${t.key}`));
+  // If the active tab isn't permitted (or none are), fall back to the first allowed.
+  const allowedKeys = TABS.map(t => t.key);
+  const effectiveTab = allowedKeys.includes(tab) ? tab : (allowedKeys[0] || null);
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Recipes</h2>
         <p className="text-xs text-slate-500 mt-0.5">Build inventory, preps, modifiers, and products. Costs roll up from your inventory prices.</p>
       </div>
-      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit">
+      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
         {TABS.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effectiveTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
         ))}
       </div>
-      {tab === "inventory" && <InventoryBuilder/>}
-      {tab === "preps"     && <RecipeBuilder mode="preps"/>}
-      {tab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
-      {tab === "products"  && <RecipeBuilder mode="products"/>}
-      {tab === "mapping"   && <PosMapper stores={stores}/>}
-      {tab === "discover"  && <ModifierDiscovery stores={stores}/>}
-      {tab === "reconcile" && <CogsReconciliation stores={stores}/>}
-      {tab === "tillaudit" && <TillAudit stores={stores}/>}
-      {tab === "modmapper" && <ModifierMapper stores={stores}/>}
-      {tab === "actualcogs" && <ActualCogs stores={stores}/>}
+      {!effectiveTab && <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">You don't have access to any COGS tabs. Ask an admin to grant them in Access &amp; Roles.</div>}
+      {effectiveTab === "inventory" && <InventoryBuilder/>}
+      {effectiveTab === "preps"     && <RecipeBuilder mode="preps"/>}
+      {effectiveTab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
+      {effectiveTab === "products"  && <RecipeBuilder mode="products"/>}
+      {effectiveTab === "mapping"   && <PosMapper stores={stores}/>}
+      {effectiveTab === "discover"  && <ModifierDiscovery stores={stores}/>}
+      {effectiveTab === "reconcile" && <CogsReconciliation stores={stores}/>}
+      {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
+      {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
+      {effectiveTab === "actualcogs" && <ActualCogs stores={stores}/>}
     </div>
   );
 }
@@ -40235,7 +40252,7 @@ export default function App() {
             {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
             {effectiveActiveView === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "cogs" && ["owner","hq_staff"].includes(currentUser.role) && <CogsView stores={stores}/>}
+            {effectiveActiveView === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
