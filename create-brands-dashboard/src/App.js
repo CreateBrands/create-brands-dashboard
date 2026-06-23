@@ -231,6 +231,7 @@ const FEATURE_REGISTRY = [
   { key: "feat.ck.dispatch",   label: "CK · Dispatch",      section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.ck.categories", label: "CK · Categories",    section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.ck.suppliers",  label: "CK · Suppliers",     section: "central-kitchen", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.ck.orders",     label: "CK · Orders",        section: "central-kitchen", defaultRoles: ["owner","hq_staff","manager"] },
   // Team / employee profile actions
   { key: "feat.team.editPay", label: "Edit pay / rates",   section: "team", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.team.editHR",  label: "Edit HR details",    section: "team", defaultRoles: ["owner","hq_staff","manager"] },
@@ -245,6 +246,7 @@ const FEATURE_REGISTRY = [
   { key: "feat.accounts.suppliers", label: "Suppliers",           section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.accounts.reconcile", label: "Reconcile",           section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.accounts.export",    label: "Export",              section: "accounts", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.accounts.ledger",    label: "Ledger (trial balance / journals)", section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.finance.spend",      label: "Spend",               section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.finance.pettycash",  label: "Petty Cash",          section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.finance.expenses",   label: "Expenses",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
@@ -4495,7 +4497,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           { label: "Planning",  tabs: [["orders","Orders"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
           { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
         ].map((grp, gi) => {
-          const visible = grp.tabs.filter(([k]) => k === "overview" || ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
+          const visible = grp.tabs.filter(([k]) => k === "overview" || k === "orders" || ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
           if (!visible.length) return null;
           return (
             <div key={grp.label} className="flex items-center gap-1">
@@ -27744,7 +27746,7 @@ function AccountsHubView(props) {
 
   const { canFeature: acctCanFeature } = useAccess();
   const isAdmin = currentUser?.role === "owner";
-  const TAB_FEAT = { pnl:"feat.accounts.pnl", bank:"feat.accounts.bank", invoices:"feat.accounts.invoices", suppliers:"feat.accounts.suppliers", reconcile:"feat.accounts.reconcile", export:"feat.accounts.export" };
+  const TAB_FEAT = { pnl:"feat.accounts.pnl", bank:"feat.accounts.bank", invoices:"feat.accounts.invoices", suppliers:"feat.accounts.suppliers", reconcile:"feat.accounts.reconcile", export:"feat.accounts.export", ledger:"feat.accounts.ledger" };
   const TABS = [
     ["pnl", "P&L"],
     ["bank", "Bank & Cash"],
@@ -27752,7 +27754,7 @@ function AccountsHubView(props) {
     ["suppliers", "Suppliers"],
     ["reconcile", "Reconcile"],
     ["export", "Export"],
-    ...(isAdmin ? [["ledger", "Ledger"]] : []),
+    ...(acctCanFeature("feat.accounts.ledger") ? [["ledger", "Ledger"]] : []),
     ...(isAdmin ? [["roles", "Team & Roles"]] : []),
   ].filter(([k]) => (k === "roles" || k === "ledger") ? true : acctCanFeature(TAB_FEAT[k]));
   // If the active tab isn't permitted, fall back to the first allowed tab.
@@ -27786,7 +27788,7 @@ function AccountsHubView(props) {
       )}
 
       {effTab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} accessPerms={accessPerms} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole} onSetPerm={onSetPerm}/>}
-      {effTab === "ledger" && isAdmin && <LedgerView entities={entities} entityFilter={entityFilter} stores={stores}/>}
+      {effTab === "ledger" && acctCanFeature("feat.accounts.ledger") && <LedgerView entities={entities} entityFilter={entityFilter} stores={stores}/>}
 
       {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)}/>}
       {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
