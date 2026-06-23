@@ -38780,6 +38780,14 @@ export default function App() {
   // are now tabs inside Dashboard to slim the sidebar. "overview" = the main
   // dashboard. Gated per-tab by the same role/matrix checks as before.
   const [dashTab, setDashTab] = useState("overview");
+  // Operations is a single tabbed page (like Dashboard): Ops Overview, Today's
+  // Tasks, Temperatures, Deliveries, Issues, Assignments. The old per-item nav
+  // keys still work and redirect into the matching tab.
+  const [opsTab, setOpsTab] = useState("ops-network");
+  const OPS_TAB_KEYS = ["ops-network", "ops-tasks", "ops-temps", "ops-deliveries", "issues", "ops-assigns"];
+  useEffect(() => {
+    if (OPS_TAB_KEYS.includes(activeView)) setOpsTab(activeView);
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
   // If something routes to the legacy "chain"/"store-analytics" keys, open the
   // matching Dashboard tab (effectiveActiveView redirects the view to dashboard).
   useEffect(() => {
@@ -39989,10 +39997,7 @@ export default function App() {
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
     ]},
     { group: "OPERATIONS", items: [
-      { key: "ops-network",    label: "Ops Overview",    icon: Activity },
-      { key: "ops-tasks",      label: "Today's Tasks",   icon: CheckSquare },
-      { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
-      { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
+      { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
       { key: "ck-order",       label: "Order from Kitchen", icon: ChefHat, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
@@ -40003,14 +40008,10 @@ export default function App() {
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
       { key: "notifications", label: "Notifications",    icon: Bell },
-      { key: "ops-assigns",  label: "Assignments",       icon: Clipboard },
       { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, badgeClearOnView: true },
       { key: "onboarding-board", label: "Onboarding Board", icon: UserCheck, roles: ["owner", "hq_staff", "manager"] },
       { key: "training",     label: "Training",          icon: GraduationCap },
       { key: "contracts",    label: "Contracts",         icon: FileText },
-    ]},
-    { group: "MAINTENANCE", items: [
-      { key: "issues",  label: "Issues",  icon: Wrench, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
     ]},
     { group: "COMPLIANCE", items: [
       { key: "ops-compliance", label: "Compliance",  icon: Shield },
@@ -40066,6 +40067,9 @@ export default function App() {
     // Legacy keys: chain & store-analytics are now Dashboard sub-tabs. If anything
     // still routes to them (old deep link, saved state), land on Dashboard.
     if (activeView === "chain" || activeView === "store-analytics") return "dashboard";
+    // Operations is now a tabbed page; its old per-item keys route to it (the
+    // opsTab sync effect selects the matching tab).
+    if (OPS_TAB_KEYS.includes(activeView)) return "operations";
     const allowedKeys = effectiveNavGroups.flatMap(g => g.items.map(i => i.key));
     if (isFinanceEntity) return allowedKeys.includes(activeView) ? activeView : "accounts";
     if (allowedKeys.length === 0) return activeView;
@@ -40202,15 +40206,36 @@ export default function App() {
             {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
-            {effectiveActiveView === "issues"         && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
-            {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {effectiveActiveView === "operations" && (() => {
+              const opsTabs = [
+                { key: "ops-network",    label: "Ops Overview" },
+                { key: "ops-tasks",      label: "Today's Tasks" },
+                { key: "ops-temps",      label: "Temperatures" },
+                { key: "ops-deliveries", label: "Deliveries" },
+                { key: "issues",         label: "Issues", badge: openIssueCount > 0 ? openIssueCount : null },
+                { key: "ops-assigns",    label: "Assignments" },
+              ];
+              const effOpsTab = OPS_TAB_KEYS.includes(opsTab) ? opsTab : "ops-network";
+              return (
+                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
+                  {opsTabs.map(t => (
+                    <button key={t.key} onClick={() => setOpsTab(t.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${effOpsTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
+                      {t.label}{t.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+            {effectiveActiveView === "operations" && opsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+            {effectiveActiveView === "operations" && opsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "operations" && opsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
+            {effectiveActiveView === "operations" && opsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ck-order" && <CkOrderView stores={stores} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>}
-            {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+            {effectiveActiveView === "operations" && opsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {effectiveActiveView === "ops-assigns"    && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+            {effectiveActiveView === "operations" && opsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
             {effectiveActiveView === "hiring"         && <HiringView
               brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
               applications={applications} opsTeam={opsTeam} currentUser={currentUser}
