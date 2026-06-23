@@ -6460,6 +6460,7 @@ const mapCkProduct = (p) => ({
   outputUnit: p.output_unit || "each", yieldQty: p.yield_qty != null ? Number(p.yield_qty) : null,
   shelfLifeDays: p.shelf_life_days != null ? Number(p.shelf_life_days) : null,
   minutesPerUnit: p.minutes_per_unit != null ? Number(p.minutes_per_unit) : null,
+  parLevel: p.par_level != null ? Number(p.par_level) : null,
   mayContainAllergens: p.may_contain_allergens || [], note: p.note || "",
   archivedAt: p.archived_at || null,
 });
@@ -6491,6 +6492,7 @@ export async function upsertCkProduct(p) {
     output_unit: p.outputUnit || "each", yield_qty: p.yieldQty === "" || p.yieldQty == null ? null : Number(p.yieldQty),
     shelf_life_days: p.shelfLifeDays === "" || p.shelfLifeDays == null ? null : Number(p.shelfLifeDays),
     minutes_per_unit: p.minutesPerUnit === "" || p.minutesPerUnit == null ? null : Number(p.minutesPerUnit),
+    par_level: p.parLevel === "" || p.parLevel == null ? null : Number(p.parLevel),
     may_contain_allergens: p.mayContainAllergens || [], note: p.note || null,
     updated_at: new Date().toISOString(),
   };

@@ -3815,6 +3815,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const [dispatches, setDispatches] = useState([]);
   const [dispatchedByRun, setDispatchedByRun] = useState({});
   const [ckOrders, setCkOrders] = useState([]); // outlet orders to the CK
+  const [aiSummary, setAiSummary] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
@@ -4379,6 +4381,25 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   // Finished goods held at the kitchen = each run's produced minus dispatched.
   const finishedGoods = runs.map(r => ({ ...r, dispatched: dispatchedByRun[r.id] || 0, onHand: runRemaining(r) }));
   const finishedOnHand = finishedGoods.filter(f => f.onHand > 0.00001);
+  // Yield & variance: aggregate per product from runs that have a planned qty.
+  const yieldStats = useMemo(() => {
+    const planned = (runs || []).filter(r => r.plannedQty && r.plannedQty > 0 && r.producedQty != null);
+    const byProduct = {};
+    planned.forEach(r => {
+      const k = String(r.productId);
+      const pct = (r.producedQty / r.plannedQty) * 100;
+      const s = byProduct[k] || { productId: r.productId, name: r.productName, runs: 0, sumPct: 0, sumPlanned: 0, sumProduced: 0, worst: null };
+      s.runs += 1; s.sumPct += pct; s.sumPlanned += r.plannedQty; s.sumProduced += r.producedQty;
+      if (s.worst == null || pct < s.worst) s.worst = pct;
+      byProduct[k] = s;
+    });
+    const rows = Object.values(byProduct).map(s => ({ ...s, avgPct: s.runs ? s.sumPct / s.runs : null, overallPct: s.sumPlanned ? (s.sumProduced / s.sumPlanned) * 100 : null }))
+      .sort((a,b) => (a.avgPct||0) - (b.avgPct||0)); // worst first
+    const allPlanned = planned.reduce((a,r)=>a+r.plannedQty,0);
+    const allProduced = planned.reduce((a,r)=>a+r.producedQty,0);
+    return { rows, runCount: planned.length, overallPct: allPlanned ? (allProduced/allPlanned)*100 : null };
+  }, [runs]);
+  const yieldColor = (pct) => pct == null ? "text-slate-500" : pct >= 98 ? "text-emerald-400" : pct >= 90 ? "text-amber-400" : "text-red-400";
   const fgSoon = new Date(); fgSoon.setDate(fgSoon.getDate() + 3);
   const fgExpiring = finishedOnHand.filter(f => f.useByDate && new Date(f.useByDate) <= fgSoon);
   const [dispModal, setDispModal] = useState(false);
@@ -4489,6 +4510,9 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
         const pendingDispatch = (dispatches || []).filter(d => d.status === "sent");
         const recentRuns = [...(runs || [])].sort((a,b) => String(b.runDate||"").localeCompare(String(a.runDate||""))).slice(0, 6);
         const fgUnits = finishedOnHand.reduce((a,f) => a + (f.onHand||0), 0);
+        // Below-par finished products: par set, on-hand below it.
+        const onHandByProd = {}; finishedOnHand.forEach(f => { onHandByProd[String(f.productId)] = (onHandByProd[String(f.productId)]||0) + (f.onHand||0); });
+        const belowPar = (ckProducts||[]).filter(p => p.parLevel != null && p.parLevel > 0).map(p => ({ product: p, onHand: onHandByProd[String(p.id)]||0, par: p.parLevel, toMake: Math.max(0, p.parLevel - (onHandByProd[String(p.id)]||0)) })).filter(x => x.toMake > 0.00001);
         const card = (label, value, sub, accent, onClick) => (
           <button onClick={onClick} className={`text-left p-4 rounded-2xl border bg-slate-900/40 hover:bg-slate-900/70 transition ${accent}`}>
             <div className="text-3xl font-bold text-white leading-none">{value}</div>
@@ -4498,13 +4522,58 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
         );
         return (
           <div className="space-y-4">
-            <div className="text-sm text-slate-400">Today at the Central Kitchen — {new Date().toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" })}</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm text-slate-400">Today at the Central Kitchen — {new Date().toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" })}</div>
+              <button disabled={aiBusy} onClick={async()=>{
+                setAiBusy(true); setAiSummary("");
+                try {
+                  const demand = computeCkOrderDemand(ckOrders);
+                  const ctx = [
+                    `Central Kitchen status for a daily ops summary. Write 3-5 short plain-English bullet points highlighting what needs attention. Be concise and practical.`,
+                    `Ingredients below reorder: ${lowStock.length} (${lowStock.slice(0,6).map(s=>s.name).join(", ")||"none"}).`,
+                    `Raw batches expiring within 3 days: ${expiringSoon.length}.`,
+                    `Finished products below par needing production: ${belowPar.length} (${belowPar.slice(0,6).map(x=>`${x.product.name} make ${x.toMake}${x.product.outputUnit}`).join("; ")||"none"}).`,
+                    `Outlet demand (submitted orders) per product: ${demand.slice(0,8).map(d=>`${d.productName} ${d.total}${d.unit}`).join("; ")||"none"}.`,
+                    `Production yield overall: ${yieldStats.overallPct!=null?yieldStats.overallPct.toFixed(0)+"%":"n/a"} across ${yieldStats.runCount} runs. Worst-yielding: ${yieldStats.rows.slice(0,3).map(s=>`${s.name} ${s.avgPct?.toFixed(0)}%`).join(", ")||"n/a"}.`,
+                    `Pending dispatches: ${pendingDispatch.length}.`,
+                  ].join("\n");
+                  const ans = await askData(ctx);
+                  setAiSummary(ans || "No summary returned.");
+                } catch (e) { setAiSummary("Couldn't generate a summary: " + (e?.message||String(e))); }
+                setAiBusy(false);
+              }} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">✨ {aiBusy?"Thinking…":"AI summary"}</button>
+            </div>
+            {aiSummary && (
+              <div className="rounded-2xl border border-indigo-800/40 bg-indigo-950/20 p-4 text-sm text-slate-200 whitespace-pre-wrap">{aiSummary}</div>
+            )}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {card("Low on stock", lowStock.length, lowStock.length ? "ingredients at/below reorder" : "all above reorder", lowStock.length ? "border-amber-700/50" : "border-slate-800", () => ckCanFeature("feat.ck.stock") && setTab("stock"))}
               {card("Expiring soon", expiringSoon.length, "raw batches \u2264 3 days", expiringSoon.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.goods") && setTab("goods"))}
               {card("Finished on hand", finishedOnHand.length, `${fgUnits.toFixed(0)} units${fgExpiring.length ? ` \u00b7 ${fgExpiring.length} use-by soon` : ""}`, fgExpiring.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.finished") && setTab("finished"))}
               {card("Pending dispatch", pendingDispatch.length, pendingDispatch.length ? "sent, awaiting receipt" : "none in transit", pendingDispatch.length ? "border-sky-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.dispatch") && setTab("dispatch"))}
             </div>
+
+            {belowPar.length > 0 && (
+              <div className="rounded-2xl border border-indigo-800/40 bg-indigo-950/10 p-4">
+                <div className="text-sm font-bold text-indigo-300 mb-2">📦 Below par — replenish</div>
+                <div className="space-y-1.5">
+                  {belowPar.map(x => (
+                    <div key={x.product.id} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-300 min-w-0 truncate">{x.product.name} <span className="text-slate-600">· {x.onHand}/{x.par} {x.product.outputUnit}</span></span>
+                      <button onClick={async()=>{
+                        if (!window.confirm(`Produce ${x.toMake} ${x.product.outputUnit} of ${x.product.name} to reach par (${x.par})? Ingredients consumed FEFO from stock.`)) return;
+                        try {
+                          const plan = planRunConsumption({ product: x.product, components: componentsFor(x.product.id), preps: ckPreps, prepCompsByPrep, producedQty: x.toMake, goodsIn });
+                          const useBy = x.product.shelfLifeDays ? (() => { const d=new Date(); d.setDate(d.getDate()+x.product.shelfLifeDays); return d.toISOString().slice(0,10); })() : null;
+                          await createProductionRun({ siteId, product: x.product, producedQty: x.toMake, runDate: new Date().toISOString().slice(0,10), useByDate: useBy, allocations: (plan?.allocations||[]).filter(a=>!a.shortfall), allergens: x.product.mayContainAllergens||[], note: "Replenish to par", runBy: currentUser?.name||"", planId: null });
+                          load();
+                        } catch (e) { setErr(e?.message || String(e)); }
+                      }} className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold flex-shrink-0">Make {x.toMake} {x.product.outputUnit}</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {lowStock.length > 0 && (
               <div className="rounded-2xl border border-amber-800/40 bg-amber-950/10 p-4">
@@ -5242,13 +5311,39 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
         <div className="space-y-3">
           <button onClick={openRun} disabled={!ckProducts.length} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New production run</button>
           {!ckProducts.length && <div className="text-xs text-amber-400">Create a kitchen product first (Products tab).</div>}
+
+          {/* Yield & variance summary */}
+          {yieldStats.runCount > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-bold text-slate-200">Yield &amp; variance</div>
+                <div className="text-xs">overall <span className={`font-bold ${yieldColor(yieldStats.overallPct)}`}>{yieldStats.overallPct!=null?yieldStats.overallPct.toFixed(0):"—"}%</span> <span className="text-slate-600">· {yieldStats.runCount} runs</span></div>
+              </div>
+              <div className="space-y-1.5">
+                {yieldStats.rows.map(s => (
+                  <div key={s.productId} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-300 min-w-0 truncate">{s.name} <span className="text-slate-600">· {s.runs} run{s.runs>1?"s":""}</span></span>
+                    <span className="flex items-center gap-3 flex-shrink-0">
+                      <span className="text-slate-500">worst {s.worst!=null?s.worst.toFixed(0):"—"}%</span>
+                      <span className={`font-bold ${yieldColor(s.avgPct)}`}>avg {s.avgPct!=null?s.avgPct.toFixed(0):"—"}%</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="text-[11px] text-slate-600">Yield = produced ÷ planned. Green ≥98%, amber ≥90%, red &lt;90% (significant loss). Sorted worst-first — the top rows are where you're losing most in production.</div>
+            </div>
+          )}
+
           {runs.length === 0 ? <div className="text-xs text-slate-600">No production runs yet.</div> : (
             <div className="space-y-2">
               {runs.map(r => (
                 <div key={r.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-slate-200">{r.productName} · {r.producedQty} {r.outputUnit}</div>
-                    <span className="text-[10px] text-slate-500">{r.runDate}</span>
+                    <span className="flex items-center gap-2">
+                      {r.plannedQty && r.plannedQty > 0 && <span className={`text-[10px] font-bold ${yieldColor((r.producedQty/r.plannedQty)*100)}`}>{((r.producedQty/r.plannedQty)*100).toFixed(0)}% yield</span>}
+                      <span className="text-[10px] text-slate-500">{r.runDate}</span>
+                    </span>
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap gap-2 mt-1">
                     <span className="text-indigo-300">batch {r.finishedBatchNo}</span>
@@ -5608,7 +5703,9 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
               <div><label className={labelCls}>Shelf life (days)</label><input type="number" value={prodForm.shelfLifeDays??""} onChange={e=>setProdForm(f=>({...f,shelfLifeDays:e.target.value}))} className={inputCls}/></div>
               <div><label className={labelCls}>Minutes per unit</label><input type="number" value={prodForm.minutesPerUnit??""} onChange={e=>setProdForm(f=>({...f,minutesPerUnit:e.target.value}))} placeholder="prep time" className={inputCls}/></div>
             </div>
-
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Par level ({prodForm.outputUnit||"each"})</label><input type="number" value={prodForm.parLevel??""} onChange={e=>setProdForm(f=>({...f,parLevel:e.target.value}))} placeholder="target finished stock" className={inputCls}/></div>
+            </div>
             {/* Recipe: kitchen ingredients + preps */}
             <div>
               <div className="flex items-center justify-between mb-1">
