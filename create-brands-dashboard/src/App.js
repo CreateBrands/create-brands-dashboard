@@ -239,6 +239,12 @@ const FEATURE_REGISTRY = [
   // Time & Attendance
   { key: "feat.time.approve", label: "Approve hours",      section: "time-attend", defaultRoles: ["owner","hq_staff","manager"] },
   { key: "feat.time.editPunch", label: "Edit punches",     section: "time-attend", defaultRoles: ["owner","hq_staff","manager"] },
+  // Hiring
+  { key: "feat.hiring.hire", label: "Hire / convert applicant", section: "hiring", defaultRoles: ["owner","hq_staff","manager"] },
+  // Documents & compliance
+  { key: "feat.docs.approve", label: "Approve RTW / contract docs", section: "team", defaultRoles: ["owner","hq_staff"] },
+  // EOD
+  { key: "feat.eod.submit", label: "Submit EOD report", section: "eod", defaultRoles: ["owner","hq_staff","manager"] },
   // Accounts / Finance
   { key: "feat.accounts.pnl",       label: "View P&L",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.accounts.bank",      label: "Bank & Cash",         section: "accounts", defaultRoles: ["owner","hq_staff"] },
@@ -20149,7 +20155,10 @@ function HiringView({
   // Slice 5 rule: only manager-or-above can transition to hired. We check
   // the current user's role against the visibility helper. Staff can still
   // do other transitions (reviewing, in_training, reject, withdraw).
-  const canHire = isHqOrAbove(currentUser?.role) || currentUser?.role === "manager";
+  const { canFeature: hireCanFeature } = useAccess();
+  // Hiring/converting an applicant requires the feat.hiring.hire grant on top of
+  // the role check, so the matrix can withhold hire rights from a role.
+  const canHire = (isHqOrAbove(currentUser?.role) || currentUser?.role === "manager") && hireCanFeature("feat.hiring.hire");
 
   const handleTransition = async (app, newStatus) => {
     if (newStatus === "rejected") {
@@ -23239,10 +23248,15 @@ function DocumentsTab({ employeeId, currentUser }) {
   const [signAgree, setSignAgree] = useState(false);
   const [signBusy, setSignBusy] = useState(false);
 
+  const { canFeature: docCanFeature } = useAccess();
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
   const isManagerPlus = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
+  // Document approval (manager stage-1 and HR stage-2) additionally requires the
+  // feat.docs.approve grant, so the access matrix can withhold approval rights
+  // from a role even if they can otherwise see the section.
+  const canApproveDocs = docCanFeature("feat.docs.approve");
   // HR = hq_staff/owner does stage-2 final approval.
-  const isHR = isHqOrOwner;
+  const isHR = isHqOrOwner && canApproveDocs;
   // A trainee (role "employee") views their own slots: upload only, no review.
   const isTrainee = !isManagerPlus;
 
@@ -23364,7 +23378,7 @@ function DocumentsTab({ employeeId, currentUser }) {
     }
     const btns = [];
     // Stage 1 — manager: act on pending docs.
-    if (d.reviewStage === "pending" && isManagerPlus) {
+    if (d.reviewStage === "pending" && isManagerPlus && canApproveDocs) {
       btns.push(<button key="ma" onClick={() => act(managerApproveDocument, d, currentUser)} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-sky-600 text-white text-[11px] font-semibold hover:bg-sky-500 disabled:opacity-50">👤 Manager approve</button>);
       btns.push(<button key="mr" onClick={() => { setRejectingId(d.id); setRejectStage("manager"); }} disabled={busyId === d.id} className="px-2.5 py-1 rounded-lg bg-slate-800 text-red-300 text-[11px] font-semibold hover:bg-red-950/30 border border-red-900/50 disabled:opacity-50">✗ Reject</button>);
     }
