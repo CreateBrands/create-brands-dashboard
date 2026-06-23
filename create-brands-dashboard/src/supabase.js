@@ -4884,6 +4884,11 @@ export async function updateInvoiceHeader(invoiceId, fields) {
 export async function approveInvoiceRpc(invoiceId, userId) {
   const { data, error } = await supabase.rpc("approve_invoice", { p_invoice_id: invoiceId, p_user: userId });
   if (error) throw error;
+  // Mirror the approved invoice into the journal: Dr expense, Cr trade creditors.
+  try {
+    const { data: inv } = await supabase.from("invoices").select("id, entity_id, invoice_number, invoice_date, supplier_name, total_ex_vat").eq("id", invoiceId).maybeSingle();
+    if (inv?.entity_id) await postInvoiceJournal(inv, inv.entity_id);
+  } catch (e) { /* journal mirror is non-critical */ }
   return Array.isArray(data) ? data[0] : data;
 }
 
@@ -7419,6 +7424,53 @@ export async function computeTrialBalance(entityId, { from, to } = {}) {
   return { rows, totalDebit, totalCredit, balanced: Math.abs(totalDebit - totalCredit) < 0.01 };
 }
 
+// Auto-posting bridge: turn a business event into a balanced journal entry on
+// the entity's chart. Resolves accounts by canonical code. Idempotent via
+// source_ref. Each helper returns the postJournalEntry result (or skips).
+//
+// Accounting conventions used (debit +, credit -):
+//   Cash income   : Dr Cash(1010)        Cr Sales(4000)
+//   Cash expense  : Dr Expense(5xxx)      Cr Cash(1010)
+//   EOD takings   : Dr Cash on hand(1000) Cr Sales(4000)
+//   Invoice (appr): Dr Expense(5xxx/COGS) Cr Trade creditors(2000)
+//   Invoice paid  : Dr Trade creditors    Cr Cash(1010)
+export async function postCashMovementJournal(tx, entityId) {
+  if (!entityId) return { posted: false, skipped: true, reason: "no entity" };
+  const amt = Number(tx.amount); if (!(amt > 0)) return { posted: false, skipped: true, reason: "zero" };
+  const cash = await resolveAccountForEntity(entityId, "1010");
+  const sales = await resolveAccountForEntity(entityId, "4000");
+  const expense = await resolveAccountForEntity(entityId, "5000"); // COGS as default expense
+  let lines = null;
+  if (tx.type === "income" || tx.type === "opening") lines = [{ accountId: cash, amount: amt }, { accountId: sales, amount: -amt }];
+  else if (tx.type === "expense") lines = [{ accountId: expense, amount: amt }, { accountId: cash, amount: -amt }];
+  else return { posted: false, skipped: true, reason: `type ${tx.type} not auto-posted` }; // transfers/adjustments net within cash
+  if (!lines.every(l => l.accountId)) return { posted: false, skipped: true, reason: "accounts not found" };
+  return postJournalEntry({ entityId, entryDate: tx.txnDate, memo: tx.reference || `Cash ${tx.type}`, sourceKind: "cash_ledger", sourceRef: `cashmv:${tx.id || tx.sourceRef || Date.now()}`, createdBy: tx.createdBy, lines });
+}
+
+export async function postEodTakingsJournal(eodEntry, entityId) {
+  if (!entityId || !eodEntry?.id) return { posted: false, skipped: true, reason: "missing" };
+  const amt = Number(eodEntry.netSales); if (!(amt > 0)) return { posted: false, skipped: true, reason: "no sales" };
+  const cash = await resolveAccountForEntity(entityId, "1000");
+  const sales = await resolveAccountForEntity(entityId, "4000");
+  if (!cash || !sales) return { posted: false, skipped: true, reason: "accounts not found" };
+  return postJournalEntry({ entityId, entryDate: eodEntry.date, memo: `EOD takings ${eodEntry.date || ""}`.trim(), sourceKind: "eod", sourceRef: `eodje:${eodEntry.id}`, lines: [{ accountId: cash, amount: amt, storeId: eodEntry.storeId }, { accountId: sales, amount: -amt, storeId: eodEntry.storeId }] });
+}
+
+export async function postInvoiceJournal(invoice, entityId, { paid = false } = {}) {
+  if (!entityId || !invoice?.id) return { posted: false, skipped: true, reason: "missing" };
+  const amt = Number(invoice.total_ex_vat ?? invoice.totalExVat); if (!(amt > 0)) return { posted: false, skipped: true, reason: "no amount" };
+  const creditors = await resolveAccountForEntity(entityId, "2000");
+  if (paid) {
+    const cash = await resolveAccountForEntity(entityId, "1010");
+    if (!creditors || !cash) return { posted: false, skipped: true, reason: "accounts not found" };
+    return postJournalEntry({ entityId, entryDate: invoice.paid_date || new Date().toISOString().slice(0,10), memo: `Paid invoice ${invoice.invoice_number || invoice.id}`, sourceKind: "invoice_paid", sourceRef: `invpaid:${invoice.id}`, lines: [{ accountId: creditors, amount: amt }, { accountId: cash, amount: -amt }] });
+  }
+  const expense = await resolveAccountForEntity(entityId, "5000"); // default to COGS
+  if (!creditors || !expense) return { posted: false, skipped: true, reason: "accounts not found" };
+  return postJournalEntry({ entityId, entryDate: invoice.invoice_date || new Date().toISOString().slice(0,10), memo: `Invoice ${invoice.invoice_number || invoice.id} ${invoice.supplier_name || ""}`.trim(), sourceKind: "invoice", sourceRef: `inv:${invoice.id}`, lines: [{ accountId: expense, amount: amt }, { accountId: creditors, amount: -amt }] });
+}
+
 export async function fetchCashAccounts() {
   const { data, error } = await supabase.from("cash_accounts").select("*").is("archived_at", null).order("name");
   if (error) throw error;
@@ -7516,7 +7568,12 @@ export async function addCashLedgerEntry(tx) {
   };
   const { data, error } = await supabase.from("cash_ledger").insert(row).select().maybeSingle();
   if (error) throw error;
-  return data ? mapCashLedger(data) : null;
+  const saved = data ? mapCashLedger(data) : null;
+  // Mirror into the double-entry journal (best-effort; never block the cash save).
+  if (saved && saved.entityId) {
+    try { await postCashMovementJournal(saved, saved.entityId); } catch (e) { /* journal mirror is non-critical */ }
+  }
+  return saved;
 }
 
 export async function deleteCashLedgerEntry(id) {
@@ -7601,6 +7658,9 @@ export async function postEodCashDeposit(eodEntry, stores = [], createdBy = null
     if (String(insErr.message || "").toLowerCase().includes("duplicate") || insErr.code === "23505") return { posted: false, skipped: true, reason: "already posted" };
     throw insErr;
   }
+  // Mirror the takings into the double-entry journal (Dr cash, Cr sales).
+  const eodEntity = ((stores || []).find(s => s.id === storeId)?.brandId) || null;
+  if (eodEntity) { try { await postEodTakingsJournal(eodEntry, eodEntity); } catch (e) { /* non-critical */ } }
   return { posted: true, skipped: false, accountId };
 }
 
