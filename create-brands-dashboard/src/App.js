@@ -38788,6 +38788,13 @@ export default function App() {
   useEffect(() => {
     if (OPS_TAB_KEYS.includes(activeView)) setOpsTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Team is a single tabbed page: Team, Time & Attendance, Hiring, Onboarding
+  // Board, Training, Contracts. Old per-item keys still work via redirect.
+  const [teamTab, setTeamTab] = useState("team");
+  const TEAM_TAB_KEYS = ["team", "time-attend", "hiring", "onboarding-board", "training", "contracts"];
+  useEffect(() => {
+    if (TEAM_TAB_KEYS.includes(activeView)) setTeamTab(activeView);
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
   // If something routes to the legacy "chain"/"store-analytics" keys, open the
   // matching Dashboard tab (effectiveActiveView redirects the view to dashboard).
   useEffect(() => {
@@ -39992,7 +39999,7 @@ export default function App() {
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "cogs", label: "COGS / Inventory", icon: ClipboardList, roles: ["owner", "hq_staff"], hideForCK: true },
-      { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"] },
+      { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
       { key: "payslip-inbox", label: "Payslips Inbox", icon: FileText, roles: ["owner", "hq_staff"] },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
     ]},
@@ -40002,16 +40009,11 @@ export default function App() {
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "PEOPLE", items: [
-      { key: "team",         label: "Team",              icon: Users, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null, badgeClearOnView: true },
-      { key: "time-attend",  label: "Time & Attendance", icon: Clock },
+      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
       { key: "notifications", label: "Notifications",    icon: Bell },
-      { key: "hiring",       label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, badgeClearOnView: true },
-      { key: "onboarding-board", label: "Onboarding Board", icon: UserCheck, roles: ["owner", "hq_staff", "manager"] },
-      { key: "training",     label: "Training",          icon: GraduationCap },
-      { key: "contracts",    label: "Contracts",         icon: FileText },
     ]},
     { group: "COMPLIANCE", items: [
       { key: "ops-compliance", label: "Compliance",  icon: Shield },
@@ -40030,7 +40032,10 @@ export default function App() {
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
       canRoleSeeSection(currentUserRole.matrixRole, item) &&
-      !(ckOnly && item.hideForCK)
+      !(ckOnly && item.hideForCK) &&
+      // Entity-scoped items (e.g. Central Kitchen) only appear when that entity
+      // is the one currently entered. selectedEntityBrand holds the brand/entity id.
+      (!item.requiresEntity || selectedEntityBrand === item.requiresEntity)
     ) }))
     .filter(g => g.items.length > 0);
 
@@ -40070,6 +40075,7 @@ export default function App() {
     // Operations is now a tabbed page; its old per-item keys route to it (the
     // opsTab sync effect selects the matching tab).
     if (OPS_TAB_KEYS.includes(activeView)) return "operations";
+    if (TEAM_TAB_KEYS.includes(activeView)) return "team";
     const allowedKeys = effectiveNavGroups.flatMap(g => g.items.map(i => i.key));
     if (isFinanceEntity) return allowedKeys.includes(activeView) ? activeView : "accounts";
     if (allowedKeys.length === 0) return activeView;
@@ -40236,7 +40242,7 @@ export default function App() {
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-            {effectiveActiveView === "hiring"         && <HiringView
+            {effectiveActiveView === "team" && teamTab === "hiring" && <HiringView
               brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
               applications={applications} opsTeam={opsTeam} currentUser={currentUser}
               onAdd={addApplication} onUpdate={updateApplicationRow}
@@ -40246,11 +40252,11 @@ export default function App() {
               advertisedRoles={advertisedRoles}
               onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
             />}
-            {effectiveActiveView === "training"       && <TrainingAdminView
+            {effectiveActiveView === "team" && teamTab === "training" && <TrainingAdminView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               opsTeam={opsTeam} currentUser={currentUser}
             />}
-            {effectiveActiveView === "contracts"      && <ContractsAdminView
+            {effectiveActiveView === "team" && teamTab === "contracts" && <ContractsAdminView
               stores={stores} opsTeam={opsTeam} currentUser={currentUser}
             />}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
@@ -40261,7 +40267,29 @@ export default function App() {
               onUpdateEmployee={patchOpsTeam}
               onClose={closeEmployeeProfile}
             />}
-            {effectiveActiveView === "team"           && <OpsTeamView
+            {effectiveActiveView === "team" && (() => {
+              const teamTabs = [
+                { key: "team",            label: "Team", badge: pendingSetupCount > 0 ? pendingSetupCount : null },
+                { key: "time-attend",     label: "Time & Attendance" },
+                { key: "hiring",          label: "Hiring", badge: hiringBadge > 0 ? hiringBadge : null, gate: () => canSeeView("hiring") },
+                { key: "onboarding-board",label: "Onboarding Board", gate: () => canSeeView("onboarding-board") },
+                { key: "training",        label: "Training" },
+                { key: "contracts",       label: "Contracts" },
+              ].filter(t => !t.gate || t.gate());
+              const teamKeys = teamTabs.map(t => t.key);
+              const effTeamTab = teamKeys.includes(teamTab) ? teamTab : "team";
+              return (
+                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
+                  {teamTabs.map(t => (
+                    <button key={t.key} onClick={() => setTeamTab(t.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${effTeamTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
+                      {t.label}{t.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+            {effectiveActiveView === "team" && !["time-attend","hiring","onboarding-board","training","contracts"].includes(teamTab) && <OpsTeamView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
               opsTeam={opsTeam} users={users}
@@ -40289,7 +40317,7 @@ export default function App() {
               appSettings={appSettings} onSaveOtRules={saveOtRules}
               currentUser={currentUser}
             />}
-            {effectiveActiveView === "time-attend"    && <TimeAttendanceView
+            {effectiveActiveView === "team" && teamTab === "time-attend" && <TimeAttendanceView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
               punchRecords={punchRecords} currentUser={currentUser}
               onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
@@ -40310,7 +40338,7 @@ export default function App() {
             />}
             {effectiveActiveView === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
-            {effectiveActiveView === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "team" && teamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
