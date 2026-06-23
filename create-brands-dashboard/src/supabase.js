@@ -6814,8 +6814,110 @@ export async function fetchDistributionStock(siteId) {
 }
 
 // ============================================================================
-// CENTRAL KITCHEN — weekly production planner
+// CENTRAL KITCHEN — outlet ordering (Phase 2)
+// Outlets place orders for finished CK products; CK sees consolidated demand
+// and fulfils via dispatch. States: draft → submitted → fulfilled (or cancelled).
 // ============================================================================
+const mapCkOrder = (o) => ({
+  id: o.id, fromStoreId: o.from_store_id || null, fromStoreName: o.from_store_name || "",
+  status: o.status || "draft", requestedDate: o.requested_date || null,
+  createdBy: o.created_by || "", note: o.note || "", createdAt: o.created_at,
+  submittedAt: o.submitted_at || null, fulfilledAt: o.fulfilled_at || null,
+});
+const mapCkOrderLine = (l) => ({
+  id: l.id, orderId: l.order_id, productId: l.product_id, productName: l.product_name || "",
+  qty: l.qty != null ? Number(l.qty) : 0, unit: l.unit || "", qtyFulfilled: l.qty_fulfilled != null ? Number(l.qty_fulfilled) : null,
+});
+
+// Fetch orders with their lines. Filter by store (outlet view) or status (CK view).
+export async function fetchCkOrders({ fromStoreId, status } = {}) {
+  let q = supabase.from("ck_orders").select("*").order("created_at", { ascending: false });
+  if (fromStoreId) q = q.eq("from_store_id", fromStoreId);
+  if (status) q = Array.isArray(status) ? q.in("status", status) : q.eq("status", status);
+  const { data: orders, error } = await q;
+  if (error) throw error;
+  const ids = (orders || []).map(o => o.id);
+  let linesByOrder = {};
+  if (ids.length) {
+    const { data: lines } = await supabase.from("ck_order_lines").select("*").in("order_id", ids);
+    (lines || []).forEach(l => { (linesByOrder[l.order_id] = linesByOrder[l.order_id] || []).push(mapCkOrderLine(l)); });
+  }
+  return (orders || []).map(o => ({ ...mapCkOrder(o), lines: linesByOrder[o.id] || [] }));
+}
+
+// Create or update a draft order + replace its lines. lines = [{productId, productName, qty, unit}].
+export async function saveCkOrder({ id, fromStoreId, fromStoreName, requestedDate, createdBy, note, lines }) {
+  const orderId = id || `cko-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  if (id) {
+    const { error } = await supabase.from("ck_orders").update({
+      requested_date: requestedDate || null, note: note || null,
+    }).eq("id", id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("ck_orders").insert({
+      id: orderId, from_store_id: fromStoreId || null, from_store_name: fromStoreName || null,
+      status: "draft", requested_date: requestedDate || null, created_by: createdBy || null, note: note || null,
+    });
+    if (error) throw error;
+  }
+  // Replace lines
+  await supabase.from("ck_order_lines").delete().eq("order_id", orderId);
+  const rows = (lines || []).filter(l => l.productId && Number(l.qty) > 0).map(l => ({
+    id: `ckol-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+    order_id: orderId, product_id: l.productId, product_name: l.productName || null,
+    qty: Number(l.qty), unit: l.unit || null, qty_fulfilled: null,
+  }));
+  if (rows.length) { const { error } = await supabase.from("ck_order_lines").insert(rows); if (error) throw error; }
+  return orderId;
+}
+
+export async function submitCkOrder(orderId) {
+  const { error } = await supabase.from("ck_orders").update({ status: "submitted", submitted_at: new Date().toISOString() }).eq("id", orderId);
+  if (error) throw error;
+  return orderId;
+}
+
+export async function cancelCkOrder(orderId) {
+  const { error } = await supabase.from("ck_orders").update({ status: "cancelled" }).eq("id", orderId);
+  if (error) throw error;
+  return orderId;
+}
+
+export async function deleteCkOrder(orderId) {
+  const { error } = await supabase.from("ck_orders").delete().eq("id", orderId);
+  if (error) throw error;
+  return orderId;
+}
+
+// Mark an order fulfilled (called after the CK dispatches against it). Optionally
+// records fulfilled quantities per line.
+export async function fulfilCkOrder(orderId, lineFulfilments = []) {
+  for (const lf of lineFulfilments) {
+    if (lf.lineId != null && lf.qtyFulfilled != null) {
+      await supabase.from("ck_order_lines").update({ qty_fulfilled: Number(lf.qtyFulfilled) }).eq("id", lf.lineId);
+    }
+  }
+  const { error } = await supabase.from("ck_orders").update({ status: "fulfilled", fulfilled_at: new Date().toISOString() }).eq("id", orderId);
+  if (error) throw error;
+  return orderId;
+}
+
+// Consolidated demand across all submitted orders: total qty needed per product,
+// with a per-outlet breakdown. Used by the CK demand view + production suggest.
+export function computeCkOrderDemand(orders) {
+  const byProduct = new Map(); // productId -> { productId, productName, unit, total, byStore: [{storeName, qty}] }
+  (orders || []).filter(o => o.status === "submitted").forEach(o => {
+    (o.lines || []).forEach(l => {
+      const k = String(l.productId);
+      const cur = byProduct.get(k) || { productId: l.productId, productName: l.productName, unit: l.unit, total: 0, byStore: [] };
+      cur.total += Number(l.qty) || 0;
+      cur.byStore.push({ storeName: o.fromStoreName || o.fromStoreId || "Outlet", qty: Number(l.qty) || 0 });
+      byProduct.set(k, cur);
+    });
+  });
+  return [...byProduct.values()].sort((a,b)=> a.productName.localeCompare(b.productName));
+}
+
 const mapPlan = (p) => ({
   id: p.id, siteId: p.site_id || null, name: p.name, weekStart: p.week_start || null,
   note: p.note || "", isTemplate: !!p.is_template,

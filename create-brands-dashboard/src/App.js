@@ -64,7 +64,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -3792,8 +3792,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   // The full tab order, with their permission keys. Tabs without a feat key
   // (overview, count, allergens) are always visible. Used to land on a permitted
   // tab so a user without Stock access doesn't open to a hidden tab (blank page).
-  const CK_TAB_ORDER = ["overview","stock","goods","count","allergens","preps","products","planner","production","finished","dispatch","categories","suppliers"];
-  const ckTabAllowed = (k) => (k === "overview" || k === "count" || k === "allergens") ? true : ckCanFeature(`feat.ck.${k}`);
+  const CK_TAB_ORDER = ["overview","stock","goods","count","allergens","preps","products","orders","planner","production","finished","dispatch","categories","suppliers"];
+  const ckTabAllowed = (k) => (k === "overview" || k === "count" || k === "allergens" || k === "orders") ? true : ckCanFeature(`feat.ck.${k}`);
   useEffect(() => {
     // If the current tab isn't permitted, jump to the first one that is.
     if (!ckTabAllowed(tab)) {
@@ -3814,6 +3814,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const [runs, setRuns] = useState([]);
   const [dispatches, setDispatches] = useState([]);
   const [dispatchedByRun, setDispatchedByRun] = useState({});
+  const [ckOrders, setCkOrders] = useState([]); // outlet orders to the CK
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
@@ -3830,8 +3831,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[])])
-      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[]), fetchCkOrders({ status: ["submitted","fulfilled"] }).catch(()=>[])])
+      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl, ord]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); setCkOrders(ord); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -4466,7 +4467,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           { label: "", tabs: [["overview","🏠 Today"]] },
           { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"],["count","Count"],["allergens","Allergens"]] },
           { label: "Recipes",   tabs: [["preps","Preps"],["products","Products"]] },
-          { label: "Planning",  tabs: [["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
+          { label: "Planning",  tabs: [["orders","Orders"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
           { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
         ].map((grp, gi) => {
           const visible = grp.tabs.filter(([k]) => k === "overview" || ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
@@ -4721,6 +4722,85 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
       )}
 
       {!loading && tab === "count" && <CkStockCount ingredients={ingredients} siteId={siteId} currentUser={currentUser} />}
+
+      {!loading && tab === "orders" && (() => {
+        const submitted = (ckOrders||[]).filter(o => o.status === "submitted");
+        const fulfilledRecent = (ckOrders||[]).filter(o => o.status === "fulfilled").slice(0, 10);
+        const demand = computeCkOrderDemand(ckOrders);
+        // finished on-hand per product (by name match) to show coverage
+        const onHandByProduct = {};
+        finishedOnHand.forEach(f => { onHandByProduct[String(f.productId)] = (onHandByProduct[String(f.productId)]||0) + (f.onHand||0); });
+        const doFulfil = async (o) => {
+          if (!window.confirm(`Mark order from ${o.fromStoreName||"outlet"} as fulfilled? This records it as sent — create the dispatch separately on the Dispatch tab.`)) return;
+          try { await fulfilCkOrder(o.id, (o.lines||[]).map(l => ({ lineId: l.id, qtyFulfilled: l.qty }))); load(); }
+          catch (e) { setErr(e?.message || String(e)); }
+        };
+        return (
+          <div className="space-y-4">
+            {/* Consolidated demand */}
+            <div>
+              <div className="text-sm font-bold text-slate-200 mb-2">Consolidated demand <span className="text-slate-500 font-normal">· what all outlets need now</span></div>
+              {demand.length === 0 ? <div className="text-xs text-slate-600">No submitted orders. When outlets order, demand appears here.</div> : (
+                <div className="space-y-2">
+                  {demand.map(d => {
+                    const onHand = onHandByProduct[String(d.productId)] || 0;
+                    const toProduce = Math.max(0, d.total - onHand);
+                    return (
+                      <div key={d.productId} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm font-semibold text-slate-200">{d.productName}</div>
+                          <div className="text-xs text-slate-400">need <span className="text-white font-bold">{d.total} {d.unit}</span></div>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap gap-x-2">
+                          {d.byStore.map((b,i)=><span key={i}>{b.storeName}: {b.qty}</span>)}
+                        </div>
+                        <div className="text-[11px] mt-1.5 flex gap-3">
+                          <span className="text-slate-400">on hand: {onHand} {d.unit}</span>
+                          {toProduce > 0
+                            ? <span className="text-amber-300 font-semibold">→ produce {toProduce} {d.unit}</span>
+                            : <span className="text-emerald-400 font-semibold">✓ covered by stock</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Submitted orders to fulfil */}
+            <div>
+              <div className="text-sm font-bold text-slate-300 mb-2">Submitted orders ({submitted.length})</div>
+              {submitted.length === 0 ? <div className="text-xs text-slate-600">Nothing waiting.</div> : (
+                <div className="space-y-2">
+                  {submitted.map(o => (
+                    <div key={o.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-slate-200">{o.fromStoreName || o.fromStoreId}</div>
+                        <button onClick={()=>doFulfil(o)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Mark fulfilled</button>
+                      </div>
+                      <div className="text-[11px] text-slate-500">{o.submittedAt ? new Date(o.submittedAt).toLocaleDateString("en-GB") : ""}{o.requestedDate ? ` · needed ${o.requestedDate}` : ""}</div>
+                      <div className="mt-1.5 space-y-0.5">
+                        {(o.lines||[]).map(l => <div key={l.id} className="flex justify-between text-xs"><span className="text-slate-300">{l.productName}</span><span className="text-slate-400">{l.qty} {l.unit}</span></div>)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {fulfilledRecent.length > 0 && (
+              <div>
+                <div className="text-sm font-bold text-slate-300 mb-2">Recently fulfilled</div>
+                <div className="space-y-1">
+                  {fulfilledRecent.map(o => (
+                    <div key={o.id} className="flex justify-between text-xs px-2 py-1.5"><span className="text-slate-400">{o.fromStoreName}</span><span className="text-slate-600">{o.fulfilledAt ? new Date(o.fulfilledAt).toLocaleDateString("en-GB") : ""}</span></div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {!loading && tab === "allergens" && <CkAllergenTagger ingredients={ingredients} siteId={siteId} onSaved={load} />}
 
       {!loading && tab === "preps" && (
@@ -17886,6 +17966,150 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
             <div><label className={labelCls}>Notes</label><input value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Any observations…" className={inputCls}/></div>
           </div>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Order from Kitchen (outlet side) ─────────────────────────────────────────
+// Store managers browse CK products, build an order, submit it to the Central
+// Kitchen, and see their order history. States: draft → submitted → fulfilled.
+function CkOrderView({ stores = [], visibleStoreIds = [], currentUser }) {
+  const [ckProducts, setCkProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  // Which store is ordering. Default to the user's first visible store.
+  const myStores = (stores || []).filter(s => (visibleStoreIds || []).includes(s.id) && s.siteType !== "central_kitchen" && !s.archivedAt);
+  const [storeId, setStoreId] = useState(myStores[0]?.id || "");
+  const [cart, setCart] = useState({}); // productId -> qty
+  const [reqDate, setReqDate] = useState("");
+  const [search, setSearch] = useState("");
+
+  const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [prods, myOrders] = await Promise.all([
+        fetchCkProducts().catch(()=>[]),
+        storeId ? fetchCkOrders({ fromStoreId: storeId }).catch(()=>[]) : Promise.resolve([]),
+      ]);
+      setCkProducts((prods||[]).filter(p => !p.archivedAt));
+      setOrders(myOrders || []);
+    } catch (e) { setErr(e?.message || String(e)); }
+    setLoading(false);
+  }, [storeId]);
+  useEffect(() => { load(); }, [load]);
+
+  const store = myStores.find(s => s.id === storeId);
+  const filtered = ckProducts.filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()));
+  const cartLines = Object.entries(cart).filter(([,q]) => Number(q) > 0);
+  const setQty = (pid, q) => setCart(c => ({ ...c, [pid]: q }));
+
+  const submitOrder = async () => {
+    if (!storeId) { setErr("Pick a store first."); return; }
+    if (!cartLines.length) { setErr("Add at least one product."); return; }
+    setErr(""); setMsg("");
+    try {
+      const lines = cartLines.map(([pid, q]) => {
+        const p = ckProducts.find(x => String(x.id) === String(pid));
+        return { productId: pid, productName: p?.name || "", qty: Number(q), unit: p?.outputUnit || "each" };
+      });
+      const orderId = await saveCkOrder({ fromStoreId: storeId, fromStoreName: store?.name || store?.shortName || "", requestedDate: reqDate || null, createdBy: currentUser?.name || "", lines });
+      await submitCkOrder(orderId);
+      setCart({}); setReqDate(""); setMsg("Order submitted to the Central Kitchen.");
+      load();
+    } catch (e) { setErr(e?.message || String(e)); }
+  };
+
+  const statusBadge = (s) => {
+    const map = { draft:"bg-slate-700 text-slate-300", submitted:"bg-amber-900/40 text-amber-300", fulfilled:"bg-emerald-900/40 text-emerald-300", cancelled:"bg-red-900/30 text-red-300" };
+    return <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${map[s]||map.draft}`}>{s}</span>;
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><ChefHat size={18}/> Order from Central Kitchen</h2>
+        <p className="text-xs text-slate-500">Request finished products from the kitchen. Submit, and the CK will prepare and dispatch them.</p>
+      </div>
+
+      {myStores.length > 1 && (
+        <div>
+          <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Ordering for</label>
+          <select value={storeId} onChange={e=>setStoreId(e.target.value)} className={inputCls}>
+            {myStores.map(s => <option key={s.id} value={s.id}>{s.name || s.shortName}</option>)}
+          </select>
+        </div>
+      )}
+
+      {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+      {msg && <div className="text-xs text-emerald-300 bg-emerald-950/20 border border-emerald-800/40 rounded-xl px-3 py-2">{msg}</div>}
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
+        <>
+          {/* Build order */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-bold text-slate-200">New order</div>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 w-48 focus:outline-none focus:border-indigo-500"/>
+            </div>
+            {ckProducts.length === 0 ? <div className="text-xs text-slate-600">No kitchen products available yet.</div> : (
+              <div className="space-y-1 max-h-80 overflow-y-auto">
+                {filtered.map(p => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/40">
+                    <div className="min-w-0">
+                      <div className="text-sm text-slate-200">{p.name}</div>
+                      <div className="text-[10px] text-slate-500">{p.category || "Uncategorised"} · per {p.outputUnit||"each"}</div>
+                    </div>
+                    <input type="number" min="0" value={cart[p.id]||""} onChange={e=>setQty(p.id, e.target.value)} placeholder="0" className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-sm text-white text-right focus:outline-none focus:border-indigo-500"/>
+                  </div>
+                ))}
+              </div>
+            )}
+            {cartLines.length > 0 && (
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <div className="text-[11px] font-bold text-slate-500 uppercase">In this order</div>
+                {cartLines.map(([pid, q]) => { const p = ckProducts.find(x=>String(x.id)===String(pid)); return (
+                  <div key={pid} className="flex justify-between text-xs"><span className="text-slate-300">{p?.name}</span><span className="text-slate-400">{q} {p?.outputUnit||"each"}</span></div>
+                ); })}
+                <div className="flex items-end gap-2 pt-1">
+                  <div className="flex-1"><label className="text-[10px] text-slate-500">Needed by (optional)</label><input type="date" value={reqDate} onChange={e=>setReqDate(e.target.value)} className={inputCls}/></div>
+                  <button onClick={submitOrder} className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold whitespace-nowrap">Submit order</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Order history */}
+          <div>
+            <div className="text-sm font-bold text-slate-300 mb-2">Your orders</div>
+            {orders.length === 0 ? <div className="text-xs text-slate-600">No orders yet.</div> : (
+              <div className="space-y-2">
+                {orders.map(o => (
+                  <div key={o.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs text-slate-400">{o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-GB") : ""}{o.requestedDate ? ` · needed ${o.requestedDate}` : ""}</div>
+                      <div className="flex items-center gap-2">{statusBadge(o.status)}
+                        {o.status === "submitted" && <button onClick={async()=>{ if(window.confirm("Cancel this order?")){ try{await cancelCkOrder(o.id); load();}catch(e){setErr(e?.message||String(e));} } }} className="text-[10px] text-red-400 hover:text-red-300">cancel</button>}
+                      </div>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5">
+                      {(o.lines||[]).map(l => (
+                        <div key={l.id} className="flex justify-between text-xs">
+                          <span className="text-slate-300">{l.productName}</span>
+                          <span className="text-slate-400">{l.qty} {l.unit}{l.qtyFulfilled!=null ? ` · ${l.qtyFulfilled} sent` : ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -39346,6 +39570,7 @@ export default function App() {
       { key: "ops-tasks",      label: "Today's Tasks",   icon: CheckSquare },
       { key: "ops-temps",      label: "Temperatures",    icon: Thermometer },
       { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
+      { key: "ck-order",       label: "Order from Kitchen", icon: ChefHat, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "PEOPLE", items: [
@@ -39430,7 +39655,7 @@ export default function App() {
 
   const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
-    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
+    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ck-order":"Order from Kitchen", "ops-assigns":"Assignments",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
     admin:"Admin", comms:"Communication", announcements:"Announcements", "time-attend":"Time & Attendance",
     "employee-profile":"Employee Profile", hiring:"Hiring", team:"Team" };
@@ -39529,6 +39754,7 @@ export default function App() {
             {effectiveActiveView === "ops-tasks"      && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam}/>}
             {effectiveActiveView === "ops-temps"      && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
             {effectiveActiveView === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+            {effectiveActiveView === "ck-order" && <CkOrderView stores={stores} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>}
             {effectiveActiveView === "ops-network"    && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
