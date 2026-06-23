@@ -15,7 +15,7 @@ import {
   fetchEntityOverrides, setEntityOverride,
   fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
   fetchEntities,
-  fetchAccounts, resolveAccountForEntity, postJournalEntry, fetchJournalEntries, deleteJournalEntry, computeTrialBalance,
+  fetchAccounts, resolveAccountForEntity, postJournalEntry, fetchJournalEntries, deleteJournalEntry, computeTrialBalance, computeBalanceSheet, computeConsolidatedBalanceSheet,
   fetchCashAccounts, upsertCashAccount, archiveCashAccount,
   fetchCashSources, upsertCashSource, archiveCashSource,
   fetchCashExpenseTypes, upsertCashExpenseType, archiveCashExpenseType,
@@ -27613,6 +27613,8 @@ function FinanceRolesTab({ customRoles = [], opsTeam = [], accessPerms = {}, onS
 // (must net to zero) and lets you post a balanced manual journal entry.
 function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
   const [entityId, setEntityId] = useState(entityFilter !== "all" ? entityFilter : (entities[0]?.id || ""));
+  const [viewMode, setViewMode] = useState("tb"); // tb | bs
+  const [bs, setBs] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [tb, setTb] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -27630,8 +27632,8 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
     if (!entityId) { setLoading(false); return; }
     setLoading(true); setErr("");
     try {
-      const [accs, trial] = await Promise.all([fetchAccounts(entityId), computeTrialBalance(entityId)]);
-      setAccounts(accs); setTb(trial);
+      const [accs, trial, sheet] = await Promise.all([fetchAccounts(entityId), computeTrialBalance(entityId), computeBalanceSheet(entityId)]);
+      setAccounts(accs); setTb(trial); setBs(sheet);
     } catch (e) { setErr(e?.message || String(e)); }
     setLoading(false);
   }, [entityId]);
@@ -27698,7 +27700,12 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
         </div>
       )}
 
-      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : !tb ? null : (
+      <div className="flex items-center gap-2">
+        <button onClick={()=>setViewMode("tb")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${viewMode==="tb"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>Trial balance</button>
+        <button onClick={()=>setViewMode("bs")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${viewMode==="bs"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>Balance sheet</button>
+      </div>
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : viewMode === "tb" ? (!tb ? null : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="flex items-center justify-between p-3 border-b border-slate-800">
             <div className="text-sm font-bold text-slate-200">Trial balance</div>
@@ -27720,6 +27727,44 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
               </tbody>
               <tfoot><tr className="font-bold text-slate-200"><td className="p-2 pl-3 text-right">Totals</td><td className="p-2 text-right">{money(tb.totalDebit)}</td><td className="p-2 pr-3 text-right">{money(tb.totalCredit)}</td></tr></tfoot>
             </table>
+          )}
+        </div>
+      )) : !bs ? null : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="flex items-center justify-between p-3 border-b border-slate-800">
+            <div className="text-sm font-bold text-slate-200">Balance sheet</div>
+            <div className={`text-xs font-bold ${bs.balanced ? "text-emerald-400" : "text-red-400"}`}>{bs.balanced ? "✓ balances" : `⚠ off by ${money(bs.difference)}`}</div>
+          </div>
+          {(bs.totalAssets === 0 && bs.totalLiabilities === 0 && bs.totalEquity === 0) ? (
+            <div className="p-8 text-center text-sm text-slate-500">No balances yet. As cash, invoices and EOD takings post to the journal, the position builds here.</div>
+          ) : (
+            <div className="p-3 space-y-4 text-sm">
+              {/* Assets */}
+              <div>
+                <div className="text-[11px] uppercase font-bold text-sky-300 mb-1">Assets</div>
+                {bs.assets.map(r => <div key={r.account.id} className="flex justify-between py-0.5"><span className="text-slate-300">{r.account.code} {r.account.name}</span><span className="text-slate-200">{money(r.amount)}</span></div>)}
+                <div className="flex justify-between border-t border-slate-800 mt-1 pt-1 font-bold text-slate-100"><span>Total assets</span><span>{money(bs.totalAssets)}</span></div>
+              </div>
+              {/* Liabilities */}
+              <div>
+                <div className="text-[11px] uppercase font-bold text-amber-300 mb-1">Liabilities</div>
+                {bs.liabilities.length ? bs.liabilities.map(r => <div key={r.account.id} className="flex justify-between py-0.5"><span className="text-slate-300">{r.account.code} {r.account.name}</span><span className="text-slate-200">{money(r.amount)}</span></div>) : <div className="text-xs text-slate-600">None</div>}
+                <div className="flex justify-between border-t border-slate-800 mt-1 pt-1 font-bold text-slate-100"><span>Total liabilities</span><span>{money(bs.totalLiabilities)}</span></div>
+              </div>
+              {/* Equity */}
+              <div>
+                <div className="text-[11px] uppercase font-bold text-purple-300 mb-1">Equity</div>
+                {bs.equityAccounts.map(r => <div key={r.account.id} className="flex justify-between py-0.5"><span className="text-slate-300">{r.account.code} {r.account.name}</span><span className="text-slate-200">{money(r.amount)}</span></div>)}
+                <div className="flex justify-between py-0.5"><span className="text-slate-300">Retained earnings (net profit)</span><span className="text-slate-200">{money(bs.retainedEarnings)}</span></div>
+                <div className="flex justify-between border-t border-slate-800 mt-1 pt-1 font-bold text-slate-100"><span>Total equity</span><span>{money(bs.totalEquity)}</span></div>
+              </div>
+              {/* Check */}
+              <div className="flex justify-between border-t border-slate-700 pt-2 font-bold">
+                <span className="text-slate-200">Liabilities + Equity</span>
+                <span className={bs.balanced ? "text-emerald-400" : "text-red-400"}>{money(bs.totalLiabilities + bs.totalEquity)}</span>
+              </div>
+              <div className="text-[11px] text-slate-600">Net profit (income {money(bs.incomeTotal)} − expenses {money(bs.expenseTotal)}) rolls into equity as retained earnings. The sheet balances when Assets = Liabilities + Equity.</div>
+            </div>
           )}
         </div>
       )}

@@ -4886,7 +4886,7 @@ export async function approveInvoiceRpc(invoiceId, userId) {
   if (error) throw error;
   // Mirror the approved invoice into the journal: Dr expense, Cr trade creditors.
   try {
-    const { data: inv } = await supabase.from("invoices").select("id, entity_id, invoice_number, invoice_date, supplier_name, total_ex_vat").eq("id", invoiceId).maybeSingle();
+    const { data: inv } = await supabase.from("invoices").select("id, entity_id, invoice_number, invoice_date, supplier_name, total_ex_vat, total_vat").eq("id", invoiceId).maybeSingle();
     if (inv?.entity_id) await postInvoiceJournal(inv, inv.entity_id);
   } catch (e) { /* journal mirror is non-critical */ }
   return Array.isArray(data) ? data[0] : data;
@@ -7424,8 +7424,66 @@ export async function computeTrialBalance(entityId, { from, to } = {}) {
   return { rows, totalDebit, totalCredit, balanced: Math.abs(totalDebit - totalCredit) < 0.01 };
 }
 
-// Auto-posting bridge: turn a business event into a balanced journal entry on
-// the entity's chart. Resolves accounts by canonical code. Idempotent via
+// Balance sheet for an entity: arranges journal balances into Assets,
+// Liabilities and Equity. Income/expense accounts don't appear directly — they
+// roll up into retained earnings (net profit) inside equity, which is what makes
+// the sheet balance (Assets = Liabilities + Equity). `asOf` bounds the period.
+export async function computeBalanceSheet(entityId, { asOf } = {}) {
+  const [accounts, entries] = await Promise.all([
+    fetchAccounts(entityId),
+    fetchJournalEntries({ entityId, to: asOf }),
+  ]);
+  const net = {};
+  accounts.forEach(a => { net[a.id] = 0; });
+  entries.forEach(j => (j.lines || []).forEach(l => { if (net[l.accountId] != null) net[l.accountId] += l.amount; }));
+
+  const section = (type) => accounts
+    .filter(a => a.type === type)
+    .map(a => ({ account: a, balance: net[a.id] || 0 }))
+    .filter(r => Math.abs(r.balance) > 0.005);
+
+  // Assets are debit-normal (show as +balance). Liabilities & equity are
+  // credit-normal (stored negative; flip sign to show the positive amount owed/held).
+  const assets = section("asset").map(r => ({ ...r, amount: r.balance }));
+  const liabilities = section("liability").map(r => ({ ...r, amount: -r.balance }));
+  const equityAccounts = section("equity").map(r => ({ ...r, amount: -r.balance }));
+
+  // Retained earnings = net profit = income (credit-normal) − expenses (debit-normal).
+  const incomeTotal = accounts.filter(a => a.type === "income").reduce((s, a) => s + (-(net[a.id] || 0)), 0);
+  const expenseTotal = accounts.filter(a => a.type === "expense").reduce((s, a) => s + (net[a.id] || 0), 0);
+  const retainedEarnings = incomeTotal - expenseTotal;
+
+  const totalAssets = assets.reduce((s, r) => s + r.amount, 0);
+  const totalLiabilities = liabilities.reduce((s, r) => s + r.amount, 0);
+  const totalEquityAccounts = equityAccounts.reduce((s, r) => s + r.amount, 0);
+  const totalEquity = totalEquityAccounts + retainedEarnings;
+
+  return {
+    assets, liabilities, equityAccounts, retainedEarnings,
+    incomeTotal, expenseTotal,
+    totalAssets, totalLiabilities, totalEquity,
+    // Balances when Assets = Liabilities + Equity.
+    balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+    difference: totalAssets - (totalLiabilities + totalEquity),
+  };
+}
+
+// Consolidated balance sheet across multiple entities (simple sum; inter-company
+// elimination comes in Phase 4). Returns the same shape with per-entity detail.
+export async function computeConsolidatedBalanceSheet(entityIds = [], { asOf } = {}) {
+  const sheets = await Promise.all(entityIds.map(id => computeBalanceSheet(id, { asOf }).then(s => ({ entityId: id, sheet: s }))));
+  const sum = (key) => sheets.reduce((a, s) => a + s.sheet[key], 0);
+  return {
+    perEntity: sheets,
+    totalAssets: sum("totalAssets"),
+    totalLiabilities: sum("totalLiabilities"),
+    totalEquity: sum("totalEquity"),
+    retainedEarnings: sum("retainedEarnings"),
+    balanced: Math.abs(sum("totalAssets") - (sum("totalLiabilities") + sum("totalEquity"))) < 0.01,
+  };
+}
+
+
 // source_ref. Each helper returns the postJournalEntry result (or skips).
 //
 // Accounting conventions used (debit +, credit -):
@@ -7468,7 +7526,18 @@ export async function postInvoiceJournal(invoice, entityId, { paid = false } = {
   }
   const expense = await resolveAccountForEntity(entityId, "5000"); // default to COGS
   if (!creditors || !expense) return { posted: false, skipped: true, reason: "accounts not found" };
-  return postJournalEntry({ entityId, entryDate: invoice.invoice_date || new Date().toISOString().slice(0,10), memo: `Invoice ${invoice.invoice_number || invoice.id} ${invoice.supplier_name || ""}`.trim(), sourceKind: "invoice", sourceRef: `inv:${invoice.id}`, lines: [{ accountId: expense, amount: amt }, { accountId: creditors, amount: -amt }] });
+  // Split VAT out to the VAT control account so it shows on the balance sheet:
+  //   Dr Expense (ex-VAT) + Dr VAT control (VAT) ; Cr Trade creditors (gross).
+  const vat = Number(invoice.total_vat ?? invoice.totalVat) || 0;
+  const gross = amt + vat;
+  const lines = [{ accountId: expense, amount: amt }];
+  if (vat > 0.005) {
+    const vatCtrl = await resolveAccountForEntity(entityId, "2100");
+    if (vatCtrl) lines.push({ accountId: vatCtrl, amount: vat });
+    else lines[0].amount = gross; // no VAT account → put whole gross to expense so it still balances
+  }
+  lines.push({ accountId: creditors, amount: -(lines.reduce((s, l) => s + l.amount, 0)) });
+  return postJournalEntry({ entityId, entryDate: invoice.invoice_date || new Date().toISOString().slice(0,10), memo: `Invoice ${invoice.invoice_number || invoice.id} ${invoice.supplier_name || ""}`.trim(), sourceKind: "invoice", sourceRef: `inv:${invoice.id}`, lines });
 }
 
 export async function fetchCashAccounts() {
