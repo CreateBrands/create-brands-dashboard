@@ -7822,15 +7822,20 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const batchLabel = (itemId, batchId) => { const b = (batches[itemId] || []).find(x => x.id === batchId); return b ? `${b.batchNo || "batch"}${b.expiryDate ? ` · exp ${b.expiryDate}` : ""}` : ""; };
+  // An order is awaiting pick only if it has NO existing pick yet. (Previously the
+  // list showed any order in "picking" status, so an already-picked order kept
+  // appearing and could be picked again — causing duplicate picks.)
+  const pickedSoIds = new Set(picks.map(p => p.soId).filter(Boolean));
+  const ordersAwaitingPick = orders.filter(so => !pickedSoIds.has(so.id));
   return (
     <div className="space-y-4">
-      <div className="text-sm text-slate-400">{picks.length} pick{picks.length!==1?"s":""} · {orders.length} order{orders.length!==1?"s":""} awaiting pick</div>
+      <div className="text-sm text-slate-400">{picks.length} pick{picks.length!==1?"s":""} · {ordersAwaitingPick.length} order{ordersAwaitingPick.length!==1?"s":""} awaiting pick</div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {/* Orders awaiting pick */}
-      {orders.length > 0 && (
+      {ordersAwaitingPick.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">Confirmed orders — start a pick</div>
-          {orders.map(so => (
+          {ordersAwaitingPick.map(so => (
             <div key={so.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
               <div><span className="text-white font-mono text-xs">{so.soNumber}</span><div className="text-[11px] text-slate-500">{so.lines.length} line{so.lines.length!==1?"s":""} · {so.orderDate}</div></div>
               <button onClick={() => startPick(so)} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Pick (auto-FEFO)</button>
@@ -8002,6 +8007,7 @@ function DistDispatchView({ currentUser, pendingConvert, setPendingConvert }) {
 
 // ── INVOICES (Dr AR / Cr Sales + VAT) ──
 function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
+  const { convert } = useDistDocLink();
   const [d, setD] = useState(null); const [err, setErr] = useState("");
   useEffect(() => { let a = true; fetchDistInvoiceDetail(invoiceId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [invoiceId]);
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
@@ -8017,6 +8023,9 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && <DistNextStep source={d} doneLabel="This invoice is fully paid." next={
+          d.balance > 0.005 ? { label: "Record Payment Received", view: "dist-receipts", target: "invoice", hint: "Record the customer's payment — posts Dr bank / Cr debtors." } : null
+        }/>}
         {d && (
           <>
             {/* Invoice header band */}
@@ -8211,11 +8220,25 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
 }
 
 // ── PAYMENTS RECEIVED (Zoho Record Payment; unpaid invoices + excess) ──
-function DistReceiptsView({ currentUser }) {
+function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
   const [pays, setPays] = useState([]); const [customers, setCustomers] = useState([]); const [invoices, setInvoices] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map());
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { const [p, c, inv, tx] = await Promise.all([fetchDistInvoicePayments(), fetchDistContacts({ kind: "customer" }), fetchDistInvoices({ status: ["open", "part_paid"] }), fetchDistTaxRates()]); setPays(p); setCustomers(c); setInvoices(inv); setTaxRates(tx); try { setPaidMap(await fetchDistInvoicePaidMap(inv.map(x => x.id))); } catch { /* paid map best-effort */ } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
+  // Consume Invoice→Payment Received: open the receipt form pre-filled with the
+  // customer, the invoice's outstanding balance, and that invoice pre-allocated.
+  useEffect(() => {
+    if (pendingConvert?.target === "invoice" && pendingConvert.source) {
+      const inv = pendingConvert.source;
+      const bal = inv.balance != null ? inv.balance : inv.grand;
+      setCreating({
+        customerId: inv.customer?.id || inv.customerId || "", amount: bal, method: "bank", depositCode: "1010",
+        payDate: new Date().toISOString().slice(0, 10),
+        allocations: bal > 0 ? [{ invoiceId: inv.id, amount: +Number(bal).toFixed(2) }] : [],
+      });
+      setPendingConvert(null);
+    }
+  }, [pendingConvert, setPendingConvert]);
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
   const custInvoices = creating ? invoices.filter(i => i.customerId === creating.customerId) : [];
   const invGross = (i) => distComputeTotals(i.lines, taxRates, i.vatMode, i.discountPercent, i.discountType).grandTotal + (Number(i.shippingCharge) || 0);
@@ -43911,7 +43934,7 @@ export default function App() {
             {effectiveActiveView === "dist-picks" && <DistPicksView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-dispatch" && <DistDispatchView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
-            {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
             {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}

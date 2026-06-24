@@ -9728,6 +9728,14 @@ export async function fetchDistPicks({ soId, status } = {}) {
 }
 export async function createDistPick(pick, lines = []) {
   const id = pick.id || distId("dpick");
+  // Guard: refuse a second active pick for the same sales order. A SO should
+  // have at most one open/picked pick at a time (prevents duplicate picks).
+  if (pick.soId) {
+    const { data: existing } = await supabase.from("dist_picks").select("id, status").eq("so_id", pick.soId);
+    if ((existing || []).some(p => p.status !== "cancelled")) {
+      throw new Error("This order already has a pick. Open that pick to edit or dispatch it.");
+    }
+  }
   const row = {
     id, pick_number: pick.pickNumber || `PICK-${Date.now().toString().slice(-6)}`, so_id: pick.soId || null,
     customer_id: pick.customerId || null, status: pick.status || "picked", pick_date: pick.pickDate || new Date().toISOString().slice(0, 10),
