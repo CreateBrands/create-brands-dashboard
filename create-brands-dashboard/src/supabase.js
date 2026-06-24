@@ -9464,7 +9464,34 @@ export async function createDistPick(pick, lines = []) {
   return id;
 }
 
-// ── DISPATCH (the stock-OUT event + COGS journal) ──
+// Update a pick: rewrite header + replace lines. Picks don't touch stock or
+// the ledger, so this is a plain rewrite (safe).
+export async function updateDistPick(pick, lines = []) {
+  if (!pick.id) throw new Error("Pick id required for update.");
+  await supabase.from("dist_picks").update({
+    pick_date: pick.pickDate || new Date().toISOString().slice(0, 10), note: pick.note || null,
+  }).eq("id", pick.id);
+  await supabase.from("dist_pick_lines").delete().eq("pick_id", pick.id);
+  const lr = lines.filter(l => l.itemId && l.batchId && Number(l.qty) > 0).map(l => ({
+    id: distId("dpickl"), pick_id: pick.id, item_id: l.itemId, batch_id: l.batchId, qty: Number(l.qty) || 0,
+    unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+  }));
+  if (lr.length) { const { error } = await supabase.from("dist_pick_lines").insert(lr); if (error) throw error; }
+  return pick.id;
+}
+
+// Delete a pick. Blocked if it's already been dispatched (a dispatch references
+// it). Resets its SO back to 'confirmed' so it can be re-picked.
+export async function deleteDistPick(pickId) {
+  const disp = await fetchDistDispatches({}).catch(() => []);
+  if (disp.some(d => d.pickId === pickId)) throw new Error("Cannot delete: this pick has been dispatched. Delete the dispatch first.");
+  const { data: pick } = await supabase.from("dist_picks").select("so_id").eq("id", pickId).maybeSingle();
+  await supabase.from("dist_pick_lines").delete().eq("pick_id", pickId);
+  const { error } = await supabase.from("dist_picks").delete().eq("id", pickId);
+  if (error) throw error;
+  if (pick?.so_id) await supabase.from("dist_sales_orders").update({ status: "confirmed" }).eq("id", pick.so_id);
+  return true;
+}
 const mapDistDispatch = (d) => ({
   id: d.id, dispatchNumber: d.dispatch_number || "", pickId: d.pick_id || null, soId: d.so_id || null,
   customerId: d.customer_id || null, dispatchDate: d.dispatch_date || null, note: d.note || "",
@@ -9478,6 +9505,39 @@ export async function fetchDistDispatches({ soId } = {}) {
   const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(mapDistDispatch);
+}
+
+// Detail for a pick drill-down: resolves customer, SO number, item names/images.
+export async function fetchDistPickDetail(pickId) {
+  const { data: head } = await supabase.from("dist_picks").select("*, dist_pick_lines(*)").eq("id", pickId).maybeSingle();
+  if (!head) return null;
+  const [items, customers, sos] = await Promise.all([
+    fetchDistItems().catch(() => []), fetchDistContacts({ kind: "customer" }).catch(() => []), fetchDistSalesOrders({}).catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const customer = customers.find(c => c.id === head.customer_id) || null;
+  const so = sos.find(s => s.id === head.so_id) || null;
+  const lines = (head.dist_pick_lines || []).map(l => ({ itemId: l.item_id, batchId: l.batch_id, qty: Number(l.qty) || 0,
+    unitPrice: Number(l.unit_price) || 0, item: itemById.get(l.item_id) || null }));
+  return { id: head.id, pickNumber: head.pick_number, status: head.status, pickDate: head.pick_date, note: head.note,
+    soId: head.so_id, soNumber: so?.soNumber || null, customer, lines };
+}
+
+// Detail for a dispatch drill-down.
+export async function fetchDistDispatchDetail(dispatchId) {
+  const { data: head } = await supabase.from("dist_dispatches").select("*, dist_dispatch_lines(*)").eq("id", dispatchId).maybeSingle();
+  if (!head) return null;
+  const [items, customers, sos] = await Promise.all([
+    fetchDistItems().catch(() => []), fetchDistContacts({ kind: "customer" }).catch(() => []), fetchDistSalesOrders({}).catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const customer = customers.find(c => c.id === head.customer_id) || null;
+  const so = sos.find(s => s.id === head.so_id) || null;
+  const lines = (head.dist_dispatch_lines || []).map(l => ({ itemId: l.item_id, batchId: l.batch_id, qty: Number(l.qty) || 0,
+    landedCost: Number(l.landed_cost) || 0, unitPrice: Number(l.unit_price) || 0, item: itemById.get(l.item_id) || null }));
+  const cogsTotal = +lines.reduce((s, l) => s + l.qty * l.landedCost, 0).toFixed(2);
+  return { id: head.id, dispatchNumber: head.dispatch_number, posted: !!head.posted, dispatchDate: head.dispatch_date,
+    note: head.note, soId: head.so_id, soNumber: so?.soNumber || null, pickId: head.pick_id, customer, lines, cogsTotal };
 }
 
 // Resolve a sales order's fulfilment status across the chain for the
@@ -9544,6 +9604,55 @@ export async function postDistDispatch(dispatch, lines = []) {
   if (dispatch.soId) await supabase.from("dist_sales_orders").update({ status: "dispatched" }).eq("id", dispatch.soId);
   if (dispatch.pickId) await supabase.from("dist_picks").update({ status: "dispatched" }).eq("id", dispatch.pickId);
   return id;
+}
+
+// Delete (reverse) a dispatch. Because dispatch posted stock-OUT movements + a
+// COGS journal, deletion must REVERSE both, not just drop rows:
+//   1. Post positive (return) movements to put stock back on each batch.
+//   2. Post a reversing journal: Dr Stock 1200 / Cr COGS 5000.
+//   3. Delete the dispatch lines + header.
+//   4. Reset the SO/pick status so it can be re-dispatched.
+// Blocked if an invoice references this dispatch (delete the invoice first).
+export async function deleteDistDispatch(dispatchId) {
+  const invoices = await fetchDistInvoices({}).catch(() => []);
+  if (invoices.some(i => i.dispatchId === dispatchId)) throw new Error("Cannot delete: an invoice references this dispatch. Delete the invoice first.");
+  const { data: head } = await supabase.from("dist_dispatches").select("*").eq("id", dispatchId).maybeSingle();
+  if (!head) throw new Error("Dispatch not found.");
+  const { data: lines } = await supabase.from("dist_dispatch_lines").select("*").eq("dispatch_id", dispatchId);
+
+  // 1. Return stock to each batch (positive movement, distinct reversal ref).
+  let cogsValue = 0;
+  for (const l of lines || []) {
+    await addDistMovement({
+      itemId: l.item_id, batchId: l.batch_id, qty: Math.abs(Number(l.qty) || 0), type: "return",
+      sourceKind: "dispatch_reversal", sourceRef: `distdispREV:${dispatchId}:${l.item_id}:${l.batch_id}`,
+    });
+    cogsValue += (Number(l.qty) || 0) * (Number(l.landed_cost) || 0);
+  }
+  // 2. Reversing journal: Dr Stock / Cr COGS.
+  if (cogsValue > 0) {
+    const [cogs, stock] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "5000"), resolveAccountForEntity(DIST_ENTITY, "1200"),
+    ]);
+    if (cogs && stock) {
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of dispatch ${head.dispatch_number}`, sourceKind: "dist_dispatch_reversal",
+          sourceRef: `distdispREV:${dispatchId}`,
+          lines: [{ accountId: stock, amount: +cogsValue.toFixed(2) }, { accountId: cogs, amount: -cogsValue.toFixed(2) }],
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  // 3. Delete lines + header.
+  await supabase.from("dist_dispatch_lines").delete().eq("dispatch_id", dispatchId);
+  const { error } = await supabase.from("dist_dispatches").delete().eq("id", dispatchId);
+  if (error) throw error;
+  // 4. Reset SO + pick so the order can be re-dispatched.
+  if (head.so_id) await supabase.from("dist_sales_orders").update({ status: "picking" }).eq("id", head.so_id);
+  if (head.pick_id) await supabase.from("dist_picks").update({ status: "picked" }).eq("id", head.pick_id);
+  return true;
 }
 
 // ── INVOICES (Dr AR / Cr Sales + VAT) ──

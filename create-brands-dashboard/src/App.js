@@ -150,7 +150,7 @@ import {
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
-  updateDistSalesOrder, deleteDistSalesOrder,
+  updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6963,7 +6963,7 @@ function DistPriceListView() {
 }
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
-function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete }) {
+function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate }) {
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   useEffect(() => {
@@ -6994,6 +6994,20 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
           {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
+        {/* What's next — workflow conversion */}
+        {detail && onNavigate && (() => {
+          const next = !detail.status.picked ? { label: "Convert to Pick", view: "dist-picks", hint: "Allocate batches (FEFO) for this order." }
+            : !detail.status.dispatched ? { label: "Dispatch", view: "dist-dispatch", hint: "Ship the picked order — reduces stock, posts COGS." }
+            : !detail.status.invoiced ? { label: "Create Invoice", view: "dist-invoices", hint: "Bill the customer for this order." }
+            : null;
+          if (!next) return <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 px-3 py-2.5 text-xs text-emerald-300">This order is fully invoiced. ✓</div>;
+          return (
+            <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 flex items-center justify-between gap-3">
+              <div><span className="text-xs font-semibold text-white">What's next?</span> <span className="text-xs text-slate-400">{next.hint}</span></div>
+              <button onClick={() => { onNavigate(next.view); onClose(); }} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
+            </div>
+          );
+        })()}
         {err && <div className="text-xs text-red-400">{err}</div>}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -7080,7 +7094,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   );
 }
 
-function DistSalesOrderView({ currentUser }) {
+function DistSalesOrderView({ currentUser, setActiveView }) {
   const [sos, setSos] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState(null); const [statusMap, setStatusMap] = useState({});
@@ -7162,7 +7176,7 @@ function DistSalesOrderView({ currentUser }) {
           )}
         </div>
       )}
-      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)}/>}
+      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)} onNavigate={setActiveView}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.soNumber || "sales order"}` : "New sales order"} maxW="max-w-4xl">
           <div className="space-y-4">
@@ -7194,9 +7208,94 @@ function DistSalesOrderView({ currentUser }) {
 // ============================================================================
 
 // ── PICKS (allocate batches against a confirmed sales order; FEFO default) ──
+function DistPickDetail({ pickId, onClose, onDelete }) {
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistPickDetail(pickId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [pickId]);
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  return (
+    <Modal onClose={onClose} title={d?.pickNumber || "Pick"} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d?.status==="dispatched"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d?.status||"").toUpperCase()}</span>
+          {onDelete && d?.status !== "dispatched" && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (
+          <>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Customer</div><div className="text-sm text-white">{d.customer?.displayName || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono text-indigo-300">{d.soNumber || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Pick date</div><div className="text-sm text-white">{fmtDate(d.pickDate)}</div></div>
+            </div>
+            <div className="rounded-xl border border-slate-800 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch</th><th className="text-right px-3 py-2">Qty</th></tr></thead>
+                <tbody>{d.lines.map((l, i) => (
+                  <tr key={i} className="border-t border-slate-800/60">
+                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
+                    <td className="px-3 py-2 font-mono text-slate-400">{l.batchId || "—"}</td>
+                    <td className="px-3 py-2 text-right text-white font-semibold">{l.qty}</td>
+                  </tr>))}</tbody>
+              </table>
+            </div>
+          </>
+        )}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function DistDispatchDetail({ dispatchId, onClose, onDelete }) {
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistDispatchDetail(dispatchId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [dispatchId]);
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  return (
+    <Modal onClose={onClose} title={d?.dispatchNumber || "Dispatch"} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">{d?.posted ? "POSTED" : "DRAFT"}</span>
+          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete (reverse)</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (
+          <>
+            <div className="grid grid-cols-4 gap-3">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Customer</div><div className="text-sm text-white">{d.customer?.displayName || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono text-indigo-300">{d.soNumber || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Date</div><div className="text-sm text-white">{fmtDate(d.dispatchDate)}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">COGS posted</div><div className="text-sm text-amber-300 font-semibold">{gbp(d.cogsTotal)}</div></div>
+            </div>
+            <div className="rounded-xl border border-slate-800 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Cost/unit</th><th className="text-right px-3 py-2">Line cost</th></tr></thead>
+                <tbody>{d.lines.map((l, i) => (
+                  <tr key={i} className="border-t border-slate-800/60">
+                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
+                    <td className="px-3 py-2 font-mono text-slate-400">{l.batchId || "—"}</td>
+                    <td className="px-3 py-2 text-right text-white font-semibold">{l.qty}</td>
+                    <td className="px-3 py-2 text-right text-slate-300">{gbp(l.landedCost)}</td>
+                    <td className="px-3 py-2 text-right text-white">{gbp(l.qty * l.landedCost)}</td>
+                  </tr>))}</tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-slate-500">Deleting reverses the stock movements (returns stock to batches) and posts a reversing COGS journal (Dr Stock / Cr COGS). Blocked if an invoice references this dispatch.</p>
+          </>
+        )}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function DistPicksView({ currentUser }) {
   const [picks, setPicks] = useState([]); const [orders, setOrders] = useState([]); const [batches, setBatches] = useState({}); const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [p, so, it] = await Promise.all([fetchDistPicks(), fetchDistSalesOrders({ status: ["confirmed", "picking"] }), fetchDistItems()]); setPicks(p); setOrders(so); setItems(it); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   // Start a pick from a sales order: auto-FEFO each line.
@@ -7254,13 +7353,19 @@ function DistPicksView({ currentUser }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">Picks</div>
           {picks.map(p => (
-            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{p.pickNumber}</span><div className="text-[11px] text-slate-500">{p.lines.length} line{p.lines.length!==1?"s":""} · {p.pickDate}</div></div>
+            <div key={p.id} onClick={() => setDetailId(p.id)} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+              <div><span className="text-indigo-300 font-mono text-xs hover:underline">{p.pickNumber}</span><div className="text-[11px] text-slate-500">{p.lines.length} line{p.lines.length!==1?"s":""} · {p.pickDate}</div></div>
               <span className={`text-[10px] px-2 py-0.5 rounded-full ${p.status==="dispatched"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{p.status}</span>
             </div>
           ))}
         </div>
       )}
+      {detailId && <DistPickDetail pickId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+        if (!window.confirm("Delete this pick? It frees the order to be re-picked.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistPick(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); }
+        setBusy(false);
+      }}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title={`Pick ${creating.soNumber}`} maxW="max-w-4xl">
           <div className="space-y-4">
@@ -7290,6 +7395,7 @@ function DistPicksView({ currentUser }) {
 function DistDispatchView({ currentUser }) {
   const [dispatches, setDispatches] = useState([]); const [picks, setPicks] = useState([]); const [items, setItems] = useState([]); const [batches, setBatches] = useState({});
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [d, p, it] = await Promise.all([fetchDistDispatches(), fetchDistPicks({ status: "picked" }), fetchDistItems()]); setDispatches(d); setPicks(p); setItems(it); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const startDispatch = async (pick) => {
@@ -7336,13 +7442,19 @@ function DistDispatchView({ currentUser }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">Dispatches</div>
           {dispatches.map(d => (
-            <div key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{d.dispatchNumber}</span><div className="text-[11px] text-slate-500">{d.lines.length} line{d.lines.length!==1?"s":""} · {d.dispatchDate}</div></div>
+            <div key={d.id} onClick={() => setDetailId(d.id)} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+              <div><span className="text-indigo-300 font-mono text-xs hover:underline">{d.dispatchNumber}</span><div className="text-[11px] text-slate-500">{d.lines.length} line{d.lines.length!==1?"s":""} · {d.dispatchDate}</div></div>
               {d.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">posted</span>}
             </div>
           ))}
         </div>
       )}
+      {detailId && <DistDispatchDetail dispatchId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+        if (!window.confirm("Delete this dispatch? This reverses the stock movements and posts a reversing COGS journal. Can't be undone.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistDispatch(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); }
+        setBusy(false);
+      }}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title={`Dispatch ${creating.pickNumber}`} maxW="max-w-4xl">
           <div className="space-y-4">
@@ -43134,7 +43246,7 @@ export default function App() {
             {effectiveActiveView === "dist-pay" && <DistPaymentsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-customers" && <DistCustomersView currentUser={currentUser} stores={stores}/>}
             {effectiveActiveView === "dist-pricelists" && <DistPriceListView/>}
-            {effectiveActiveView === "dist-sales-orders" && <DistSalesOrderView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-sales-orders" && <DistSalesOrderView currentUser={currentUser} setActiveView={setActiveView}/>}
             {effectiveActiveView === "dist-picks" && <DistPicksView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-dispatch" && <DistDispatchView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser}/>}
