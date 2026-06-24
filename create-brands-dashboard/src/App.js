@@ -152,8 +152,8 @@ import {
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
-  updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
-  fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail,
+  updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
+  fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6101,8 +6101,8 @@ const DIST_PAYMENT_TERMS = [
 // A lightweight context so any Distribution detail view can open another linked
 // document (SO#, invoice#, pick#, dispatch#, customer) without prop-drilling.
 // The provider renders the shared detail modals once.
-const DistDocLinkContext = React.createContext(null);
-function useDistDocLink() { return React.useContext(DistDocLinkContext) || { openDoc: () => {} }; }
+const DistDocLinkContext = createContext(null);
+function useDistDocLink() { return useContext(DistDocLinkContext) || { openDoc: () => {} }; }
 
 function DistDocLinkProvider({ children }) {
   const [stack, setStack] = useState([]); // [{type, id}] — supports drilling link→link
@@ -6143,6 +6143,7 @@ function DistDocLinkProvider({ children }) {
       {top && top.type === "po" && <DistPODetail poId={top.id} onClose={close}/>}
       {top && top.type === "grn" && <DistGRNDetail grnId={top.id} onClose={close}/>}
       {top && top.type === "bill" && <DistBillDetail billId={top.id} onClose={close}/>}
+      {top && top.type === "payment" && <DistPaymentDetail payId={top.id} onClose={close}/>}
       {top && top.type === "so" && obj && <DistSalesOrderDetail so={obj} customer={aux.customers.find(c => c.id === obj.customerId)} items={aux.items} taxRates={aux.taxRates} onClose={close} onEdit={close}/>}
       {top && top.type === "customer" && obj && <DistCustomerDetail customer={obj} onClose={close} onEdit={close}/>}
       {top && top.type === "vendor" && obj && <DistVendorDetail vendor={obj} onClose={close} onEdit={close}/>}
@@ -6278,7 +6279,7 @@ function DistPODetail({ poId, onClose, onEdit, onDelete }) {
   );
 }
 
-function DistGRNDetail({ grnId, onClose, onDelete }) {
+function DistGRNDetail({ grnId, onClose, onDelete, onEdit }) {
   const [d, setD] = useState(null); const [err, setErr] = useState("");
   useEffect(() => { let a = true; fetchDistGRNDetail(grnId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [grnId]);
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
@@ -6288,7 +6289,8 @@ function DistGRNDetail({ grnId, onClose, onDelete }) {
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">{d?.posted ? "RECEIVED" : "DRAFT"}</span>
-          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete (reverse)</button>}
+          {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
+          {onDelete && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete (reverse)</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
@@ -6391,6 +6393,62 @@ function DistVendorDetail({ vendor, onClose, onEdit }) {
             )}</DistDetailSection>
           </div>
         ) : <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>)}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function DistPaymentDetail({ payId, onClose, onDelete }) {
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistPaymentDetail(payId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [payId]);
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  const allocTotal = (d?.allocations || []).reduce((s, a) => s + a.amount, 0);
+  const excess = +((d?.amount || 0) - allocTotal).toFixed(2);
+  return (
+    <Modal onClose={onClose} title={d?.paymentNumber || "Payment"} maxW="max-w-2xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">PAYMENT MADE</span>
+          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (
+          <>
+            <div className="grid grid-cols-4 gap-3">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Vendor</div><div className="text-sm"><DocLink type="vendor" id={d.vendor?.id}>{d.vendor?.displayName || "—"}</DocLink></div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Date</div><div className="text-sm text-white">{fmtDate(d.payDate)}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Method</div><div className="text-sm text-white capitalize">{d.method || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Amount</div><div className="text-sm text-emerald-300 font-semibold">{gbp(d.amount)}</div></div>
+            </div>
+            {d.reference && <div className="text-xs text-slate-400">Reference: <span className="text-slate-200">{d.reference}</span></div>}
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">Bills paid</div>
+              <div className="rounded-xl border border-slate-800 overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Bill#</th><th className="text-right px-3 py-2">Amount applied</th></tr></thead>
+                  <tbody>
+                    {d.allocations.length === 0 ? <tr><td colSpan={2} className="px-3 py-3 text-center text-slate-600">No bills applied (payment in advance).</td></tr> :
+                      d.allocations.map((a, i) => (
+                        <tr key={i} className="border-t border-slate-800/60">
+                          <td className="px-3 py-2"><DocLink type="bill" id={a.billId} className="font-mono">{a.billNumber}</DocLink></td>
+                          <td className="px-3 py-2 text-right text-white">{gbp(a.amount)}</td>
+                        </tr>))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <div className="w-56 space-y-1.5">
+                <div className="flex justify-between text-xs"><span className="text-slate-400">Total applied</span><span className="text-white">{gbp(allocTotal)}</span></div>
+                {excess > 0.005 && <div className="flex justify-between text-xs"><span className="text-slate-400">Unapplied (advance)</span><span className="text-amber-300">{gbp(excess)}</span></div>}
+                <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-800"><span className="text-white">Payment total</span><span className="text-white">{gbp(d.amount)}</span></div>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-500">Deleting this payment reverses the AP/Bank journal (Dr Bank / Cr Trade creditors) and re-opens the bills it settled.</p>
+          </>
+        )}
         <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
       </div>
     </Modal>
@@ -6577,7 +6635,12 @@ function DistGRNView({ currentUser }) {
     const valid = (creating.lines || []).filter(l => l.itemId && Number(l.qty) > 0);
     if (!valid.length) { setErr("Add at least one received line with qty"); return; }
     setBusy(true); setErr("");
-    try { const vendor = vendors.find(v => v.id === creating.vendorId); await postDistGoodsReceipt({ ...creating, sourceKind: vendor?.isCentralKitchen ? "central_kitchen" : "vendor", createdBy: currentUser?.id }, valid); setCreating(null); await load(); }
+    try {
+      const vendor = vendors.find(v => v.id === creating.vendorId);
+      if (creating.id) await updateDistGoodsReceipt({ id: creating.id, receivedDate: creating.receivedDate, note: creating.note }, valid);
+      else await postDistGoodsReceipt({ ...creating, sourceKind: vendor?.isCentralKitchen ? "central_kitchen" : "vendor", createdBy: currentUser?.id }, valid);
+      setCreating(null); await load();
+    }
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
@@ -6618,7 +6681,12 @@ function DistGRNView({ currentUser }) {
           )}
         </div>
       )}
-      {detailId && <DistGRNDetail grnId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+      {detailId && <DistGRNDetail grnId={detailId} onClose={() => setDetailId(null)} onEdit={async () => {
+        try {
+          const gd = await fetchDistGRNDetail(detailId);
+          if (gd) { setCreating({ id: gd.id, grnNumber: gd.grnNumber, vendorId: gd.vendor?.id, poId: gd.poId, receivedDate: gd.receivedDate, note: gd.note, lines: gd.lines.map(l => ({ itemId: l.itemId, qty: l.qty, landedCost: l.landedCost, batchNo: l.batchNo, expiryDate: l.expiryDate })) }); setDetailId(null); }
+        } catch (e) { setErr(e.message); }
+      }} onDelete={async () => {
         if (!window.confirm("Delete this goods receipt? This reverses the stock (removes received qty) and posts a reversing journal. Blocked if a bill references it.")) return;
         setBusy(true); setErr("");
         try { await deleteDistGoodsReceipt(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); alert(e.message); }
@@ -6646,7 +6714,7 @@ function DistGRNView({ currentUser }) {
         </Modal>
       )}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="Receive goods into warehouse" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.grnNumber || "goods receipt"}` : "Receive goods into warehouse"} maxW="max-w-4xl">
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Raises stock (a receipt movement per line) and posts Dr Stock / Cr GRNI at landed cost.</p>
             <div className="grid grid-cols-3 gap-4">
@@ -6760,7 +6828,7 @@ function DistBillsView({ currentUser }) {
 // ── PAYMENTS ──
 function DistPaymentsView({ currentUser }) {
   const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map());
-  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [p, v, b, tx] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] }), fetchDistTaxRates()]); setPays(p); setVendors(v); setBills(b); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { /* paid map best-effort */ } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const save = async () => {
@@ -6799,14 +6867,15 @@ function DistPaymentsView({ currentUser }) {
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Payment#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Method</th><th className="text-right px-4 py-2.5 font-semibold">Bills</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
                 <tbody>{pays.map(p => (
-                  <tr key={p.id} className="border-t border-slate-800/50 hover:bg-slate-800/40">
+                  <tr key={p.id} onClick={() => setDetailId(p.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{p.payDate}</td>
-                    <td className="px-4 py-2.5 font-mono text-slate-200">{p.paymentNumber}</td>
+                    <td className="px-4 py-2.5 font-mono text-indigo-300 hover:underline">{p.paymentNumber}</td>
                     <td className="px-4 py-2.5 text-slate-300">{vName(p.vendorId)}</td>
                     <td className="px-4 py-2.5 text-slate-400 capitalize">{p.method}</td>
                     <td className="px-4 py-2.5 text-right text-slate-300">{p.allocations.length}</td>
                     <td className="px-4 py-2.5 text-right text-white font-semibold whitespace-nowrap">{gbp(p.amount)}</td>
-                    <td className="px-2 py-2.5 text-center"><button onClick={async () => {
+                    <td className="px-2 py-2.5 text-center"><button onClick={async (e) => {
+                      e.stopPropagation();
                       if (!window.confirm("Delete this payment? This reverses the AP/Bank journal and re-opens the bills it settled.")) return;
                       setBusy(true); setErr("");
                       try { await deleteDistBillPayment(p.id); await load(); } catch (e) { setErr(e.message); alert(e.message); }
@@ -6819,6 +6888,12 @@ function DistPaymentsView({ currentUser }) {
           )}
         </div>
       )}
+      {detailId && <DistPaymentDetail payId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+        if (!window.confirm("Delete this payment? This reverses the AP/Bank journal and re-opens the bills it settled.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistBillPayment(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); alert(e.message); }
+        setBusy(false);
+      }}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title="Record Payment" maxW="max-w-4xl">
           <div className="space-y-4">
