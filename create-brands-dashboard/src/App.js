@@ -7737,7 +7737,6 @@ function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
   const [taxRates, setTaxRates] = useState([]);
   const [ckProducts, setCkProducts] = useState([]);
-  const [imgUploading, setImgUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
@@ -7755,6 +7754,15 @@ function DistItemsView({ currentUser }) {
   const fileRef = useRef(null);
   const XLSX = useXLSX();
   const [busy, setBusy] = useState(false);
+  const [imgUploading, setImgUploading] = useState(false);
+  const onPickImage = async (file) => {
+    if (!file) return;
+    if (!file.type?.startsWith("image/")) { setErr("Please choose an image file."); return; }
+    setImgUploading(true); setErr("");
+    try { const { url } = await uploadDistItemImage(file); setEditItem(prev => ({ ...prev, imageUrl: url })); }
+    catch (e) { setErr(e.message || "Image upload failed."); }
+    setImgUploading(false);
+  };
 
   const load = useCallback(async () => {
     setLoading(true); setErr("");
@@ -8042,23 +8050,15 @@ function DistItemsView({ currentUser }) {
                 <input type="number" value={editItem.reorderPoint ?? ""} onChange={e => setEditItem({ ...editItem, reorderPoint: e.target.value })} placeholder="0" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <div className="text-xs text-slate-400 col-span-2">Product image <span className="text-slate-600">(shown on the store ordering portal)</span>
                 <div className="mt-1 flex items-center gap-3">
-                  <div className="w-20 h-20 rounded-xl bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-700">
-                    {editItem.imageUrl
-                      ? <img src={editItem.imageUrl} alt="" className="w-full h-full object-contain p-1.5"/>
-                      : <Package size={24} className="text-slate-300"/>}
+                  <div className="w-16 h-16 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-700">
+                    {editItem.imageUrl ? <img src={editItem.imageUrl} alt="" className="w-full h-full object-contain p-1"/> : <Package size={22} className="text-slate-300"/>}
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className={`px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 w-fit ${imgUploading ? "bg-slate-700 text-slate-400" : "bg-slate-800 hover:bg-slate-700 text-white"}`}>
-                      <Upload size={13}/> {imgUploading ? "Uploading…" : editItem.imageUrl ? "Replace image" : "Upload image"}
-                      <input type="file" accept="image/*" disabled={imgUploading} className="hidden" onChange={async e => {
-                        const file = e.target.files?.[0]; if (!file) return;
-                        setImgUploading(true); setErr("");
-                        try { const { url, path } = await uploadDistItemImage(file); setEditItem(prev => ({ ...prev, imageUrl: url, imageStoragePath: path })); }
-                        catch (er) { setErr("Image upload failed: " + er.message); }
-                        setImgUploading(false); e.target.value = "";
-                      }}/>
-                    </label>
-                    {editItem.imageUrl && <button type="button" onClick={() => setEditItem({ ...editItem, imageUrl: "", imageStoragePath: "" })} className="text-[11px] text-slate-500 hover:text-red-400 w-fit">Remove</button>}
+                  <div className="flex-1 space-y-1.5">
+                    <input type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; onPickImage(f); e.target.value = ""; }} className="block w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500"/>
+                    <div className="flex items-center gap-2">
+                      {imgUploading && <span className="text-[11px] text-indigo-300">Uploading…</span>}
+                      {editItem.imageUrl && !imgUploading && <button type="button" onClick={() => setEditItem({ ...editItem, imageUrl: "" })} className="text-[11px] text-slate-500 hover:text-red-400">Remove image</button>}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -40581,7 +40581,7 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: t
   );
 }
 
-function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverride = null, liveGroups = null, onLogout }) {
+function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverride = null, liveGroups = null, onLogout, onSwitchEntity = null }) {
   if (!open) return null;
   // If live nav groups are supplied and contain expandable children (e.g. the
   // Distribution WAREHOUSE group's Purchasing/Sales), surface those groups so
@@ -40638,6 +40638,14 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
         <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={22}/></button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 pb-24">
+        {onSwitchEntity && (
+          <button onClick={() => { onClose(); onSwitchEntity(); }}
+            className="w-full flex items-center gap-3 px-4 py-3 bg-indigo-600/15 border border-indigo-500/40 rounded-2xl text-left hover:bg-indigo-600/25">
+            <Building2 size={18} className="text-indigo-300 flex-shrink-0"/>
+            <span className="text-sm font-semibold text-white flex-1">Switch entity</span>
+            <ChevronRight size={16} className="text-indigo-300"/>
+          </button>
+        )}
         {[...childGroups, ...GROUPS].map(g => {
           const items = g.items.filter(it => allowedKeys.includes(it.key) || (it.children && it.children.some(c => allowedKeys.includes(c.key))));
           if (!items.length) return null;
@@ -42666,7 +42674,7 @@ export default function App() {
             { key: "petty-cash", label: "Petty Cash", icon: Wallet },
             { key: "expenses",   label: "Expenses", icon: Receipt },
           ] : undefined}/>
-        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={effectiveNavGroups.flatMap(g => g.items.flatMap(i => [i.key, ...((i.children || []).map(c => c.key))]))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} liveGroups={effectiveNavGroups} onLogout={handleLogout}/>
+        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={effectiveNavGroups.flatMap(g => g.items.flatMap(i => [i.key, ...((i.children || []).map(c => c.key))]))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} liveGroups={effectiveNavGroups} onLogout={handleLogout} onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}/>
         <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
