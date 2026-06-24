@@ -9599,6 +9599,16 @@ export async function fetchDistInvoicePayments({ customerId } = {}) {
 
 // Aggregate everything a customer detail page needs: invoices (with balance
 // due), payments, sales orders, receivables, monthly income, statement lines.
+// Receivables (outstanding balance) per customer id, for the customer list.
+export async function fetchDistReceivablesByCustomer() {
+  const m = new Map();
+  try {
+    const aged = await fetchDistAgedDebtors();
+    for (const r of aged.rows || []) m.set(r.party, +((m.get(r.party) || 0) + (Number(r.due) || 0)).toFixed(2));
+  } catch { /* best-effort */ }
+  return m;
+}
+
 export async function fetchDistCustomerDetail(customerId) {
   const [invoices, payments, salesOrders, taxRates] = await Promise.all([
     fetchDistInvoices({ customerId }).catch(() => []),

@@ -149,7 +149,7 @@ import {
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
-  fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail,
+  fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6828,7 +6828,8 @@ function DistEmptyRow({ text }) { return <div className="px-3 py-6 text-center t
 function DistCustomersView({ currentUser, stores = [] }) {
   const [customers, setCustomers] = useState([]); const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [detail, setDetail] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false);
-  const load = useCallback(async () => { setLoading(true); try { setCustomers(await fetchDistContacts({ kind: "customer" })); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const [recvMap, setRecvMap] = useState(new Map());
+  const load = useCallback(async () => { setLoading(true); try { const [cs, rm] = await Promise.all([fetchDistContacts({ kind: "customer" }), fetchDistReceivablesByCustomer()]); setCustomers(cs); setRecvMap(rm); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const filtered = useMemo(() => { const q = search.trim().toLowerCase(); return q ? customers.filter(c => `${c.displayName} ${c.companyName} ${c.email}`.toLowerCase().includes(q)) : customers; }, [customers, search]);
   const storeName = (id) => stores.find(s => s.id === id)?.name || null;
@@ -6848,13 +6849,40 @@ function DistCustomersView({ currentUser, stores = [] }) {
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No customers yet. Add stores as customers or import the Zoho Contacts CSV.</div>}
-          {filtered.map(c => (
-            <button key={c.id} onClick={() => setDetail(c)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50">
-              <div><span className="text-white">{c.displayName}</span>{c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/50 text-indigo-300">{storeName(c.storeId)}</span>}<div className="text-[11px] text-slate-500">{c.companyName || c.email || "—"}</div></div>
-              <Edit size={13} className="text-slate-600"/>
-            </button>
-          ))}
+          {filtered.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No customers yet. Add stores as customers or import the Zoho Contacts CSV.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 font-semibold">Name</th>
+                    <th className="text-left px-4 py-2.5 font-semibold">Company</th>
+                    <th className="text-left px-4 py-2.5 font-semibold">Email</th>
+                    <th className="text-left px-4 py-2.5 font-semibold">Phone</th>
+                    <th className="text-right px-4 py-2.5 font-semibold">Receivables</th>
+                    <th className="px-2 py-2.5 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(c => {
+                    const recv = recvMap.get(c.id) || 0;
+                    return (
+                      <tr key={c.id} onClick={() => setDetail(c)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                        <td className="px-4 py-2.5">
+                          <span className="text-indigo-300 font-medium hover:underline">{c.displayName}</span>
+                          {c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/50 text-indigo-300">{storeName(c.storeId)}</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-300">{c.companyName || "—"}</td>
+                        <td className="px-4 py-2.5 text-slate-400">{c.email || "—"}</td>
+                        <td className="px-4 py-2.5 text-slate-400">{c.workPhone || c.mobile || c.phone || "—"}</td>
+                        <td className={`px-4 py-2.5 text-right font-semibold ${recv > 0 ? "text-amber-300" : "text-slate-500"}`}>{gbp(recv)}</td>
+                        <td className="px-2 py-2.5 text-center"><button onClick={(e) => { e.stopPropagation(); setEdit(c); }} className="text-slate-600 hover:text-indigo-300"><Edit size={13}/></button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
       {importOpen && <DistContactImportModal kind="customer" stores={stores} onClose={() => setImportOpen(false)} onDone={load}/>}
