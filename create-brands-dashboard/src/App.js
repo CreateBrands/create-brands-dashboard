@@ -148,6 +148,7 @@ import {
   fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
+  fetchDistCustomersForStores, fetchDistPortalCatalogue,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -7388,6 +7389,189 @@ function DistReorderReport() {
         </div>
       )}
     </DistReportShell>
+  );
+}
+
+// ============================================================================
+// DISTRIBUTION — STORE ORDERING PORTAL (blind). Store users order from the
+// warehouse at their own price-list prices. No stock is ever shown.
+// Category nav · search · quantity steppers · running cart · reorder-from-last.
+// Writes a Distribution sales order (commits stock) on checkout.
+// ============================================================================
+function DistOrderPortalView({ currentUser }) {
+  const [customers, setCustomers] = useState([]);    // dist customers for this user's stores
+  const [customerId, setCustomerId] = useState("");
+  const [catalogue, setCatalogue] = useState([]);
+  const [taxRates, setTaxRates] = useState([]);
+  const [cart, setCart] = useState({});               // itemId -> qty
+  const [cat, setCat] = useState("All");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [placing, setPlacing] = useState(false);
+  const [lastOrder, setLastOrder] = useState(null);   // last SO for reorder
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [placed, setPlaced] = useState(null);
+
+  const storeIds = currentUser?.storeIds || [];
+
+  // Resolve which Distribution customer(s) this user can order for.
+  useEffect(() => {
+    (async () => {
+      setLoading(true); setErr("");
+      try {
+        const cs = await fetchDistCustomersForStores(storeIds);
+        setCustomers(cs);
+        if (cs.length) setCustomerId(cs[0].id);
+        else setErr("Your store isn't linked to a Distribution customer yet. Ask the Distribution team to link it.");
+      } catch (e) { setErr(e.message); }
+      setLoading(false);
+    })();
+  }, [JSON.stringify(storeIds)]);
+
+  // Load catalogue + last order whenever the chosen customer changes.
+  useEffect(() => {
+    if (!customerId) return;
+    (async () => {
+      setLoading(true);
+      try {
+        const [catalogueRows, tx, orders] = await Promise.all([
+          fetchDistPortalCatalogue(customerId), fetchDistTaxRates(), fetchDistSalesOrders({ customerId }),
+        ]);
+        setCatalogue(catalogueRows); setTaxRates(tx);
+        setLastOrder((orders || []).find(o => o.status !== "cancelled") || null);
+      } catch (e) { setErr(e.message); }
+      setLoading(false);
+    })();
+  }, [customerId]);
+
+  const categories = useMemo(() => ["All", ...Array.from(new Set(catalogue.map(i => i.category))).sort()], [catalogue]);
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return catalogue.filter(i => (cat === "All" || i.category === cat) && (!q || `${i.name} ${i.sku}`.toLowerCase().includes(q)));
+  }, [catalogue, cat, search]);
+
+  const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
+  const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
+
+  const unitLabel = (i) => { const parts = []; if (i.packCount && i.packCount !== 1) parts.push(`${i.packCount}×`); if (i.packSize) parts.push(`${i.packSize}${i.packUnit || ""}`); else if (i.packUnit) parts.push(i.packUnit); return parts.join(" ") || "each"; };
+
+  const cartLines = useMemo(() => Object.entries(cart).map(([itemId, qty]) => { const it = catalogue.find(c => c.id === itemId); return it ? { ...it, qty } : null; }).filter(Boolean), [cart, catalogue]);
+  const cartTotal = useMemo(() => cartLines.reduce((s, l) => s + l.qty * (Number(l.price) || 0), 0), [cartLines]);
+  const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
+
+  const reorderLast = () => {
+    if (!lastOrder) return;
+    const next = {};
+    for (const l of lastOrder.lines) { if (l.itemId && catalogue.some(c => c.id === l.itemId)) next[l.itemId] = (next[l.itemId] || 0) + (Number(l.qty) || 0); }
+    setCart(next);
+  };
+
+  const placeOrder = async () => {
+    if (!cartLines.length) return;
+    setPlacing(true); setErr("");
+    try {
+      const lines = cartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent" }));
+      const id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: "Placed via store ordering portal" }, lines);
+      setPlaced({ id, count: cartCount, total: cartTotal }); setCart({}); setConfirmOpen(false);
+    } catch (e) { setErr(e.message); }
+    setPlacing(false);
+  };
+
+  if (placed) {
+    return (
+      <div className="max-w-md mx-auto text-center py-12 space-y-4">
+        <div className="w-14 h-14 rounded-full bg-emerald-900/40 border border-emerald-700/50 flex items-center justify-center mx-auto"><Check size={28} className="text-emerald-300"/></div>
+        <h2 className="text-xl font-bold text-white">Order placed</h2>
+        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} · £{placed.total.toFixed(2)}. The Distribution team will pick and deliver it.</p>
+        <button onClick={() => setPlaced(null)} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Start another order</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white">Order from Distribution</h2>
+          {customers.length > 1 ? (
+            <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="mt-1 px-2 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
+              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          ) : customers.length === 1 ? <div className="text-xs text-slate-500">{customers[0].name}</div> : null}
+        </div>
+        {lastOrder && <button onClick={reorderLast} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><RotateCcw size={14}/> Reorder last ({lastOrder.soNumber})</button>}
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+
+      {loading ? <div className="text-sm text-slate-500 py-10 text-center">Loading…</div> : customerId && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Catalogue */}
+          <div className="lg:col-span-2 space-y-3">
+            <div className="relative"><Search size={15} className="absolute left-3 top-2.5 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search products…" className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/></div>
+            <div className="flex gap-1.5 flex-wrap">{categories.map(c => <button key={c} onClick={() => setCat(c)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${cat===c?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{c}</button>)}</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {visible.length === 0 && <div className="col-span-full text-center text-sm text-slate-600 py-8">No products match.</div>}
+              {visible.map(i => {
+                const qty = cart[i.id] || 0;
+                return (
+                  <div key={i.id} className={`rounded-2xl border p-3 flex flex-col ${qty>0?"border-indigo-600/60 bg-indigo-950/20":"border-slate-800 bg-slate-900"}`}>
+                    <div className="text-sm font-semibold text-white leading-tight">{i.name}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{unitLabel(i)}</div>
+                    <div className="text-base font-bold text-emerald-300 mt-2">£{Number(i.price).toFixed(2)}</div>
+                    <div className="mt-auto pt-2">
+                      {qty > 0 ? (
+                        <div className="flex items-center justify-between gap-1">
+                          <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold">−</button>
+                          <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-12 text-center px-1 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"/>
+                          <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold">+</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => bump(i.id, 1)} className="w-full py-2 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center justify-center gap-1"><Plus size={13}/> Add</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {/* Cart */}
+          <div className="lg:col-span-1">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 sticky top-4">
+              <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between"><span className="text-sm font-bold text-white">Your order</span><span className="text-xs text-slate-500">{cartCount} item{cartCount!==1?"s":""}</span></div>
+              <div className="max-h-96 overflow-y-auto divide-y divide-slate-800/60">
+                {cartLines.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">Cart is empty. Tap products to add.</div>}
+                {cartLines.map(l => (
+                  <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                    <div className="min-w-0"><div className="text-sm text-white truncate">{l.name}</div><div className="text-[11px] text-slate-500">{l.qty} × £{Number(l.price).toFixed(2)}</div></div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0"><span className="text-sm text-white">£{(l.qty*Number(l.price)).toFixed(2)}</span><button onClick={() => setQty(l.id, 0)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
+                  </div>
+                ))}
+              </div>
+              <div className="px-4 py-3 border-t border-slate-800 space-y-2">
+                <div className="flex justify-between text-sm"><span className="text-slate-400">Subtotal (excl. VAT)</span><span className="text-white font-bold">£{cartTotal.toFixed(2)}</span></div>
+                <button onClick={() => setConfirmOpen(true)} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Place order</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmOpen && (
+        <Modal onClose={() => setConfirmOpen(false)} title="Confirm your order" maxW="max-w-lg">
+          <div className="space-y-3">
+            <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-xl">
+              {cartLines.map(l => (
+                <div key={l.id} className="px-3 py-2 flex justify-between text-sm"><span className="text-slate-300">{l.qty} × {l.name}</span><span className="text-white">£{(l.qty*Number(l.price)).toFixed(2)}</span></div>
+              ))}
+            </div>
+            <div className="flex justify-between text-sm font-bold"><span className="text-white">Total (excl. VAT)</span><span className="text-white">£{cartTotal.toFixed(2)}</span></div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+            <div className="flex justify-end gap-2"><button onClick={() => setConfirmOpen(false)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Keep editing</button><button onClick={placeOrder} disabled={placing} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{placing?"Placing…":"Confirm & place order"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -41967,6 +42151,7 @@ export default function App() {
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
       { key: "ck-order",       label: "Order from Kitchen", icon: ChefHat, hideForCK: true },
+      { key: "dist-order",     label: "Order from Distribution", icon: ShoppingCart, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "WAREHOUSE", items: [
@@ -42219,6 +42404,7 @@ export default function App() {
             {effectiveActiveView === "operations" && opsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "ck-order" && <CkOrderView stores={stores} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}

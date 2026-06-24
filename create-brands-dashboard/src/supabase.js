@@ -9164,6 +9164,33 @@ export async function deleteDistPrice(id) {
   if (error) throw error;
 }
 // Resolve a customer's price for an item: price-list entry first, else item default sell.
+// ── STORE ORDERING PORTAL helpers ──
+// Resolve the Distribution customer(s) for a store user: dist_contacts (kind
+// customer) whose store_id is one of the user's storeIds. Returns [{id, name, storeId}].
+export async function fetchDistCustomersForStores(storeIds = []) {
+  const ids = (storeIds || []).filter(Boolean);
+  if (!ids.length) return [];
+  const customers = await fetchDistContacts({ kind: "customer" });
+  return customers.filter(c => c.storeId && ids.includes(c.storeId)).map(c => ({ id: c.id, name: c.displayName, storeId: c.storeId }));
+}
+
+// Priced catalogue for a customer: active items + each item's resolved sell
+// price (price-list entry, else item default). One round-trip for the portal.
+// Deliberately returns NO stock figures — stores order blind (SoW principle).
+export async function fetchDistPortalCatalogue(customerId) {
+  const [items, priceList] = await Promise.all([
+    fetchDistItems(),
+    customerId ? fetchDistPriceList(customerId) : Promise.resolve([]),
+  ]);
+  const priceByItem = new Map((priceList || []).map(p => [p.itemId, p.sellPrice]));
+  return items.filter(i => i.active !== false).map(i => ({
+    id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
+    packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
+    taxRateId: i.taxRateId,
+    price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
+  }));
+}
+
 export async function resolveDistSellPrice(customerId, itemId) {
   if (customerId) {
     const { data } = await supabase.from("dist_price_lists").select("sell_price").eq("customer_id", customerId).eq("item_id", itemId).maybeSingle();
