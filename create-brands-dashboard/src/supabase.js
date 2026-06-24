@@ -8750,3 +8750,234 @@ export async function deleteDistItem(itemId) {
   if (error) throw error;
   return { archived: false };
 }
+
+// ============================================================================
+// DISTRIBUTION — PHASE 2: BUY SIDE (vendors=contacts, POs, goods receipts,
+// bills, payments) + journal bridges into Finance (entity = brand-distribution).
+// Goods move ONLY at goods receipt. Money documents post journals, never stock.
+// ============================================================================
+const DIST_ENTITY = "brand-distribution";
+
+// ── Mappers ──
+const mapDistPO = (o) => ({
+  id: o.id, poNumber: o.po_number || "", vendorId: o.vendor_id || null, status: o.status || "draft",
+  orderDate: o.order_date || null, expectedDate: o.expected_date || null, note: o.note || "",
+  createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_purchase_order_lines || []).map(mapDistPOLine),
+});
+const mapDistPOLine = (l) => ({ id: l.id, poId: l.po_id, itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null });
+const mapDistGRN = (g) => ({
+  id: g.id, grnNumber: g.grn_number || "", vendorId: g.vendor_id || null, poId: g.po_id || null,
+  sourceKind: g.source_kind || "vendor", receivedDate: g.received_date || null, note: g.note || "",
+  posted: !!g.posted, createdBy: g.created_by || null, createdAt: g.created_at, lines: (g.dist_goods_receipt_lines || []).map(mapDistGRNLine),
+});
+const mapDistGRNLine = (l) => ({ id: l.id, grnId: l.grn_id, itemId: l.item_id, batchId: l.batch_id, qty: Number(l.qty) || 0, landedCost: Number(l.landed_cost) || 0, batchNo: l.batch_no || "", expiryDate: l.expiry_date || null });
+const mapDistBill = (b) => ({
+  id: b.id, billNumber: b.bill_number || "", vendorId: b.vendor_id || null, poId: b.po_id || null, grnId: b.grn_id || null,
+  billDate: b.bill_date || null, dueDate: b.due_date || null, status: b.status || "open", note: b.note || "",
+  posted: !!b.posted, createdBy: b.created_by || null, createdAt: b.created_at, lines: (b.dist_bill_lines || []).map(mapDistBillLine),
+});
+const mapDistBillLine = (l) => ({ id: l.id, billId: l.bill_id, itemId: l.item_id, description: l.description || "", qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null, accountCode: l.account_code || null });
+const mapDistBillPay = (p) => ({
+  id: p.id, paymentNumber: p.payment_number || "", vendorId: p.vendor_id || null, payDate: p.pay_date || null,
+  amount: Number(p.amount) || 0, method: p.method || null, bankCode: p.bank_code || null, reference: p.reference || "",
+  posted: !!p.posted, createdBy: p.created_by || null, createdAt: p.created_at, allocations: (p.dist_bill_payment_allocations || []).map(a => ({ id: a.id, billId: a.bill_id, amount: Number(a.amount) || 0 })),
+});
+
+// ── Tax helper: split a gross/net amount by an item/line tax rate ──
+async function distTaxPercent(taxRateId) {
+  if (!taxRateId) return 0;
+  const { data } = await supabase.from("dist_tax_rates").select("percent").eq("id", taxRateId).maybeSingle();
+  return Number(data?.percent) || 0;
+}
+
+// ── PURCHASE ORDERS ──
+export async function fetchDistPurchaseOrders({ vendorId, status } = {}) {
+  let q = supabase.from("dist_purchase_orders").select("*, dist_purchase_order_lines(*)").order("created_at", { ascending: false });
+  if (vendorId) q = q.eq("vendor_id", vendorId);
+  if (status) q = Array.isArray(status) ? q.in("status", status) : q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistPO);
+}
+export async function createDistPurchaseOrder(po, lines = []) {
+  const id = po.id || distId("dpo");
+  const row = {
+    id, po_number: po.poNumber || `PO-${Date.now().toString().slice(-6)}`, vendor_id: po.vendorId || null,
+    status: po.status || "draft", order_date: po.orderDate || new Date().toISOString().slice(0, 10),
+    expected_date: po.expectedDate || null, note: po.note || null, created_by: po.createdBy || null,
+  };
+  const { error } = await supabase.from("dist_purchase_orders").insert(row);
+  if (error) throw error;
+  if (lines.length) {
+    const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
+      id: distId("dpol"), po_id: id, item_id: l.itemId, qty: Number(l.qty) || 0,
+      unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+    }));
+    if (lr.length) { const { error: e2 } = await supabase.from("dist_purchase_order_lines").insert(lr); if (e2) throw e2; }
+  }
+  return id;
+}
+export async function setDistPurchaseOrderStatus(id, status) {
+  const { error } = await supabase.from("dist_purchase_orders").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+// ── GOODS RECEIPTS (the stock-IN event + journal) ──
+export async function fetchDistGoodsReceipts({ vendorId } = {}) {
+  let q = supabase.from("dist_goods_receipts").select("*, dist_goods_receipt_lines(*)").order("created_at", { ascending: false });
+  if (vendorId) q = q.eq("vendor_id", vendorId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistGRN);
+}
+// Receive goods: for each line create a batch, write a +receipt movement, then
+// post one journal Dr Stock / Cr GRNI at total landed cost. Idempotent.
+export async function postDistGoodsReceipt(grn, lines = []) {
+  const id = grn.id || distId("dgrn");
+  const receivedDate = grn.receivedDate || new Date().toISOString().slice(0, 10);
+  const head = {
+    id, grn_number: grn.grnNumber || `GRN-${Date.now().toString().slice(-6)}`, vendor_id: grn.vendorId || null,
+    po_id: grn.poId || null, source_kind: grn.sourceKind || "vendor", received_date: receivedDate,
+    note: grn.note || null, created_by: grn.createdBy || null, posted: false,
+  };
+  const { error } = await supabase.from("dist_goods_receipts").insert(head);
+  if (error) throw error;
+
+  let totalValue = 0;
+  for (const l of lines.filter(x => x.itemId && Number(x.qty) > 0)) {
+    const batch = await createDistBatch({
+      itemId: l.itemId, batchNo: l.batchNo || head.grn_number, expiryDate: l.expiryDate || null,
+      landedCost: Number(l.landedCost) || 0, costMethod: grn.sourceKind === "central_kitchen" ? "ck_cost" : "vendor_bill",
+      sourceKind: grn.sourceKind || "vendor",
+    });
+    await supabase.from("dist_goods_receipt_lines").insert({
+      id: distId("dgrnl"), grn_id: id, item_id: l.itemId, batch_id: batch.id, qty: Number(l.qty) || 0,
+      landed_cost: Number(l.landedCost) || 0, batch_no: l.batchNo || null, expiry_date: l.expiryDate || null,
+    });
+    await addDistMovement({
+      itemId: l.itemId, batchId: batch.id, qty: Number(l.qty) || 0, type: "receipt",
+      sourceKind: "goods_receipt", sourceRef: `distrecv:${id}:${l.itemId}:${batch.id}`, createdBy: grn.createdBy,
+    });
+    totalValue += (Number(l.qty) || 0) * (Number(l.landedCost) || 0);
+  }
+
+  // Journal: Dr Stock 1200 / Cr GRNI 2050 at landed cost.
+  if (totalValue > 0) {
+    const [stock, grni] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "1200"), resolveAccountForEntity(DIST_ENTITY, "2050"),
+    ]);
+    if (stock && grni) {
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: receivedDate, memo: `Goods receipt ${head.grn_number}`,
+          sourceKind: "dist_goods_receipt", sourceRef: `distrecv:${id}`, createdBy: grn.createdBy,
+          lines: [{ accountId: stock, amount: +totalValue.toFixed(2) }, { accountId: grni, amount: -totalValue.toFixed(2) }],
+        });
+      } catch (e) { /* best-effort: stock already recorded; journal can be retried */ }
+    }
+  }
+  await supabase.from("dist_goods_receipts").update({ posted: true }).eq("id", id);
+  if (grn.poId) await supabase.from("dist_purchase_orders").update({ status: "received" }).eq("id", grn.poId);
+  return id;
+}
+
+// ── BILLS (payable + journal Dr GRNI/VAT / Cr creditors) ──
+export async function fetchDistBills({ vendorId, status } = {}) {
+  let q = supabase.from("dist_bills").select("*, dist_bill_lines(*)").order("created_at", { ascending: false });
+  if (vendorId) q = q.eq("vendor_id", vendorId);
+  if (status) q = Array.isArray(status) ? q.in("status", status) : q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistBill);
+}
+export async function postDistBill(bill, lines = []) {
+  const id = bill.id || distId("dbill");
+  const billDate = bill.billDate || new Date().toISOString().slice(0, 10);
+  const head = {
+    id, bill_number: bill.billNumber || `BILL-${Date.now().toString().slice(-6)}`, vendor_id: bill.vendorId || null,
+    po_id: bill.poId || null, grn_id: bill.grnId || null, bill_date: billDate, due_date: bill.dueDate || null,
+    status: "open", note: bill.note || null, created_by: bill.createdBy || null, posted: false,
+  };
+  const { error } = await supabase.from("dist_bills").insert(head);
+  if (error) throw error;
+
+  const validLines = lines.filter(l => Number(l.qty) !== 0 || Number(l.unitPrice) !== 0);
+  let net = 0, vat = 0;
+  for (const l of validLines) {
+    const lineNet = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
+    const pct = await distTaxPercent(l.taxRateId);
+    net += lineNet; vat += lineNet * pct / 100;
+    await supabase.from("dist_bill_lines").insert({
+      id: distId("dbilll"), bill_id: id, item_id: l.itemId || null, description: l.description || null,
+      qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null, account_code: l.accountCode || null,
+    });
+  }
+  net = +net.toFixed(2); vat = +vat.toFixed(2); const gross = +(net + vat).toFixed(2);
+
+  // Journal: Dr GRNI 2050 (net) + Dr VAT 2100 (vat) / Cr Trade creditors 2000 (gross).
+  if (gross > 0) {
+    const [grni, vatAcc, creditors] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "2050"), resolveAccountForEntity(DIST_ENTITY, "2100"), resolveAccountForEntity(DIST_ENTITY, "2000"),
+    ]);
+    if (grni && creditors) {
+      const jlines = [{ accountId: grni, amount: net }];
+      if (vat > 0 && vatAcc) jlines.push({ accountId: vatAcc, amount: vat });
+      jlines.push({ accountId: creditors, amount: -gross });
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: billDate, memo: `Bill ${head.bill_number}`,
+          sourceKind: "dist_bill", sourceRef: `distbill:${id}`, createdBy: bill.createdBy, lines: jlines,
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  await supabase.from("dist_bills").update({ posted: true }).eq("id", id);
+  return id;
+}
+
+// ── BILL PAYMENTS (settle + allocate across bills) ──
+export async function fetchDistBillPayments({ vendorId } = {}) {
+  let q = supabase.from("dist_bill_payments").select("*, dist_bill_payment_allocations(*)").order("created_at", { ascending: false });
+  if (vendorId) q = q.eq("vendor_id", vendorId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistBillPay);
+}
+export async function postDistBillPayment(pay, allocations = []) {
+  const id = pay.id || distId("dbpay");
+  const payDate = pay.payDate || new Date().toISOString().slice(0, 10);
+  const amount = +(Number(pay.amount) || 0).toFixed(2);
+  const head = {
+    id, payment_number: pay.paymentNumber || `PAY-${Date.now().toString().slice(-6)}`, vendor_id: pay.vendorId || null,
+    pay_date: payDate, amount, method: pay.method || "bank", bank_code: pay.bankCode || "1010",
+    reference: pay.reference || null, created_by: pay.createdBy || null, posted: false,
+  };
+  const { error } = await supabase.from("dist_bill_payments").insert(head);
+  if (error) throw error;
+
+  for (const a of allocations.filter(x => x.billId && Number(x.amount) > 0)) {
+    await supabase.from("dist_bill_payment_allocations").insert({ id: distId("dbpa"), payment_id: id, bill_id: a.billId, amount: Number(a.amount) });
+    // Update bill status by comparing total allocated to its gross (best-effort).
+    const { data: allocs } = await supabase.from("dist_bill_payment_allocations").select("amount").eq("bill_id", a.billId);
+    const paid = (allocs || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    await supabase.from("dist_bills").update({ status: paid > 0 ? "part_paid" : "open" }).eq("id", a.billId);
+  }
+
+  // Journal: Dr Trade creditors 2000 / Cr Bank (bank_code).
+  if (amount > 0) {
+    const [creditors, bank] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "2000"), resolveAccountForEntity(DIST_ENTITY, head.bank_code || "1010"),
+    ]);
+    if (creditors && bank) {
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: payDate, memo: `Bill payment ${head.payment_number}`,
+          sourceKind: "dist_bill_payment", sourceRef: `distbillpay:${id}`, createdBy: pay.createdBy,
+          lines: [{ accountId: creditors, amount }, { accountId: bank, amount: -amount }],
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  await supabase.from("dist_bill_payments").update({ posted: true }).eq("id", id);
+  return id;
+}

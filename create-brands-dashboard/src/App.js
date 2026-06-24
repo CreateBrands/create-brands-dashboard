@@ -138,6 +138,9 @@ import {
   fetchDistItems, upsertDistItem, deleteDistItem, fetchDistBatches, createDistBatch,
   fetchDistMovements, addDistMovement, seedDistOpeningStock,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
+  fetchDistPurchaseOrders, createDistPurchaseOrder, setDistPurchaseOrderStatus,
+  fetchDistGoodsReceipts, postDistGoodsReceipt,
+  fetchDistBills, postDistBill, fetchDistBillPayments, postDistBillPayment,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6034,6 +6037,367 @@ function distMoney(v) {
   if (v == null || v === "") return null;
   const n = Number(String(v).replace(/[^0-9.\-]/g, ""));
   return isNaN(n) ? null : n;
+}
+
+// ============================================================================
+// DISTRIBUTION — BUY SIDE UI (vendors, POs, goods receipts, bills, payments).
+// Tabbed. Goods receipt is the stock-IN event; bills/payments post journals.
+// ============================================================================
+function DistBuyView({ currentUser }) {
+  const [tab, setTab] = useState("vendors");
+  const TABS = [
+    { key: "vendors", label: "Vendors" },
+    { key: "pos", label: "Purchase Orders" },
+    { key: "grn", label: "Goods In" },
+    { key: "bills", label: "Bills" },
+    { key: "pay", label: "Payments" },
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
+        {TABS.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
+        ))}
+      </div>
+      {tab === "vendors" && <DistVendorsTab currentUser={currentUser}/>}
+      {tab === "pos" && <DistPOTab currentUser={currentUser}/>}
+      {tab === "grn" && <DistGRNTab currentUser={currentUser}/>}
+      {tab === "bills" && <DistBillsTab currentUser={currentUser}/>}
+      {tab === "pay" && <DistPaymentsTab currentUser={currentUser}/>}
+    </div>
+  );
+}
+
+// ── Vendors (contacts kind=vendor) ──
+function DistVendorsTab({ currentUser }) {
+  const [vendors, setVendors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setVendors(await fetchDistContacts({ kind: "vendor" })); } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    if (!edit?.displayName) { setErr("Name required"); return; }
+    setBusy(true); setErr("");
+    try { await upsertDistContact({ ...edit, kind: "vendor" }); setEdit(null); await load(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center">
+        <div className="text-sm text-slate-400">{vendors.length} vendor{vendors.length!==1?"s":""}</div>
+        <button onClick={() => setEdit({ kind: "vendor", active: true })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New vendor</button>
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {vendors.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No vendors yet. Add suppliers (and the Central Kitchen) here.</div>}
+          {vendors.map(v => (
+            <button key={v.id} onClick={() => setEdit(v)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50">
+              <div><span className="text-white">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CENTRAL KITCHEN</span>}<div className="text-[11px] text-slate-500">{v.companyName || v.email || "—"}</div></div>
+              <Edit size={13} className="text-slate-600"/>
+            </button>
+          ))}
+        </div>
+      )}
+      {edit && (
+        <Modal onClose={() => setEdit(null)} title={edit.id ? "Edit vendor" : "New vendor"}>
+          <div className="space-y-3">
+            <label className="text-xs text-slate-400 block">Name<input value={edit.displayName || ""} onChange={e => setEdit({ ...edit, displayName: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            <label className="text-xs text-slate-400 block">Company / legal name<input value={edit.companyName || ""} onChange={e => setEdit({ ...edit, companyName: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">Email<input value={edit.email || ""} onChange={e => setEdit({ ...edit, email: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Phone<input value={edit.phone || ""} onChange={e => setEdit({ ...edit, phone: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <label className="text-xs text-slate-400 flex items-center gap-2"><input type="checkbox" checked={!!edit.isCentralKitchen} onChange={e => setEdit({ ...edit, isCentralKitchen: e.target.checked })}/> This vendor is the Central Kitchen</label>
+            <div className="flex justify-end gap-2"><button onClick={() => setEdit(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Saving…":"Save"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Shared: line editor for item+qty+price ──
+function DistLineEditor({ items, taxRates, lines, setLines, withPrice }) {
+  const add = () => setLines([...lines, { itemId: "", qty: "", unitPrice: "", taxRateId: null }]);
+  const upd = (i, patch) => setLines(lines.map((l, j) => j === i ? { ...l, ...patch } : l));
+  const del = (i) => setLines(lines.filter((_, j) => j !== i));
+  return (
+    <div className="space-y-2">
+      {lines.map((l, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <select value={l.itemId} onChange={e => { const it = items.find(x => x.id === e.target.value); upd(i, { itemId: e.target.value, taxRateId: it?.taxRateId || null, unitPrice: l.unitPrice || it?.purchaseRate || "" }); }} className="flex-1 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
+            <option value="">Select item…</option>{items.map(it => <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>)}
+          </select>
+          <input type="number" value={l.qty} onChange={e => upd(i, { qty: e.target.value })} placeholder="Qty" className="w-20 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+          {withPrice && <input type="number" value={l.unitPrice} onChange={e => upd(i, { unitPrice: e.target.value })} placeholder="£/unit" className="w-24 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>}
+          <button onClick={() => del(i)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button>
+        </div>
+      ))}
+      <button onClick={add} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"><Plus size={12}/> Add line</button>
+    </div>
+  );
+}
+
+// ── Purchase Orders ──
+function DistPOTab({ currentUser }) {
+  const [pos, setPos] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [p, v, it, tx] = await Promise.all([fetchDistPurchaseOrders(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setPos(p); setVendors(v); setItems(it); setTaxRates(tx); }
+    catch (e) { setErr(e.message); } setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
+    setBusy(true); setErr("");
+    try { await createDistPurchaseOrder({ ...creating, status: "sent", createdBy: currentUser?.id }, creating.lines || []); setCreating(null); await load(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pos.length} order{pos.length!==1?"s":""}</div>
+        <button onClick={() => setCreating({ lines: [{ itemId: "", qty: "", unitPrice: "" }] })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New PO</button></div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {pos.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No purchase orders yet.</div>}
+          {pos.map(po => (
+            <div key={po.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+              <div><span className="text-white font-mono text-xs">{po.poNumber}</span> <span className="text-slate-400">{vName(po.vendorId)}</span><div className="text-[11px] text-slate-500">{po.lines.length} line{po.lines.length!==1?"s":""} · {po.orderDate}</div></div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${po.status==="received"?"bg-emerald-900/50 text-emerald-300":po.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{po.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {creating && (
+        <Modal onClose={() => setCreating(null)} title="New purchase order" maxW="max-w-2xl">
+          <div className="space-y-3">
+            <label className="text-xs text-slate-400 block">Vendor<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select…</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">Order date<input type="date" value={creating.orderDate || new Date().toISOString().slice(0,10)} onChange={e => setCreating({ ...creating, orderDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Expected<input type="date" value={creating.expectedDate || ""} onChange={e => setCreating({ ...creating, expectedDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <div className="text-xs text-slate-400">Lines</div>
+            <DistLineEditor items={items} taxRates={taxRates} lines={creating.lines || []} setLines={ls => setCreating({ ...creating, lines: ls })} withPrice/>
+            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Saving…":"Create PO"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Goods In (receipt -> stock + journal) ──
+function DistGRNTab({ currentUser }) {
+  const [grns, setGrns] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [g, v, it] = await Promise.all([fetchDistGoodsReceipts(), fetchDistContacts({ kind: "vendor" }), fetchDistItems()]); setGrns(g); setVendors(v); setItems(it); }
+    catch (e) { setErr(e.message); } setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    if (!creating?.vendorId) { setErr("Pick a source/vendor"); return; }
+    const valid = (creating.lines || []).filter(l => l.itemId && Number(l.qty) > 0);
+    if (!valid.length) { setErr("Add at least one received line with qty"); return; }
+    setBusy(true); setErr("");
+    try {
+      const vendor = vendors.find(v => v.id === creating.vendorId);
+      await postDistGoodsReceipt({ ...creating, sourceKind: vendor?.isCentralKitchen ? "central_kitchen" : "vendor", createdBy: currentUser?.id }, valid);
+      setCreating(null); await load();
+    } catch (e) { setErr(e.message); } setBusy(false);
+  };
+  const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{grns.length} receipt{grns.length!==1?"s":""}</div>
+        <button onClick={() => setCreating({ lines: [{ itemId: "", qty: "", landedCost: "", batchNo: "", expiryDate: "" }] })} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> Receive goods</button></div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {grns.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No goods received yet. This is the event that raises stock.</div>}
+          {grns.map(g => (
+            <div key={g.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+              <div><span className="text-white font-mono text-xs">{g.grnNumber}</span> <span className="text-slate-400">{vName(g.vendorId)}</span>{g.sourceKind==="central_kitchen" && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK</span>}<div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length!==1?"s":""} · {g.receivedDate}</div></div>
+              {g.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">posted</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {creating && (
+        <Modal onClose={() => setCreating(null)} title="Receive goods into warehouse" maxW="max-w-3xl">
+          <div className="space-y-3">
+            <p className="text-[11px] text-slate-500">This raises stock (a receipt movement per line) and posts Dr Stock / Cr GRNI at landed cost.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">Source / vendor<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select…</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}{v.isCentralKitchen?" (CK)":""}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Received date<input type="date" value={creating.receivedDate || new Date().toISOString().slice(0,10)} onChange={e => setCreating({ ...creating, receivedDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <div className="text-xs text-slate-400">Received lines (qty · landed cost £/unit · batch · expiry)</div>
+            <div className="space-y-2">
+              {(creating.lines || []).map((l, i) => (
+                <div key={i} className="flex items-center gap-2 flex-wrap">
+                  <select value={l.itemId} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,itemId:e.target.value, landedCost: x.landedCost || items.find(it=>it.id===e.target.value)?.purchaseRate || ""}:x) })} className="flex-1 min-w-[160px] px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"><option value="">Item…</option>{items.map(it => <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>)}</select>
+                  <input type="number" value={l.qty} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,qty:e.target.value}:x) })} placeholder="Qty" className="w-16 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+                  <input type="number" value={l.landedCost} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,landedCost:e.target.value}:x) })} placeholder="£/unit" className="w-20 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+                  <input value={l.batchNo} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,batchNo:e.target.value}:x) })} placeholder="Batch" className="w-24 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+                  <input type="date" value={l.expiryDate} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,expiryDate:e.target.value}:x) })} className="w-36 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+                  <button onClick={() => setCreating({ ...creating, lines: creating.lines.filter((_,j)=>j!==i) })} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button>
+                </div>
+              ))}
+              <button onClick={() => setCreating({ ...creating, lines: [...(creating.lines||[]), { itemId:"", qty:"", landedCost:"", batchNo:"", expiryDate:"" }] })} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"><Plus size={12}/> Add line</button>
+            </div>
+            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Receive & post"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Bills ──
+function DistBillsTab({ currentUser }) {
+  const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); }
+    catch (e) { setErr(e.message); } setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
+    setBusy(true); setErr("");
+    try { await postDistBill({ ...creating, createdBy: currentUser?.id }, creating.lines || []); setCreating(null); await load(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{bills.length} bill{bills.length!==1?"s":""}</div>
+        <button onClick={() => setCreating({ lines: [{ itemId:"", description:"", qty:"", unitPrice:"", taxRateId:null }] })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {bills.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No bills yet.</div>}
+          {bills.map(b => (
+            <div key={b.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+              <div><span className="text-white font-mono text-xs">{b.billNumber}</span> <span className="text-slate-400">{vName(b.vendorId)}</span><div className="text-[11px] text-slate-500">{b.billDate}{b.dueDate?` · due ${b.dueDate}`:""}</div></div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${b.status==="paid"?"bg-emerald-900/50 text-emerald-300":b.status==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-slate-800 text-slate-400"}`}>{b.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {creating && (
+        <Modal onClose={() => setCreating(null)} title="New bill" maxW="max-w-2xl">
+          <div className="space-y-3">
+            <p className="text-[11px] text-slate-500">Posts Dr GRNI (net) + Dr VAT / Cr Trade creditors (gross).</p>
+            <div className="grid grid-cols-3 gap-3">
+              <label className="text-xs text-slate-400 col-span-1">Vendor<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select…</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Bill date<input type="date" value={creating.billDate || new Date().toISOString().slice(0,10)} onChange={e => setCreating({ ...creating, billDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Due<input type="date" value={creating.dueDate || ""} onChange={e => setCreating({ ...creating, dueDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <div className="text-xs text-slate-400">Lines</div>
+            <div className="space-y-2">
+              {(creating.lines || []).map((l, i) => (
+                <div key={i} className="flex items-center gap-2 flex-wrap">
+                  <select value={l.itemId||""} onChange={e => { const it=items.find(x=>x.id===e.target.value); setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,itemId:e.target.value,taxRateId:it?.taxRateId||x.taxRateId,unitPrice:x.unitPrice||it?.purchaseRate||""}:x) }); }} className="flex-1 min-w-[150px] px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"><option value="">Item…</option>{items.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}</select>
+                  <input type="number" value={l.qty} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,qty:e.target.value}:x) })} placeholder="Qty" className="w-16 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+                  <input type="number" value={l.unitPrice} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,unitPrice:e.target.value}:x) })} placeholder="£/unit" className="w-20 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/>
+                  <select value={l.taxRateId||""} onChange={e => setCreating({ ...creating, lines: creating.lines.map((x,j)=>j===i?{...x,taxRateId:e.target.value||null}:x) })} className="w-24 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"><option value="">No tax</option>{taxRates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+                  <button onClick={() => setCreating({ ...creating, lines: creating.lines.filter((_,j)=>j!==i) })} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button>
+                </div>
+              ))}
+              <button onClick={() => setCreating({ ...creating, lines: [...(creating.lines||[]), { itemId:"", qty:"", unitPrice:"", taxRateId:null }] })} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"><Plus size={12}/> Add line</button>
+            </div>
+            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Create & post bill"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Payments ──
+function DistPaymentsTab({ currentUser }) {
+  const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [p, v, b] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] })]); setPays(p); setVendors(v); setBills(b); }
+    catch (e) { setErr(e.message); } setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    if (!creating?.vendorId || !(Number(creating.amount) > 0)) { setErr("Vendor and amount required"); return; }
+    setBusy(true); setErr("");
+    try {
+      const allocs = (creating.allocations || []).filter(a => a.billId && Number(a.amount) > 0);
+      await postDistBillPayment({ ...creating, createdBy: currentUser?.id }, allocs);
+      setCreating(null); await load();
+    } catch (e) { setErr(e.message); } setBusy(false);
+  };
+  const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
+  const vendorBills = creating ? bills.filter(b => b.vendorId === creating.vendorId) : [];
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pays.length} payment{pays.length!==1?"s":""}</div>
+        <button onClick={() => setCreating({ method:"bank", bankCode:"1010", allocations: [] })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New payment</button></div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {pays.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No payments yet.</div>}
+          {pays.map(p => (
+            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+              <div><span className="text-white font-mono text-xs">{p.paymentNumber}</span> <span className="text-slate-400">{vName(p.vendorId)}</span><div className="text-[11px] text-slate-500">{p.payDate} · {p.method} · {p.allocations.length} bill{p.allocations.length!==1?"s":""}</div></div>
+              <span className="text-white font-semibold">£{p.amount.toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {creating && (
+        <Modal onClose={() => setCreating(null)} title="New bill payment" maxW="max-w-2xl">
+          <div className="space-y-3">
+            <p className="text-[11px] text-slate-500">Posts Dr Trade creditors / Cr Bank. Allocate across the vendor&#39;s open bills.</p>
+            <div className="grid grid-cols-3 gap-3">
+              <label className="text-xs text-slate-400">Vendor<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value, allocations: [] })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select…</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Amount £<input type="number" value={creating.amount || ""} onChange={e => setCreating({ ...creating, amount: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Paid through<select value={creating.bankCode || "1010"} onChange={e => setCreating({ ...creating, bankCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="1010">Bank (1010)</option><option value="1000">Cash (1000)</option></select></label>
+            </div>
+            {creating.vendorId && (
+              <div>
+                <div className="text-xs text-slate-400 mb-1">Allocate to bills</div>
+                {vendorBills.length === 0 ? <div className="text-xs text-slate-600">No open bills for this vendor.</div> : (
+                  <div className="space-y-1">{vendorBills.map(b => {
+                    const alloc = (creating.allocations || []).find(a => a.billId === b.id);
+                    return (
+                      <div key={b.id} className="flex items-center gap-2 text-xs">
+                        <span className="flex-1 text-slate-300 font-mono">{b.billNumber}</span>
+                        <input type="number" value={alloc?.amount || ""} onChange={e => {
+                          const others = (creating.allocations || []).filter(a => a.billId !== b.id);
+                          setCreating({ ...creating, allocations: e.target.value ? [...others, { billId: b.id, amount: Number(e.target.value) }] : others });
+                        }} placeholder="£ allocate" className="w-28 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white"/>
+                      </div>
+                    );
+                  })}</div>
+                )}
+              </div>
+            )}
+            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Record payment"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
 }
 
 // Item detail: all attributes + read-only stock (on-hand/committed/available)
@@ -40545,6 +40909,7 @@ export default function App() {
     ]},
     { group: "WAREHOUSE", items: [
       { key: "dist-items",  label: "Items",  icon: Tag, requiresEntity: "brand-distribution" },
+      { key: "dist-buy",    label: "Purchasing", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
@@ -40900,6 +41265,7 @@ export default function App() {
             {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-buy" && <DistBuyView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
