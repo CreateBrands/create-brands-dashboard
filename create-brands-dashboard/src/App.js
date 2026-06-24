@@ -11507,19 +11507,37 @@ function EmpThemeStyle() {
   color: var(--ink);
 }
 
-/* Backgrounds: dark slates -> cream surfaces */
+/* Backgrounds: dark slates -> cream surfaces (brand tile backgrounds) */
 .emp-theme .bg-slate-950,
 .emp-theme .bg-slate-900 { background-color: var(--cream) !important; }
 .emp-theme .bg-slate-800 { background-color: var(--cream-soft) !important; }
 .emp-theme .bg-slate-700 { background-color: var(--cream-deep) !important; }
+.emp-theme .bg-slate-900\\/20,
+.emp-theme .bg-slate-900\\/25,
+.emp-theme .bg-slate-900\\/30,
 .emp-theme .bg-slate-900\\/40,
+.emp-theme .bg-slate-900\\/50,
 .emp-theme .bg-slate-900\\/60,
+.emp-theme .bg-slate-900\\/70,
+.emp-theme .bg-slate-900\\/80,
 .emp-theme .bg-slate-950\\/40,
 .emp-theme .bg-slate-950\\/50,
+.emp-theme .bg-slate-950\\/60,
+.emp-theme .bg-slate-950\\/80,
+.emp-theme .bg-slate-950\\/95,
+.emp-theme .bg-slate-800\\/30,
+.emp-theme .bg-slate-800\\/40,
+.emp-theme .bg-slate-800\\/50,
 .emp-theme .bg-slate-800\\/60,
 .emp-theme .bg-slate-800\\/70,
-.emp-theme .bg-slate-800\\/80,
-.emp-theme .bg-slate-800\\/40 { background-color: var(--cream-soft) !important; }
+.emp-theme .bg-slate-800\\/80 { background-color: var(--cream-soft) !important; }
+.emp-theme .bg-slate-700\\/30,
+.emp-theme .bg-slate-700\\/40,
+.emp-theme .bg-slate-700\\/60,
+.emp-theme .bg-slate-600,
+.emp-theme .bg-slate-500,
+.emp-theme .bg-slate-400,
+.emp-theme .bg-slate-500\\/10 { background-color: var(--cream-deep) !important; }
 
 /* Indigo accents -> brown */
 .emp-theme .bg-indigo-600 { background-color: var(--brown) !important; }
