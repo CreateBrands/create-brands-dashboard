@@ -6095,6 +6095,59 @@ const DIST_PAYMENT_TERMS = [
 ];
 
 // Compute line + document totals honouring vat mode + header discount.
+// ── Cross-document linking ───────────────────────────────────────────────────
+// A lightweight context so any Distribution detail view can open another linked
+// document (SO#, invoice#, pick#, dispatch#, customer) without prop-drilling.
+// The provider renders the shared detail modals once.
+const DistDocLinkContext = React.createContext(null);
+function useDistDocLink() { return React.useContext(DistDocLinkContext) || { openDoc: () => {} }; }
+
+function DistDocLinkProvider({ children }) {
+  const [stack, setStack] = useState([]); // [{type, id}] — supports drilling link→link
+  const openDoc = useCallback((type, id) => { if (type && id) setStack(s => [...s, { type, id }]); }, []);
+  const top = stack[stack.length - 1] || null;
+  const close = () => setStack(s => s.slice(0, -1));
+
+  // Lazy data for views that need a full object (SO, customer).
+  const [obj, setObj] = useState(null);
+  const [aux, setAux] = useState({ items: [], taxRates: [], customers: [], stores: [] });
+  useEffect(() => {
+    let alive = true;
+    if (!top) { setObj(null); return; }
+    (async () => {
+      try {
+        if (top.type === "so") {
+          const [sos, items, taxRates, customers] = await Promise.all([fetchDistSalesOrders({}), fetchDistItems(), fetchDistTaxRates(), fetchDistContacts({ kind: "customer" })]);
+          const so = sos.find(s => s.id === top.id) || null;
+          if (alive) { setObj(so); setAux({ items, taxRates, customers, stores: [] }); }
+        } else if (top.type === "customer") {
+          const customers = await fetchDistContacts({ kind: "customer" });
+          if (alive) setObj(customers.find(c => c.id === top.id) || null);
+        } else { setObj({ id: top.id }); }
+      } catch { if (alive) setObj(null); }
+    })();
+    return () => { alive = false; };
+  }, [top]);
+
+  return (
+    <DistDocLinkContext.Provider value={{ openDoc }}>
+      {children}
+      {top && top.type === "invoice" && <DistInvoiceDetail invoiceId={top.id} onClose={close}/>}
+      {top && top.type === "pick" && <DistPickDetail pickId={top.id} onClose={close}/>}
+      {top && top.type === "dispatch" && <DistDispatchDetail dispatchId={top.id} onClose={close}/>}
+      {top && top.type === "so" && obj && <DistSalesOrderDetail so={obj} customer={aux.customers.find(c => c.id === obj.customerId)} items={aux.items} taxRates={aux.taxRates} onClose={close} onEdit={close}/>}
+      {top && top.type === "customer" && obj && <DistCustomerDetail customer={obj} onClose={close} onEdit={close}/>}
+    </DistDocLinkContext.Provider>
+  );
+}
+
+// A clickable document reference (number or name) that opens the linked detail.
+function DocLink({ type, id, children, className = "" }) {
+  const { openDoc } = useDistDocLink();
+  if (!id) return <span className={className}>{children}</span>;
+  return <button onClick={(e) => { e.stopPropagation(); openDoc(type, id); }} className={`text-indigo-300 hover:underline ${className}`}>{children}</button>;
+}
+
 function distComputeTotals(lines, taxRates, vatMode, discountValue, discountType) {
   const inclusive = vatMode === "inclusive";
   const discVal = Number(discountValue) || 0;
@@ -6734,7 +6787,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
                   <tbody>{data.invoices.map(i => (
                     <tr key={i.id} className="border-t border-slate-800/60">
                       <td className="px-3 py-2 text-slate-400">{fmtDate(i.date)}</td>
-                      <td className="px-3 py-2"><span className="font-mono text-indigo-300">{i.invoiceNumber}</span></td>
+                      <td className="px-3 py-2"><DocLink type="invoice" id={i.id} className="font-mono">{i.invoiceNumber}</DocLink></td>
                       <td className="px-3 py-2 text-right text-white">{gbp(i.amount)}</td>
                       <td className="px-3 py-2 text-right text-slate-300">{gbp(i.balance)}</td>
                       <td className={`px-3 py-2 pl-4 capitalize ${statusColor(i.status)}`}>{i.status.replace("_", " ")}</td>
@@ -6765,7 +6818,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
                   <tbody>{data.salesOrders.map(s => (
                     <tr key={s.id} className="border-t border-slate-800/60">
                       <td className="px-3 py-2 text-slate-400">{fmtDate(s.date)}</td>
-                      <td className="px-3 py-2 font-mono text-indigo-300">{s.soNumber}</td>
+                      <td className="px-3 py-2 font-mono"><DocLink type="so" id={s.id} className="font-mono">{s.soNumber}</DocLink></td>
                       <td className="px-3 py-2 text-right text-white">{gbp(s.total)}</td>
                       <td className="px-3 py-2 pl-4 text-slate-400 capitalize">{(s.status || "").replace(/_/g, " ")}</td>
                     </tr>))}</tbody>
@@ -7033,12 +7086,12 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 lg:col-span-2 grid grid-cols-2 gap-3">
             <div>
               <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Billing address</div>
-              <div className="text-sm text-indigo-300 font-medium">{customer?.displayName || "—"}</div>
+              <div className="text-sm font-medium"><DocLink type="customer" id={customer?.id} className="font-medium">{customer?.displayName || "—"}</DocLink></div>
               {customer?.billingAddress ? <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{customer.billingAddress}</div> : <div className="text-xs text-slate-600 mt-0.5">No billing address</div>}
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Shipping address</div>
-              <div className="text-sm text-indigo-300 font-medium">{customer?.displayName || "—"}</div>
+              <div className="text-sm font-medium"><DocLink type="customer" id={customer?.id} className="font-medium">{customer?.displayName || "—"}</DocLink></div>
               {customer?.shippingAddress ? <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{customer.shippingAddress}</div> : <div className="text-xs text-slate-600 mt-0.5">No shipping address</div>}
             </div>
           </div>
@@ -7227,8 +7280,8 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
         {d && (
           <>
             <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Customer</div><div className="text-sm text-white">{d.customer?.displayName || "—"}</div></div>
-              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono text-indigo-300">{d.soNumber || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Customer</div><div className="text-sm"><DocLink type="customer" id={d.customer?.id}>{d.customer?.displayName || "—"}</DocLink></div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono"><DocLink type="so" id={d.soId} className="font-mono">{d.soNumber || "—"}</DocLink></div></div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Pick date</div><div className="text-sm text-white">{fmtDate(d.pickDate)}</div></div>
             </div>
             <div className="rounded-xl border border-slate-800 overflow-hidden">
@@ -7268,8 +7321,8 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
         {d && (
           <>
             <div className="grid grid-cols-4 gap-3">
-              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Customer</div><div className="text-sm text-white">{d.customer?.displayName || "—"}</div></div>
-              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono text-indigo-300">{d.soNumber || "—"}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Customer</div><div className="text-sm"><DocLink type="customer" id={d.customer?.id}>{d.customer?.displayName || "—"}</DocLink></div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono"><DocLink type="so" id={d.soId} className="font-mono">{d.soNumber || "—"}</DocLink></div></div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Date</div><div className="text-sm text-white">{fmtDate(d.dispatchDate)}</div></div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">COGS posted</div><div className="text-sm text-amber-300 font-semibold">{gbp(d.cogsTotal)}</div></div>
             </div>
@@ -7524,7 +7577,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
               <div className="flex justify-between items-start">
                 <div>
                   <div className="text-[10px] uppercase tracking-wide text-slate-500">Bill To</div>
-                  <div className="text-sm font-semibold text-indigo-300 mt-0.5">{d.customer?.displayName || "—"}</div>
+                  <div className="text-sm font-semibold mt-0.5"><DocLink type="customer" id={d.customer?.id} className="font-semibold">{d.customer?.displayName || "—"}</DocLink></div>
                   {d.customer?.billingAddress && <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{d.customer.billingAddress}</div>}
                 </div>
                 <div className="text-right space-y-1">
@@ -7537,7 +7590,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
                 <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Invoice date</div><div className="text-sm text-white">{fmtDate(d.invoiceDate)}</div></div>
                 <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Terms</div><div className="text-sm text-white capitalize">{(d.paymentTerms||"").replace(/_/g," ")||"—"}</div></div>
                 <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Due date</div><div className="text-sm text-white">{fmtDate(d.dueDate)}</div></div>
-                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">P.O. / SO#</div><div className="text-sm font-mono text-indigo-300">{d.soNumber || "—"}</div></div>
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">P.O. / SO#</div><div className="text-sm font-mono"><DocLink type="so" id={d.soId} className="font-mono">{d.soNumber || "—"}</DocLink></div></div>
               </div>
             </div>
 
@@ -7580,8 +7633,9 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
 
 function DistInvoicesView({ currentUser }) {
   const [invoices, setInvoices] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [dispatches, setDispatches] = useState([]);
+  const [paidMap, setPaidMap] = useState(new Map()); const [soNumMap, setSoNumMap] = useState(new Map());
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
-  const load = useCallback(async () => { setLoading(true); try { const [inv, c, it, tx, d] = await Promise.all([fetchDistInvoices(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates(), fetchDistDispatches()]); setInvoices(inv); setCustomers(c); setItems(it); setTaxRates(tx); setDispatches(d); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const load = useCallback(async () => { setLoading(true); try { const [inv, c, it, tx, d, sos] = await Promise.all([fetchDistInvoices(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates(), fetchDistDispatches(), fetchDistSalesOrders({})]); setInvoices(inv); setCustomers(c); setItems(it); setTaxRates(tx); setDispatches(d); setSoNumMap(new Map(sos.map(so => [so.id, so.soNumber]))); try { setPaidMap(await fetchDistInvoicePaidMap(inv.map(i => i.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const newDoc = () => setCreating({ customerId: "", invoiceDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", shippingCharge: "", paymentTerms: "due_on_receipt", lines: [{ itemId:"", accountCode:"4000", qty:1, unitPrice:"", taxRateId:null }] });
   // Build an invoice from a dispatch (pull its lines).
@@ -7613,14 +7667,56 @@ function DistInvoicesView({ currentUser }) {
         </div>
       )}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {invoices.length === 0 && uninvoicedDispatches.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices yet.</div>}
-          {invoices.map(inv => { const t = distComputeTotals(inv.lines, taxRates, inv.vatMode, inv.discountPercent, inv.discountType); return (
-            <div key={inv.id} onClick={() => setDetailId(inv.id)} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
-              <div><span className="text-indigo-300 font-mono text-xs hover:underline">{inv.invoiceNumber}</span> <span className="text-slate-400">{cName(inv.customerId)}</span><div className="text-[11px] text-slate-500">{inv.invoiceDate}{inv.dueDate?` · due ${inv.dueDate}`:""}</div></div>
-              <div className="flex items-center gap-3"><span className="text-white text-xs">£{(t.grandTotal + (Number(inv.shippingCharge)||0)).toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${inv.status==="paid"?"bg-emerald-900/50 text-emerald-300":inv.status==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-slate-800 text-slate-400"}`}>{inv.status}</span></div>
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {invoices.length === 0 && uninvoicedDispatches.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices yet.</div> : invoices.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
+                  <tr>
+                    <th className="text-left px-3 py-2.5 font-semibold">Date</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Invoice#</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Order Number</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Customer Name</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Status</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Due Date</th>
+                    <th className="text-right px-3 py-2.5 font-semibold">Amount</th>
+                    <th className="text-right px-3 py-2.5 font-semibold">Balance Due</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map(inv => {
+                    const t = distComputeTotals(inv.lines, taxRates, inv.vatMode, inv.discountPercent, inv.discountType);
+                    const amount = t.grandTotal + (Number(inv.shippingCharge) || 0);
+                    const paid = paidMap.get(inv.id) || 0;
+                    const balance = +(amount - paid).toFixed(2);
+                    // Status label like Zoho: Paid / Due Today / Overdue by N days / Due in N days.
+                    let label = "Open", tone = "text-slate-400";
+                    if (balance <= 0.005) { label = "Paid"; tone = "text-emerald-400"; }
+                    else if (inv.dueDate) {
+                      const today = new Date(); today.setHours(0,0,0,0);
+                      const due = new Date(inv.dueDate); due.setHours(0,0,0,0);
+                      const days = Math.round((due - today) / 86400000);
+                      if (days < 0) { label = `Overdue by ${Math.abs(days)} day${Math.abs(days)!==1?"s":""}`; tone = "text-orange-400"; }
+                      else if (days === 0) { label = "Due Today"; tone = "text-blue-400"; }
+                      else { label = `Due in ${days} day${days!==1?"s":""}`; tone = "text-slate-300"; }
+                    } else if (paid > 0) { label = "Partially Paid"; tone = "text-amber-400"; }
+                    return (
+                      <tr key={inv.id} onClick={() => setDetailId(inv.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                        <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{inv.invoiceDate}</td>
+                        <td className="px-3 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{inv.invoiceNumber}</span></td>
+                        <td className="px-3 py-2.5 font-mono text-indigo-300/80">{soNumMap.get(inv.soId) || "—"}</td>
+                        <td className="px-3 py-2.5 text-slate-300">{cName(inv.customerId)}</td>
+                        <td className={`px-3 py-2.5 text-xs font-semibold ${tone}`}>{label}</td>
+                        <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{inv.dueDate || "—"}</td>
+                        <td className="px-3 py-2.5 text-right text-white whitespace-nowrap">{gbp(amount)}</td>
+                        <td className={`px-3 py-2.5 text-right font-semibold whitespace-nowrap ${balance > 0 ? "text-amber-300" : "text-slate-500"}`}>{gbp(balance)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          ); })}
+          )}
         </div>
       )}
       {detailId && <DistInvoiceDetail invoiceId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
@@ -43158,6 +43254,7 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
+            <DistDocLinkProvider>
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
               // Build the dashboard tabs available to this user. Same gates as the
@@ -43375,6 +43472,7 @@ export default function App() {
               isEmployee={false}
             />}
             {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
+            </DistDocLinkProvider>
           </main>
         </div>
         <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}
