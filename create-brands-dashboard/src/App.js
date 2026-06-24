@@ -134,6 +134,10 @@ import {
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
+  fetchDistTaxRates, fetchDistContacts, upsertDistContact,
+  fetchDistItems, upsertDistItem, fetchDistBatches, createDistBatch,
+  fetchDistMovements, addDistMovement, seedDistOpeningStock,
+  computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -152,7 +156,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt
+  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -5989,6 +5993,317 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
             {err && <div className="text-xs text-red-400">{err}</div>}
           </div>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+
+// ============================================================================
+// DISTRIBUTION — WAREHOUSE: Item Master + Stock (Phase 1 UI)
+// DistItemsView: catalogue CRUD + CSV import (parses Zoho pack strings,
+//   generates SKUs, seeds opening stock as movements).
+// DistStockView: derived on-hand (SUM of movements) — the reconciliation proof.
+// ============================================================================
+
+// Parse a Zoho item name string -> { name, packCount, packSize, packUnit }.
+// Handles hyphen AND en/em dash, multi-pack (4*), decimals, "(1*20 kg)".
+function parseDistItemName(raw) {
+  if (!raw) return { name: "", packCount: 1, packSize: null, packUnit: "" };
+  const s = String(raw).replace(/[\u2012\u2013\u2014\u2015]/g, "-").trim();
+  const m = s.match(/^(.*?)[\s-]*\(\s*(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*\)\s*$/);
+  if (!m) return { name: s.replace(/[-\s]+$/, "").trim(), packCount: 1, packSize: null, packUnit: "" };
+  return { name: m[1].replace(/[-\s]+$/, "").trim(), packCount: Number(m[2]), packSize: Number(m[3]), packUnit: m[4] };
+}
+
+// Category -> 3-letter SKU prefix. Falls back to first letters of the category.
+function distSkuPrefix(category) {
+  const map = {
+    "Ice Creams": "ICE", "Cakes": "CAK", "Frozen Stock": "FRZ", "Prep Items": "PRP",
+    "Chocoberry Products": "CHB", "Desserts": "DES", "Drinks": "DRK", "Packaging": "PKG",
+    "Cleaning": "CLN", "Hot Drinks": "HOT",
+  };
+  if (map[category]) return map[category];
+  const letters = String(category || "GEN").replace(/[^a-zA-Z]/g, "").toUpperCase();
+  return (letters.slice(0, 3) || "GEN").padEnd(3, "X");
+}
+
+// Strip a "GBP 140.00" style value to a number.
+function distMoney(v) {
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(/[^0-9.\-]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+function DistItemsView({ currentUser }) {
+  const [items, setItems] = useState([]);
+  const [taxRates, setTaxRates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [editItem, setEditItem] = useState(null);   // item being edited, or {} for new
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importPreview, setImportPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr("");
+    try {
+      const [its, tax] = await Promise.all([fetchDistItems({ includeInactive: true }), fetchDistTaxRates()]);
+      setItems(its); setTaxRates(tax);
+    } catch (e) { setErr(e.message || "Load failed"); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(i => `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(q));
+  }, [items, search]);
+
+  const taxName = (id) => taxRates.find(t => t.id === id)?.name || "—";
+
+  const saveItem = async () => {
+    if (!editItem?.name) { setErr("Name is required"); return; }
+    setBusy(true); setErr("");
+    try { await upsertDistItem(editItem); setEditItem(null); await load(); }
+    catch (e) { setErr(e.message || "Save failed"); }
+    setBusy(false);
+  };
+
+  // ── CSV import: parse the Zoho Items export ──
+  const buildPreview = () => {
+    setErr("");
+    const lines = importText.trim().split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) { setErr("Paste the CSV including the header row"); return; }
+    const header = lines[0].split(",").map(h => h.trim().toLowerCase());
+    const col = (name) => header.indexOf(name);
+    const iName = col("item name"), iRate = col("rate"), iTax = col("tax name"),
+      iCat = col("category name"), iPur = col("purchase rate"),
+      iAcc = col("account"), iPAcc = col("purchase account"),
+      iOpen = col("opening stock"), iOpenVal = col("opening stock value");
+    if (iName < 0) { setErr("Could not find an 'Item Name' column"); return; }
+    // crude CSV split that respects simple quoting
+    const splitCsv = (line) => {
+      const out = []; let cur = "", inQ = false;
+      for (const ch of line) {
+        if (ch === '"') inQ = !inQ;
+        else if (ch === "," && !inQ) { out.push(cur); cur = ""; }
+        else cur += ch;
+      }
+      out.push(cur); return out;
+    };
+    const seq = {}; // per-prefix running number for SKU
+    const rows = lines.slice(1).map(line => {
+      const c = splitCsv(line);
+      const parsed = parseDistItemName(c[iName] || "");
+      const category = iCat >= 0 ? (c[iCat] || "").trim() : "";
+      const prefix = distSkuPrefix(category);
+      seq[prefix] = (seq[prefix] || 0) + 1;
+      const sku = `${prefix}-${String(seq[prefix]).padStart(4, "0")}`;
+      const taxRaw = iTax >= 0 ? (c[iTax] || "").trim().toLowerCase() : "";
+      const taxRateId = taxRaw.includes("zero") ? "zero" : taxRaw.includes("standard") ? "standard" : null;
+      return {
+        sku, name: parsed.name, category,
+        packCount: parsed.packCount, packSize: parsed.packSize, packUnit: parsed.packUnit,
+        taxRateId,
+        sellRate: iRate >= 0 ? distMoney(c[iRate]) : null,
+        purchaseRate: iPur >= 0 ? distMoney(c[iPur]) : null,
+        incomeAccountCode: iAcc >= 0 ? (c[iAcc] || "").trim() || null : null,
+        expenseAccountCode: iPAcc >= 0 ? (c[iPAcc] || "").trim() || null : null,
+        openingStock: iOpen >= 0 ? distMoney(c[iOpen]) : null,
+        openingValue: iOpenVal >= 0 ? distMoney(c[iOpenVal]) : null,
+        active: true,
+      };
+    });
+    setImportPreview(rows);
+  };
+
+  const runImport = async () => {
+    if (!importPreview?.length) return;
+    setBusy(true); setErr("");
+    try {
+      for (const r of importPreview) {
+        const saved = await upsertDistItem(r);
+        // Seed opening stock as a movement ONLY if a positive opening was given.
+        // (Negative Zoho figures are the divergence bug — never seed those.)
+        if (saved && r.openingStock != null && r.openingStock > 0) {
+          const landed = r.openingValue != null && r.openingStock ? +(r.openingValue / r.openingStock).toFixed(4)
+            : (r.purchaseRate != null ? r.purchaseRate : 0);
+          await seedDistOpeningStock({ itemId: saved.id, qty: r.openingStock, landedCost: landed, createdBy: currentUser?.id });
+        }
+      }
+      setImportOpen(false); setImportPreview(null); setImportText("");
+      await load();
+    } catch (e) { setErr(e.message || "Import failed"); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={15} className="absolute left-3 top-2.5 text-slate-500"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items, SKU, category…"
+            className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setImportOpen(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import CSV</button>
+          <button onClick={() => setEditItem({ active: true, packCount: 1 })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New item</button>
+        </div>
+      </div>
+
+      {err && <div className="text-xs text-red-400 bg-red-950/40 border border-red-900/50 rounded-lg px-3 py-2">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-8 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">
+            <div className="col-span-1">SKU</div><div className="col-span-4">Name</div><div className="col-span-2">Category</div>
+            <div className="col-span-2">Pack</div><div className="col-span-1">Tax</div><div className="col-span-1 text-right">Buy</div><div className="col-span-1 text-right">Sell</div>
+          </div>
+          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No items yet. Import the Zoho CSV or add one.</div>}
+          {filtered.map(i => (
+            <button key={i.id} onClick={() => setEditItem(i)} className="w-full grid grid-cols-12 gap-2 px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50 items-center">
+              <div className="col-span-1 font-mono text-[11px] text-indigo-300">{i.sku || "—"}</div>
+              <div className="col-span-4 text-white truncate">{i.name}{!i.active && <span className="ml-1 text-[9px] text-slate-500">(inactive)</span>}</div>
+              <div className="col-span-2 text-slate-400 truncate">{i.category || "—"}</div>
+              <div className="col-span-2 text-slate-400">{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</div>
+              <div className="col-span-1 text-slate-400 text-[11px]">{taxName(i.taxRateId)}</div>
+              <div className="col-span-1 text-right text-slate-300">{i.purchaseRate != null ? `£${i.purchaseRate}` : "—"}</div>
+              <div className="col-span-1 text-right text-slate-300">{i.sellRate != null ? `£${i.sellRate}` : "—"}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Edit / new item modal */}
+      {editItem && (
+        <Modal onClose={() => setEditItem(null)} title={editItem.id ? "Edit item" : "New item"}>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400 col-span-2">Name
+                <input value={editItem.name || ""} onChange={e => setEditItem({ ...editItem, name: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">SKU
+                <input value={editItem.sku || ""} onChange={e => setEditItem({ ...editItem, sku: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
+              <label className="text-xs text-slate-400">Category
+                <input value={editItem.category || ""} onChange={e => setEditItem({ ...editItem, category: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Pack count
+                <input type="number" value={editItem.packCount ?? 1} onChange={e => setEditItem({ ...editItem, packCount: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Pack size
+                <input type="number" value={editItem.packSize ?? ""} onChange={e => setEditItem({ ...editItem, packSize: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Pack unit
+                <input value={editItem.packUnit || ""} onChange={e => setEditItem({ ...editItem, packUnit: e.target.value })} placeholder="kg, L, g, pcs" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Tax rate
+                <select value={editItem.taxRateId || ""} onChange={e => setEditItem({ ...editItem, taxRateId: e.target.value || null })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                  <option value="">—</option>{taxRates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Buy rate (£)
+                <input type="number" value={editItem.purchaseRate ?? ""} onChange={e => setEditItem({ ...editItem, purchaseRate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Sell rate (£)
+                <input type="number" value={editItem.sellRate ?? ""} onChange={e => setEditItem({ ...editItem, sellRate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Income acct
+                <input value={editItem.incomeAccountCode || ""} onChange={e => setEditItem({ ...editItem, incomeAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
+              <label className="text-xs text-slate-400">Expense acct
+                <input value={editItem.expenseAccountCode || ""} onChange={e => setEditItem({ ...editItem, expenseAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
+              <label className="text-xs text-slate-400 col-span-2 flex items-center gap-2 mt-1">
+                <input type="checkbox" checked={editItem.active !== false} onChange={e => setEditItem({ ...editItem, active: e.target.checked })}/> Active</label>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setEditItem(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button>
+              <button onClick={saveItem} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1.5"><Save size={14}/> {busy ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* CSV import modal */}
+      {importOpen && (
+        <Modal onClose={() => { setImportOpen(false); setImportPreview(null); }} title="Import items from Zoho CSV">
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400">Paste the Zoho Items export (including the header row). Pack strings like <span className="font-mono">(4*2.5kg)</span> are parsed into structured units, SKUs are generated by category, and positive opening stock is seeded as an opening movement. Negative Zoho stock figures are ignored (they are the divergence bug).</p>
+            {!importPreview ? (
+              <>
+                <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={8} placeholder="Item Name,SKU,Rate,Account,..." className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/>
+                <div className="flex justify-end"><button onClick={buildPreview} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Preview</button></div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-slate-400">{importPreview.length} items parsed. Review then import:</div>
+                <div className="max-h-72 overflow-auto bg-slate-950 border border-slate-800 rounded-lg">
+                  <table className="w-full text-[11px]">
+                    <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">SKU</th><th className="text-left px-2 py-1">Name</th><th className="px-2 py-1">Pack</th><th className="px-2 py-1">Tax</th><th className="px-2 py-1 text-right">Open</th></tr></thead>
+                    <tbody>{importPreview.map((r, i) => (
+                      <tr key={i} className="border-t border-slate-800/60">
+                        <td className="px-2 py-1 font-mono text-indigo-300">{r.sku}</td>
+                        <td className="px-2 py-1 text-white">{r.name}</td>
+                        <td className="px-2 py-1 text-center text-slate-400">{r.packCount}&times;{r.packSize ?? "?"}{r.packUnit}</td>
+                        <td className="px-2 py-1 text-center text-slate-400">{r.taxRateId || "—"}</td>
+                        <td className="px-2 py-1 text-right text-slate-300">{r.openingStock != null && r.openingStock > 0 ? r.openingStock : "—"}</td>
+                      </tr>))}</tbody>
+                  </table>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setImportPreview(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Back</button>
+                  <button onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy ? "Importing…" : `Import ${importPreview.length} items`}</button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function DistStockView() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr("");
+    try { setRows(await fetchDistStockSnapshot()); }
+    catch (e) { setErr(e.message || "Load failed"); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (q ? rows.filter(r => `${r.name} ${r.sku}`.toLowerCase().includes(q)) : rows);
+  }, [rows, search]);
+
+  const negatives = filtered.filter(r => r.negative).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={15} className="absolute left-3 top-2.5 text-slate-500"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search stock…" className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/>
+        </div>
+        <button onClick={load} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold">Refresh</button>
+      </div>
+      <p className="text-xs text-slate-500">On-hand is derived live from the stock-movement ledger (SUM of movements) — never a stored figure. Available = on-hand − committed (committed becomes live when the sell side ships).</p>
+      {negatives > 0 && <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-900/50 rounded-lg px-3 py-2 flex items-center gap-2"><AlertTriangle size={14}/> {negatives} item{negatives>1?"s":""} below zero — investigate (receipt missing or over-dispatch).</div>}
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-8 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">
+            <div className="col-span-1">SKU</div><div className="col-span-5">Item</div><div className="col-span-2 text-right">On-hand</div><div className="col-span-2 text-right">Committed</div><div className="col-span-2 text-right">Available</div>
+          </div>
+          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No stock yet. Import items + seed opening stock, or receive goods.</div>}
+          {filtered.map(r => (
+            <div key={r.id} className="grid grid-cols-12 gap-2 px-4 py-2.5 text-sm border-b border-slate-800/50 items-center">
+              <div className="col-span-1 font-mono text-[11px] text-indigo-300">{r.sku || "—"}</div>
+              <div className="col-span-5 text-white truncate">{r.name} <span className="text-slate-500 text-[11px]">{r.packCount}&times;{r.packSize ?? "?"}{r.packUnit}</span></div>
+              <div className={`col-span-2 text-right font-semibold ${r.negative ? "text-red-400" : "text-white"}`}>{r.onHand}{r.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</div>
+              <div className="col-span-2 text-right text-slate-400">{r.committed}</div>
+              <div className={`col-span-2 text-right ${r.available < 0 ? "text-red-400" : "text-emerald-300"}`}>{r.available}</div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -40018,6 +40333,10 @@ export default function App() {
       { key: "ck-order",       label: "Order from Kitchen", icon: ChefHat, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
+    { group: "WAREHOUSE", items: [
+      { key: "dist-items",  label: "Items",  icon: Tag, requiresEntity: "brand-distribution" },
+      { key: "dist-stock",  label: "Stock",  icon: ClipboardList, requiresEntity: "brand-distribution" },
+    ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
@@ -40370,6 +40689,8 @@ export default function App() {
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-stock" && <DistStockView/>}
             {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
