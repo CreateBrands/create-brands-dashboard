@@ -7716,7 +7716,7 @@ function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy, curren
               <Stat label="Committed" value={item.committed} tone="text-slate-300"/>
               <Stat label="Available" value={item.available} tone={item.available < 0 ? "text-red-400" : "text-emerald-300"}/>
             </div>
-            <p className="text-[11px] text-slate-500 -mt-2">Stock is derived live from the movement ledger and can&#39;t be edited directly \u2014 it changes through receipts, dispatches and adjustments.</p>
+            <p className="text-[11px] text-slate-500 -mt-2">Stock is derived live from the movement ledger and can&#39;t be edited directly &mdash; it changes through receipts, dispatches and adjustments.</p>
             <div className="flex gap-3">
               {item.imageUrl && <div className="w-24 h-24 rounded-xl bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800"><img src={item.imageUrl} alt="" className="w-full h-full object-contain p-1.5"/></div>}
               <div className="grid grid-cols-3 gap-3 bg-slate-950/40 border border-slate-800 rounded-xl p-3 flex-1">
@@ -11514,6 +11514,8 @@ function EmpThemeStyle() {
 .emp-theme .bg-slate-700 { background-color: var(--cream-deep) !important; }
 .emp-theme .bg-slate-900\\/40,
 .emp-theme .bg-slate-900\\/60,
+.emp-theme .bg-slate-950\\/40,
+.emp-theme .bg-slate-950\\/50,
 .emp-theme .bg-slate-800\\/60,
 .emp-theme .bg-slate-800\\/70,
 .emp-theme .bg-slate-800\\/80,
