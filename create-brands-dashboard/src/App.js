@@ -40045,8 +40045,14 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: t
   );
 }
 
-function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverride = null, onLogout }) {
+function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverride = null, liveGroups = null, onLogout }) {
   if (!open) return null;
+  // If live nav groups are supplied and contain expandable children (e.g. the
+  // Distribution WAREHOUSE group's Purchasing/Sales), surface those groups so
+  // their sub-items are reachable on mobile.
+  const childGroups = (liveGroups || [])
+    .filter(g => g.items.some(it => it.children && it.children.length))
+    .map(g => ({ title: g.group, items: g.items, hasChildren: true }));
   const GROUPS = groupsOverride
     ? groupsOverride.map(g => ({ title: g.group, items: g.items }))
     : [
@@ -40096,8 +40102,8 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
         <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={22}/></button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 pb-24">
-        {GROUPS.map(g => {
-          const items = g.items.filter(it => allowedKeys.includes(it.key));
+        {[...childGroups, ...GROUPS].map(g => {
+          const items = g.items.filter(it => allowedKeys.includes(it.key) || (it.children && it.children.some(c => allowedKeys.includes(c.key))));
           if (!items.length) return null;
           return (
             <div key={g.title}>
@@ -40105,6 +40111,30 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
               <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
                 {items.map(it => {
                   const Icon = it.icon;
+                  // Item with children → header label + indented child rows.
+                  if (it.children && it.children.length) {
+                    const kids = it.children.filter(c => allowedKeys.includes(c.key));
+                    if (!kids.length) return null;
+                    return (
+                      <Fragment key={it.key}>
+                        <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-900/60">
+                          {Icon && <Icon size={16} className="text-slate-500 flex-shrink-0"/>}
+                          <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400 flex-1">{it.label}</span>
+                        </div>
+                        {kids.map(c => {
+                          const CIcon = c.icon;
+                          return (
+                            <button key={c.key} onClick={() => go(c.key)}
+                              className="w-full flex items-center gap-3 pl-9 pr-4 py-3 hover:bg-slate-800/50 text-left">
+                              {CIcon && <CIcon size={16} className="text-slate-400 flex-shrink-0"/>}
+                              <span className="text-sm font-semibold text-white flex-1">{c.label}</span>
+                              <ChevronRight size={16} className="text-slate-600"/>
+                            </button>
+                          );
+                        })}
+                      </Fragment>
+                    );
+                  }
                   return (
                     <button key={it.key} onClick={() => go(it.key)}
                       className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800/50 text-left">
@@ -42098,7 +42128,7 @@ export default function App() {
             { key: "petty-cash", label: "Petty Cash", icon: Wallet },
             { key: "expenses",   label: "Expenses", icon: Receipt },
           ] : undefined}/>
-        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={effectiveNavGroups.flatMap(g => g.items.map(i => i.key))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} onLogout={handleLogout}/>
+        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={effectiveNavGroups.flatMap(g => g.items.flatMap(i => [i.key, ...((i.children || []).map(c => c.key))]))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} liveGroups={effectiveNavGroups} onLogout={handleLogout}/>
         <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
