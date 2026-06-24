@@ -9310,6 +9310,20 @@ export async function deleteDistGoodsReceipt(grnId) {
   return true;
 }
 
+// Edit a goods receipt by reversing it (remove stock, delete batches, reverse
+// the GRNI journal) then re-posting fresh. Mirrors updateDistDispatch. Blocked
+// if a bill references it (delete the bill first, via deleteDistGoodsReceipt's guard).
+export async function updateDistGoodsReceipt(grn, lines = []) {
+  if (!grn.id) throw new Error("Goods receipt id required for update.");
+  const { data: head } = await supabase.from("dist_goods_receipts").select("*").eq("id", grn.id).maybeSingle();
+  if (!head) throw new Error("Goods receipt not found.");
+  await deleteDistGoodsReceipt(grn.id); // guards bills + reverses stock/journal + deletes batches
+  return postDistGoodsReceipt({
+    vendorId: head.vendor_id, poId: head.po_id, sourceKind: head.source_kind,
+    receivedDate: grn.receivedDate || head.received_date, note: grn.note ?? head.note, createdBy: head.created_by,
+  }, lines);
+}
+
 // ── Bill: delete reverses Dr GRNI+VAT / Cr AP. Blocked if it has payments. ──
 export async function deleteDistBill(billId) {
   const paidMap = await fetchDistBillPaidMap([billId]).catch(() => new Map());
@@ -9449,6 +9463,25 @@ export async function fetchDistVendorDetail(vendorId) {
     total: (p.lines || []).reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0) }))
     .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
   return { purchaseOrders: poRows, bills: billRows, grns: grns.filter(g => g.vendorId === vendorId), payable };
+}
+
+// Payment drill-down: resolve vendor + the bills this payment settled.
+export async function fetchDistPaymentDetail(payId) {
+  const { data: head } = await supabase.from("dist_bill_payments").select("*, dist_bill_payment_allocations(*)").eq("id", payId).maybeSingle();
+  if (!head) return null;
+  const [vendors, bills] = await Promise.all([
+    fetchDistContacts({ kind: "vendor" }).catch(() => []), fetchDistBills({}).catch(() => []),
+  ]);
+  const vendor = vendors.find(v => v.id === head.vendor_id) || null;
+  const billByid = new Map(bills.map(b => [b.id, b]));
+  const allocations = (head.dist_bill_payment_allocations || []).map(a => {
+    const b = billByid.get(a.bill_id);
+    return { billId: a.bill_id, billNumber: b?.billNumber || "\u2014", amount: Number(a.amount) || 0 };
+  });
+  return {
+    id: head.id, paymentNumber: head.payment_number, payDate: head.pay_date, amount: Number(head.amount) || 0,
+    method: head.method, bankCode: head.bank_code, reference: head.reference || "", vendor, allocations,
+  };
 }
 // ============================================================================
 
