@@ -9015,7 +9015,11 @@ export async function postDistGoodsReceipt(grn, lines = []) {
     }
   }
   await supabase.from("dist_goods_receipts").update({ posted: true }).eq("id", id);
-  if (grn.poId) await supabase.from("dist_purchase_orders").update({ status: "received" }).eq("id", grn.poId);
+  if (grn.poId) {
+    const prog = await fetchDistPOReceiptProgress(grn.poId).catch(() => null);
+    const poStatus = prog ? (prog.fullyReceived ? "received" : prog.partiallyReceived ? "partially_received" : "open") : "received";
+    await supabase.from("dist_purchase_orders").update({ status: poStatus }).eq("id", grn.poId);
+  }
   return id;
 }
 
@@ -9306,7 +9310,11 @@ export async function deleteDistGoodsReceipt(grnId) {
   await supabase.from("dist_goods_receipt_lines").delete().eq("grn_id", grnId);
   const { error } = await supabase.from("dist_goods_receipts").delete().eq("id", grnId);
   if (error) throw error;
-  if (head.po_id) await supabase.from("dist_purchase_orders").update({ status: "open" }).eq("id", head.po_id);
+  if (head.po_id) {
+    const prog = await fetchDistPOReceiptProgress(head.po_id).catch(() => null);
+    const poStatus = prog ? (prog.fullyReceived ? "received" : prog.partiallyReceived ? "partially_received" : "open") : "open";
+    await supabase.from("dist_purchase_orders").update({ status: poStatus }).eq("id", head.po_id);
+  }
   return true;
 }
 
@@ -9383,6 +9391,33 @@ export async function deleteDistBillPayment(payId) {
 }
 
 // ── Detail aggregators for buy-side drill-downs ──
+
+// Per-PO-line receipt progress for partial receipts: received-so-far (summed
+// across all goods receipts for this PO, by item) vs ordered + outstanding.
+// Derived — no schema change, matching our append-only pattern.
+export async function fetchDistPOReceiptProgress(poId) {
+  const { data: head } = await supabase.from("dist_purchase_orders").select("*, dist_purchase_order_lines(*)").eq("id", poId).maybeSingle();
+  if (!head) return null;
+  const grns = await fetchDistGoodsReceipts().catch(() => []);
+  const poGrns = grns.filter(g => g.poId === poId);
+  const receivedByItem = new Map();
+  for (const g of poGrns) for (const l of (g.lines || [])) {
+    receivedByItem.set(l.itemId, (receivedByItem.get(l.itemId) || 0) + (Number(l.qty) || 0));
+  }
+  const remainingByItem = new Map(receivedByItem);
+  const lines = (head.dist_purchase_order_lines || []).map(l => {
+    const ordered = Number(l.qty) || 0;
+    const pool = remainingByItem.get(l.item_id) || 0;
+    const received = Math.min(ordered, pool);
+    remainingByItem.set(l.item_id, Math.max(0, pool - received));
+    return { poLineId: l.id, itemId: l.item_id, ordered, received: +received.toFixed(3),
+      outstanding: +Math.max(0, ordered - received).toFixed(3), unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null };
+  });
+  const anyReceived = lines.some(l => l.received > 0.0005);
+  const fullyReceived = lines.length > 0 && lines.every(l => l.outstanding <= 0.0005);
+  return { poId, lines, fullyReceived, partiallyReceived: anyReceived && !fullyReceived };
+}
+
 export async function fetchDistPODetail(poId) {
   const { data: head } = await supabase.from("dist_purchase_orders").select("*, dist_purchase_order_lines(*)").eq("id", poId).maybeSingle();
   if (!head) return null;
@@ -9392,10 +9427,18 @@ export async function fetchDistPODetail(poId) {
   ]);
   const itemById = new Map(items.map(i => [i.id, i]));
   const vendor = vendors.find(v => v.id === head.vendor_id) || null;
-  const lines = (head.dist_purchase_order_lines || []).map(l => ({ itemId: l.item_id, item: itemById.get(l.item_id) || null, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, amount: +((Number(l.qty) || 0) * (Number(l.unit_price) || 0)).toFixed(2) }));
+  const prog = await fetchDistPOReceiptProgress(poId).catch(() => null);
+  const progByLine = new Map((prog?.lines || []).map(l => [l.poLineId, l]));
+  const lines = (head.dist_purchase_order_lines || []).map(l => {
+    const p = progByLine.get(l.id);
+    return { poLineId: l.id, itemId: l.item_id, item: itemById.get(l.item_id) || null, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0,
+      received: p?.received || 0, outstanding: p ? p.outstanding : (Number(l.qty) || 0), taxRateId: l.tax_rate_id || null,
+      amount: +((Number(l.qty) || 0) * (Number(l.unit_price) || 0)).toFixed(2) };
+  });
   const total = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
   return { id: head.id, poNumber: head.po_number, status: head.status, orderDate: head.order_date, expectedDate: head.expected_date,
-    reference: head.reference, vendor, lines, total,
+    reference: head.reference, vendorId: head.vendor_id, vendor, lines, total,
+    fullyReceived: prog?.fullyReceived || false, partiallyReceived: prog?.partiallyReceived || false,
     grns: grns.filter(g => g.poId === poId), bills: bills.filter(b => b.poId === poId) };
 }
 

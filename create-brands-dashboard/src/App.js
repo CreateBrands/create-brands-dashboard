@@ -6102,12 +6102,14 @@ const DIST_PAYMENT_TERMS = [
 // document (SO#, invoice#, pick#, dispatch#, customer) without prop-drilling.
 // The provider renders the shared detail modals once.
 const DistDocLinkContext = createContext(null);
-function useDistDocLink() { return useContext(DistDocLinkContext) || { openDoc: () => {}, navigate: () => {} }; }
+function useDistDocLink() { return useContext(DistDocLinkContext) || { openDoc: () => {}, navigate: () => {}, convert: () => {} }; }
 
-function DistDocLinkProvider({ children, onNavigate }) {
+function DistDocLinkProvider({ children, onNavigate, onConvert }) {
   const [stack, setStack] = useState([]); // [{type, id}] — supports drilling link→link
   const openDoc = useCallback((type, id) => { if (type && id) setStack(s => [...s, { type, id }]); }, []);
   const navigate = useCallback((view) => { setStack([]); if (onNavigate) onNavigate(view); }, [onNavigate]);
+  // Lifecycle conversion: stash a source doc for the target view to pre-fill from, then navigate.
+  const convert = useCallback((target, view, source) => { setStack([]); if (onConvert) onConvert({ target, source }); if (onNavigate) onNavigate(view); }, [onConvert, onNavigate]);
   const top = stack[stack.length - 1] || null;
   const close = () => setStack(s => s.slice(0, -1));
 
@@ -6136,7 +6138,7 @@ function DistDocLinkProvider({ children, onNavigate }) {
   }, [top]);
 
   return (
-    <DistDocLinkContext.Provider value={{ openDoc, navigate }}>
+    <DistDocLinkContext.Provider value={{ openDoc, navigate, convert }}>
       {children}
       {top && top.type === "invoice" && <DistInvoiceDetail invoiceId={top.id} onClose={close}/>}
       {top && top.type === "pick" && <DistPickDetail pickId={top.id} onClose={close}/>}
@@ -6160,14 +6162,15 @@ function DocLink({ type, id, children, className = "" }) {
 }
 
 // Buy-side "What's next?" workflow banner: PO → Goods In → Bill → Payment.
-// `next` is null when the chain is complete (renders a done state).
-function DistNextStep({ next, doneLabel }) {
-  const { navigate } = useDistDocLink();
+// `next` carries {label, view, hint, target} and `source` is the doc to convert from.
+function DistNextStep({ next, doneLabel, source }) {
+  const { convert, navigate } = useDistDocLink();
   if (!next) return <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 px-3 py-2.5 text-xs text-emerald-300">{doneLabel} ✓</div>;
+  const go = () => { if (next.target && source) convert(next.target, next.view, source); else navigate(next.view); };
   return (
     <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 flex items-center justify-between gap-3">
       <div><span className="text-xs font-semibold text-white">What's next?</span> <span className="text-xs text-slate-400">{next.hint}</span></div>
-      <button onClick={() => navigate(next.view)} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
+      <button onClick={go} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
     </div>
   );
 }
@@ -6262,15 +6265,15 @@ function DistPODetail({ poId, onClose, onEdit, onDelete }) {
     <Modal onClose={onClose} title={d?.poNumber || "Purchase Order"} maxW="max-w-3xl">
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d.status==="received"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d.status||"").toUpperCase()}</span>}
+          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d.status==="received"?"bg-emerald-900/50 text-emerald-300":d.status==="partially_received"?"bg-amber-900/50 text-amber-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d.status||"").replace(/_/g," ").toUpperCase()}</span>}
           {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
           {onDelete && <button onClick={onDelete} className={`${onEdit?"":"ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
-        {d && <DistNextStep doneLabel="This PO has been received and billed." next={
-          (d.grns?.length || 0) === 0 ? { label: "Receive (Goods In)", view: "dist-grn", hint: "Receive these goods into the warehouse — raises stock." }
-          : (d.bills?.length || 0) === 0 ? { label: "Convert to Bill", view: "dist-bills", hint: "Record the supplier bill for what was received." }
+        {d && <DistNextStep source={d} doneLabel="This PO has been fully received and billed." next={
+          !d.fullyReceived ? { label: d.partiallyReceived ? "Receive remaining" : "Receive (Goods In)", view: "dist-grn", target: "po", hint: d.partiallyReceived ? "Receive the outstanding items into the warehouse." : "Receive these goods into the warehouse — raises stock." }
+          : (d.bills?.length || 0) === 0 ? { label: "Convert to Bill", view: "dist-bills", target: "po", hint: "Record the supplier bill for what was received." }
           : null
         }/>}
         {d && (<>
@@ -6280,8 +6283,8 @@ function DistPODetail({ poId, onClose, onEdit, onDelete }) {
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Expected</div><div className="text-sm text-white">{fmtDate(d.expectedDate)}</div></div>
           </div>
           <div className="rounded-xl border border-slate-800 overflow-hidden">
-            <table className="w-full text-xs"><thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
-              <tbody>{d.lines.map((l, i) => (<tr key={i} className="border-t border-slate-800/60"><td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td><td className="px-3 py-2 text-right text-slate-300">{l.qty}</td><td className="px-3 py-2 text-right text-slate-300">{gbp(l.unitPrice)}</td><td className="px-3 py-2 text-right text-white">{gbp(l.amount)}</td></tr>))}</tbody></table>
+            <table className="w-full text-xs"><thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Ordered</th><th className="text-right px-3 py-2">Received</th><th className="text-right px-3 py-2">Outstanding</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+              <tbody>{d.lines.map((l, i) => (<tr key={i} className="border-t border-slate-800/60"><td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td><td className="px-3 py-2 text-right text-slate-300">{l.qty}</td><td className="px-3 py-2 text-right text-emerald-300">{l.received || 0}</td><td className={`px-3 py-2 text-right ${(l.outstanding ?? l.qty) > 0.0005 ? "text-amber-300" : "text-slate-500"}`}>{l.outstanding ?? l.qty}</td><td className="px-3 py-2 text-right text-slate-300">{gbp(l.unitPrice)}</td><td className="px-3 py-2 text-right text-white">{gbp(l.amount)}</td></tr>))}</tbody></table>
           </div>
           <div className="flex justify-end"><div className="w-56"><div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-800"><span className="text-white">Total</span><span className="text-white">{gbp(d.total)}</span></div></div></div>
           {(d.grns.length > 0 || d.bills.length > 0) && (
@@ -6313,8 +6316,8 @@ function DistGRNDetail({ grnId, onClose, onDelete, onEdit }) {
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
-        {d && <DistNextStep doneLabel="This receipt has been billed." next={
-          d.billed ? null : { label: "Convert to Bill", view: "dist-bills", hint: "Record the supplier bill for these received goods." }
+        {d && <DistNextStep source={d} doneLabel="This receipt has been billed." next={
+          d.billed ? null : { label: "Convert to Bill", view: "dist-bills", target: "grn", hint: "Record the supplier bill for these received goods." }
         }/>}
         {d && (<>
           <div className="grid grid-cols-4 gap-3">
@@ -6350,8 +6353,8 @@ function DistBillDetail({ billId, onClose, onDelete }) {
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
-        {d && <DistNextStep doneLabel="This bill is fully paid." next={
-          d.balance > 0.005 ? { label: "Record Payment", view: "dist-pay", hint: "Pay this bill — posts Dr creditors / Cr bank." } : null
+        {d && <DistNextStep source={d} doneLabel="This bill is fully paid." next={
+          d.balance > 0.005 ? { label: "Record Payment", view: "dist-pay", target: "bill", hint: "Pay this bill — posts Dr creditors / Cr bank." } : null
         }/>}
         {d && (<>
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
@@ -6640,11 +6643,28 @@ function DistPOView({ currentUser }) {
 }
 
 // ── GOODS IN (same Zoho table format; raises stock + journal) ──
-function DistGRNView({ currentUser }) {
+function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
   const [grns, setGrns] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [confirming, setConfirming] = useState(null); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [g, v, it, tx] = await Promise.all([fetchDistGoodsReceipts(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setGrns(g); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
+  // Consume a PO→Goods In conversion: pre-fill the receipt from the PO's
+  // OUTSTANDING lines (partial-receipt aware). User can reduce qty to receive part.
+  useEffect(() => {
+    if (pendingConvert?.target === "po" && pendingConvert.source) {
+      const po = pendingConvert.source;
+      const outstanding = (po.lines || []).filter(l => (l.outstanding ?? l.qty) > 0.0005);
+      setCreating({
+        vendorId: po.vendorId || po.vendor?.id || "", poId: po.id, poNumber: po.poNumber,
+        receivedDate: new Date().toISOString().slice(0, 10),
+        lines: (outstanding.length ? outstanding : (po.lines || [])).map(l => ({
+          itemId: l.itemId, qty: l.outstanding ?? l.qty, ordered: l.qty, outstanding: l.outstanding ?? l.qty,
+          landedCost: l.unitPrice || "", batchNo: "", expiryDate: "",
+        })),
+      });
+      setPendingConvert(null);
+    }
+  }, [pendingConvert, setPendingConvert]);
   const itemName = (id) => { const it = items.find(x => x.id === id); return it ? `${it.name} (${it.sku})` : id; };
   const confirmDraft = async () => {
     setBusy(true); setErr("");
@@ -6739,8 +6759,9 @@ function DistGRNView({ currentUser }) {
         </Modal>
       )}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.grnNumber || "goods receipt"}` : "Receive goods into warehouse"} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.grnNumber || "goods receipt"}` : creating.poNumber ? `Receive against ${creating.poNumber}` : "Receive goods into warehouse"} maxW="max-w-4xl">
           <div className="space-y-4">
+            {creating.poNumber && <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 text-xs text-indigo-200">Receiving against <span className="font-mono font-semibold">{creating.poNumber}</span>. Quantities are pre-filled with what's still outstanding — reduce any line to receive a <span className="font-semibold">partial</span> delivery; the rest stays open on the PO.</div>}
             <p className="text-[11px] text-slate-500">Raises stock (a receipt movement per line) and posts Dr Stock / Cr GRNI at landed cost.</p>
             <div className="grid grid-cols-3 gap-4">
               <label className="text-xs text-slate-400">Source / vendor *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}{v.isCentralKitchen?" (CK)":""}</option>)}</select></label>
@@ -6752,7 +6773,7 @@ function DistGRNView({ currentUser }) {
               {(creating.lines || []).map((l, i) => (
                 <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center">
                   <div className="col-span-4"><select value={l.itemId} onChange={e => updLine(i, { itemId: e.target.value, landedCost: l.landedCost || items.find(it=>it.id===e.target.value)?.purchaseRate || "" })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"><option value="">Select an item…</option>{items.map(it => <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>)}</select></div>
-                  <div className="col-span-1"><input type="number" value={l.qty} onChange={e => updLine(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
+                  <div className="col-span-1"><input type="number" value={l.qty} onChange={e => updLine(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/>{l.ordered != null && <div className="text-[9px] text-slate-500 text-right mt-0.5">of {l.outstanding} left</div>}</div>
                   <div className="col-span-2"><input type="number" value={l.landedCost} onChange={e => updLine(i, { landedCost: e.target.value })} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
                   <div className="col-span-2"><input value={l.batchNo} onChange={e => updLine(i, { batchNo: e.target.value })} placeholder="Batch" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/></div>
                   <div className="col-span-3 flex items-center gap-1"><input type="date" value={l.expiryDate} onChange={e => updLine(i, { expiryDate: e.target.value })} className="flex-1 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/><button onClick={() => setCreating({ ...creating, lines: creating.lines.filter((_, j) => j !== i) })} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
@@ -6769,11 +6790,34 @@ function DistGRNView({ currentUser }) {
 }
 
 // ── BILLS (Zoho table format) ──
-function DistBillsView({ currentUser }) {
+function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map()); const [detailId, setDetailId] = useState(null);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
+  // Consume GRN→Bill or PO→Bill: pre-fill the bill from received goods (GRN) or
+  // the PO lines, carrying vendor + a link back to the source document.
+  useEffect(() => {
+    if (!pendingConvert?.source) return;
+    const src = pendingConvert.source;
+    if (pendingConvert.target === "grn") {
+      setCreating({
+        vendorId: src.vendorId || src.vendor?.id || "", grnId: src.id, poId: src.poId || null,
+        reference: src.grnNumber || "", billDate: new Date().toISOString().slice(0, 10),
+        vatMode: "exclusive", discountPercent: 0, discountType: "percent",
+        lines: (src.lines || []).map(l => ({ itemId: l.itemId, accountCode: "", qty: l.qty, unitPrice: l.landedCost || "", taxRateId: l.taxRateId || null })),
+      });
+      setPendingConvert(null);
+    } else if (pendingConvert.target === "po") {
+      setCreating({
+        vendorId: src.vendorId || src.vendor?.id || "", poId: src.id,
+        reference: src.poNumber || "", billDate: new Date().toISOString().slice(0, 10),
+        vatMode: "exclusive", discountPercent: 0, discountType: "percent",
+        lines: (src.lines || []).map(l => ({ itemId: l.itemId, accountCode: "", qty: (l.received ?? l.qty) || l.qty, unitPrice: l.unitPrice || "", taxRateId: l.taxRateId || null })),
+      });
+      setPendingConvert(null);
+    }
+  }, [pendingConvert, setPendingConvert]);
   const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
   const save = async () => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
@@ -6851,11 +6895,23 @@ function DistBillsView({ currentUser }) {
 }
 
 // ── PAYMENTS ──
-function DistPaymentsView({ currentUser }) {
+function DistPaymentsView({ currentUser, pendingConvert, setPendingConvert }) {
   const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map());
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [p, v, b, tx] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] }), fetchDistTaxRates()]); setPays(p); setVendors(v); setBills(b); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { /* paid map best-effort */ } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (pendingConvert?.target === "bill" && pendingConvert.source) {
+      const b = pendingConvert.source;
+      const bal = b.balance != null ? b.balance : b.grand;
+      setCreating({
+        vendorId: b.vendor?.id || b.vendorId || "", amount: bal, method: "bank", bankCode: "1010",
+        payDate: new Date().toISOString().slice(0, 10),
+        allocations: bal > 0 ? [{ billId: b.id, amount: +Number(bal).toFixed(2) }] : [],
+      });
+      setPendingConvert(null);
+    }
+  }, [pendingConvert, setPendingConvert]);
   const save = async () => {
     if (!creating?.vendorId || !(Number(creating.amount) > 0)) { setErr("Vendor and amount required"); return; }
     setBusy(true); setErr("");
@@ -7382,6 +7438,7 @@ function DistPriceListView() {
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
 function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate }) {
+  const { convert } = useDistDocLink();
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   useEffect(() => {
@@ -7413,16 +7470,17 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
         {/* What's next — workflow conversion */}
-        {detail && onNavigate && (() => {
-          const next = !detail.status.picked ? { label: "Convert to Pick", view: "dist-picks", hint: "Allocate batches (FEFO) for this order." }
-            : !detail.status.dispatched ? { label: "Dispatch", view: "dist-dispatch", hint: "Ship the picked order — reduces stock, posts COGS." }
-            : !detail.status.invoiced ? { label: "Create Invoice", view: "dist-invoices", hint: "Bill the customer for this order." }
+        {detail && (() => {
+          const next = !detail.status.picked ? { label: "Convert to Pick", view: "dist-picks", target: "so", hint: "Allocate batches (FEFO) for this order." }
+            : !detail.status.dispatched ? { label: "Dispatch", view: "dist-dispatch", target: "pick", hint: "Ship the picked order — reduces stock, posts COGS." }
+            : !detail.status.invoiced ? { label: "Create Invoice", view: "dist-invoices", target: "dispatch", hint: "Bill the customer for this order." }
             : null;
           if (!next) return <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 px-3 py-2.5 text-xs text-emerald-300">This order is fully invoiced. ✓</div>;
+          const src = { ...detail, id: so.id, soId: so.id, soNumber: so.soNumber, customerId: so.customerId, lines: so.lines };
           return (
             <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 flex items-center justify-between gap-3">
               <div><span className="text-xs font-semibold text-white">What's next?</span> <span className="text-xs text-slate-400">{next.hint}</span></div>
-              <button onClick={() => { onNavigate(next.view); onClose(); }} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
+              <button onClick={() => { convert(next.target, next.view, src); onClose(); }} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
             </div>
           );
         })()}
@@ -7712,7 +7770,7 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
   );
 }
 
-function DistPicksView({ currentUser }) {
+function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
   const [picks, setPicks] = useState([]); const [orders, setOrders] = useState([]); const [batches, setBatches] = useState({}); const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const [detailId, setDetailId] = useState(null);
@@ -7743,6 +7801,14 @@ function DistPicksView({ currentUser }) {
       setCreating({ soId: so.id, customerId: so.customerId, soNumber: so.soNumber, lines });
     } catch (e) { setErr(e.message); }
   };
+  // Consume SO→Pick conversion: run the FEFO pick straight from the source order.
+  useEffect(() => {
+    if (pendingConvert?.target === "so" && pendingConvert.source) {
+      startPick(pendingConvert.source);
+      setPendingConvert(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingConvert]);
   const updLine = (i, patch) => setCreating({ ...creating, lines: creating.lines.map((x, j) => j === i ? { ...x, ...patch } : x) });
   const save = async () => {
     const valid = (creating.lines || []).filter(l => l.itemId && l.batchId && Number(l.qty) > 0);
@@ -7821,7 +7887,7 @@ function DistPicksView({ currentUser }) {
 }
 
 // ── DISPATCH (stock OUT + COGS journal) ──
-function DistDispatchView({ currentUser }) {
+function DistDispatchView({ currentUser, pendingConvert, setPendingConvert }) {
   const [dispatches, setDispatches] = useState([]); const [picks, setPicks] = useState([]); const [items, setItems] = useState([]); const [batches, setBatches] = useState({});
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const [detailId, setDetailId] = useState(null);
@@ -7844,6 +7910,23 @@ function DistDispatchView({ currentUser }) {
       setCreating({ pickId: pick.id, soId: pick.soId, customerId: pick.customerId, pickNumber: pick.pickNumber, lines });
     } catch (e) { setErr(e.message); }
   };
+  // Consume Pick→Dispatch (or SO→Dispatch): find the pick awaiting dispatch for
+  // this order and open the dispatch form pre-filled from it.
+  useEffect(() => {
+    if (pendingConvert?.target === "pick" && pendingConvert.source) {
+      const soId = pendingConvert.source.soId || pendingConvert.source.id;
+      (async () => {
+        try {
+          const ps = await fetchDistPicks({ status: "picked" });
+          const pick = ps.find(p => p.soId === soId) || ps.find(p => p.id === pendingConvert.source.id);
+          if (pick) await startDispatch(pick);
+          else setErr("No pick awaiting dispatch was found for this order.");
+        } catch (e) { setErr(e.message); }
+      })();
+      setPendingConvert(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingConvert]);
   const save = async () => {
     const valid = (creating.lines || []).filter(l => l.itemId && l.batchId && Number(l.qty) > 0);
     if (!valid.length) { setErr("Nothing to dispatch"); return; }
@@ -7995,7 +8078,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
   );
 }
 
-function DistInvoicesView({ currentUser }) {
+function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
   const [invoices, setInvoices] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [dispatches, setDispatches] = useState([]);
   const [paidMap, setPaidMap] = useState(new Map()); const [soNumMap, setSoNumMap] = useState(new Map());
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
@@ -8007,6 +8090,18 @@ function DistInvoicesView({ currentUser }) {
     const lines = d.lines.map(l => ({ itemId: l.itemId, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice, taxRateId: l.taxRateId }));
     setCreating({ customerId: d.customerId, soId: d.soId, dispatchId: d.id, invoiceDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", shippingCharge: "", paymentTerms: "due_on_receipt", lines: lines.length ? lines : [{ itemId:"", accountCode:"4000", qty:1, unitPrice:"", taxRateId:null }] });
   };
+  // Consume Dispatch→Invoice (source = SO): find this order's uninvoiced dispatch
+  // and open the invoice form pre-filled from it.
+  useEffect(() => {
+    if (pendingConvert?.target === "dispatch" && pendingConvert.source) {
+      const soId = pendingConvert.source.soId || pendingConvert.source.id;
+      const d = uninvoicedDispatches.find(x => x.soId === soId);
+      if (d) fromDispatch(d);
+      else if (!loading) setErr("No dispatch awaiting invoicing was found for this order.");
+      setPendingConvert(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingConvert, loading]);
   const save = async (status) => {
     if (!creating?.customerId) { setErr("Pick a customer"); return; }
     setBusy(true); setErr("");
@@ -42189,6 +42284,7 @@ export default function App() {
   // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
+  const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
   // are now tabs inside Dashboard to slim the sidebar. "overview" = the main
   // dashboard. Gated per-tab by the same role/matrix checks as before.
@@ -43618,7 +43714,7 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
-            <DistDocLinkProvider onNavigate={setActiveView}>
+            <DistDocLinkProvider onNavigate={setActiveView} onConvert={setPendingConvert}>
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
               // Build the dashboard tabs available to this user. Same gates as the
@@ -43806,15 +43902,15 @@ export default function App() {
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser} stores={stores}/>}
             {effectiveActiveView === "dist-pos" && <DistPOView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-grn" && <DistGRNView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-bills" && <DistBillsView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-pay" && <DistPaymentsView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-grn" && <DistGRNView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
+            {effectiveActiveView === "dist-bills" && <DistBillsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
+            {effectiveActiveView === "dist-pay" && <DistPaymentsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-customers" && <DistCustomersView currentUser={currentUser} stores={stores}/>}
             {effectiveActiveView === "dist-pricelists" && <DistPriceListView/>}
             {effectiveActiveView === "dist-sales-orders" && <DistSalesOrderView currentUser={currentUser} setActiveView={setActiveView}/>}
-            {effectiveActiveView === "dist-picks" && <DistPicksView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-dispatch" && <DistDispatchView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-picks" && <DistPicksView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
+            {effectiveActiveView === "dist-dispatch" && <DistDispatchView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
+            {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
