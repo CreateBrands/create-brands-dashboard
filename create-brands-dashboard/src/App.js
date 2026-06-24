@@ -6102,11 +6102,12 @@ const DIST_PAYMENT_TERMS = [
 // document (SO#, invoice#, pick#, dispatch#, customer) without prop-drilling.
 // The provider renders the shared detail modals once.
 const DistDocLinkContext = createContext(null);
-function useDistDocLink() { return useContext(DistDocLinkContext) || { openDoc: () => {} }; }
+function useDistDocLink() { return useContext(DistDocLinkContext) || { openDoc: () => {}, navigate: () => {} }; }
 
-function DistDocLinkProvider({ children }) {
+function DistDocLinkProvider({ children, onNavigate }) {
   const [stack, setStack] = useState([]); // [{type, id}] — supports drilling link→link
   const openDoc = useCallback((type, id) => { if (type && id) setStack(s => [...s, { type, id }]); }, []);
+  const navigate = useCallback((view) => { setStack([]); if (onNavigate) onNavigate(view); }, [onNavigate]);
   const top = stack[stack.length - 1] || null;
   const close = () => setStack(s => s.slice(0, -1));
 
@@ -6135,7 +6136,7 @@ function DistDocLinkProvider({ children }) {
   }, [top]);
 
   return (
-    <DistDocLinkContext.Provider value={{ openDoc }}>
+    <DistDocLinkContext.Provider value={{ openDoc, navigate }}>
       {children}
       {top && top.type === "invoice" && <DistInvoiceDetail invoiceId={top.id} onClose={close}/>}
       {top && top.type === "pick" && <DistPickDetail pickId={top.id} onClose={close}/>}
@@ -6156,6 +6157,19 @@ function DocLink({ type, id, children, className = "" }) {
   const { openDoc } = useDistDocLink();
   if (!id) return <span className={className}>{children}</span>;
   return <button onClick={(e) => { e.stopPropagation(); openDoc(type, id); }} className={`text-indigo-300 hover:underline ${className}`}>{children}</button>;
+}
+
+// Buy-side "What's next?" workflow banner: PO → Goods In → Bill → Payment.
+// `next` is null when the chain is complete (renders a done state).
+function DistNextStep({ next, doneLabel }) {
+  const { navigate } = useDistDocLink();
+  if (!next) return <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 px-3 py-2.5 text-xs text-emerald-300">{doneLabel} ✓</div>;
+  return (
+    <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 flex items-center justify-between gap-3">
+      <div><span className="text-xs font-semibold text-white">What's next?</span> <span className="text-xs text-slate-400">{next.hint}</span></div>
+      <button onClick={() => navigate(next.view)} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
+    </div>
+  );
 }
 
 function distComputeTotals(lines, taxRates, vatMode, discountValue, discountType) {
@@ -6254,6 +6268,11 @@ function DistPODetail({ poId, onClose, onEdit, onDelete }) {
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && <DistNextStep doneLabel="This PO has been received and billed." next={
+          (d.grns?.length || 0) === 0 ? { label: "Receive (Goods In)", view: "dist-grn", hint: "Receive these goods into the warehouse — raises stock." }
+          : (d.bills?.length || 0) === 0 ? { label: "Convert to Bill", view: "dist-bills", hint: "Record the supplier bill for what was received." }
+          : null
+        }/>}
         {d && (<>
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Vendor</div><div className="text-sm"><DocLink type="vendor" id={d.vendor?.id}>{d.vendor?.displayName || "—"}</DocLink></div></div>
@@ -6294,6 +6313,9 @@ function DistGRNDetail({ grnId, onClose, onDelete, onEdit }) {
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && <DistNextStep doneLabel="This receipt has been billed." next={
+          d.billed ? null : { label: "Convert to Bill", view: "dist-bills", hint: "Record the supplier bill for these received goods." }
+        }/>}
         {d && (<>
           <div className="grid grid-cols-4 gap-3">
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Vendor</div><div className="text-sm"><DocLink type="vendor" id={d.vendor?.id}>{d.sourceKind==="central_kitchen"?"Central Kitchen":(d.vendor?.displayName||"—")}</DocLink></div></div>
@@ -6328,6 +6350,9 @@ function DistBillDetail({ billId, onClose, onDelete }) {
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && <DistNextStep doneLabel="This bill is fully paid." next={
+          d.balance > 0.005 ? { label: "Record Payment", view: "dist-pay", hint: "Pay this bill — posts Dr creditors / Cr bank." } : null
+        }/>}
         {d && (<>
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
             <div className="flex justify-between items-start">
@@ -43593,7 +43618,7 @@ export default function App() {
           </div>
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
-            <DistDocLinkProvider>
+            <DistDocLinkProvider onNavigate={setActiveView}>
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
               // Build the dashboard tabs available to this user. Same gates as the

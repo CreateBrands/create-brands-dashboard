@@ -9410,8 +9410,10 @@ export async function fetchDistGRNDetail(grnId) {
   const po = pos.find(p => p.id === head.po_id) || null;
   const lines = (head.dist_goods_receipt_lines || []).map(l => ({ itemId: l.item_id, item: itemById.get(l.item_id) || null, batchId: l.batch_id, qty: Number(l.qty) || 0, landedCost: Number(l.landed_cost) || 0, expiryDate: l.expiry_date, amount: +((Number(l.qty) || 0) * (Number(l.landed_cost) || 0)).toFixed(2) }));
   const total = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
+  const allBills = await fetchDistBills({}).catch(() => []);
+  const billed = allBills.some(b => b.grnId === grnId);
   return { id: head.id, grnNumber: head.grn_number, posted: !!head.posted, receivedDate: head.received_date, sourceKind: head.source_kind,
-    poId: head.po_id, poNumber: po?.poNumber || null, vendor, lines, total };
+    poId: head.po_id, poNumber: po?.poNumber || null, vendorId: head.vendor_id, vendor, lines, total, billed };
 }
 
 export async function fetchDistBillDetail(billId) {
