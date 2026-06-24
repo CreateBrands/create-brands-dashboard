@@ -146,6 +146,7 @@ import {
   suggestDistFefo, fetchDistPicks, createDistPick, fetchDistDispatches, postDistDispatch,
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
+  confirmDistGoodsReceipt,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6299,9 +6300,18 @@ function DistPOView({ currentUser }) {
 // ── GOODS IN (same Zoho table format; raises stock + journal) ──
 function DistGRNView({ currentUser }) {
   const [grns, setGrns] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
-  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [confirming, setConfirming] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [g, v, it, tx] = await Promise.all([fetchDistGoodsReceipts(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setGrns(g); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
+  const itemName = (id) => { const it = items.find(x => x.id === id); return it ? `${it.name} (${it.sku})` : id; };
+  const confirmDraft = async () => {
+    setBusy(true); setErr("");
+    try {
+      const edits = (confirming.lines || []).map(l => ({ lineId: l.id, qty: Number(l.qty) || 0, landedCost: Number(l.landedCost) || 0 }));
+      await confirmDistGoodsReceipt(confirming.id, edits);
+      setConfirming(null); await load();
+    } catch (e) { setErr(e.message); } setBusy(false);
+  };
   const newDoc = () => setCreating({ vendorId: "", receivedDate: new Date().toISOString().slice(0,10), lines: [{ itemId: "", qty: 1, landedCost: "", batchNo: "", expiryDate: "" }] });
   const save = async () => {
     if (!creating?.vendorId) { setErr("Pick a source/vendor"); return; }
@@ -6317,16 +6327,49 @@ function DistGRNView({ currentUser }) {
     <div className="space-y-4">
       <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{grns.length} receipt{grns.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> Receive goods</button></div>
       {err && <div className="text-xs text-red-400">{err}</div>}
+      {/* CK draft receipts awaiting confirmation */}
+      {grns.some(g => g.status === "draft" && !g.posted) && (
+        <div className="bg-amber-950/20 border border-amber-900/40 rounded-2xl overflow-hidden">
+          <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-amber-300/80 border-b border-amber-900/30">From Central Kitchen — review &amp; confirm to raise stock</div>
+          {grns.filter(g => g.status === "draft" && !g.posted).map(g => (
+            <div key={g.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-amber-900/20">
+              <div><span className="text-white font-mono text-xs">{g.grnNumber}</span> <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK DRAFT</span><div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length!==1?"s":""} · {g.receivedDate}</div></div>
+              <button onClick={() => setConfirming({ ...g, lines: g.lines.map(l => ({ ...l })) })} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Review &amp; confirm</button>
+            </div>
+          ))}
+        </div>
+      )}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {grns.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No goods received yet. This is the event that raises stock.</div>}
-          {grns.map(g => (
+          {grns.filter(g => !(g.status === "draft" && !g.posted)).length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No posted receipts yet. This is the event that raises stock.</div>}
+          {grns.filter(g => !(g.status === "draft" && !g.posted)).map(g => (
             <div key={g.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
               <div><span className="text-white font-mono text-xs">{g.grnNumber}</span> <span className="text-slate-400">{vName(g.vendorId)}</span>{g.sourceKind==="central_kitchen" && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK</span>}<div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length!==1?"s":""} · {g.receivedDate}</div></div>
               {g.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">posted</span>}
             </div>
           ))}
         </div>
+      )}
+      {/* Confirm CK draft modal */}
+      {confirming && (
+        <Modal onClose={() => setConfirming(null)} title={`Confirm ${confirming.grnNumber}`} maxW="max-w-3xl">
+          <div className="space-y-4">
+            <p className="text-[11px] text-slate-500">From Central Kitchen. Adjust qty or landed cost if needed, then confirm to raise stock and post Dr Stock / Cr GRNI.</p>
+            <div className="border border-slate-800 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-6">Item</div><div className="col-span-2 text-right">Qty</div><div className="col-span-2 text-right">Cost £/u</div><div className="col-span-2 text-right">Value</div></div>
+              {(confirming.lines || []).map((l, i) => (
+                <div key={l.id} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
+                  <div className="col-span-6 text-white truncate">{itemName(l.itemId)}</div>
+                  <div className="col-span-2"><input type="number" value={l.qty} onChange={e => setConfirming({ ...confirming, lines: confirming.lines.map((x, j) => j === i ? { ...x, qty: e.target.value } : x) })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
+                  <div className="col-span-2"><input type="number" value={l.landedCost} onChange={e => setConfirming({ ...confirming, lines: confirming.lines.map((x, j) => j === i ? { ...x, landedCost: e.target.value } : x) })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
+                  <div className="col-span-2 text-right text-slate-300">£{((Number(l.qty)||0)*(Number(l.landedCost)||0)).toFixed(2)}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end"><div className="text-sm text-slate-400">Stock value: <span className="text-white font-semibold">£{(confirming.lines || []).reduce((s, l) => s + (Number(l.qty)||0)*(Number(l.landedCost)||0), 0).toFixed(2)}</span></div></div>
+            <div className="flex justify-end gap-2"><button onClick={() => setConfirming(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={confirmDraft} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Confirming…":"Confirm & raise stock"}</button></div>
+          </div>
+        </Modal>
       )}
       {creating && (
         <Modal onClose={() => setCreating(null)} title="Receive goods into warehouse" maxW="max-w-4xl">
@@ -7233,6 +7276,7 @@ function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy }) {
 function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
   const [taxRates, setTaxRates] = useState([]);
+  const [ckProducts, setCkProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
@@ -7254,9 +7298,10 @@ function DistItemsView({ currentUser }) {
   const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
-      const [its, tax, onHand] = await Promise.all([
-        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(),
+      const [its, tax, onHand, ckp] = await Promise.all([
+        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(), fetchCkProducts().catch(() => []),
       ]);
+      setCkProducts(ckp || []);
       // Merge derived on-hand onto each item (committed=0 until sell side ships).
       const withStock = its.map(i => {
         const oh = onHand.get(i.id) || 0;
@@ -7526,6 +7571,12 @@ function DistItemsView({ currentUser }) {
                 <input value={editItem.incomeAccountCode || ""} onChange={e => setEditItem({ ...editItem, incomeAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
               <label className="text-xs text-slate-400">Expense acct
                 <input value={editItem.expenseAccountCode || ""} onChange={e => setEditItem({ ...editItem, expenseAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
+              <label className="text-xs text-slate-400 col-span-2">Central Kitchen product link
+                <select value={editItem.ckProductId || ""} onChange={e => setEditItem({ ...editItem, ckProductId: e.target.value || null })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                  <option value="">— not linked —</option>
+                  {ckProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <span className="text-[10px] text-slate-500">When the CK dispatches this product to the warehouse, a draft goods receipt is created for this item.</span></label>
               <label className="text-xs text-slate-400 col-span-2 flex items-center gap-2 mt-1">
                 <input type="checkbox" checked={editItem.active !== false} onChange={e => setEditItem({ ...editItem, active: e.target.checked })}/> Active</label>
             </div>

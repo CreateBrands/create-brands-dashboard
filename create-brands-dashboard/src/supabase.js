@@ -6826,6 +6826,14 @@ export async function receiveDispatch({ dispatchId, toSiteId, receivedDate, rece
     status: "received", received_date: receivedDate || new Date().toISOString().slice(0,10), received_by: receivedBy || null,
   }).eq("id", dispatchId);
   if (error) throw error;
+
+  // CK → Distribution hook (best-effort): draft a Distribution goods receipt
+  // for the received lines so warehouse stock can be confirmed. Never blocks CK.
+  try {
+    const ckLines = (receipts || []).map(r => { const l = byId.get(r.lineId); return l ? { productId: l.productId, productName: l.productName, qtyReceived: Number(r.qtyReceived) || 0, finishedBatchNo: l.finishedBatchNo, useByDate: l.useByDate } : null; }).filter(Boolean);
+    if (ckLines.length) await createDistDraftReceiptFromCk({ ckDispatchId: dispatchId, ckLines, receivedDate: receivedDate || new Date().toISOString().slice(0,10), createdBy: receivedBy });
+  } catch (e) { /* hook is non-blocking; draft can be created later */ }
+
   return dispatchId;
 }
 
@@ -8578,6 +8586,7 @@ const mapDistItem = (i) => ({
   packUnit: i.pack_unit || "", taxRateId: i.tax_rate_id || null,
   sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
+  ckProductId: i.ck_product_id || null,
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -8641,6 +8650,7 @@ export async function upsertDistItem(i) {
     sell_rate: i.sellRate != null && i.sellRate !== "" ? Number(i.sellRate) : null,
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
+    ck_product_id: i.ckProductId || null,
     active: i.active !== false,
   };
   const { data, error } = await supabase.from("dist_items").upsert(row).select().maybeSingle();
@@ -8779,6 +8789,7 @@ const mapDistPOLine = (l) => ({ id: l.id, poId: l.po_id, itemId: l.item_id, qty:
 const mapDistGRN = (g) => ({
   id: g.id, grnNumber: g.grn_number || "", vendorId: g.vendor_id || null, poId: g.po_id || null,
   sourceKind: g.source_kind || "vendor", receivedDate: g.received_date || null, note: g.note || "",
+  status: g.status || (g.posted ? "posted" : "draft"), ckDispatchId: g.ck_dispatch_id || null,
   posted: !!g.posted, createdBy: g.created_by || null, createdAt: g.created_at, lines: (g.dist_goods_receipt_lines || []).map(mapDistGRNLine),
 });
 const mapDistGRNLine = (l) => ({ id: l.id, grnId: l.grn_id, itemId: l.item_id, batchId: l.batch_id, qty: Number(l.qty) || 0, landedCost: Number(l.landed_cost) || 0, batchNo: l.batch_no || "", expiryDate: l.expiry_date || null });
@@ -8893,6 +8904,96 @@ export async function postDistGoodsReceipt(grn, lines = []) {
   await supabase.from("dist_goods_receipts").update({ posted: true }).eq("id", id);
   if (grn.poId) await supabase.from("dist_purchase_orders").update({ status: "received" }).eq("id", grn.poId);
   return id;
+}
+
+// ── CK → Distribution hook ──
+// Build a DRAFT goods receipt from a CK dispatch. Maps each CK line's product
+// to a dist_item via dist_items.ck_product_id. Unmapped products are returned
+// in `unmatched` (not received). Raises NO stock/journal — review then confirm.
+// Idempotent: if a receipt already exists for this ck_dispatch_id, returns it.
+export async function createDistDraftReceiptFromCk({ ckDispatchId, ckLines = [], ckProducts = [], receivedDate, createdBy }) {
+  // Already linked? Don't duplicate.
+  const { data: existing } = await supabase.from("dist_goods_receipts").select("id").eq("ck_dispatch_id", ckDispatchId).limit(1);
+  if (existing && existing.length) return { grnId: existing[0].id, alreadyExists: true, matched: 0, unmatched: [] };
+
+  // Map CK products -> dist items.
+  const items = await fetchDistItems();
+  const byCk = new Map(items.filter(i => i.ckProductId).map(i => [i.ckProductId, i]));
+  const matchedLines = []; const unmatched = [];
+  for (const l of ckLines) {
+    const qty = Number(l.qtyReceived ?? l.qty_received ?? l.qtySent ?? l.qty_sent) || 0;
+    if (qty <= 0) continue;
+    const item = byCk.get(l.productId || l.product_id);
+    const prodName = l.productName || l.product_name || (ckProducts.find(p => p.id === (l.productId || l.product_id))?.name) || (l.productId || l.product_id);
+    if (!item) { unmatched.push({ productId: l.productId || l.product_id, productName: prodName, qty }); continue; }
+    matchedLines.push({
+      itemId: item.id, qty,
+      landedCost: Number(item.purchaseRate) || 0,           // cost basis; editable before confirm
+      batchNo: l.finishedBatchNo || l.finished_batch_no || "",
+      expiryDate: l.useByDate || l.use_by_date || null,
+    });
+  }
+
+  const id = distId("dgrn");
+  const date = receivedDate || new Date().toISOString().slice(0, 10);
+  const head = {
+    id, grn_number: `CKGRN-${Date.now().toString().slice(-6)}`, vendor_id: null, po_id: null,
+    source_kind: "central_kitchen", received_date: date, note: "Auto-drafted from Central Kitchen dispatch",
+    created_by: createdBy || null, posted: false, status: "draft", ck_dispatch_id: ckDispatchId,
+  };
+  const { error } = await supabase.from("dist_goods_receipts").insert(head);
+  if (error) throw error;
+  // Store lines WITHOUT a batch / movement (draft only).
+  for (const l of matchedLines) {
+    await supabase.from("dist_goods_receipt_lines").insert({
+      id: distId("dgrnl"), grn_id: id, item_id: l.itemId, batch_id: null, qty: l.qty,
+      landed_cost: l.landedCost, batch_no: l.batchNo || null, expiry_date: l.expiryDate || null,
+    });
+  }
+  return { grnId: id, alreadyExists: false, matched: matchedLines.length, unmatched };
+}
+
+// Confirm a DRAFT goods receipt: create a batch + receipt movement per line and
+// post Dr Stock / Cr GRNI at landed cost. Idempotent on distrecv:<id>.
+export async function confirmDistGoodsReceipt(grnId, lineEdits = null) {
+  const { data: g } = await supabase.from("dist_goods_receipts").select("*, dist_goods_receipt_lines(*)").eq("id", grnId).maybeSingle();
+  if (!g) throw new Error("Goods receipt not found.");
+  if (g.posted) return grnId; // already confirmed
+  const receivedDate = g.received_date || new Date().toISOString().slice(0, 10);
+  const editMap = new Map((lineEdits || []).map(e => [e.lineId, e]));
+
+  let totalValue = 0;
+  for (const ln of g.dist_goods_receipt_lines || []) {
+    const edit = editMap.get(ln.id) || {};
+    const qty = Number(edit.qty ?? ln.qty) || 0;
+    const landedCost = Number(edit.landedCost ?? ln.landed_cost) || 0;
+    if (!ln.item_id || qty <= 0) continue;
+    const batch = await createDistBatch({
+      itemId: ln.item_id, batchNo: ln.batch_no || g.grn_number, expiryDate: ln.expiry_date || null,
+      landedCost, costMethod: g.source_kind === "central_kitchen" ? "ck_cost" : "vendor_bill", sourceKind: g.source_kind || "vendor",
+    });
+    await supabase.from("dist_goods_receipt_lines").update({ batch_id: batch.id, qty, landed_cost: landedCost }).eq("id", ln.id);
+    await addDistMovement({
+      itemId: ln.item_id, batchId: batch.id, qty, type: "receipt",
+      sourceKind: "goods_receipt", sourceRef: `distrecv:${grnId}:${ln.item_id}:${batch.id}`, createdBy: g.created_by,
+    });
+    totalValue += qty * landedCost;
+  }
+
+  if (totalValue > 0) {
+    const [stock, grni] = await Promise.all([resolveAccountForEntity(DIST_ENTITY, "1200"), resolveAccountForEntity(DIST_ENTITY, "2050")]);
+    if (stock && grni) {
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: receivedDate, memo: `Goods receipt ${g.grn_number}`,
+          sourceKind: "dist_goods_receipt", sourceRef: `distrecv:${grnId}`, createdBy: g.created_by,
+          lines: [{ accountId: stock, amount: +totalValue.toFixed(2) }, { accountId: grni, amount: -totalValue.toFixed(2) }],
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  await supabase.from("dist_goods_receipts").update({ posted: true, status: "posted" }).eq("id", grnId);
+  return grnId;
 }
 
 // ── BILLS (payable + journal Dr GRNI/VAT / Cr creditors) ──
