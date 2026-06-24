@@ -9596,6 +9596,70 @@ export async function fetchDistInvoicePayments({ customerId } = {}) {
   if (error) throw error;
   return (data || []).map(mapDistInvPay);
 }
+
+// Aggregate everything a customer detail page needs: invoices (with balance
+// due), payments, sales orders, receivables, monthly income, statement lines.
+export async function fetchDistCustomerDetail(customerId) {
+  const [invoices, payments, salesOrders, taxRates] = await Promise.all([
+    fetchDistInvoices({ customerId }).catch(() => []),
+    fetchDistInvoicePayments({ customerId }).catch(() => []),
+    fetchDistSalesOrders({ customerId }).catch(() => []),
+    fetchDistTaxRates().catch(() => []),
+  ]);
+  const paidMap = await fetchDistInvoicePaidMap(invoices.map(i => i.id)).catch(() => new Map());
+
+  const invGross = (i) => {
+    if (i.grandTotal != null && i.grandTotal > 0) return i.grandTotal;
+    // fallback recompute
+    const tr = new Map(taxRates.map(t => [t.id, Number(t.percent) || 0]));
+    let net = 0, vat = 0;
+    for (const l of i.lines || []) {
+      const raw = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
+      net += raw; vat += raw * (tr.get(l.taxRateId) || 0) / 100;
+    }
+    return +(net + vat + (Number(i.shippingCharge) || 0)).toFixed(2);
+  };
+
+  const invRows = invoices.map(i => {
+    const gross = invGross(i);
+    const paid = paidMap.get(i.id) || 0;
+    const balance = +(gross - paid).toFixed(2);
+    return { id: i.id, invoiceNumber: i.invoiceNumber, soId: i.soId, date: i.invoiceDate, dueDate: i.dueDate,
+      amount: gross, paid, balance, status: balance <= 0.005 ? "paid" : (i.dueDate && new Date(i.dueDate) < new Date() ? "overdue" : (paid > 0 ? "part_paid" : "open")) };
+  }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  const payRows = payments.map(p => ({ id: p.id, paymentNumber: p.paymentNumber, date: p.payDate,
+    reference: p.reference, method: p.method, amount: Number(p.amount) || 0,
+    unused: +((Number(p.amount) || 0) - (p.allocations || []).reduce((s, a) => s + (Number(a.amount) || 0), 0)).toFixed(2) }))
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  const soRows = salesOrders.map(s => ({ id: s.id, soNumber: s.soNumber, date: s.orderDate, status: s.status,
+    total: (s.lines || []).reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0) }))
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  const receivables = +invRows.reduce((s, r) => s + r.balance, 0).toFixed(2);
+  const invoicedTotal = +invRows.reduce((s, r) => s + r.amount, 0).toFixed(2);
+  const receivedTotal = +payRows.reduce((s, r) => s + r.amount, 0).toFixed(2);
+
+  // Monthly income (last 6 months) from invoice dates.
+  const months = [];
+  const now = new Date();
+  for (let k = 5; k >= 0; k--) { const d = new Date(now.getFullYear(), now.getMonth() - k, 1); months.push({ key: `${d.getFullYear()}-${d.getMonth()}`, label: d.toLocaleString("en-GB", { month: "short" }), year: d.getFullYear(), amount: 0 }); }
+  const mIdx = new Map(months.map((m, i) => [m.key, i]));
+  for (const r of invRows) { if (!r.date) continue; const d = new Date(r.date); const k = `${d.getFullYear()}-${d.getMonth()}`; if (mIdx.has(k)) months[mIdx.get(k)].amount += r.amount; }
+  const incomeTotal = +months.reduce((s, m) => s + m.amount, 0).toFixed(2);
+
+  // Statement lines: opening balance + invoices/payments interleaved, running balance.
+  const events = [
+    ...invRows.map(r => ({ date: r.date, type: "Invoice", details: `${r.invoiceNumber} - due on ${r.dueDate || r.date}`, amount: r.amount, payment: 0 })),
+    ...payRows.map(p => ({ date: p.date, type: "Payment Received", details: `${p.paymentNumber}`, amount: 0, payment: p.amount })),
+  ].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+  let run = 0;
+  const statement = events.map(e => { run += (e.amount || 0) - (e.payment || 0); return { ...e, balance: +run.toFixed(2) }; });
+
+  return { invoices: invRows, payments: payRows, salesOrders: soRows, receivables, invoicedTotal, receivedTotal,
+    months, incomeTotal, statement };
+}
 export async function postDistInvoicePayment(pay, allocations = []) {
   const id = pay.id || distId("dipay");
   const payDate = pay.payDate || new Date().toISOString().slice(0, 10);

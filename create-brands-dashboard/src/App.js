@@ -149,7 +149,7 @@ import {
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
-  fetchDistItemTransactions, fetchDistItemHistory,
+  fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6646,9 +6646,188 @@ function DistContactImportModal({ kind, stores = [], onClose, onDone }) {
 }
 
 // ── CUSTOMERS (rich form + store link + CSV) ──
+function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
+  const [tab, setTab] = useState("overview");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    fetchDistCustomerDetail(customer.id).then(d => { if (alive) setData(d); }).catch(e => { if (alive) setErr(e.message); });
+    return () => { alive = false; };
+  }, [customer.id]);
+
+  const storeName = stores.find(s => s.id === customer.storeId)?.name || null;
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "\u2014";
+  const statusColor = (s) => s === "paid" ? "text-emerald-400" : s === "overdue" ? "text-red-400" : s === "part_paid" ? "text-amber-400" : "text-slate-400";
+  const TABS = [["overview", "Overview"], ["transactions", "Transactions"], ["statement", "Statement"]];
+  const maxIncome = data ? Math.max(1, ...data.months.map(m => m.amount)) : 1;
+
+  return (
+    <Modal onClose={onClose} title={customer.displayName} maxW="max-w-4xl">
+      <div className="space-y-4">
+        {/* Tabs + actions */}
+        <div className="flex items-center gap-1 border-b border-slate-800 -mt-1">
+          {TABS.map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-400 hover:text-white"}`}>{l}</button>
+          ))}
+          <button onClick={onEdit} className="ml-auto mb-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!data && !err && <div className="text-sm text-slate-500 py-10 text-center">Loading\u2026</div>}
+
+        {/* OVERVIEW */}
+        {data && tab === "overview" && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Left: contact + address */}
+            <div className="space-y-3 lg:col-span-1">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                <div className="text-sm font-bold text-white">{customer.companyName || customer.displayName}</div>
+                {(customer.firstName || customer.lastName) && <div className="text-sm text-slate-300 mt-1">{[customer.salutation, customer.firstName, customer.lastName].filter(Boolean).join(" ")}</div>}
+                {customer.email && <div className="text-xs text-indigo-300 mt-0.5">{customer.email}</div>}
+                {(customer.workPhone || customer.mobile || customer.phone) && <div className="text-xs text-slate-400 mt-0.5">{customer.workPhone || customer.mobile || customer.phone}</div>}
+              </div>
+              {(customer.billingAddress || customer.shippingAddress) && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 space-y-2">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Address</div>
+                  {customer.billingAddress && <div><div className="text-[11px] text-slate-500">Billing</div><div className="text-xs text-slate-300 whitespace-pre-line">{customer.billingAddress}</div></div>}
+                  {customer.shippingAddress && <div><div className="text-[11px] text-slate-500">Shipping</div><div className="text-xs text-slate-300 whitespace-pre-line">{customer.shippingAddress}</div></div>}
+                </div>
+              )}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 grid grid-cols-2 gap-2">
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Currency</div><div className="text-sm text-white">{customer.currencyCode || "GBP"}</div></div>
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Terms</div><div className="text-sm text-white capitalize">{(customer.paymentTerms || "").replace(/_/g, " ") || "\u2014"}</div></div>
+                {storeName && <div className="col-span-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">Linked store</div><div className="text-sm text-white">{storeName}</div></div>}
+              </div>
+            </div>
+            {/* Right: receivables + income */}
+            <div className="space-y-3 lg:col-span-2">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Receivables</div><div className="text-xl font-bold text-amber-300">{gbp(data.receivables)}</div></div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Invoiced</div><div className="text-xl font-bold text-white">{gbp(data.invoicedTotal)}</div></div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Received</div><div className="text-xl font-bold text-emerald-300">{gbp(data.receivedTotal)}</div></div>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                <div className="flex items-center justify-between mb-2"><div className="text-sm font-semibold text-white">Income</div><div className="text-xs text-slate-500">Last 6 months \u00B7 {gbp(data.incomeTotal)}</div></div>
+                <div className="flex items-end gap-2 h-32 pt-2">
+                  {data.months.map(m => (
+                    <div key={m.key} className="flex-1 flex flex-col items-center justify-end h-full">
+                      <div className="w-full rounded-t bg-indigo-500/70" style={{ height: `${Math.max(2, (m.amount / maxIncome) * 100)}%` }} title={gbp(m.amount)}></div>
+                      <div className="text-[9px] text-slate-500 mt-1">{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TRANSACTIONS */}
+        {data && tab === "transactions" && (
+          <div className="space-y-4">
+            <DistDetailSection title="Invoices" count={data.invoices.length}>
+              {data.invoices.length === 0 ? <DistEmptyRow text="No invoices."/> : (
+                <table className="w-full text-xs">
+                  <thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Invoice #</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Balance Due</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead>
+                  <tbody>{data.invoices.map(i => (
+                    <tr key={i.id} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-400">{fmtDate(i.date)}</td>
+                      <td className="px-3 py-2"><span className="font-mono text-indigo-300">{i.invoiceNumber}</span></td>
+                      <td className="px-3 py-2 text-right text-white">{gbp(i.amount)}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{gbp(i.balance)}</td>
+                      <td className={`px-3 py-2 pl-4 capitalize ${statusColor(i.status)}`}>{i.status.replace("_", " ")}</td>
+                    </tr>))}</tbody>
+                </table>
+              )}
+            </DistDetailSection>
+            <DistDetailSection title="Customer Payments" count={data.payments.length}>
+              {data.payments.length === 0 ? <DistEmptyRow text="No payments."/> : (
+                <table className="w-full text-xs">
+                  <thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Payment #</th><th className="text-left px-3 py-2">Reference</th><th className="text-left px-3 py-2">Mode</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Unused</th></tr></thead>
+                  <tbody>{data.payments.map(p => (
+                    <tr key={p.id} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-400">{fmtDate(p.date)}</td>
+                      <td className="px-3 py-2 font-mono text-slate-300">{p.paymentNumber}</td>
+                      <td className="px-3 py-2 text-slate-400">{p.reference || "\u2014"}</td>
+                      <td className="px-3 py-2 text-slate-400 capitalize">{(p.method || "").replace(/_/g, " ")}</td>
+                      <td className="px-3 py-2 text-right text-emerald-300">{gbp(p.amount)}</td>
+                      <td className="px-3 py-2 text-right text-slate-400">{gbp(p.unused)}</td>
+                    </tr>))}</tbody>
+                </table>
+              )}
+            </DistDetailSection>
+            <DistDetailSection title="Sales Orders" count={data.salesOrders.length}>
+              {data.salesOrders.length === 0 ? <DistEmptyRow text="No sales orders."/> : (
+                <table className="w-full text-xs">
+                  <thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">SO #</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead>
+                  <tbody>{data.salesOrders.map(s => (
+                    <tr key={s.id} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-400">{fmtDate(s.date)}</td>
+                      <td className="px-3 py-2 font-mono text-indigo-300">{s.soNumber}</td>
+                      <td className="px-3 py-2 text-right text-white">{gbp(s.total)}</td>
+                      <td className="px-3 py-2 pl-4 text-slate-400 capitalize">{(s.status || "").replace(/_/g, " ")}</td>
+                    </tr>))}</tbody>
+                </table>
+              )}
+            </DistDetailSection>
+          </div>
+        )}
+
+        {/* STATEMENT */}
+        {data && tab === "statement" && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-4 gap-2">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-slate-500">Opening</div><div className="text-sm font-bold text-white">{gbp(0)}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-slate-500">Invoiced</div><div className="text-sm font-bold text-white">{gbp(data.invoicedTotal)}</div></div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-slate-500">Received</div><div className="text-sm font-bold text-emerald-300">{gbp(data.receivedTotal)}</div></div>
+              <div className="rounded-xl border border-indigo-800/50 bg-indigo-950/30 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-indigo-300/70">Balance Due</div><div className="text-sm font-bold text-amber-300">{gbp(data.receivables)}</div></div>
+            </div>
+            <div className="overflow-auto border border-slate-800 rounded-xl max-h-96">
+              <table className="w-full text-xs">
+                <thead className="text-slate-500 sticky top-0 bg-slate-900"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Transaction</th><th className="text-left px-3 py-2">Details</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Payment</th><th className="text-right px-3 py-2">Balance</th></tr></thead>
+                <tbody>
+                  <tr className="border-t border-slate-800/60"><td className="px-3 py-2 text-slate-400">{fmtDate(data.statement[0]?.date)}</td><td className="px-3 py-2 text-slate-300">Opening Balance</td><td className="px-3 py-2"></td><td className="px-3 py-2 text-right text-slate-500">0.00</td><td className="px-3 py-2 text-right text-slate-500">0.00</td><td className="px-3 py-2 text-right text-slate-300">0.00</td></tr>
+                  {data.statement.map((e, idx) => (
+                    <tr key={idx} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-400">{fmtDate(e.date)}</td>
+                      <td className="px-3 py-2 text-slate-300">{e.type}</td>
+                      <td className="px-3 py-2 text-slate-400">{e.details}</td>
+                      <td className="px-3 py-2 text-right text-white">{e.amount ? gbp(e.amount) : ""}</td>
+                      <td className="px-3 py-2 text-right text-emerald-300">{e.payment ? gbp(e.payment) : ""}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{gbp(e.balance)}</td>
+                    </tr>))}
+                  <tr className="border-t-2 border-slate-700"><td className="px-3 py-2" colSpan={5}><span className="font-bold text-white float-right">Balance Due</span></td><td className="px-3 py-2 text-right font-bold text-amber-300">{gbp(data.receivables)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end pt-1 border-t border-slate-800/60">
+          <button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DistDetailSection({ title, count, children }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="rounded-xl border border-slate-800 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-3 py-2.5 bg-slate-950/40 hover:bg-slate-900/60">
+        <span className="text-sm font-semibold text-white flex items-center gap-2">{open ? <ChevronDown size={15}/> : <ChevronRight size={15}/>} {title}</span>
+        <span className="text-[11px] text-slate-500">{count}</span>
+      </button>
+      {open && <div className="overflow-auto">{children}</div>}
+    </div>
+  );
+}
+function DistEmptyRow({ text }) { return <div className="px-3 py-6 text-center text-xs text-slate-600">{text}</div>; }
+
 function DistCustomersView({ currentUser, stores = [] }) {
   const [customers, setCustomers] = useState([]); const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false);
+  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [detail, setDetail] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { setCustomers(await fetchDistContacts({ kind: "customer" })); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const filtered = useMemo(() => { const q = search.trim().toLowerCase(); return q ? customers.filter(c => `${c.displayName} ${c.companyName} ${c.email}`.toLowerCase().includes(q)) : customers; }, [customers, search]);
@@ -6671,7 +6850,7 @@ function DistCustomersView({ currentUser, stores = [] }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No customers yet. Add stores as customers or import the Zoho Contacts CSV.</div>}
           {filtered.map(c => (
-            <button key={c.id} onClick={() => setEdit(c)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50">
+            <button key={c.id} onClick={() => setDetail(c)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50">
               <div><span className="text-white">{c.displayName}</span>{c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/50 text-indigo-300">{storeName(c.storeId)}</span>}<div className="text-[11px] text-slate-500">{c.companyName || c.email || "—"}</div></div>
               <Edit size={13} className="text-slate-600"/>
             </button>
@@ -6679,6 +6858,7 @@ function DistCustomersView({ currentUser, stores = [] }) {
         </div>
       )}
       {importOpen && <DistContactImportModal kind="customer" stores={stores} onClose={() => setImportOpen(false)} onDone={load}/>}
+      {detail && <DistCustomerDetail customer={detail} stores={stores} onClose={() => setDetail(null)} onEdit={() => { setEdit(detail); setDetail(null); }}/>}
       {edit && (
         <Modal onClose={() => setEdit(null)} title={edit.id ? "Edit customer" : "New customer"} maxW="max-w-3xl">
           <div className="space-y-4">
