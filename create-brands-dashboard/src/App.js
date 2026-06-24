@@ -147,6 +147,7 @@ import {
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   confirmDistGoodsReceipt,
+  fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -7187,6 +7188,209 @@ function distItemNameFrom(items, itemId) {
   const it = (items || []).find(x => x.id === itemId);
   return it ? `${it.name} (${it.sku})` : itemId;
 }
+// ============================================================================
+// DISTRIBUTION — REPORTS (tabbed): Stock Valuation, Expiry, Aged Debtors,
+// Aged Creditors, P&L, Reorder. Read-only views over derived data.
+// ============================================================================
+function DistReportsView() {
+  const [tab, setTab] = useState("valuation");
+  const TABS = [
+    { key: "valuation", label: "Stock Valuation" },
+    { key: "expiry", label: "Expiry" },
+    { key: "debtors", label: "Aged Debtors" },
+    { key: "creditors", label: "Aged Creditors" },
+    { key: "pnl", label: "P&L" },
+    { key: "reorder", label: "Reorder" },
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
+        {TABS.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>)}
+      </div>
+      {tab === "valuation" && <DistValuationReport/>}
+      {tab === "expiry" && <DistExpiryReport/>}
+      {tab === "debtors" && <DistAgedReport kind="debtors"/>}
+      {tab === "creditors" && <DistAgedReport kind="creditors"/>}
+      {tab === "pnl" && <DistPnLReport/>}
+      {tab === "reorder" && <DistReorderReport/>}
+    </div>
+  );
+}
+
+const gbp = (n) => `£${(Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function DistReportShell({ loading, err, children }) {
+  if (loading) return <div className="text-sm text-slate-500 py-10 text-center">Loading…</div>;
+  if (err) return <div className="text-xs text-red-400 py-4">{err}</div>;
+  return children;
+}
+
+// ── Stock valuation ──
+function DistValuationReport() {
+  const [data, setData] = useState(null); const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
+  useEffect(() => { fetchDistStockValuation().then(setData).catch(e => setErr(e.message)).finally(() => setLoading(false)); }, []);
+  return (
+    <DistReportShell loading={loading} err={err}>
+      {data && (
+        <div className="space-y-3">
+          <div className="flex gap-3 flex-wrap">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Total stock value</div><div className="text-2xl font-bold text-emerald-300">{gbp(data.totalValue)}</div></div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Items with stock</div><div className="text-2xl font-bold text-white">{data.rows.filter(r => r.onHand !== 0).length}</div></div>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800"><div className="col-span-2">SKU</div><div className="col-span-5">Item</div><div className="col-span-2 text-right">On hand</div><div className="col-span-1 text-right">Cost</div><div className="col-span-2 text-right">Value</div></div>
+            {data.rows.filter(r => r.onHand !== 0).map(r => (
+              <div key={r.itemId} className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b border-slate-800/50 items-center">
+                <div className="col-span-2 font-mono text-[11px] text-indigo-300">{r.sku}</div>
+                <div className="col-span-5 text-white truncate">{r.name}</div>
+                <div className={`col-span-2 text-right ${r.negative?"text-red-400":"text-slate-300"}`}>{r.onHand}</div>
+                <div className="col-span-1 text-right text-slate-500 text-xs">{gbp(r.avgCost)}</div>
+                <div className="col-span-2 text-right text-white">{gbp(r.value)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </DistReportShell>
+  );
+}
+
+// ── Expiry ──
+function DistExpiryReport() {
+  const [data, setData] = useState(null); const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
+  useEffect(() => { fetchDistExpiryReport().then(setData).catch(e => setErr(e.message)).finally(() => setLoading(false)); }, []);
+  const badge = (s) => s === "expired" ? "bg-red-900/50 text-red-300" : s === "critical" ? "bg-amber-900/50 text-amber-300" : s === "soon" ? "bg-yellow-900/40 text-yellow-300" : "bg-slate-800 text-slate-400";
+  return (
+    <DistReportShell loading={loading} err={err}>
+      {data && (
+        <div className="space-y-3">
+          <div className="flex gap-3 flex-wrap">
+            <div className="rounded-2xl border border-red-900/40 bg-red-950/20 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-red-300/80">Expired batches</div><div className="text-2xl font-bold text-red-300">{data.expiredCount}</div></div>
+            <div className="rounded-2xl border border-amber-900/40 bg-amber-950/20 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-amber-300/80">Critical (≤7 days)</div><div className="text-2xl font-bold text-amber-300">{data.criticalCount}</div></div>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800"><div className="col-span-4">Item</div><div className="col-span-2">Batch</div><div className="col-span-2">Expiry</div><div className="col-span-1 text-right">Qty</div><div className="col-span-1 text-right">Days</div><div className="col-span-2 text-right">At risk</div></div>
+            {data.rows.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No batches with stock on hand.</div>}
+            {data.rows.map(r => (
+              <div key={r.batchId} className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b border-slate-800/50 items-center">
+                <div className="col-span-4 text-white truncate">{r.name}</div>
+                <div className="col-span-2 text-slate-400 text-xs font-mono">{r.batchNo || "—"}</div>
+                <div className="col-span-2 text-slate-400 text-xs">{r.expiryDate || "—"} {r.status !== "ok" && <span className={`ml-1 text-[9px] px-1 py-0.5 rounded ${badge(r.status)}`}>{r.status}</span>}</div>
+                <div className="col-span-1 text-right text-slate-300">{r.qty}</div>
+                <div className="col-span-1 text-right text-slate-400 text-xs">{r.daysLeft != null ? r.daysLeft : "—"}</div>
+                <div className="col-span-2 text-right text-white">{gbp(r.valueAtRisk)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </DistReportShell>
+  );
+}
+
+// ── Aged debtors / creditors (shared) ──
+function DistAgedReport({ kind }) {
+  const [data, setData] = useState(null); const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [names, setNames] = useState({});
+  useEffect(() => {
+    const fn = kind === "debtors" ? fetchDistAgedDebtors : fetchDistAgedCreditors;
+    Promise.all([fn(), fetchDistContacts({ kind: kind === "debtors" ? "customer" : "vendor" })])
+      .then(([d, contacts]) => { setData(d); setNames(Object.fromEntries(contacts.map(c => [c.id, c.displayName]))); })
+      .catch(e => setErr(e.message)).finally(() => setLoading(false));
+  }, [kind]);
+  const BUCKETS = [["current", "Current"], ["d30", "1–30"], ["d60", "31–60"], ["d90", "61–90"], ["older", "90+"]];
+  return (
+    <DistReportShell loading={loading} err={err}>
+      {data && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+            {BUCKETS.map(([k, l]) => (<div key={k} className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-2.5 text-center"><div className="text-[9px] uppercase tracking-wide text-slate-500">{l}</div><div className={`text-sm font-bold ${k==="older"||k==="d90"?"text-amber-300":"text-white"}`}>{gbp(data.buckets[k])}</div></div>))}
+            <div className="rounded-xl border border-indigo-800/50 bg-indigo-950/30 px-3 py-2.5 text-center"><div className="text-[9px] uppercase tracking-wide text-indigo-300/70">Total</div><div className="text-sm font-bold text-indigo-200">{gbp(data.total)}</div></div>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800"><div className="col-span-3">{kind === "debtors" ? "Invoice" : "Bill"}</div><div className="col-span-4">{kind === "debtors" ? "Customer" : "Vendor"}</div><div className="col-span-2">Due date</div><div className="col-span-1 text-right">Days</div><div className="col-span-2 text-right">Due</div></div>
+            {data.rows.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">Nothing outstanding.</div>}
+            {data.rows.map(r => (
+              <div key={r.id} className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b border-slate-800/50 items-center">
+                <div className="col-span-3 font-mono text-xs text-white">{r.ref}</div>
+                <div className="col-span-4 text-slate-300 truncate">{names[r.party] || "—"}</div>
+                <div className="col-span-2 text-slate-400 text-xs">{r.dueDate || r.date || "—"}</div>
+                <div className={`col-span-1 text-right text-xs ${r.days>60?"text-amber-300":"text-slate-400"}`}>{r.days}</div>
+                <div className="col-span-2 text-right text-white">{gbp(r.due)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </DistReportShell>
+  );
+}
+
+// ── P&L ──
+function DistPnLReport() {
+  const [from, setFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 10); });
+  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  const [data, setData] = useState(null); const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
+  const run = useCallback(() => { setLoading(true); setErr(""); fetchDistPnL({ from, to }).then(setData).catch(e => setErr(e.message)).finally(() => setLoading(false)); }, [from, to]);
+  useEffect(() => { run(); }, [run]);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs text-slate-400">From <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="ml-1 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+        <label className="text-xs text-slate-400">To <input type="date" value={to} onChange={e => setTo(e.target.value)} className="ml-1 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+      </div>
+      <DistReportShell loading={loading} err={err}>
+        {data && (
+          <div className="space-y-3">
+            <div className="flex gap-3 flex-wrap">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Revenue</div><div className="text-xl font-bold text-emerald-300">{gbp(data.totalIncome)}</div></div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">COGS</div><div className="text-xl font-bold text-amber-300">{gbp(data.cogs)}</div></div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Gross profit</div><div className="text-xl font-bold text-white">{gbp(data.grossProfit)}</div></div>
+              <div className="rounded-2xl border border-indigo-800/50 bg-indigo-950/30 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-indigo-300/70">Net profit</div><div className={`text-xl font-bold ${data.netProfit>=0?"text-emerald-300":"text-red-400"}`}>{gbp(data.netProfit)}</div></div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">Income</div>
+              {data.incomeRows.length === 0 && <div className="px-4 py-3 text-xs text-slate-600">No income in range.</div>}
+              {data.incomeRows.map(r => <div key={r.code} className="flex justify-between px-4 py-1.5 text-sm border-b border-slate-800/40"><span className="text-slate-300"><span className="font-mono text-xs text-slate-500 mr-2">{r.code}</span>{r.name}</span><span className="text-white">{gbp(r.amount)}</span></div>)}
+              <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-t border-slate-800">Expenses</div>
+              {data.expenseRows.length === 0 && <div className="px-4 py-3 text-xs text-slate-600">No expenses in range.</div>}
+              {data.expenseRows.map(r => <div key={r.code} className="flex justify-between px-4 py-1.5 text-sm border-b border-slate-800/40"><span className="text-slate-300"><span className="font-mono text-xs text-slate-500 mr-2">{r.code}</span>{r.name}</span><span className="text-white">{gbp(r.amount)}</span></div>)}
+              <div className="flex justify-between px-4 py-2.5 text-sm font-bold bg-slate-950/40"><span className="text-white">Net profit</span><span className={data.netProfit>=0?"text-emerald-300":"text-red-400"}>{gbp(data.netProfit)}</span></div>
+            </div>
+          </div>
+        )}
+      </DistReportShell>
+    </div>
+  );
+}
+
+// ── Reorder ──
+function DistReorderReport() {
+  const [rows, setRows] = useState(null); const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
+  useEffect(() => { fetchDistReorderReport().then(setRows).catch(e => setErr(e.message)).finally(() => setLoading(false)); }, []);
+  return (
+    <DistReportShell loading={loading} err={err}>
+      {rows && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">Items whose available stock (on hand − committed) is at or below their reorder point. Set a reorder point on an item to include it here.</p>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800"><div className="col-span-2">SKU</div><div className="col-span-4">Item</div><div className="col-span-2 text-right">Available</div><div className="col-span-2 text-right">Reorder pt</div><div className="col-span-2 text-right">Shortfall</div></div>
+            {rows.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">Nothing at or below its reorder point.</div>}
+            {rows.map(r => (
+              <div key={r.itemId} className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b border-slate-800/50 items-center">
+                <div className="col-span-2 font-mono text-[11px] text-indigo-300">{r.sku}</div>
+                <div className="col-span-4 text-white truncate">{r.name}</div>
+                <div className="col-span-2 text-right text-slate-300">{r.available}</div>
+                <div className="col-span-2 text-right text-slate-400">{r.reorderPoint}</div>
+                <div className="col-span-2 text-right text-amber-300 font-semibold">{r.shortfall}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </DistReportShell>
+  );
+}
+
 // Item detail: all attributes + read-only stock (on-hand/committed/available)
 // + movement history (the audit trail behind on-hand). Edit/Delete actions.
 function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy }) {
@@ -7577,6 +7781,8 @@ function DistItemsView({ currentUser }) {
                   {ckProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <span className="text-[10px] text-slate-500">When the CK dispatches this product to the warehouse, a draft goods receipt is created for this item.</span></label>
+              <label className="text-xs text-slate-400">Reorder point
+                <input type="number" value={editItem.reorderPoint ?? ""} onChange={e => setEditItem({ ...editItem, reorderPoint: e.target.value })} placeholder="0" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400 col-span-2 flex items-center gap-2 mt-1">
                 <input type="checkbox" checked={editItem.active !== false} onChange={e => setEditItem({ ...editItem, active: e.target.checked })}/> Active</label>
             </div>
@@ -41782,6 +41988,7 @@ export default function App() {
         { key: "dist-receipts",   label: "Payments Received", icon: PoundSterling },
         { key: "dist-credit-notes", label: "Credit Notes", icon: Receipt },
       ]},
+      { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
@@ -42152,6 +42359,7 @@ export default function App() {
             {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-reports" && <DistReportsView/>}
             {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}

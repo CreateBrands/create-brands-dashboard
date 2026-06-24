@@ -8587,6 +8587,7 @@ const mapDistItem = (i) => ({
   sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
   ckProductId: i.ck_product_id || null,
+  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0,
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -8651,6 +8652,7 @@ export async function upsertDistItem(i) {
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
+    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0,
     active: i.active !== false,
   };
   const { data, error } = await supabase.from("dist_items").upsert(row).select().maybeSingle();
@@ -9557,4 +9559,150 @@ export async function postDistCreditNote(cn, lines = []) {
   }
   await supabase.from("dist_credit_notes").update({ posted: true }).eq("id", id);
   return id;
+}
+
+// ============================================================================
+// DISTRIBUTION — REPORTING LAYER (read-only; derives from existing data).
+// Stock valuation, batch expiry, aged debtors/creditors, Distribution P&L,
+// reorder report. No new write paths.
+// ============================================================================
+
+// ── STOCK VALUATION: per item, on-hand × weighted batch cost ──
+// Uses batch-level on-hand × each batch's landed cost for an accurate value.
+export async function fetchDistStockValuation() {
+  const [items, batchOnHand] = await Promise.all([fetchDistItems(), computeDistBatchOnHand()]);
+  // batchOnHand: Map(batchId -> qty). Need each batch's item + cost.
+  const { data: batchRows } = await supabase.from("dist_batches").select("id, item_id, landed_cost, batch_no, expiry_date");
+  const batchById = new Map((batchRows || []).map(b => [b.id, b]));
+  const byItem = new Map();
+  for (const [batchId, qty] of batchOnHand.entries()) {
+    const b = batchById.get(batchId); if (!b) continue;
+    const cur = byItem.get(b.item_id) || { qty: 0, value: 0 };
+    cur.qty += qty; cur.value += qty * (Number(b.landed_cost) || 0);
+    byItem.set(b.item_id, cur);
+  }
+  const rows = items.map(it => {
+    const agg = byItem.get(it.id) || { qty: 0, value: 0 };
+    const avgCost = agg.qty > 0 ? agg.value / agg.qty : (Number(it.purchaseRate) || 0);
+    return { itemId: it.id, sku: it.sku, name: it.name, category: it.category, onHand: +agg.qty.toFixed(3), avgCost: +avgCost.toFixed(4), value: +agg.value.toFixed(2), negative: agg.qty < 0 };
+  });
+  const totalValue = +rows.reduce((s, r) => s + r.value, 0).toFixed(2);
+  return { rows, totalValue };
+}
+
+// ── BATCH EXPIRY: batches with on-hand > 0, soonest expiry first ──
+export async function fetchDistExpiryReport(withinDays = null) {
+  const [batchOnHand, items] = await Promise.all([computeDistBatchOnHand(), fetchDistItems()]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const { data: batchRows } = await supabase.from("dist_batches").select("id, item_id, batch_no, expiry_date, landed_cost");
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const rows = [];
+  for (const b of batchRows || []) {
+    const qty = batchOnHand.get(b.id) || 0;
+    if (qty <= 0) continue;
+    const it = itemById.get(b.item_id);
+    let daysLeft = null, status = "ok";
+    if (b.expiry_date) {
+      daysLeft = Math.round((new Date(b.expiry_date) - today) / 86400000);
+      status = daysLeft < 0 ? "expired" : daysLeft <= 7 ? "critical" : daysLeft <= 30 ? "soon" : "ok";
+    }
+    rows.push({ batchId: b.id, itemId: b.item_id, sku: it?.sku || "", name: it?.name || b.item_id, batchNo: b.batch_no || "", expiryDate: b.expiry_date || null, daysLeft, status, qty: +qty.toFixed(3), valueAtRisk: +(qty * (Number(b.landed_cost) || 0)).toFixed(2) });
+  }
+  rows.sort((a, b) => { if (a.expiryDate == null) return 1; if (b.expiryDate == null) return -1; return new Date(a.expiryDate) - new Date(b.expiryDate); });
+  const filtered = withinDays != null ? rows.filter(r => r.daysLeft != null && r.daysLeft <= withinDays) : rows;
+  return { rows: filtered, expiredCount: rows.filter(r => r.status === "expired").length, criticalCount: rows.filter(r => r.status === "critical").length };
+}
+
+// ── AGED CREDITORS: unpaid bills bucketed by age from due date (else bill date) ──
+export async function fetchDistAgedCreditors(asOf = null) {
+  const ref = asOf ? new Date(asOf) : new Date(); ref.setHours(0, 0, 0, 0);
+  const bills = await fetchDistBills({ status: ["open", "part_paid"] });
+  const paid = await fetchDistBillPaidMap(bills.map(b => b.id));
+  const taxRates = await fetchDistTaxRates();
+  const buckets = { current: 0, d30: 0, d60: 0, d90: 0, older: 0 };
+  const rows = bills.map(b => {
+    const gross = b.grandTotal != null && b.grandTotal > 0 ? b.grandTotal : distReportDocGross(b, taxRates);
+    const due = +(gross - (paid.get(b.id) || 0)).toFixed(2);
+    if (due <= 0.005) return null;
+    const ageDate = b.dueDate || b.billDate;
+    const days = ageDate ? Math.round((ref - new Date(ageDate)) / 86400000) : 0;
+    const bucket = days <= 0 ? "current" : days <= 30 ? "d30" : days <= 60 ? "d60" : days <= 90 ? "d90" : "older";
+    buckets[bucket] += due;
+    return { id: b.id, ref: b.billNumber, party: b.vendorId, date: b.billDate, dueDate: b.dueDate, due, days, bucket };
+  }).filter(Boolean);
+  for (const k in buckets) buckets[k] = +buckets[k].toFixed(2);
+  return { rows, buckets, total: +rows.reduce((s, r) => s + r.due, 0).toFixed(2) };
+}
+
+// ── AGED DEBTORS: unpaid invoices bucketed by age ──
+export async function fetchDistAgedDebtors(asOf = null) {
+  const ref = asOf ? new Date(asOf) : new Date(); ref.setHours(0, 0, 0, 0);
+  const invoices = await fetchDistInvoices({ status: ["open", "part_paid"] });
+  const paid = await fetchDistInvoicePaidMap(invoices.map(i => i.id));
+  const taxRates = await fetchDistTaxRates();
+  const buckets = { current: 0, d30: 0, d60: 0, d90: 0, older: 0 };
+  const rows = invoices.map(i => {
+    const gross = (i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : distReportDocGross(i, taxRates)) + (Number(i.shippingCharge) || 0) * (i.grandTotal > 0 ? 0 : 1);
+    const due = +(gross - (paid.get(i.id) || 0)).toFixed(2);
+    if (due <= 0.005) return null;
+    const ageDate = i.dueDate || i.invoiceDate;
+    const days = ageDate ? Math.round((ref - new Date(ageDate)) / 86400000) : 0;
+    const bucket = days <= 0 ? "current" : days <= 30 ? "d30" : days <= 60 ? "d60" : days <= 90 ? "d90" : "older";
+    buckets[bucket] += due;
+    return { id: i.id, ref: i.invoiceNumber, party: i.customerId, date: i.invoiceDate, dueDate: i.dueDate, due, days, bucket };
+  }).filter(Boolean);
+  for (const k in buckets) buckets[k] = +buckets[k].toFixed(2);
+  return { rows, buckets, total: +rows.reduce((s, r) => s + r.due, 0).toFixed(2) };
+}
+
+// Fallback gross for older docs without a stored grand_total.
+function distReportDocGross(doc, taxRates) {
+  const inclusive = doc.vatMode === "inclusive";
+  const dVal = Number(doc.discountPercent) || 0; const dType = doc.discountType || "percent";
+  let sub = 0; const base = [];
+  for (const l of doc.lines || []) {
+    const pct = (taxRates.find(t => t.id === l.taxRateId)?.percent) || 0;
+    const raw = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
+    const net = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
+    base.push({ pct, net }); sub += net;
+  }
+  const factor = dType === "value" ? (sub > 0 ? Math.max(0, 1 - dVal / sub) : 1) : (1 - dVal / 100);
+  let net = 0, vat = 0;
+  for (const { pct, net: bn } of base) { const dn = bn * factor; net += dn; vat += dn * pct / 100; }
+  return +(net + vat).toFixed(2);
+}
+
+// ── DISTRIBUTION P&L: income vs expense from journal lines over a range ──
+export async function fetchDistPnL({ from, to } = {}) {
+  const [entries, accounts] = await Promise.all([
+    fetchJournalEntries({ entityId: "brand-distribution", from, to }), fetchAccounts("brand-distribution"),
+  ]);
+  const acctById = new Map(accounts.map(a => [a.id, a]));
+  const income = new Map(); const expense = new Map();
+  for (const e of entries) {
+    for (const l of e.lines) {
+      const a = acctById.get(l.accountId); if (!a) continue;
+      // Income accounts are credit-normal (negative amount = revenue); expense debit-normal.
+      if (a.type === "income") {
+        const cur = income.get(a.code) || { code: a.code, name: a.name, amount: 0 };
+        cur.amount += -l.amount; income.set(a.code, cur);
+      } else if (a.type === "expense") {
+        const cur = expense.get(a.code) || { code: a.code, name: a.name, amount: 0 };
+        cur.amount += l.amount; expense.set(a.code, cur);
+      }
+    }
+  }
+  const incomeRows = [...income.values()].map(r => ({ ...r, amount: +r.amount.toFixed(2) })).filter(r => r.amount !== 0).sort((a, b) => a.code.localeCompare(b.code));
+  const expenseRows = [...expense.values()].map(r => ({ ...r, amount: +r.amount.toFixed(2) })).filter(r => r.amount !== 0).sort((a, b) => a.code.localeCompare(b.code));
+  const totalIncome = +incomeRows.reduce((s, r) => s + r.amount, 0).toFixed(2);
+  const totalExpense = +expenseRows.reduce((s, r) => s + r.amount, 0).toFixed(2);
+  const cogs = +expenseRows.filter(r => r.code === "5000").reduce((s, r) => s + r.amount, 0).toFixed(2);
+  return { incomeRows, expenseRows, totalIncome, totalExpense, cogs, grossProfit: +(totalIncome - cogs).toFixed(2), netProfit: +(totalIncome - totalExpense).toFixed(2) };
+}
+
+// ── REORDER REPORT: items at/below reorder point (available <= reorder_point) ──
+export async function fetchDistReorderReport() {
+  const snap = await fetchDistStockSnapshot();
+  return snap.filter(it => (Number(it.reorderPoint) || 0) > 0 && it.available <= (Number(it.reorderPoint) || 0))
+    .map(it => ({ itemId: it.id, sku: it.sku, name: it.name, onHand: it.onHand, committed: it.committed, available: it.available, reorderPoint: Number(it.reorderPoint) || 0, shortfall: +((Number(it.reorderPoint) || 0) - it.available).toFixed(3) }));
 }
