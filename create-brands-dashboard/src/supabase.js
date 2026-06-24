@@ -8733,14 +8733,14 @@ export async function computeDistBatchOnHand(itemId) {
   return m;
 }
 
-// Full stock snapshot for the UI: per item, on-hand + (committed=0 until the
-// sell side exists) + available, plus a below-zero alarm flag.
+// Full stock snapshot for the UI: per item, on-hand + committed (open SO lines)
+// + available, plus a below-zero alarm flag.
 export async function fetchDistStockSnapshot() {
-  const [items, onHand] = await Promise.all([fetchDistItems(), computeDistOnHand()]);
+  const [items, onHand, committed] = await Promise.all([fetchDistItems(), computeDistOnHand(), computeDistCommitted()]);
   return items.map((it) => {
     const oh = onHand.get(it.id) || 0;
-    const committed = 0; // sell-side phase will populate this
-    return { ...it, onHand: oh, committed, available: oh - committed, negative: oh < 0 };
+    const com = committed.get(it.id) || 0;
+    return { ...it, onHand: oh, committed: com, available: oh - com, negative: oh < 0 };
   });
 }
 
@@ -9014,4 +9014,99 @@ export async function postDistBillPayment(pay, allocations = []) {
   }
   await supabase.from("dist_bill_payments").update({ posted: true }).eq("id", id);
   return id;
+}
+
+// ============================================================================
+// DISTRIBUTION — SELL SIDE (A): customers (helpers), price lists, sales orders.
+// Orders COMMIT stock: committed = SUM open SO line qty. available = on_hand - committed.
+// ============================================================================
+
+// ── Customers (reuse dist_contacts kind='customer') ──
+export async function fetchDistCustomers() {
+  return fetchDistContacts({ kind: "customer" });
+}
+
+// ── PRICE LISTS (customer × item × sell price) ──
+const mapDistPrice = (p) => ({ id: p.id, customerId: p.customer_id, itemId: p.item_id, sellPrice: Number(p.sell_price) || 0 });
+export async function fetchDistPriceList(customerId) {
+  let q = supabase.from("dist_price_lists").select("*");
+  if (customerId) q = q.eq("customer_id", customerId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistPrice);
+}
+export async function upsertDistPrice(p) {
+  const row = { id: p.id || distId("dpl"), customer_id: p.customerId, item_id: p.itemId, sell_price: Number(p.sellPrice) || 0 };
+  const { data, error } = await supabase.from("dist_price_lists").upsert(row, { onConflict: "customer_id,item_id" }).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistPrice(data) : null;
+}
+export async function deleteDistPrice(id) {
+  const { error } = await supabase.from("dist_price_lists").delete().eq("id", id);
+  if (error) throw error;
+}
+// Resolve a customer's price for an item: price-list entry first, else item default sell.
+export async function resolveDistSellPrice(customerId, itemId) {
+  if (customerId) {
+    const { data } = await supabase.from("dist_price_lists").select("sell_price").eq("customer_id", customerId).eq("item_id", itemId).maybeSingle();
+    if (data) return Number(data.sell_price) || 0;
+  }
+  const { data: it } = await supabase.from("dist_items").select("sell_rate").eq("id", itemId).maybeSingle();
+  return Number(it?.sell_rate) || 0;
+}
+
+// ── SALES ORDERS ──
+const mapDistSO = (o) => ({
+  id: o.id, soNumber: o.so_number || "", customerId: o.customer_id || null, status: o.status || "draft",
+  orderDate: o.order_date || null, expectedShip: o.expected_ship || null, paymentTerms: o.payment_terms || "",
+  reference: o.reference || "", deliveryMethod: o.delivery_method || "", salesperson: o.salesperson || "",
+  vatMode: o.vat_mode || "exclusive", discountPercent: Number(o.discount_percent) || 0, discountType: o.discount_type || "percent",
+  shippingCharge: Number(o.shipping_charge) || 0, note: o.note || "", terms: o.terms || "",
+  createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_sales_order_lines || []).map(mapDistSOLine),
+});
+const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
+
+export async function fetchDistSalesOrders({ customerId, status } = {}) {
+  let q = supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").order("created_at", { ascending: false });
+  if (customerId) q = q.eq("customer_id", customerId);
+  if (status) q = Array.isArray(status) ? q.in("status", status) : q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistSO);
+}
+export async function createDistSalesOrder(so, lines = []) {
+  const id = so.id || distId("dso");
+  const row = {
+    id, so_number: so.soNumber || `SO-${Date.now().toString().slice(-6)}`, customer_id: so.customerId || null,
+    status: so.status || "draft", order_date: so.orderDate || new Date().toISOString().slice(0, 10),
+    expected_ship: so.expectedShip || null, payment_terms: so.paymentTerms || null, reference: so.reference || null,
+    delivery_method: so.deliveryMethod || null, salesperson: so.salesperson || null,
+    vat_mode: so.vatMode || "exclusive", discount_percent: Number(so.discountPercent) || 0, discount_type: so.discountType || "percent",
+    shipping_charge: Number(so.shippingCharge) || 0, note: so.note || null, terms: so.terms || null, created_by: so.createdBy || null,
+  };
+  const { error } = await supabase.from("dist_sales_orders").insert(row);
+  if (error) throw error;
+  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
+    id: distId("dsol"), so_id: id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
+    discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
+  }));
+  if (lr.length) { const { error: e2 } = await supabase.from("dist_sales_order_lines").insert(lr); if (e2) throw e2; }
+  return id;
+}
+export async function setDistSalesOrderStatus(id, status) {
+  const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+// ── COMMITTED stock: SUM of open SO line qty per item (draft/confirmed/picking) ──
+export async function computeDistCommitted(itemId) {
+  const { data: orders } = await supabase.from("dist_sales_orders").select("id").in("status", ["draft", "confirmed", "picking"]);
+  const openIds = (orders || []).map(o => o.id);
+  const m = new Map();
+  if (!openIds.length) return m;
+  let q = supabase.from("dist_sales_order_lines").select("item_id, qty, so_id").in("so_id", openIds);
+  if (itemId) q = q.eq("item_id", itemId);
+  const { data } = await q;
+  for (const r of data || []) m.set(r.item_id, (m.get(r.item_id) || 0) + (Number(r.qty) || 0));
+  return m;
 }

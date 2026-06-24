@@ -141,6 +141,8 @@ import {
   fetchDistPurchaseOrders, createDistPurchaseOrder, setDistPurchaseOrderStatus,
   fetchDistGoodsReceipts, postDistGoodsReceipt,
   fetchDistBills, postDistBill, fetchDistBillPayments, postDistBillPayment,
+  fetchDistCustomers, fetchDistPriceList, upsertDistPrice, deleteDistPrice, resolveDistSellPrice,
+  fetchDistSalesOrders, createDistSalesOrder, setDistSalesOrderStatus, computeDistCommitted,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -159,7 +161,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save
+  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -6137,9 +6139,9 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
 }
 
 // ── VENDORS (rich Zoho-style form) ──
-function DistVendorsView({ currentUser }) {
+function DistVendorsView({ currentUser, stores = [] }) {
   const [vendors, setVendors] = useState([]); const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState("");
+  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { setVendors(await fetchDistContacts({ kind: "vendor" })); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const filtered = useMemo(() => { const q = search.trim().toLowerCase(); return q ? vendors.filter(v => `${v.displayName} ${v.companyName} ${v.email}`.toLowerCase().includes(q)) : vendors; }, [vendors, search]);
@@ -6154,7 +6156,7 @@ function DistVendorsView({ currentUser }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[220px]"><Search size={15} className="absolute left-3 top-2.5 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search vendors…" className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/></div>
-        <button onClick={() => setEdit({ kind: "vendor", active: true, currencyCode: "GBP", paymentTerms: "due_on_receipt", accountsPayableCode: "2000" })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New vendor</button>
+        <div className="flex gap-2"><button onClick={() => setImportOpen(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import CSV</button><button onClick={() => setEdit({ kind: "vendor", active: true, currencyCode: "GBP", paymentTerms: "due_on_receipt", accountsPayableCode: "2000" })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New vendor</button></div>
       </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
@@ -6168,6 +6170,7 @@ function DistVendorsView({ currentUser }) {
           ))}
         </div>
       )}
+      {importOpen && <DistContactImportModal kind="vendor" stores={stores} onClose={() => setImportOpen(false)} onDone={load}/>}
       {edit && (
         <Modal onClose={() => setEdit(null)} title={edit.id ? "Edit vendor" : "New vendor"} maxW="max-w-3xl">
           <div className="space-y-4">
@@ -6478,6 +6481,261 @@ function DistPaymentsView({ currentUser }) {
   );
 }
 
+
+// ============================================================================
+// DISTRIBUTION — SELL SIDE (A): Customers (rich form + store link + CSV),
+// Price Lists, Sales Orders (Zoho format; commit stock). Plus a shared
+// contact-CSV importer reused by Vendors and Customers.
+// ============================================================================
+
+// Shared CSV/Excel importer for contacts (vendors or customers). Maps Zoho
+// Contacts columns; for customers, tries to match Display Name -> a store.
+function DistContactImportModal({ kind, stores = [], onClose, onDone }) {
+  const [text, setText] = useState(""); const [mode, setMode] = useState("file"); const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState(null); const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [result, setResult] = useState(null);
+  const fileRef = useRef(null); const XLSX = useXLSX();
+
+  const parseCsv = (t) => {
+    const lines = t.replace(/\r\n/g, "\n").split("\n").filter(l => l.trim().length);
+    if (lines.length < 2) return null;
+    const split = (line) => { const out = []; let cur = "", q = false; for (const c of line) { if (c === '"') q = !q; else if (c === "," && !q) { out.push(cur); cur = ""; } else cur += c; } out.push(cur); return out; };
+    const header = split(lines[0]).map(h => h.trim());
+    return lines.slice(1).map(line => { const cells = split(line); const o = {}; header.forEach((h, i) => o[h] = cells[i] != null ? cells[i] : ""); return o; });
+  };
+  const rowFrom = (obj) => {
+    const get = (label) => { const k = Object.keys(obj).find(k => k.trim().toLowerCase() === label); return k != null ? String(obj[k]).trim() : ""; };
+    const displayName = get("display name") || [get("first name"), get("last name")].filter(Boolean).join(" ") || get("company name");
+    // For customers, try to match a store by name similarity to display name.
+    let storeId = null;
+    if (kind === "customer" && displayName) {
+      const dn = displayName.toLowerCase();
+      const match = stores.find(s => { const n = (s.name || "").toLowerCase(); return n && (dn.includes(n) || n.includes(dn.replace(/^chocoberry\s*/, ""))); });
+      storeId = match?.id || null;
+    }
+    return {
+      kind, displayName, companyName: get("company name"), email: get("emailid") || get("email"),
+      phone: get("phone"), workPhone: get("phone"), website: get("website"), notes: get("notes"),
+      currencyCode: get("currency code") || "GBP", billingAddress: get("billing address"), shippingAddress: get("shipping address"),
+      billingAttention: get("billing attention"), shippingAttention: get("shipping attention"),
+      openingBalance: Number((get("opening balance") || "0").replace(/[^0-9.\-]/g, "")) || 0,
+      storeId, active: true,
+    };
+  };
+  const buildPreview = (objs) => {
+    setErr("");
+    if (!objs || !objs.length) { setErr("No rows found."); return; }
+    const hasName = Object.keys(objs[0]).some(k => ["display name", "company name", "first name"].includes(k.trim().toLowerCase()));
+    if (!hasName) { setErr("Could not find a Display Name / Company Name column."); return; }
+    setPreview(objs.map(rowFrom));
+  };
+  const handleFile = (file) => {
+    setErr(""); setFileName(file.name); const isCsv = /\.csv$/i.test(file.name); const reader = new FileReader();
+    reader.onload = (e) => { try { if (isCsv) buildPreview(parseCsv(String(e.target.result))); else { if (!XLSX) { setErr("Excel still loading — try again or use CSV."); return; } const wb = XLSX.read(e.target.result, { type: "array" }); buildPreview(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" })); } } catch (e2) { setErr("Read failed: " + e2.message); } };
+    if (isCsv) reader.readAsText(file); else reader.readAsArrayBuffer(file);
+  };
+  const run = async () => {
+    if (!preview?.length) return; setBusy(true); setErr("");
+    const res = { inserted: 0, failed: 0, linked: 0 };
+    try { for (const r of preview) { try { await upsertDistContact(r); res.inserted++; if (r.storeId) res.linked++; } catch { res.failed++; } } setResult(res); onDone && onDone(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  return (
+    <Modal onClose={onClose} title={`Import ${kind === "vendor" ? "vendors" : "customers"}`} maxW="max-w-3xl">
+      <div className="space-y-3">
+        <p className="text-xs text-slate-400">Upload a .csv or .xlsx (Zoho Contacts export works).{kind === "customer" ? " Customers are matched to your stores by name where possible." : ""}</p>
+        {result ? (
+          <div className="space-y-3"><div className="grid grid-cols-3 gap-2 text-center">
+            {[["Imported", result.inserted, "text-emerald-300"], ["Linked to store", result.linked, "text-indigo-300"], ["Failed", result.failed, result.failed ? "text-red-400" : "text-slate-300"]].map(([l, v, c]) => (<div key={l} className="rounded-xl border border-slate-800 bg-slate-950/40 px-2 py-3"><div className={`text-xl font-bold ${c}`}>{v}</div><div className="text-[10px] uppercase tracking-wide text-slate-500">{l}</div></div>))}
+          </div><div className="flex justify-end"><button onClick={onClose} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Done</button></div></div>
+        ) : !preview ? (
+          <>
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit">{[["file", "Upload file"], ["paste", "Paste"]].map(([k, l]) => (<button key={k} onClick={() => setMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${mode===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>))}</div>
+            {mode === "file" ? (
+              <div onClick={() => fileRef.current?.click()} className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-indigo-600 rounded-2xl py-10 text-center group"><Upload size={26} className="mx-auto text-slate-500 group-hover:text-indigo-400 mb-2"/><div className="text-sm text-slate-300">{fileName || "Click to choose a .csv or .xlsx file"}</div><input ref={fileRef} type="file" accept=".csv,.xlsx" className="hidden" onChange={e => e.target.files[0] && handleFile(e.target.files[0])}/></div>
+            ) : (<><textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder="Display Name,Company Name,EmailID,..." className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/><div className="flex justify-end"><button onClick={() => buildPreview(parseCsv(text.trim()))} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Preview</button></div></>)}
+            {err && <div className="text-xs text-red-400">{err}</div>}
+          </>
+        ) : (
+          <>
+            <div className="text-xs text-slate-400">{preview.length} {kind === "vendor" ? "vendors" : "customers"} parsed{kind === "customer" ? ` · ${preview.filter(r => r.storeId).length} matched to a store` : ""}:</div>
+            <div className="max-h-72 overflow-auto bg-slate-950 border border-slate-800 rounded-lg"><table className="w-full text-[11px]"><thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">Display name</th><th className="text-left px-2 py-1">Company</th><th className="text-left px-2 py-1">Email</th>{kind === "customer" && <th className="text-left px-2 py-1">Store</th>}</tr></thead><tbody>{preview.map((r, i) => (<tr key={i} className="border-t border-slate-800/60"><td className="px-2 py-1 text-white">{r.displayName}</td><td className="px-2 py-1 text-slate-400">{r.companyName || "—"}</td><td className="px-2 py-1 text-slate-400">{r.email || "—"}</td>{kind === "customer" && <td className="px-2 py-1">{r.storeId ? <span className="text-emerald-300">✓</span> : <span className="text-slate-600">—</span>}</td>}</tr>))}</tbody></table></div>
+            {err && <div className="text-xs text-red-400">{err}</div>}
+            <div className="flex justify-end gap-2"><button onClick={() => { setPreview(null); setFileName(""); }} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Back</button><button onClick={run} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy ? "Importing…" : `Import ${preview.length}`}</button></div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ── CUSTOMERS (rich form + store link + CSV) ──
+function DistCustomersView({ currentUser, stores = [] }) {
+  const [customers, setCustomers] = useState([]); const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false);
+  const load = useCallback(async () => { setLoading(true); try { setCustomers(await fetchDistContacts({ kind: "customer" })); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  useEffect(() => { load(); }, [load]);
+  const filtered = useMemo(() => { const q = search.trim().toLowerCase(); return q ? customers.filter(c => `${c.displayName} ${c.companyName} ${c.email}`.toLowerCase().includes(q)) : customers; }, [customers, search]);
+  const storeName = (id) => stores.find(s => s.id === id)?.name || null;
+  const save = async () => {
+    const dn = edit?.displayName || [edit?.firstName, edit?.lastName].filter(Boolean).join(" ") || edit?.companyName;
+    if (!dn) { setErr("Display name required"); return; }
+    setBusy(true); setErr("");
+    try { await upsertDistContact({ ...edit, displayName: dn, kind: "customer" }); setEdit(null); await load(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[220px]"><Search size={15} className="absolute left-3 top-2.5 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customers…" className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/></div>
+        <div className="flex gap-2"><button onClick={() => setImportOpen(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import CSV</button><button onClick={() => setEdit({ kind: "customer", active: true, currencyCode: "GBP", paymentTerms: "due_on_receipt", accountsPayableCode: "1100" })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New customer</button></div>
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No customers yet. Add stores as customers or import the Zoho Contacts CSV.</div>}
+          {filtered.map(c => (
+            <button key={c.id} onClick={() => setEdit(c)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50">
+              <div><span className="text-white">{c.displayName}</span>{c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/50 text-indigo-300">{storeName(c.storeId)}</span>}<div className="text-[11px] text-slate-500">{c.companyName || c.email || "—"}</div></div>
+              <Edit size={13} className="text-slate-600"/>
+            </button>
+          ))}
+        </div>
+      )}
+      {importOpen && <DistContactImportModal kind="customer" stores={stores} onClose={() => setImportOpen(false)} onDone={load}/>}
+      {edit && (
+        <Modal onClose={() => setEdit(null)} title={edit.id ? "Edit customer" : "New customer"} maxW="max-w-3xl">
+          <div className="space-y-4">
+            <div><div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">Primary contact</div>
+              <div className="grid grid-cols-12 gap-2">
+                <select value={edit.salutation || ""} onChange={e => setEdit({ ...edit, salutation: e.target.value })} className="col-span-2 px-2 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">—</option><option>Mr</option><option>Mrs</option><option>Ms</option><option>Dr</option></select>
+                <input value={edit.firstName || ""} onChange={e => setEdit({ ...edit, firstName: e.target.value })} placeholder="First name" className="col-span-5 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+                <input value={edit.lastName || ""} onChange={e => setEdit({ ...edit, lastName: e.target.value })} placeholder="Last name" className="col-span-5 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">Company name<input value={edit.companyName || ""} onChange={e => setEdit({ ...edit, companyName: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Display name *<input value={edit.displayName || ""} onChange={e => setEdit({ ...edit, displayName: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Link to store<select value={edit.storeId || ""} onChange={e => setEdit({ ...edit, storeId: e.target.value || null })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">— none —</option>{stores.filter(s => !s.archivedAt).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Email address<input value={edit.email || ""} onChange={e => setEdit({ ...edit, email: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Work phone<input value={edit.workPhone || ""} onChange={e => setEdit({ ...edit, workPhone: e.target.value })} placeholder="+44…" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Mobile<input value={edit.mobile || ""} onChange={e => setEdit({ ...edit, mobile: e.target.value })} placeholder="+44…" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <div className="text-[11px] uppercase tracking-wide text-slate-500 border-t border-slate-800 pt-3">Other details</div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">Company reg. number<input value={edit.companyRegNo || ""} onChange={e => setEdit({ ...edit, companyRegNo: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Currency<select value={edit.currencyCode || "GBP"} onChange={e => setEdit({ ...edit, currencyCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="GBP">GBP – Pound Sterling</option><option value="USD">USD – US Dollar</option><option value="EUR">EUR – Euro</option><option value="AED">AED – UAE Dirham</option></select></label>
+              <label className="text-xs text-slate-400">Opening balance (£)<input type="number" value={edit.openingBalance || ""} onChange={e => setEdit({ ...edit, openingBalance: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Payment terms<select value={edit.paymentTerms || "due_on_receipt"} onChange={e => setEdit({ ...edit, paymentTerms: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">{DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
+            </div>
+            <div className="text-[11px] uppercase tracking-wide text-slate-500 border-t border-slate-800 pt-3">Address</div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">Billing address<textarea value={edit.billingAddress || ""} onChange={e => setEdit({ ...edit, billingAddress: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Shipping address<textarea value={edit.shippingAddress || ""} onChange={e => setEdit({ ...edit, shippingAddress: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400 col-span-2">Notes<textarea value={edit.notes || ""} onChange={e => setEdit({ ...edit, notes: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setEdit(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1.5"><Save size={14}/> {busy ? "Saving…" : "Save"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── PRICE LISTS (customer × item × sell price) ──
+function DistPriceListView() {
+  const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [prices, setPrices] = useState([]);
+  const [customerId, setCustomerId] = useState(""); const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => { setLoading(true); try { const [c, it] = await Promise.all([fetchDistContacts({ kind: "customer" }), fetchDistItems()]); setCustomers(c); setItems(it); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (customerId) fetchDistPriceList(customerId).then(setPrices).catch(e => setErr(e.message)); else setPrices([]); }, [customerId]);
+  const priceFor = (itemId) => prices.find(p => p.itemId === itemId)?.sellPrice;
+  const setPrice = async (itemId, val) => {
+    if (!customerId) return; setBusy(true);
+    try { if (val === "" || val == null) { const ex = prices.find(p => p.itemId === itemId); if (ex) await deleteDistPrice(ex.id); } else { await upsertDistPrice({ customerId, itemId, sellPrice: Number(val) }); } setPrices(await fetchDistPriceList(customerId)); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3"><label className="text-xs text-slate-400">Customer<select value={customerId} onChange={e => setCustomerId(e.target.value)} className="ml-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a customer…</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label></div>
+      <p className="text-xs text-slate-500">Set a per-customer price for any item. Blank = the item&#39;s default sell rate is used. These prices resolve automatically on sales orders.</p>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {!customerId ? <div className="text-sm text-slate-600 py-8 text-center">Pick a customer to set their prices.</div> : loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800"><div className="col-span-2">SKU</div><div className="col-span-5">Item</div><div className="col-span-2 text-right">Default</div><div className="col-span-3 text-right">This customer (£)</div></div>
+          {items.map(it => (
+            <div key={it.id} className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b border-slate-800/50 items-center">
+              <div className="col-span-2 font-mono text-[11px] text-indigo-300">{it.sku}</div>
+              <div className="col-span-5 text-white truncate">{it.name}</div>
+              <div className="col-span-2 text-right text-slate-500">{it.sellRate != null ? `£${it.sellRate}` : "—"}</div>
+              <div className="col-span-3"><input type="number" defaultValue={priceFor(it.id) ?? ""} onBlur={e => { if (String(e.target.value) !== String(priceFor(it.id) ?? "")) setPrice(it.id, e.target.value); }} placeholder={it.sellRate != null ? String(it.sellRate) : "0.00"} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right text-xs"/></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SALES ORDERS (Zoho format; commit stock; blind) ──
+function DistSalesOrderView({ currentUser }) {
+  const [sos, setSos] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => { setLoading(true); try { const [s, c, it, tx] = await Promise.all([fetchDistSalesOrders(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates()]); setSos(s); setCustomers(c); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  useEffect(() => { load(); }, [load]);
+  const newDoc = () => setCreating({ customerId: "", orderDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", shippingCharge: "", paymentTerms: "due_on_receipt", lines: [{ itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }] });
+  // When customer changes, re-resolve each line's price from the price list.
+  const onCustomer = async (cid) => {
+    const lines = await Promise.all((creating.lines || []).map(async l => l.itemId ? { ...l, unitPrice: await resolveDistSellPrice(cid, l.itemId) } : l));
+    setCreating({ ...creating, customerId: cid, lines });
+  };
+  const save = async (status) => {
+    if (!creating?.customerId) { setErr("Pick a customer"); return; }
+    const valid = (creating.lines || []).filter(l => l.itemId && Number(l.qty) > 0);
+    if (!valid.length) { setErr("Add at least one line"); return; }
+    setBusy(true); setErr("");
+    try { await createDistSalesOrder({ ...creating, status, createdBy: currentUser?.id }, valid); setCreating(null); await load(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{sos.length} sales order{sos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New sales order</button></div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {sos.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No sales orders yet. An order commits stock (reserves it) without shipping.</div>}
+          {sos.map(so => { const t = distComputeTotals(so.lines, taxRates, so.vatMode, so.discountPercent, so.discountType); return (
+            <div key={so.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+              <div><span className="text-white font-mono text-xs">{so.soNumber}</span> <span className="text-slate-400">{cName(so.customerId)}</span><div className="text-[11px] text-slate-500">{so.lines.length} line{so.lines.length!==1?"s":""} · {so.orderDate}</div></div>
+              <div className="flex items-center gap-3"><span className="text-white text-xs">£{(t.grandTotal + (Number(so.shippingCharge)||0)).toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{so.status}</span></div>
+            </div>
+          ); })}
+        </div>
+      )}
+      {creating && (
+        <Modal onClose={() => setCreating(null)} title="New sales order" maxW="max-w-4xl">
+          <div className="space-y-4">
+            <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select or add a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
+            <div className="grid grid-cols-2 gap-4">
+              <label className="text-xs text-slate-400">Reference#<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Sales order date *<input type="date" value={creating.orderDate} onChange={e => setCreating({ ...creating, orderDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Expected shipment date<input type="date" value={creating.expectedShip || ""} onChange={e => setCreating({ ...creating, expectedShip: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Payment terms<select value={creating.paymentTerms || "due_on_receipt"} onChange={e => setCreating({ ...creating, paymentTerms: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">{DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Delivery method<input value={creating.deliveryMethod || ""} onChange={e => setCreating({ ...creating, deliveryMethod: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Salesperson<input value={creating.salesperson || ""} onChange={e => setCreating({ ...creating, salesperson: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
+            <div className="grid grid-cols-2 gap-4">
+              <label className="text-xs text-slate-400">Customer notes<textarea value={creating.note || ""} onChange={e => setCreating({ ...creating, note: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Shipping charge (£)<input type="number" value={creating.shippingCharge || ""} onChange={e => setCreating({ ...creating, shippingCharge: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            </div>
+            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={() => save("draft")} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold">Save as draft</button><button onClick={() => save("confirmed")} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Saving…":"Save and confirm"}</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
 
 // Item detail: all attributes + read-only stock (on-hand/committed/available)
 // + movement history (the audit trail behind on-hand). Edit/Delete actions.
@@ -41026,6 +41284,11 @@ export default function App() {
         { key: "dist-bills",   label: "Bills", icon: Receipt },
         { key: "dist-pay",     label: "Payments", icon: PoundSterling },
       ]},
+      { key: "dist-sell", label: "Sales", icon: ShoppingCart, requiresEntity: "brand-distribution", children: [
+        { key: "dist-customers",  label: "Customers", icon: Users },
+        { key: "dist-pricelists", label: "Price Lists", icon: Tag },
+        { key: "dist-sales-orders", label: "Sales Orders", icon: ClipboardList },
+      ]},
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
@@ -41086,6 +41349,7 @@ export default function App() {
     if (activeView === "chain" || activeView === "store-analytics") return "dashboard";
     if (activeView === "dist-stock") return "dist-items";
     if (activeView === "dist-buy") return "dist-vendors";
+    if (activeView === "dist-sell") return "dist-customers";
     // Operations is now a tabbed page; its old per-item keys route to it (the
     // opsTab sync effect selects the matching tab).
     if (OPS_TAB_KEYS.includes(activeView)) return "operations";
@@ -41382,11 +41646,14 @@ export default function App() {
             {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser} stores={stores}/>}
             {effectiveActiveView === "dist-pos" && <DistPOView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-grn" && <DistGRNView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-bills" && <DistBillsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-pay" && <DistPaymentsView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-customers" && <DistCustomersView currentUser={currentUser} stores={stores}/>}
+            {effectiveActiveView === "dist-pricelists" && <DistPriceListView/>}
+            {effectiveActiveView === "dist-sales-orders" && <DistSalesOrderView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
