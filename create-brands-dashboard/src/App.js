@@ -151,6 +151,7 @@ import {
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
+  deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -7208,7 +7209,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
 // ============================================================================
 
 // ── PICKS (allocate batches against a confirmed sales order; FEFO default) ──
-function DistPickDetail({ pickId, onClose, onDelete }) {
+function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
   const [d, setD] = useState(null); const [err, setErr] = useState("");
   useEffect(() => { let a = true; fetchDistPickDetail(pickId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [pickId]);
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
@@ -7218,7 +7219,8 @@ function DistPickDetail({ pickId, onClose, onDelete }) {
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d?.status==="dispatched"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d?.status||"").toUpperCase()}</span>
-          {onDelete && d?.status !== "dispatched" && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
+          {onEdit && d?.status !== "dispatched" && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
+          {onDelete && d?.status !== "dispatched" && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
@@ -7248,7 +7250,7 @@ function DistPickDetail({ pickId, onClose, onDelete }) {
   );
 }
 
-function DistDispatchDetail({ dispatchId, onClose, onDelete }) {
+function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
   const [d, setD] = useState(null); const [err, setErr] = useState("");
   useEffect(() => { let a = true; fetchDistDispatchDetail(dispatchId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [dispatchId]);
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
@@ -7258,7 +7260,8 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete }) {
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">{d?.posted ? "POSTED" : "DRAFT"}</span>
-          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete (reverse)</button>}
+          {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
+          {onDelete && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete (reverse)</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
@@ -7328,7 +7331,11 @@ function DistPicksView({ currentUser }) {
     const valid = (creating.lines || []).filter(l => l.itemId && l.batchId && Number(l.qty) > 0);
     if (!valid.length) { setErr("Allocate at least one line to a batch"); return; }
     setBusy(true); setErr("");
-    try { await createDistPick({ soId: creating.soId, customerId: creating.customerId, status: "picked", createdBy: currentUser?.id }, valid); setCreating(null); await load(); }
+    try {
+      if (creating.id) await updateDistPick({ id: creating.id, pickDate: creating.pickDate, note: creating.note }, valid);
+      else await createDistPick({ soId: creating.soId, customerId: creating.customerId, status: "picked", createdBy: currentUser?.id }, valid);
+      setCreating(null); await load();
+    }
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const batchLabel = (itemId, batchId) => { const b = (batches[itemId] || []).find(x => x.id === batchId); return b ? `${b.batchNo || "batch"}${b.expiryDate ? ` · exp ${b.expiryDate}` : ""}` : ""; };
@@ -7360,14 +7367,19 @@ function DistPicksView({ currentUser }) {
           ))}
         </div>
       )}
-      {detailId && <DistPickDetail pickId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+      {detailId && <DistPickDetail pickId={detailId} onClose={() => setDetailId(null)} onEdit={async () => {
+        try {
+          const pd = await fetchDistPickDetail(detailId);
+          if (pd) { setCreating({ id: pd.id, pickNumber: pd.pickNumber, soId: pd.soId, soNumber: pd.soNumber, customerId: pd.customer?.id, pickDate: pd.pickDate, note: pd.note, lines: pd.lines.map(l => ({ itemId: l.itemId, batchId: l.batchId, qty: l.qty, unitPrice: l.unitPrice })) }); setDetailId(null); }
+        } catch (e) { setErr(e.message); }
+      }} onDelete={async () => {
         if (!window.confirm("Delete this pick? It frees the order to be re-picked.")) return;
         setBusy(true); setErr("");
         try { await deleteDistPick(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); }
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={`Pick ${creating.soNumber}`} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.pickNumber || "pick"}` : `Pick ${creating.soNumber}`} maxW="max-w-4xl">
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Batches auto-allocated soonest-expiry first (FEFO). Override the batch or qty per line as needed. A short line (insufficient stock) is flagged.</p>
             <div className="border border-slate-800 rounded-xl overflow-hidden">
@@ -7419,7 +7431,11 @@ function DistDispatchView({ currentUser }) {
     const valid = (creating.lines || []).filter(l => l.itemId && l.batchId && Number(l.qty) > 0);
     if (!valid.length) { setErr("Nothing to dispatch"); return; }
     setBusy(true); setErr("");
-    try { await postDistDispatch({ pickId: creating.pickId, soId: creating.soId, customerId: creating.customerId, createdBy: currentUser?.id }, valid); setCreating(null); await load(); }
+    try {
+      if (creating.id) await updateDistDispatch({ id: creating.id, dispatchDate: creating.dispatchDate, note: creating.note }, valid);
+      else await postDistDispatch({ pickId: creating.pickId, soId: creating.soId, customerId: creating.customerId, createdBy: currentUser?.id }, valid);
+      setCreating(null); await load();
+    }
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const cogsTotal = creating ? (creating.lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.landedCost) || 0), 0) : 0;
@@ -7449,14 +7465,19 @@ function DistDispatchView({ currentUser }) {
           ))}
         </div>
       )}
-      {detailId && <DistDispatchDetail dispatchId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+      {detailId && <DistDispatchDetail dispatchId={detailId} onClose={() => setDetailId(null)} onEdit={async () => {
+        try {
+          const dd = await fetchDistDispatchDetail(detailId);
+          if (dd) { setCreating({ id: dd.id, dispatchNumber: dd.dispatchNumber, pickId: dd.pickId, soId: dd.soId, customerId: dd.customer?.id, dispatchDate: dd.dispatchDate, note: dd.note, lines: dd.lines.map(l => ({ itemId: l.itemId, batchId: l.batchId, qty: l.qty, landedCost: l.landedCost, unitPrice: l.unitPrice })) }); setDetailId(null); }
+        } catch (e) { setErr(e.message); }
+      }} onDelete={async () => {
         if (!window.confirm("Delete this dispatch? This reverses the stock movements and posts a reversing COGS journal. Can't be undone.")) return;
         setBusy(true); setErr("");
         try { await deleteDistDispatch(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); }
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={`Dispatch ${creating.pickNumber}`} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.dispatchNumber || "dispatch"}` : `Dispatch ${creating.pickNumber}`} maxW="max-w-4xl">
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Issues stock (negative movement per batch) and posts Dr COGS / Cr Stock at landed cost.</p>
             <div className="border border-slate-800 rounded-xl overflow-hidden">
@@ -7480,9 +7501,86 @@ function DistDispatchView({ currentUser }) {
 }
 
 // ── INVOICES (Dr AR / Cr Sales + VAT) ──
+function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistInvoiceDetail(invoiceId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [invoiceId]);
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  const statusBadge = (s) => s === "paid" ? "bg-emerald-900/50 text-emerald-300" : s === "overdue" ? "bg-red-900/50 text-red-300" : s === "part_paid" ? "bg-amber-900/50 text-amber-300" : "bg-indigo-900/50 text-indigo-300";
+
+  return (
+    <Modal onClose={onClose} title={d?.invoiceNumber || "Invoice"} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${statusBadge(d.status)}`}>{d.status.replace("_", " ").toUpperCase()}</span>}
+          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (
+          <>
+            {/* Invoice header band */}
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Bill To</div>
+                  <div className="text-sm font-semibold text-indigo-300 mt-0.5">{d.customer?.displayName || "—"}</div>
+                  {d.customer?.billingAddress && <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{d.customer.billingAddress}</div>}
+                </div>
+                <div className="text-right space-y-1">
+                  <div className="text-2xl font-bold text-white tracking-wide">INVOICE</div>
+                  <div className="text-xs text-slate-400">Invoice# <span className="font-mono text-white">{d.invoiceNumber}</span></div>
+                  <div className="mt-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Due</div><div className="text-lg font-bold text-amber-300">{gbp(d.balance)}</div></div>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-slate-800/60">
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Invoice date</div><div className="text-sm text-white">{fmtDate(d.invoiceDate)}</div></div>
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Terms</div><div className="text-sm text-white capitalize">{(d.paymentTerms||"").replace(/_/g," ")||"—"}</div></div>
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Due date</div><div className="text-sm text-white">{fmtDate(d.dueDate)}</div></div>
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">P.O. / SO#</div><div className="text-sm font-mono text-indigo-300">{d.soNumber || "—"}</div></div>
+              </div>
+            </div>
+
+            {/* Line items with VAT */}
+            <div className="rounded-xl border border-slate-800 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2 w-8">#</th><th className="text-left px-3 py-2">Item & Description</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">VAT %</th><th className="text-right px-3 py-2">VAT</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+                <tbody>{d.lines.map((l, i) => (
+                  <tr key={i} className="border-t border-slate-800/60">
+                    <td className="px-3 py-2 text-slate-500">{i + 1}</td>
+                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
+                    <td className="px-3 py-2 text-right text-slate-300">{l.qty}</td>
+                    <td className="px-3 py-2 text-right text-slate-300">{gbp(l.rate)}</td>
+                    <td className="px-3 py-2 text-right text-slate-400">{l.vatPct ? `${l.vatPct}%` : "0"}</td>
+                    <td className="px-3 py-2 text-right text-slate-400">{gbp(l.vat)}</td>
+                    <td className="px-3 py-2 text-right text-white">{gbp(l.amount)}</td>
+                  </tr>))}</tbody>
+              </table>
+            </div>
+
+            {/* Totals */}
+            <div className="flex justify-end">
+              <div className="w-64 space-y-1.5">
+                <div className="flex justify-between text-xs"><span className="text-slate-400">Subtotal</span><span className="text-white">{gbp(d.net)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-slate-400">VAT</span><span className="text-white">{gbp(d.vat)}</span></div>
+                {d.shipping > 0 && <div className="flex justify-between text-xs"><span className="text-slate-400">Shipping</span><span className="text-white">{gbp(d.shipping)}</span></div>}
+                <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-800"><span className="text-white">Total</span><span className="text-white">{gbp(d.grand)}</span></div>
+                {d.paid > 0 && <div className="flex justify-between text-xs"><span className="text-slate-400">Paid</span><span className="text-emerald-300">−{gbp(d.paid)}</span></div>}
+                <div className="flex justify-between text-sm font-bold"><span className="text-white">Balance Due</span><span className="text-amber-300">{gbp(d.balance)}</span></div>
+              </div>
+            </div>
+            {d.paid > 0 && <p className="text-[11px] text-amber-300/70">This invoice has payments against it — delete is blocked until the payment is removed.</p>}
+          </>
+        )}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function DistInvoicesView({ currentUser }) {
   const [invoices, setInvoices] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [dispatches, setDispatches] = useState([]);
-  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [inv, c, it, tx, d] = await Promise.all([fetchDistInvoices(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates(), fetchDistDispatches()]); setInvoices(inv); setCustomers(c); setItems(it); setTaxRates(tx); setDispatches(d); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const newDoc = () => setCreating({ customerId: "", invoiceDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", shippingCharge: "", paymentTerms: "due_on_receipt", lines: [{ itemId:"", accountCode:"4000", qty:1, unitPrice:"", taxRateId:null }] });
@@ -7518,13 +7616,19 @@ function DistInvoicesView({ currentUser }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {invoices.length === 0 && uninvoicedDispatches.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices yet.</div>}
           {invoices.map(inv => { const t = distComputeTotals(inv.lines, taxRates, inv.vatMode, inv.discountPercent, inv.discountType); return (
-            <div key={inv.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{inv.invoiceNumber}</span> <span className="text-slate-400">{cName(inv.customerId)}</span><div className="text-[11px] text-slate-500">{inv.invoiceDate}{inv.dueDate?` · due ${inv.dueDate}`:""}</div></div>
+            <div key={inv.id} onClick={() => setDetailId(inv.id)} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+              <div><span className="text-indigo-300 font-mono text-xs hover:underline">{inv.invoiceNumber}</span> <span className="text-slate-400">{cName(inv.customerId)}</span><div className="text-[11px] text-slate-500">{inv.invoiceDate}{inv.dueDate?` · due ${inv.dueDate}`:""}</div></div>
               <div className="flex items-center gap-3"><span className="text-white text-xs">£{(t.grandTotal + (Number(inv.shippingCharge)||0)).toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${inv.status==="paid"?"bg-emerald-900/50 text-emerald-300":inv.status==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-slate-800 text-slate-400"}`}>{inv.status}</span></div>
             </div>
           ); })}
         </div>
       )}
+      {detailId && <DistInvoiceDetail invoiceId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+        if (!window.confirm("Delete this invoice? This reverses the AR/Sales/VAT journal. Blocked if it has payments. Can't be undone.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistInvoice(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); alert(e.message); }
+        setBusy(false);
+      }}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title="New invoice" maxW="max-w-4xl">
           <div className="space-y-4">

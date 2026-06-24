@@ -9655,6 +9655,19 @@ export async function deleteDistDispatch(dispatchId) {
   return true;
 }
 
+// Edit a posted dispatch: reverse it (return stock + reversing COGS journal),
+// then re-post with new lines. Keeps stock + ledger correct. Blocked if invoiced.
+export async function updateDistDispatch(dispatch, lines = []) {
+  if (!dispatch.id) throw new Error("Dispatch id required for update.");
+  const { data: head } = await supabase.from("dist_dispatches").select("*").eq("id", dispatch.id).maybeSingle();
+  if (!head) throw new Error("Dispatch not found.");
+  await deleteDistDispatch(dispatch.id); // guards invoices + reverses stock/journal
+  return postDistDispatch({
+    soId: head.so_id, pickId: head.pick_id, customerId: head.customer_id,
+    dispatchDate: dispatch.dispatchDate || head.dispatch_date, note: dispatch.note ?? head.note, createdBy: head.created_by,
+  }, lines);
+}
+
 // ── INVOICES (Dr AR / Cr Sales + VAT) ──
 const mapDistInvoice = (i) => ({
   id: i.id, invoiceNumber: i.invoice_number || "", customerId: i.customer_id || null, soId: i.so_id || null, dispatchId: i.dispatch_id || null,
@@ -9736,6 +9749,82 @@ export async function postDistInvoice(inv, lines = []) {
   await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
   if (inv.soId) await supabase.from("dist_sales_orders").update({ status: "invoiced" }).eq("id", inv.soId);
   return id;
+}
+
+// Delete (reverse) an invoice. It posted Dr AR / Cr Sales (+VAT), so deletion
+// posts a reversing journal (Dr Sales+VAT / Cr AR), then deletes lines+header.
+// BLOCKED if any payment is allocated to it (unallocate/delete the payment first).
+export async function deleteDistInvoice(invoiceId) {
+  const paidMap = await fetchDistInvoicePaidMap([invoiceId]).catch(() => new Map());
+  if ((paidMap.get(invoiceId) || 0) > 0.005) throw new Error("Cannot delete: this invoice has payments against it. Remove the payment first.");
+  const { data: head } = await supabase.from("dist_invoices").select("*").eq("id", invoiceId).maybeSingle();
+  if (!head) throw new Error("Invoice not found.");
+  const { data: lines } = await supabase.from("dist_invoice_lines").select("*").eq("invoice_id", invoiceId);
+  const mapped = (lines || []).map(l => ({ qty: l.qty, unitPrice: l.unit_price, discount: l.discount, discountType: l.discount_type, taxRateId: l.tax_rate_id }));
+  const { net, vat } = await distDocNetVat({ lines: mapped, vatMode: head.vat_mode, discountValue: head.discount_percent, discountType: head.discount_type }).catch(() => ({ net: 0, vat: 0 }));
+  const shipping = Number(head.shipping_charge) || 0;
+  const gross = +(net + vat + shipping).toFixed(2);
+  if (gross > 0) {
+    const [ar, sales, vatAcc] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "1100"), resolveAccountForEntity(DIST_ENTITY, "4000"), resolveAccountForEntity(DIST_ENTITY, "2100"),
+    ]);
+    if (ar && sales) {
+      const jlines = [{ accountId: ar, amount: -gross }, { accountId: sales, amount: +(net + shipping) }];
+      if (vat > 0 && vatAcc) jlines.push({ accountId: vatAcc, amount: +vat });
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of invoice ${head.invoice_number}`, sourceKind: "dist_invoice_reversal",
+          sourceRef: `distinvREV:${invoiceId}`, lines: jlines,
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  await supabase.from("dist_invoice_lines").delete().eq("invoice_id", invoiceId);
+  const { error } = await supabase.from("dist_invoices").delete().eq("id", invoiceId);
+  if (error) throw error;
+  // Reset SO so it can be re-invoiced (if no other invoices remain for it).
+  if (head.so_id) {
+    const others = await fetchDistInvoices({}).catch(() => []);
+    if (!others.some(i => i.soId === head.so_id)) await supabase.from("dist_sales_orders").update({ status: "dispatched" }).eq("id", head.so_id);
+  }
+  return true;
+}
+
+// Rich invoice detail for the Zoho-style drill-down.
+export async function fetchDistInvoiceDetail(invoiceId) {
+  const { data: head } = await supabase.from("dist_invoices").select("*, dist_invoice_lines(*)").eq("id", invoiceId).maybeSingle();
+  if (!head) return null;
+  const [items, customers, sos, taxRates] = await Promise.all([
+    fetchDistItems().catch(() => []), fetchDistContacts({ kind: "customer" }).catch(() => []),
+    fetchDistSalesOrders({}).catch(() => []), fetchDistTaxRates().catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const trById = new Map(taxRates.map(t => [t.id, t]));
+  const customer = customers.find(c => c.id === head.customer_id) || null;
+  const so = sos.find(s => s.id === head.so_id) || null;
+  const lines = (head.dist_invoice_lines || []).map(l => {
+    const qty = Number(l.qty) || 0, rate = Number(l.unit_price) || 0;
+    const gross = qty * rate;
+    const net = l.discount_type === "percent" ? gross * (1 - (Number(l.discount) || 0) / 100) : gross - (Number(l.discount) || 0);
+    const pct = trById.get(l.tax_rate_id)?.percent || 0;
+    const vat = +(net * pct / 100).toFixed(2);
+    return { itemId: l.item_id, item: itemById.get(l.item_id) || null, qty, rate, vatPct: pct, vat, amount: +net.toFixed(2) };
+  });
+  const net = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
+  const vat = +lines.reduce((s, l) => s + l.vat, 0).toFixed(2);
+  const shipping = Number(head.shipping_charge) || 0;
+  const grand = +(net + vat + shipping).toFixed(2);
+  const paidMap = await fetchDistInvoicePaidMap([invoiceId]).catch(() => new Map());
+  const paid = paidMap.get(invoiceId) || 0;
+  const balance = +(grand - paid).toFixed(2);
+  const overdue = balance > 0.005 && head.due_date && new Date(head.due_date) < new Date();
+  return {
+    id: head.id, invoiceNumber: head.invoice_number, invoiceDate: head.invoice_date, dueDate: head.due_date,
+    paymentTerms: head.payment_terms, reference: head.reference, soNumber: so?.soNumber || null, soId: head.so_id,
+    customer, lines, net, vat, shipping, grand, paid, balance,
+    status: balance <= 0.005 ? "paid" : overdue ? "overdue" : paid > 0 ? "part_paid" : "open",
+  };
 }
 
 // ── PAYMENTS RECEIVED (Dr Bank / Cr AR) ──
