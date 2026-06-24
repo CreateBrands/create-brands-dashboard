@@ -40,6 +40,8 @@
             "text/csv",
             "text/comma-separated-values",
             "application/csv",
+            "text/plain",
+            "application/octet-stream",
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ".csv",
