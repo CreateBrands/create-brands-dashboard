@@ -42224,7 +42224,6 @@ export default function App() {
     ]},
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
-      { key: "ck-order",       label: "Order from Kitchen", icon: ChefHat, hideForCK: true },
       { key: "dist-order",     label: "Order from Distribution", icon: ShoppingCart, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
@@ -42331,7 +42330,7 @@ export default function App() {
 
   const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
-    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ck-order":"Order from Kitchen", "ops-assigns":"Assignments",
+    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
     admin:"Admin", comms:"Communication", announcements:"Announcements", "time-attend":"Time & Attendance",
     "employee-profile":"Employee Profile", hiring:"Hiring", team:"Team" };
@@ -42477,7 +42476,6 @@ export default function App() {
             {effectiveActiveView === "operations" && opsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-            {effectiveActiveView === "ck-order" && <CkOrderView stores={stores} visibleStoreIds={visibleStoreIds} currentUser={currentUser}/>}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
