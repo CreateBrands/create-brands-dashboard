@@ -8566,6 +8566,11 @@ const mapDistContact = (c) => ({
   storeId: c.store_id || null, entityId: c.entity_id || null, isCentralKitchen: !!c.is_central_kitchen,
   email: c.email || "", phone: c.phone || "", billingAddress: c.billing_address || "", shippingAddress: c.shipping_address || "",
   openingBalance: Number(c.opening_balance) || 0, active: c.active !== false, createdAt: c.created_at,
+  salutation: c.salutation || "", firstName: c.first_name || "", lastName: c.last_name || "",
+  workPhone: c.work_phone || "", mobile: c.mobile || "", currencyCode: c.currency_code || "GBP",
+  website: c.website || "", notes: c.notes || "", paymentTerms: c.payment_terms || "due_on_receipt",
+  accountsPayableCode: c.accounts_payable_code || "2000", companyRegNo: c.company_reg_no || "",
+  billingAttention: c.billing_attention || "", shippingAttention: c.shipping_attention || "",
 });
 const mapDistItem = (i) => ({
   id: i.id, sku: i.sku || "", name: i.name || "", category: i.category || "",
@@ -8608,6 +8613,11 @@ export async function upsertDistContact(c) {
     billing_address: c.billingAddress || null, shipping_address: c.shippingAddress || null,
     opening_balance: c.openingBalance != null && c.openingBalance !== "" ? Number(c.openingBalance) : 0,
     active: c.active !== false,
+    salutation: c.salutation || null, first_name: c.firstName || null, last_name: c.lastName || null,
+    work_phone: c.workPhone || null, mobile: c.mobile || null, currency_code: c.currencyCode || "GBP",
+    website: c.website || null, notes: c.notes || null, payment_terms: c.paymentTerms || null,
+    accounts_payable_code: c.accountsPayableCode || null, company_reg_no: c.companyRegNo || null,
+    billing_attention: c.billingAttention || null, shipping_attention: c.shippingAttention || null,
   };
   const { data, error } = await supabase.from("dist_contacts").upsert(row).select().maybeSingle();
   if (error) throw error;
@@ -8762,6 +8772,7 @@ const DIST_ENTITY = "brand-distribution";
 const mapDistPO = (o) => ({
   id: o.id, poNumber: o.po_number || "", vendorId: o.vendor_id || null, status: o.status || "draft",
   orderDate: o.order_date || null, expectedDate: o.expected_date || null, note: o.note || "",
+  vatMode: o.vat_mode || "exclusive", discountPercent: Number(o.discount_percent) || 0, reference: o.reference || "", paymentTerms: o.payment_terms || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_purchase_order_lines || []).map(mapDistPOLine),
 });
 const mapDistPOLine = (l) => ({ id: l.id, poId: l.po_id, itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null });
@@ -8774,6 +8785,7 @@ const mapDistGRNLine = (l) => ({ id: l.id, grnId: l.grn_id, itemId: l.item_id, b
 const mapDistBill = (b) => ({
   id: b.id, billNumber: b.bill_number || "", vendorId: b.vendor_id || null, poId: b.po_id || null, grnId: b.grn_id || null,
   billDate: b.bill_date || null, dueDate: b.due_date || null, status: b.status || "open", note: b.note || "",
+  vatMode: b.vat_mode || "exclusive", discountPercent: Number(b.discount_percent) || 0, reference: b.reference || "", paymentTerms: b.payment_terms || "",
   posted: !!b.posted, createdBy: b.created_by || null, createdAt: b.created_at, lines: (b.dist_bill_lines || []).map(mapDistBillLine),
 });
 const mapDistBillLine = (l) => ({ id: l.id, billId: l.bill_id, itemId: l.item_id, description: l.description || "", qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null, accountCode: l.account_code || null });
@@ -8805,6 +8817,8 @@ export async function createDistPurchaseOrder(po, lines = []) {
     id, po_number: po.poNumber || `PO-${Date.now().toString().slice(-6)}`, vendor_id: po.vendorId || null,
     status: po.status || "draft", order_date: po.orderDate || new Date().toISOString().slice(0, 10),
     expected_date: po.expectedDate || null, note: po.note || null, created_by: po.createdBy || null,
+    vat_mode: po.vatMode || "exclusive", discount_percent: Number(po.discountPercent) || 0,
+    reference: po.reference || null, payment_terms: po.paymentTerms || null,
   };
   const { error } = await supabase.from("dist_purchase_orders").insert(row);
   if (error) throw error;
@@ -8897,15 +8911,22 @@ export async function postDistBill(bill, lines = []) {
     id, bill_number: bill.billNumber || `BILL-${Date.now().toString().slice(-6)}`, vendor_id: bill.vendorId || null,
     po_id: bill.poId || null, grn_id: bill.grnId || null, bill_date: billDate, due_date: bill.dueDate || null,
     status: "open", note: bill.note || null, created_by: bill.createdBy || null, posted: false,
+    vat_mode: bill.vatMode || "exclusive", discount_percent: Number(bill.discountPercent) || 0,
+    reference: bill.reference || null, payment_terms: bill.paymentTerms || null,
   };
   const { error } = await supabase.from("dist_bills").insert(head);
   if (error) throw error;
 
+  const inclusive = (bill.vatMode || "exclusive") === "inclusive";
+  const discPct = Number(bill.discountPercent) || 0;
   const validLines = lines.filter(l => Number(l.qty) !== 0 || Number(l.unitPrice) !== 0);
   let net = 0, vat = 0;
   for (const l of validLines) {
-    const lineNet = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
     const pct = await distTaxPercent(l.taxRateId);
+    const raw = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
+    // VAT-inclusive: entered price already contains VAT, so back it out.
+    let lineNet = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
+    lineNet = lineNet * (1 - discPct / 100); // apply header discount to net
     net += lineNet; vat += lineNet * pct / 100;
     await supabase.from("dist_bill_lines").insert({
       id: distId("dbilll"), bill_id: id, item_id: l.itemId || null, description: l.description || null,
