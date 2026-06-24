@@ -6045,6 +6045,14 @@ function DistItemsView({ currentUser }) {
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importPreview, setImportPreview] = useState(null);
+  const [importMode, setImportMode] = useState("file");   // 'file' | 'paste'
+  const [fileName, setFileName] = useState("");
+  const [matchBy, setMatchBy] = useState("sku");          // 'sku' | 'name'
+  const [updateStrategy, setUpdateStrategy] = useState("merge"); // 'merge' | 'overwrite' | 'skip'
+  const [seedOpening, setSeedOpening] = useState(true);
+  const [importResult, setImportResult] = useState(null);
+  const fileRef = useRef(null);
+  const XLSX = useXLSX();
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -6074,18 +6082,43 @@ function DistItemsView({ currentUser }) {
   };
 
   // ── CSV import: parse the Zoho Items export ──
-  const buildPreview = () => {
-    setErr("");
-    const lines = importText.trim().split(/\r?\n/).filter(Boolean);
-    if (lines.length < 2) { setErr("Paste the CSV including the header row"); return; }
-    const header = lines[0].split(",").map(h => h.trim().toLowerCase());
-    const col = (name) => header.indexOf(name);
-    const iName = col("item name"), iRate = col("rate"), iTax = col("tax name"),
-      iCat = col("category name"), iPur = col("purchase rate"),
-      iAcc = col("account"), iPAcc = col("purchase account"),
-      iOpen = col("opening stock"), iOpenVal = col("opening stock value");
-    if (iName < 0) { setErr("Could not find an 'Item Name' column"); return; }
-    // crude CSV split that respects simple quoting
+  // Normalise a raw row object (from SheetJS, keys = header names) into our shape.
+  // Works for both .csv and .xlsx since SheetJS gives objects either way.
+  const rowFromObject = (obj, seq) => {
+    const get = (label) => {
+      const key = Object.keys(obj).find(k => k.trim().toLowerCase() === label);
+      return key != null ? obj[key] : "";
+    };
+    const rawName = get("item name");
+    const parsed = parseDistItemName(rawName);
+    const category = String(get("category name") || "").trim();
+    const providedSku = String(get("sku") || "").trim();
+    let sku = providedSku;
+    if (!sku) {
+      const prefix = distSkuPrefix(category);
+      seq[prefix] = (seq[prefix] || 0) + 1;
+      sku = `${prefix}-${String(seq[prefix]).padStart(4, "0")}`;
+    }
+    const taxRaw = String(get("tax name") || "").trim().toLowerCase();
+    const taxRateId = taxRaw.includes("zero") ? "zero" : taxRaw.includes("standard") ? "standard" : null;
+    return {
+      sku, name: parsed.name, category,
+      packCount: parsed.packCount, packSize: parsed.packSize, packUnit: parsed.packUnit,
+      taxRateId,
+      sellRate: distMoney(get("rate")),
+      purchaseRate: distMoney(get("purchase rate")),
+      incomeAccountCode: String(get("account") || "").trim() || null,
+      expenseAccountCode: String(get("purchase account") || "").trim() || null,
+      openingStock: distMoney(get("opening stock")),
+      openingValue: distMoney(get("opening stock value")),
+      active: true,
+    };
+  };
+
+  // Parse CSV text into row objects (header-keyed), respecting simple quoting.
+  const parseCsvToObjects = (text) => {
+    const lines = text.replace(/\r\n/g, "\n").split("\n").filter(l => l.trim().length);
+    if (lines.length < 2) return null;
     const splitCsv = (line) => {
       const out = []; let cur = "", inQ = false;
       for (const ch of line) {
@@ -6095,50 +6128,115 @@ function DistItemsView({ currentUser }) {
       }
       out.push(cur); return out;
     };
-    const seq = {}; // per-prefix running number for SKU
-    const rows = lines.slice(1).map(line => {
-      const c = splitCsv(line);
-      const parsed = parseDistItemName(c[iName] || "");
-      const category = iCat >= 0 ? (c[iCat] || "").trim() : "";
-      const prefix = distSkuPrefix(category);
-      seq[prefix] = (seq[prefix] || 0) + 1;
-      const sku = `${prefix}-${String(seq[prefix]).padStart(4, "0")}`;
-      const taxRaw = iTax >= 0 ? (c[iTax] || "").trim().toLowerCase() : "";
-      const taxRateId = taxRaw.includes("zero") ? "zero" : taxRaw.includes("standard") ? "standard" : null;
-      return {
-        sku, name: parsed.name, category,
-        packCount: parsed.packCount, packSize: parsed.packSize, packUnit: parsed.packUnit,
-        taxRateId,
-        sellRate: iRate >= 0 ? distMoney(c[iRate]) : null,
-        purchaseRate: iPur >= 0 ? distMoney(c[iPur]) : null,
-        incomeAccountCode: iAcc >= 0 ? (c[iAcc] || "").trim() || null : null,
-        expenseAccountCode: iPAcc >= 0 ? (c[iPAcc] || "").trim() || null : null,
-        openingStock: iOpen >= 0 ? distMoney(c[iOpen]) : null,
-        openingValue: iOpenVal >= 0 ? distMoney(c[iOpenVal]) : null,
-        active: true,
-      };
+    const header = splitCsv(lines[0]).map(h => h.trim());
+    return lines.slice(1).map(line => {
+      const cells = splitCsv(line);
+      const obj = {};
+      header.forEach((h, i) => { obj[h] = cells[i] != null ? cells[i] : ""; });
+      return obj;
     });
-    setImportPreview(rows);
+  };
+
+  // Classify each parsed row against existing items, by chosen match key.
+  const classify = (parsedRows) => {
+    const byKey = new Map();
+    for (const it of items) {
+      const k = (matchBy === "sku" ? it.sku : it.name || "").trim().toLowerCase();
+      if (k) byKey.set(k, it);
+    }
+    return parsedRows.map(r => {
+      const key = (matchBy === "sku" ? r.sku : r.name || "").trim().toLowerCase();
+      const existing = key ? byKey.get(key) : null;
+      return { ...r, _existing: existing || null, _status: existing ? "update" : "new" };
+    });
+  };
+
+  const buildPreviewFromObjects = (objs) => {
+    setErr("");
+    if (!objs || !objs.length) { setErr("No rows found. Check the file has a header row and data."); return; }
+    const hasName = Object.keys(objs[0]).some(k => k.trim().toLowerCase() === "item name");
+    if (!hasName) { setErr("Could not find an 'Item Name' column in the file."); return; }
+    const seq = {};
+    const rows = objs.map(o => rowFromObject(o, seq));
+    setImportPreview(classify(rows));
+    setImportResult(null);
+  };
+
+  const buildPreviewFromPaste = () => {
+    const objs = parseCsvToObjects(importText.trim());
+    if (!objs) { setErr("Paste the CSV including the header row."); return; }
+    buildPreviewFromObjects(objs);
+  };
+
+  const handleImportFile = (file) => {
+    setErr(""); setFileName(file.name);
+    const isCsv = /\.csv$/i.test(file.name);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        if (isCsv) {
+          buildPreviewFromObjects(parseCsvToObjects(String(e.target.result)));
+        } else {
+          if (!XLSX) { setErr("Excel library still loading — try again in a second, or upload a .csv."); return; }
+          const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const objs = XLSX.utils.sheet_to_json(ws, { defval: "" });
+          buildPreviewFromObjects(objs);
+        }
+      } catch (e2) { setErr("Could not read file: " + (e2.message || e2)); }
+    };
+    if (isCsv) reader.readAsText(file); else reader.readAsArrayBuffer(file);
+  };
+
+  // Merge: only fill/overwrite fields that have a real incoming value; never wipe
+  // an existing value with a blank. 'overwrite' replaces all provided fields.
+  const mergeItem = (incoming, existing) => {
+    if (!existing) return incoming;
+    if (updateStrategy === "overwrite") return { ...existing, ...incoming, id: existing.id };
+    // merge: keep existing where incoming is empty/null
+    const out = { ...existing };
+    for (const [k, v] of Object.entries(incoming)) {
+      if (v !== null && v !== "" && v !== undefined) out[k] = v;
+    }
+    out.id = existing.id;
+    return out;
   };
 
   const runImport = async () => {
     if (!importPreview?.length) return;
     setBusy(true); setErr("");
+    const res = { inserted: 0, updated: 0, skipped: 0, seeded: 0, failed: 0 };
     try {
       for (const r of importPreview) {
-        const saved = await upsertDistItem(r);
-        // Seed opening stock as a movement ONLY if a positive opening was given.
-        // (Negative Zoho figures are the divergence bug — never seed those.)
-        if (saved && r.openingStock != null && r.openingStock > 0) {
-          const landed = r.openingValue != null && r.openingStock ? +(r.openingValue / r.openingStock).toFixed(4)
-            : (r.purchaseRate != null ? r.purchaseRate : 0);
-          await seedDistOpeningStock({ itemId: saved.id, qty: r.openingStock, landedCost: landed, createdBy: currentUser?.id });
-        }
+        try {
+          let saved;
+          if (r._status === "update") {
+            if (updateStrategy === "skip") { res.skipped++; continue; }
+            saved = await upsertDistItem(mergeItem(r, r._existing));
+            res.updated++;
+          } else {
+            saved = await upsertDistItem({ ...r, _existing: undefined, _status: undefined });
+            res.inserted++;
+          }
+          // Seed opening stock only for brand-NEW items with a positive opening,
+          // and only if the toggle is on. Never re-seed an existing item (the
+          // idempotent source_ref distopen:<itemId> also guards against dupes).
+          if (seedOpening && saved && r._status === "new" && r.openingStock != null && r.openingStock > 0) {
+            const landed = r.openingValue != null && r.openingStock ? +(r.openingValue / r.openingStock).toFixed(4)
+              : (r.purchaseRate != null ? r.purchaseRate : 0);
+            await seedDistOpeningStock({ itemId: saved.id, qty: r.openingStock, landedCost: landed, createdBy: currentUser?.id });
+            res.seeded++;
+          }
+        } catch (rowErr) { res.failed++; }
       }
-      setImportOpen(false); setImportPreview(null); setImportText("");
+      setImportResult(res);
       await load();
     } catch (e) { setErr(e.message || "Import failed"); }
     setBusy(false);
+  };
+
+  const closeImport = () => {
+    setImportOpen(false); setImportPreview(null); setImportText(""); setFileName(""); setImportResult(null);
   };
 
   return (
@@ -6216,24 +6314,75 @@ function DistItemsView({ currentUser }) {
         </Modal>
       )}
 
-      {/* CSV import modal */}
+      {/* CSV / Excel import modal */}
       {importOpen && (
-        <Modal onClose={() => { setImportOpen(false); setImportPreview(null); }} title="Import items from Zoho CSV">
+        <Modal onClose={closeImport} title="Import items" maxW="max-w-3xl">
           <div className="space-y-3">
-            <p className="text-xs text-slate-400">Paste the Zoho Items export (including the header row). Pack strings like <span className="font-mono">(4*2.5kg)</span> are parsed into structured units, SKUs are generated by category, and positive opening stock is seeded as an opening movement. Negative Zoho stock figures are ignored (they are the divergence bug).</p>
-            {!importPreview ? (
+            <p className="text-xs text-slate-400">Upload a .csv or .xlsx (or paste). Pack strings like <span className="font-mono">(4*2.5kg)</span> become structured units; missing SKUs are generated by category. Existing items are matched and updated without erasing data; positive opening stock seeds an opening movement on new items only.</p>
+
+            {/* Result summary after import */}
+            {importResult ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-5 gap-2 text-center">
+                  {[["Inserted", importResult.inserted, "text-emerald-300"], ["Updated", importResult.updated, "text-indigo-300"], ["Skipped", importResult.skipped, "text-slate-300"], ["Stock seeded", importResult.seeded, "text-amber-300"], ["Failed", importResult.failed, importResult.failed ? "text-red-400" : "text-slate-300"]].map(([l, v, c]) => (
+                    <div key={l} className="rounded-xl border px-2 py-3 bg-slate-950/40 border-slate-800">
+                      <div className={`text-xl font-bold ${c}`}>{v}</div>
+                      <div className="text-[10px] uppercase tracking-wide text-slate-500">{l}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end"><button onClick={closeImport} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Done</button></div>
+              </div>
+            ) : !importPreview ? (
               <>
-                <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={8} placeholder="Item Name,SKU,Rate,Account,..." className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/>
-                <div className="flex justify-end"><button onClick={buildPreview} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Preview</button></div>
+                {/* Source toggle */}
+                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit">
+                  {[["file", "Upload file"], ["paste", "Paste"]].map(([k, l]) => (
+                    <button key={k} onClick={() => setImportMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${importMode===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+                  ))}
+                </div>
+
+                {importMode === "file" ? (
+                  <div onClick={() => fileRef.current?.click()} className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-indigo-600 rounded-2xl py-10 text-center transition-colors group">
+                    <Upload size={28} className="mx-auto text-slate-500 group-hover:text-indigo-400 mb-2"/>
+                    <div className="text-sm text-slate-300">{fileName || "Click to choose a .csv or .xlsx file"}</div>
+                    <div className="text-[11px] text-slate-600 mt-1">{XLSX ? "Excel + CSV supported" : "Loading Excel support… CSV ready now"}</div>
+                    <input ref={fileRef} type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={e => e.target.files[0] && handleImportFile(e.target.files[0])}/>
+                  </div>
+                ) : (
+                  <>
+                    <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={7} placeholder="Item Name,SKU,Rate,Account,..." className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/>
+                    <div className="flex justify-end"><button onClick={buildPreviewFromPaste} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Preview</button></div>
+                  </>
+                )}
               </>
             ) : (
               <>
-                <div className="text-xs text-slate-400">{importPreview.length} items parsed. Review then import:</div>
+                {/* Conflict-handling controls */}
+                <div className="grid grid-cols-2 gap-3 bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                  <label className="text-xs text-slate-400">Match existing by
+                    <select value={matchBy} onChange={e => { setMatchBy(e.target.value); setImportPreview(p => p && p.map(r => ({ ...r }))); }} className="mt-1 w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                      <option value="sku">SKU</option><option value="name">Name</option></select></label>
+                  <label className="text-xs text-slate-400">When a match exists
+                    <select value={updateStrategy} onChange={e => setUpdateStrategy(e.target.value)} className="mt-1 w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                      <option value="merge">Update — fill/replace provided fields, keep the rest</option>
+                      <option value="overwrite">Overwrite — replace all provided fields</option>
+                      <option value="skip">Skip — leave existing untouched</option></select></label>
+                  <label className="text-xs text-slate-400 col-span-2 flex items-center gap-2">
+                    <input type="checkbox" checked={seedOpening} onChange={e => setSeedOpening(e.target.checked)}/> Seed opening stock for new items (positive figures only)</label>
+                </div>
+
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-emerald-300">{importPreview.filter(r => r._status === "new").length} new</span>
+                  <span className="text-indigo-300">{importPreview.filter(r => r._status === "update").length} existing (will {updateStrategy === "skip" ? "skip" : "update"})</span>
+                </div>
+
                 <div className="max-h-72 overflow-auto bg-slate-950 border border-slate-800 rounded-lg">
                   <table className="w-full text-[11px]">
-                    <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">SKU</th><th className="text-left px-2 py-1">Name</th><th className="px-2 py-1">Pack</th><th className="px-2 py-1">Tax</th><th className="px-2 py-1 text-right">Open</th></tr></thead>
+                    <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">Status</th><th className="text-left px-2 py-1">SKU</th><th className="text-left px-2 py-1">Name</th><th className="px-2 py-1">Pack</th><th className="px-2 py-1">Tax</th><th className="px-2 py-1 text-right">Open</th></tr></thead>
                     <tbody>{importPreview.map((r, i) => (
                       <tr key={i} className="border-t border-slate-800/60">
+                        <td className="px-2 py-1"><span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${r._status==="new"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{r._status === "new" ? "NEW" : (updateStrategy === "skip" ? "SKIP" : "UPDATE")}</span></td>
                         <td className="px-2 py-1 font-mono text-indigo-300">{r.sku}</td>
                         <td className="px-2 py-1 text-white">{r.name}</td>
                         <td className="px-2 py-1 text-center text-slate-400">{r.packCount}&times;{r.packSize ?? "?"}{r.packUnit}</td>
@@ -6243,8 +6392,8 @@ function DistItemsView({ currentUser }) {
                   </table>
                 </div>
                 <div className="flex justify-end gap-2">
-                  <button onClick={() => setImportPreview(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Back</button>
-                  <button onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy ? "Importing…" : `Import ${importPreview.length} items`}</button>
+                  <button onClick={() => { setImportPreview(null); setFileName(""); }} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Back</button>
+                  <button onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy ? "Importing…" : `Import ${importPreview.length} rows`}</button>
                 </div>
               </>
             )}
