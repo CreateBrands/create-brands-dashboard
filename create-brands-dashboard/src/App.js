@@ -6828,16 +6828,23 @@ function DistPicksView({ currentUser }) {
   const startPick = async (so) => {
     setErr("");
     try {
-      const lines = [];
+      // Fetch batches once per distinct item, and FEFO all lines, in parallel
+      // (was sequential per-line — the source of the load lag).
+      const uniqueItemIds = [...new Set((so.lines || []).map(l => l.itemId).filter(Boolean))];
+      const [batchResults, fefoResults] = await Promise.all([
+        Promise.all(uniqueItemIds.map(id => fetchDistBatches(id))),
+        Promise.all((so.lines || []).map(l => suggestDistFefo(l.itemId, l.qty))),
+      ]);
       const batchMap = {};
-      for (const l of so.lines) {
-        const fefo = await suggestDistFefo(l.itemId, l.qty);
-        batchMap[l.itemId] = await fetchDistBatches(l.itemId);
+      uniqueItemIds.forEach((id, idx) => { batchMap[id] = batchResults[idx]; });
+      const lines = [];
+      (so.lines || []).forEach((l, idx) => {
+        const fefo = fefoResults[idx] || [];
         const allocated = fefo.reduce((s, f) => s + f.qty, 0);
         // One UI row per source batch (FEFO may split a line across batches).
         if (fefo.length === 0) lines.push({ itemId: l.itemId, batchId: "", qty: l.qty, unitPrice: l.unitPrice, taxRateId: l.taxRateId, short: l.qty });
         else fefo.forEach(f => lines.push({ itemId: l.itemId, batchId: f.batchId, qty: f.qty, unitPrice: l.unitPrice, taxRateId: l.taxRateId, short: +(l.qty - allocated).toFixed(3) }));
-      }
+      });
       setBatches(batchMap);
       setCreating({ soId: so.id, customerId: so.customerId, soNumber: so.soNumber, lines });
     } catch (e) { setErr(e.message); }
@@ -6913,11 +6920,14 @@ function DistDispatchView({ currentUser }) {
   const startDispatch = async (pick) => {
     setErr("");
     try {
+      // Fetch batches once per distinct item, in parallel (was sequential).
+      const uniqueItemIds = [...new Set((pick.lines || []).map(l => l.itemId).filter(Boolean))];
+      const batchResults = await Promise.all(uniqueItemIds.map(id => fetchDistBatches(id)));
       const batchMap = {};
+      uniqueItemIds.forEach((id, idx) => { batchMap[id] = batchResults[idx]; });
       const lines = [];
       for (const l of pick.lines) {
-        if (!batchMap[l.itemId]) batchMap[l.itemId] = await fetchDistBatches(l.itemId);
-        const b = batchMap[l.itemId].find(x => x.id === l.batchId);
+        const b = (batchMap[l.itemId] || []).find(x => x.id === l.batchId);
         lines.push({ itemId: l.itemId, batchId: l.batchId, qty: l.qty, landedCost: b?.landedCost || 0, unitPrice: l.unitPrice, taxRateId: l.taxRateId });
       }
       setBatches(batchMap);
