@@ -8587,7 +8587,7 @@ const mapDistItem = (i) => ({
   sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
   ckProductId: i.ck_product_id || null,
-  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0,
+  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -8652,7 +8652,7 @@ export async function upsertDistItem(i) {
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
-    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0,
+    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null,
     active: i.active !== false,
   };
   const { data, error } = await supabase.from("dist_items").upsert(row).select().maybeSingle();
@@ -9186,7 +9186,7 @@ export async function fetchDistPortalCatalogue(customerId) {
   return items.filter(i => i.active !== false).map(i => ({
     id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
     packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
-    taxRateId: i.taxRateId,
+    taxRateId: i.taxRateId, imageUrl: i.imageUrl || "",
     price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
   }));
 }
