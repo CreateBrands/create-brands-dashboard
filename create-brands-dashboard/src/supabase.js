@@ -8965,11 +8965,23 @@ export async function postDistBill(bill, lines = []) {
       } catch (e) { /* best-effort */ }
     }
   }
-  await supabase.from("dist_bills").update({ posted: true }).eq("id", id);
+  await supabase.from("dist_bills").update({ posted: true, grand_total: gross }).eq("id", id);
   return id;
 }
 
 // ── BILL PAYMENTS (settle + allocate across bills) ──
+// Total already-allocated (paid) per bill id, across ALL payments. Returns a
+// Map(billId -> paidAmount) so the UI can show true Amount Due = gross - paid.
+export async function fetchDistBillPaidMap(billIds) {
+  const m = new Map();
+  const ids = (billIds || []).filter(Boolean);
+  if (!ids.length) return m;
+  const { data, error } = await supabase.from("dist_bill_payment_allocations").select("bill_id, amount").in("bill_id", ids);
+  if (error) throw error;
+  for (const r of data || []) m.set(r.bill_id, (m.get(r.bill_id) || 0) + (Number(r.amount) || 0));
+  return m;
+}
+
 export async function fetchDistBillPayments({ vendorId } = {}) {
   let q = supabase.from("dist_bill_payments").select("*, dist_bill_payment_allocations(*)").order("created_at", { ascending: false });
   if (vendorId) q = q.eq("vendor_id", vendorId);
@@ -8994,7 +9006,10 @@ export async function postDistBillPayment(pay, allocations = []) {
     // Update bill status by comparing total allocated to its gross (best-effort).
     const { data: allocs } = await supabase.from("dist_bill_payment_allocations").select("amount").eq("bill_id", a.billId);
     const paid = (allocs || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
-    await supabase.from("dist_bills").update({ status: paid > 0 ? "part_paid" : "open" }).eq("id", a.billId);
+    const { data: billRow } = await supabase.from("dist_bills").select("grand_total").eq("id", a.billId).maybeSingle();
+    const gt = Number(billRow?.grand_total) || 0;
+    const st = gt > 0 && paid + 0.005 >= gt ? "paid" : paid > 0 ? "part_paid" : "open";
+    await supabase.from("dist_bills").update({ status: st }).eq("id", a.billId);
   }
 
   // Journal: Dr Trade creditors 2000 / Cr Bank (bank_code).
@@ -9310,7 +9325,7 @@ export async function postDistInvoice(inv, lines = []) {
       } catch (e) { /* best-effort */ }
     }
   }
-  await supabase.from("dist_invoices").update({ posted: true }).eq("id", id);
+  await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
   if (inv.soId) await supabase.from("dist_sales_orders").update({ status: "invoiced" }).eq("id", inv.soId);
   return id;
 }
@@ -9322,6 +9337,17 @@ const mapDistInvPay = (p) => ({
   reference: p.reference || "", notes: p.notes || "", posted: !!p.posted, createdBy: p.created_by || null, createdAt: p.created_at,
   allocations: (p.dist_invoice_payment_allocations || []).map(a => ({ id: a.id, invoiceId: a.invoice_id, amount: Number(a.amount) || 0 })),
 });
+// Total already-received (paid) per invoice id, across ALL receipts.
+export async function fetchDistInvoicePaidMap(invoiceIds) {
+  const m = new Map();
+  const ids = (invoiceIds || []).filter(Boolean);
+  if (!ids.length) return m;
+  const { data, error } = await supabase.from("dist_invoice_payment_allocations").select("invoice_id, amount").in("invoice_id", ids);
+  if (error) throw error;
+  for (const r of data || []) m.set(r.invoice_id, (m.get(r.invoice_id) || 0) + (Number(r.amount) || 0));
+  return m;
+}
+
 export async function fetchDistInvoicePayments({ customerId } = {}) {
   let q = supabase.from("dist_invoice_payments").select("*, dist_invoice_payment_allocations(*)").order("created_at", { ascending: false });
   if (customerId) q = q.eq("customer_id", customerId);
@@ -9345,7 +9371,10 @@ export async function postDistInvoicePayment(pay, allocations = []) {
     await supabase.from("dist_invoice_payment_allocations").insert({ id: distId("dipa"), payment_id: id, invoice_id: a.invoiceId, amount: Number(a.amount) });
     const { data: allocs } = await supabase.from("dist_invoice_payment_allocations").select("amount").eq("invoice_id", a.invoiceId);
     const paid = (allocs || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
-    await supabase.from("dist_invoices").update({ status: paid > 0 ? "part_paid" : "open" }).eq("id", a.invoiceId);
+    const { data: invRow } = await supabase.from("dist_invoices").select("grand_total").eq("id", a.invoiceId).maybeSingle();
+    const gt = Number(invRow?.grand_total) || 0;
+    const st = gt > 0 && paid + 0.005 >= gt ? "paid" : paid > 0 ? "part_paid" : "open";
+    await supabase.from("dist_invoices").update({ status: st }).eq("id", a.invoiceId);
   }
 
   // Journal: Dr deposit (bank/cash) + Dr bank charges 5710 / Cr AR 1100.

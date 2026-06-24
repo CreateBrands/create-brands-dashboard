@@ -145,7 +145,7 @@ import {
   fetchDistSalesOrders, createDistSalesOrder, setDistSalesOrderStatus, computeDistCommitted,
   suggestDistFefo, fetchDistPicks, createDistPick, fetchDistDispatches, postDistDispatch,
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
-  fetchDistCreditNotes, postDistCreditNote,
+  fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6410,9 +6410,9 @@ function DistBillsView({ currentUser }) {
 
 // ── PAYMENTS ──
 function DistPaymentsView({ currentUser }) {
-  const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map());
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { setLoading(true); try { const [p, v, b, tx] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] }), fetchDistTaxRates()]); setPays(p); setVendors(v); setBills(b); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const load = useCallback(async () => { setLoading(true); try { const [p, v, b, tx] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] }), fetchDistTaxRates()]); setPays(p); setVendors(v); setBills(b); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { /* paid map best-effort */ } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const save = async () => {
     if (!creating?.vendorId || !(Number(creating.amount) > 0)) { setErr("Vendor and amount required"); return; }
@@ -6424,6 +6424,7 @@ function DistPaymentsView({ currentUser }) {
   const vendorBills = creating ? bills.filter(b => b.vendorId === creating.vendorId) : [];
   // Gross amount of a bill (from its lines), via the same totals helper.
   const billGross = (b) => distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType).grandTotal;
+  const billDue = (b) => +(billGross(b) - (paidMap.get(b.id) || 0)).toFixed(2);
   const totalAllocated = (creating?.allocations || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const amountInExcess = +((Number(creating?.amount) || 0) - totalAllocated).toFixed(2);
   // Auto-allocate the payment amount down the vendor's bills (oldest first).
@@ -6432,7 +6433,7 @@ function DistPaymentsView({ currentUser }) {
     const allocs = [];
     for (const b of vendorBills) {
       if (remaining <= 0) break;
-      const due = billGross(b);
+      const due = billDue(b);
       const amt = Math.min(remaining, due);
       if (amt > 0) { allocs.push({ billId: b.id, amount: +amt.toFixed(2) }); remaining -= amt; }
     }
@@ -6478,13 +6479,14 @@ function DistPaymentsView({ currentUser }) {
                   <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-2">Date</div><div className="col-span-3">Bill#</div><div className="col-span-3 text-right">Bill amount</div><div className="col-span-2 text-right">Amount due</div><div className="col-span-2 text-right">Payment</div></div>
                   {vendorBills.length === 0 ? <div className="px-3 py-6 text-center text-xs text-slate-600">There are no bills for this vendor.</div> : vendorBills.map(b => {
                     const gross = billGross(b);
+                    const due = billDue(b);
                     const alloc = (creating.allocations || []).find(a => a.billId === b.id);
                     return (
                       <div key={b.id} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
                         <div className="col-span-2 text-slate-400">{b.billDate}</div>
                         <div className="col-span-3 text-white font-mono">{b.billNumber}</div>
                         <div className="col-span-3 text-right text-slate-300">£{gross.toFixed(2)}</div>
-                        <div className="col-span-2 text-right text-slate-400">£{gross.toFixed(2)}</div>
+                        <div className="col-span-2 text-right text-slate-400">£{due.toFixed(2)}</div>
                         <div className="col-span-2"><input type="number" value={alloc?.amount || ""} onChange={e => { const others = (creating.allocations || []).filter(a => a.billId !== b.id); setCreating({ ...creating, allocations: e.target.value ? [...others, { billId: b.id, amount: Number(e.target.value) }] : others }); }} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
                       </div>
                     );
@@ -7009,16 +7011,17 @@ function DistInvoicesView({ currentUser }) {
 
 // ── PAYMENTS RECEIVED (Zoho Record Payment; unpaid invoices + excess) ──
 function DistReceiptsView({ currentUser }) {
-  const [pays, setPays] = useState([]); const [customers, setCustomers] = useState([]); const [invoices, setInvoices] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [pays, setPays] = useState([]); const [customers, setCustomers] = useState([]); const [invoices, setInvoices] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map());
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { setLoading(true); try { const [p, c, inv, tx] = await Promise.all([fetchDistInvoicePayments(), fetchDistContacts({ kind: "customer" }), fetchDistInvoices({ status: ["open", "part_paid"] }), fetchDistTaxRates()]); setPays(p); setCustomers(c); setInvoices(inv); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const load = useCallback(async () => { setLoading(true); try { const [p, c, inv, tx] = await Promise.all([fetchDistInvoicePayments(), fetchDistContacts({ kind: "customer" }), fetchDistInvoices({ status: ["open", "part_paid"] }), fetchDistTaxRates()]); setPays(p); setCustomers(c); setInvoices(inv); setTaxRates(tx); try { setPaidMap(await fetchDistInvoicePaidMap(inv.map(x => x.id))); } catch { /* paid map best-effort */ } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
   const custInvoices = creating ? invoices.filter(i => i.customerId === creating.customerId) : [];
   const invGross = (i) => distComputeTotals(i.lines, taxRates, i.vatMode, i.discountPercent, i.discountType).grandTotal + (Number(i.shippingCharge) || 0);
+  const invDue = (i) => +(invGross(i) - (paidMap.get(i.id) || 0)).toFixed(2);
   const totalAllocated = (creating?.allocations || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const amountInExcess = +((Number(creating?.amount) || 0) - totalAllocated).toFixed(2);
-  const payInFull = (i) => { const others = (creating.allocations || []).filter(a => a.invoiceId !== i.id); setCreating({ ...creating, allocations: [...others, { invoiceId: i.id, amount: +invGross(i).toFixed(2) }] }); };
+  const payInFull = (i) => { const others = (creating.allocations || []).filter(a => a.invoiceId !== i.id); setCreating({ ...creating, allocations: [...others, { invoiceId: i.id, amount: +invDue(i).toFixed(2) }] }); };
   const save = async () => {
     if (!creating?.customerId || !(Number(creating.amount) > 0)) { setErr("Customer and amount required"); return; }
     setBusy(true); setErr("");
@@ -7058,13 +7061,13 @@ function DistReceiptsView({ currentUser }) {
                 <div className="border border-slate-800 rounded-xl overflow-hidden">
                   <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-2">Date</div><div className="col-span-3">Invoice#</div><div className="col-span-3 text-right">Invoice amount</div><div className="col-span-2 text-right">Amount due</div><div className="col-span-2 text-right">Payment</div></div>
                   {custInvoices.length === 0 ? <div className="px-3 py-6 text-center text-xs text-slate-600">No unpaid invoices for this customer.</div> : custInvoices.map(i => {
-                    const gross = invGross(i); const alloc = (creating.allocations || []).find(a => a.invoiceId === i.id);
+                    const gross = invGross(i); const due = invDue(i); const alloc = (creating.allocations || []).find(a => a.invoiceId === i.id);
                     return (
                       <div key={i.id} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
                         <div className="col-span-2 text-slate-400">{i.invoiceDate}</div>
                         <div className="col-span-3 text-white font-mono">{i.invoiceNumber}</div>
                         <div className="col-span-3 text-right text-slate-300">£{gross.toFixed(2)}</div>
-                        <div className="col-span-2 text-right text-slate-400">£{gross.toFixed(2)}</div>
+                        <div className="col-span-2 text-right text-slate-400">£{due.toFixed(2)}</div>
                         <div className="col-span-2"><input type="number" value={alloc?.amount || ""} onChange={e => { const others = (creating.allocations || []).filter(a => a.invoiceId !== i.id); setCreating({ ...creating, allocations: e.target.value ? [...others, { invoiceId: i.id, amount: Number(e.target.value) }] : others }); }} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/><button onClick={() => payInFull(i)} className="block ml-auto mt-0.5 text-[10px] text-indigo-400 hover:text-indigo-300">Pay in full</button></div>
                       </div>
                     );
