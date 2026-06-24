@@ -8733,3 +8733,20 @@ export async function fetchDistStockSnapshot() {
     return { ...it, onHand: oh, committed, available: oh - committed, negative: oh < 0 };
   });
 }
+
+// Delete an item. SAFE: if the item has any stock movements, we archive it
+// (active=false) rather than hard-delete — deleting would orphan ledger rows
+// and corrupt derived stock. Only items with zero movements are hard-deleted.
+export async function deleteDistItem(itemId) {
+  const { data: mv } = await supabase.from("dist_stock_movements").select("id").eq("item_id", itemId).limit(1);
+  if (mv && mv.length) {
+    const { error } = await supabase.from("dist_items").update({ active: false }).eq("id", itemId);
+    if (error) throw error;
+    return { archived: true };
+  }
+  // No movements: safe to remove the item and any (empty) batches.
+  await supabase.from("dist_batches").delete().eq("item_id", itemId);
+  const { error } = await supabase.from("dist_items").delete().eq("id", itemId);
+  if (error) throw error;
+  return { archived: false };
+}

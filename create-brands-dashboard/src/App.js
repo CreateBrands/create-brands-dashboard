@@ -135,7 +135,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
-  fetchDistItems, upsertDistItem, fetchDistBatches, createDistBatch,
+  fetchDistItems, upsertDistItem, deleteDistItem, fetchDistBatches, createDistBatch,
   fetchDistMovements, addDistMovement, seedDistOpeningStock,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
 } from "./supabase";
@@ -6003,7 +6003,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 // DISTRIBUTION — WAREHOUSE: Item Master + Stock (Phase 1 UI)
 // DistItemsView: catalogue CRUD + CSV import (parses Zoho pack strings,
 //   generates SKUs, seeds opening stock as movements).
-// DistStockView: derived on-hand (SUM of movements) — the reconciliation proof.
+// Stock (on-hand/committed/available) is shown read-only on the item itself,
+// derived live from the movement ledger; movement history is in the detail view.
 // ============================================================================
 
 // Parse a Zoho item name string -> { name, packCount, packSize, packUnit }.
@@ -6035,6 +6036,92 @@ function distMoney(v) {
   return isNaN(n) ? null : n;
 }
 
+// Item detail: all attributes + read-only stock (on-hand/committed/available)
+// + movement history (the audit trail behind on-hand). Edit/Delete actions.
+function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy }) {
+  const [moves, setMoves] = useState(null);
+  const [mErr, setMErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try { const m = await fetchDistMovements({ itemId: item.id }); if (alive) setMoves(m); }
+      catch (e) { if (alive) setMErr(e.message || "Could not load movements"); }
+    })();
+    return () => { alive = false; };
+  }, [item.id]);
+
+  const Attr = ({ label, value }) => (
+    <div><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="text-sm text-white">{value ?? "—"}</div></div>
+  );
+  const Stat = ({ label, value, tone }) => (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3 text-center">
+      <div className={`text-2xl font-bold ${tone}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-slate-500 mt-0.5">{label}</div>
+    </div>
+  );
+  const typeColor = (t) => t === "receipt" || t === "opening" ? "text-emerald-300" : t === "dispatch" ? "text-red-300" : "text-amber-300";
+
+  return (
+    <Modal onClose={onClose} title={item.name} maxW="max-w-2xl">
+      <div className="space-y-4">
+        {/* Stock summary (read-only — derived from the ledger) */}
+        <div className="grid grid-cols-3 gap-2">
+          <Stat label="On-hand" value={item.onHand} tone={item.negative ? "text-red-400" : "text-white"}/>
+          <Stat label="Committed" value={item.committed} tone="text-slate-300"/>
+          <Stat label="Available" value={item.available} tone={item.available < 0 ? "text-red-400" : "text-emerald-300"}/>
+        </div>
+        <p className="text-[11px] text-slate-500 -mt-2">Stock is derived live from the movement ledger and can&#39;t be edited directly — it changes through receipts, dispatches and adjustments.</p>
+
+        {/* Attributes */}
+        <div className="grid grid-cols-3 gap-3 bg-slate-950/40 border border-slate-800 rounded-xl p-3">
+          <Attr label="SKU" value={<span className="font-mono text-indigo-300">{item.sku || "—"}</span>}/>
+          <Attr label="Category" value={item.category}/>
+          <Attr label="Status" value={item.active === false ? "Inactive" : "Active"}/>
+          <Attr label="Pack" value={`${item.packCount} × ${item.packSize ?? "?"} ${item.packUnit || ""}`}/>
+          <Attr label="Tax rate" value={taxName(item.taxRateId)}/>
+          <Attr label="" value=""/>
+          <Attr label="Buy rate" value={item.purchaseRate != null ? `£${item.purchaseRate}` : "—"}/>
+          <Attr label="Sell rate" value={item.sellRate != null ? `£${item.sellRate}` : "—"}/>
+          <Attr label="" value=""/>
+          <Attr label="Income acct" value={<span className="font-mono">{item.incomeAccountCode || "—"}</span>}/>
+          <Attr label="Expense acct" value={<span className="font-mono">{item.expenseAccountCode || "—"}</span>}/>
+        </div>
+
+        {/* Movement history */}
+        <div>
+          <div className="text-xs font-semibold text-slate-300 mb-1.5">Movement history</div>
+          {mErr && <div className="text-xs text-red-400">{mErr}</div>}
+          {moves == null ? <div className="text-xs text-slate-500 py-3">Loading…</div> : moves.length === 0 ? (
+            <div className="text-xs text-slate-600 bg-slate-950/40 border border-slate-800 rounded-lg px-3 py-4 text-center">No movements yet. Stock appears here once opening stock is seeded or goods are received.</div>
+          ) : (
+            <div className="max-h-56 overflow-auto bg-slate-950 border border-slate-800 rounded-lg">
+              <table className="w-full text-[11px]">
+                <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Qty</th><th className="text-left px-2 py-1">Ref</th></tr></thead>
+                <tbody>{moves.map(m => (
+                  <tr key={m.id} className="border-t border-slate-800/60">
+                    <td className="px-2 py-1 text-slate-400">{m.movedAt ? new Date(m.movedAt).toLocaleDateString() : "—"}</td>
+                    <td className={`px-2 py-1 font-medium ${typeColor(m.type)}`}>{m.type}</td>
+                    <td className={`px-2 py-1 text-right font-semibold ${m.qty < 0 ? "text-red-300" : "text-emerald-300"}`}>{m.qty > 0 ? "+" : ""}{m.qty}</td>
+                    <td className="px-2 py-1 text-slate-500 font-mono truncate">{m.sourceRef || m.reasonCode || "—"}</td>
+                  </tr>))}</tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-between items-center pt-1">
+          <button onClick={onDelete} disabled={busy} className="px-3 py-2 rounded-xl bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-sm font-semibold flex items-center gap-1.5"><Trash2 size={14}/> Delete</button>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button>
+            <button onClick={onEdit} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Edit size={14}/> Edit</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
   const [taxRates, setTaxRates] = useState([]);
@@ -6042,6 +6129,7 @@ function DistItemsView({ currentUser }) {
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
   const [editItem, setEditItem] = useState(null);   // item being edited, or {} for new
+  const [detailItem, setDetailItem] = useState(null); // item detail/stock view
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importPreview, setImportPreview] = useState(null);
@@ -6058,8 +6146,16 @@ function DistItemsView({ currentUser }) {
   const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
-      const [its, tax] = await Promise.all([fetchDistItems({ includeInactive: true }), fetchDistTaxRates()]);
-      setItems(its); setTaxRates(tax);
+      const [its, tax, onHand] = await Promise.all([
+        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(),
+      ]);
+      // Merge derived on-hand onto each item (committed=0 until sell side ships).
+      const withStock = its.map(i => {
+        const oh = onHand.get(i.id) || 0;
+        const committed = 0;
+        return { ...i, onHand: oh, committed, available: oh - committed, negative: oh < 0 };
+      });
+      setItems(withStock); setTaxRates(tax);
     } catch (e) { setErr(e.message || "Load failed"); }
     setLoading(false);
   }, []);
@@ -6078,6 +6174,19 @@ function DistItemsView({ currentUser }) {
     setBusy(true); setErr("");
     try { await upsertDistItem(editItem); setEditItem(null); await load(); }
     catch (e) { setErr(e.message || "Save failed"); }
+    setBusy(false);
+  };
+
+  const removeItem = async (item) => {
+    if (!item?.id) return;
+    const hasStock = (item.onHand || 0) !== 0;
+    const msg = hasStock
+      ? `"${item.name}" has stock movements. It will be ARCHIVED (hidden), not deleted, to preserve the ledger. Continue?`
+      : `Delete "${item.name}"? This item has no stock movements and will be permanently removed.`;
+    if (!window.confirm(msg)) return;
+    setBusy(true); setErr("");
+    try { await deleteDistItem(item.id); setDetailItem(null); setEditItem(null); await load(); }
+    catch (e) { setErr(e.message || "Delete failed"); }
     setBusy(false);
   };
 
@@ -6257,22 +6366,28 @@ function DistItemsView({ currentUser }) {
       {loading ? <div className="text-sm text-slate-500 py-8 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">
-            <div className="col-span-1">SKU</div><div className="col-span-4">Name</div><div className="col-span-2">Category</div>
-            <div className="col-span-2">Pack</div><div className="col-span-1">Tax</div><div className="col-span-1 text-right">Buy</div><div className="col-span-1 text-right">Sell</div>
+            <div className="col-span-1">SKU</div><div className="col-span-3">Name</div><div className="col-span-2">Category</div>
+            <div className="col-span-2">Pack</div><div className="col-span-2 text-right">On-hand</div><div className="col-span-2 text-right">Available</div>
           </div>
-          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No items yet. Import the Zoho CSV or add one.</div>}
+          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No items yet. Import a CSV/Excel file or add one.</div>}
           {filtered.map(i => (
-            <button key={i.id} onClick={() => setEditItem(i)} className="w-full grid grid-cols-12 gap-2 px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50 items-center">
+            <button key={i.id} onClick={() => setDetailItem(i)} className="w-full grid grid-cols-12 gap-2 px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50 items-center">
               <div className="col-span-1 font-mono text-[11px] text-indigo-300">{i.sku || "—"}</div>
-              <div className="col-span-4 text-white truncate">{i.name}{!i.active && <span className="ml-1 text-[9px] text-slate-500">(inactive)</span>}</div>
+              <div className="col-span-3 text-white truncate">{i.name}{!i.active && <span className="ml-1 text-[9px] text-slate-500">(inactive)</span>}</div>
               <div className="col-span-2 text-slate-400 truncate">{i.category || "—"}</div>
               <div className="col-span-2 text-slate-400">{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</div>
-              <div className="col-span-1 text-slate-400 text-[11px]">{taxName(i.taxRateId)}</div>
-              <div className="col-span-1 text-right text-slate-300">{i.purchaseRate != null ? `£${i.purchaseRate}` : "—"}</div>
-              <div className="col-span-1 text-right text-slate-300">{i.sellRate != null ? `£${i.sellRate}` : "—"}</div>
+              <div className={`col-span-2 text-right font-semibold ${i.negative ? "text-red-400" : "text-white"}`}>{i.onHand}{i.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</div>
+              <div className={`col-span-2 text-right ${i.available < 0 ? "text-red-400" : "text-emerald-300"}`}>{i.available}</div>
             </button>
           ))}
         </div>
+      )}
+
+      {/* Item detail + stock + movement history */}
+      {detailItem && (
+        <DistItemDetail item={detailItem} taxName={taxName} onClose={() => setDetailItem(null)}
+          onEdit={() => { setEditItem(detailItem); setDetailItem(null); }}
+          onDelete={() => removeItem(detailItem)} busy={busy}/>
       )}
 
       {/* Edit / new item modal */}
@@ -6399,60 +6514,6 @@ function DistItemsView({ currentUser }) {
             )}
           </div>
         </Modal>
-      )}
-    </div>
-  );
-}
-
-function DistStockView() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [search, setSearch] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true); setErr("");
-    try { setRows(await fetchDistStockSnapshot()); }
-    catch (e) { setErr(e.message || "Load failed"); }
-    setLoading(false);
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (q ? rows.filter(r => `${r.name} ${r.sku}`.toLowerCase().includes(q)) : rows);
-  }, [rows, search]);
-
-  const negatives = filtered.filter(r => r.negative).length;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[220px]">
-          <Search size={15} className="absolute left-3 top-2.5 text-slate-500"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search stock…" className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/>
-        </div>
-        <button onClick={load} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold">Refresh</button>
-      </div>
-      <p className="text-xs text-slate-500">On-hand is derived live from the stock-movement ledger (SUM of movements) — never a stored figure. Available = on-hand − committed (committed becomes live when the sell side ships).</p>
-      {negatives > 0 && <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-900/50 rounded-lg px-3 py-2 flex items-center gap-2"><AlertTriangle size={14}/> {negatives} item{negatives>1?"s":""} below zero — investigate (receipt missing or over-dispatch).</div>}
-      {err && <div className="text-xs text-red-400">{err}</div>}
-      {loading ? <div className="text-sm text-slate-500 py-8 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">
-            <div className="col-span-1">SKU</div><div className="col-span-5">Item</div><div className="col-span-2 text-right">On-hand</div><div className="col-span-2 text-right">Committed</div><div className="col-span-2 text-right">Available</div>
-          </div>
-          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No stock yet. Import items + seed opening stock, or receive goods.</div>}
-          {filtered.map(r => (
-            <div key={r.id} className="grid grid-cols-12 gap-2 px-4 py-2.5 text-sm border-b border-slate-800/50 items-center">
-              <div className="col-span-1 font-mono text-[11px] text-indigo-300">{r.sku || "—"}</div>
-              <div className="col-span-5 text-white truncate">{r.name} <span className="text-slate-500 text-[11px]">{r.packCount}&times;{r.packSize ?? "?"}{r.packUnit}</span></div>
-              <div className={`col-span-2 text-right font-semibold ${r.negative ? "text-red-400" : "text-white"}`}>{r.onHand}{r.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</div>
-              <div className="col-span-2 text-right text-slate-400">{r.committed}</div>
-              <div className={`col-span-2 text-right ${r.available < 0 ? "text-red-400" : "text-emerald-300"}`}>{r.available}</div>
-            </div>
-          ))}
-        </div>
       )}
     </div>
   );
@@ -40484,7 +40545,6 @@ export default function App() {
     ]},
     { group: "WAREHOUSE", items: [
       { key: "dist-items",  label: "Items",  icon: Tag, requiresEntity: "brand-distribution" },
-      { key: "dist-stock",  label: "Stock",  icon: ClipboardList, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
@@ -40543,6 +40603,7 @@ export default function App() {
     // Legacy keys: chain & store-analytics are now Dashboard sub-tabs. If anything
     // still routes to them (old deep link, saved state), land on Dashboard.
     if (activeView === "chain" || activeView === "store-analytics") return "dashboard";
+    if (activeView === "dist-stock") return "dist-items";
     // Operations is now a tabbed page; its old per-item keys route to it (the
     // opsTab sync effect selects the matching tab).
     if (OPS_TAB_KEYS.includes(activeView)) return "operations";
@@ -40839,7 +40900,6 @@ export default function App() {
             {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
-            {effectiveActiveView === "dist-stock" && <DistStockView/>}
             {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
