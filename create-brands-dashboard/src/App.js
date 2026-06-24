@@ -6058,28 +6058,36 @@ const DIST_PAYMENT_TERMS = [
 ];
 
 // Compute line + document totals honouring vat mode + header discount.
-function distComputeTotals(lines, taxRates, vatMode, discountPercent) {
+function distComputeTotals(lines, taxRates, vatMode, discountValue, discountType) {
   const inclusive = vatMode === "inclusive";
-  const discPct = Number(discountPercent) || 0;
-  let subTotal = 0, vatTotal = 0;
-  const rows = (lines || []).map(l => {
+  const discVal = Number(discountValue) || 0;
+  const dType = discountType || "percent";
+  // First pass: base net per line (back VAT out if inclusive).
+  const base = (lines || []).map(l => {
     const pct = taxRates.find(t => t.id === l.taxRateId)?.percent || 0;
     const raw = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
-    let net = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
-    net = net * (1 - discPct / 100);
-    const vat = net * pct / 100;
-    subTotal += net; vatTotal += vat;
-    return { ...l, _net: net, _vat: vat, _amount: net + vat };
+    const net = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
+    return { l, pct, net };
   });
-  return { rows, subTotal: +subTotal.toFixed(2), vatTotal: +vatTotal.toFixed(2), grandTotal: +(subTotal + vatTotal).toFixed(2) };
+  const sub = base.reduce((s, x) => s + x.net, 0);
+  const factor = dType === "value" ? (sub > 0 ? Math.max(0, 1 - discVal / sub) : 1) : (1 - discVal / 100);
+  const discountAmount = dType === "value" ? Math.min(discVal, sub) : sub * (discVal / 100);
+  let subTotal = 0, vatTotal = 0;
+  const rows = base.map(({ l, pct, net }) => {
+    const dn = net * factor;
+    const vat = dn * pct / 100;
+    subTotal += dn; vatTotal += vat;
+    return { ...l, _net: dn, _vat: vat, _amount: dn + vat };
+  });
+  return { rows, subTotalBeforeDiscount: +sub.toFixed(2), discountAmount: +discountAmount.toFixed(2), subTotal: +subTotal.toFixed(2), vatTotal: +vatTotal.toFixed(2), grandTotal: +(subTotal + vatTotal).toFixed(2) };
 }
 
 // Rich Zoho-style item table (Item · Account · Qty · Rate · VAT · Amount).
-function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent }) {
+function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent, discountType, setDiscountType }) {
   const upd = (i, patch) => setLines(lines.map((l, j) => j === i ? { ...l, ...patch } : l));
   const del = (i) => setLines(lines.filter((_, j) => j !== i));
   const add = () => setLines([...lines, { itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }]);
-  const totals = distComputeTotals(lines, taxRates, vatMode, discountPercent);
+  const totals = distComputeTotals(lines, taxRates, vatMode, discountPercent, discountType);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -6112,10 +6120,14 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
       </div>
       {/* Totals */}
       <div className="flex justify-end">
-        <div className="w-64 space-y-1.5 text-sm">
-          <div className="flex justify-between text-slate-400"><span>Sub Total</span><span className="text-white">£{totals.subTotal.toFixed(2)}</span></div>
+        <div className="w-72 space-y-1.5 text-sm">
+          <div className="flex justify-between text-slate-400"><span>Sub Total</span><span className="text-white">£{totals.subTotalBeforeDiscount.toFixed(2)}</span></div>
           <div className="flex justify-between items-center text-slate-400"><span>Discount</span>
-            <span className="flex items-center gap-1"><input type="number" value={discountPercent || ""} onChange={e => setDiscountPercent(e.target.value)} className="w-14 px-1.5 py-1 rounded bg-slate-800 border border-slate-700 text-xs text-white text-right"/><span className="text-xs">%</span></span></div>
+            <span className="flex items-center gap-1">
+              <input type="number" value={discountPercent || ""} onChange={e => setDiscountPercent(e.target.value)} className="w-16 px-1.5 py-1 rounded bg-slate-800 border border-slate-700 text-xs text-white text-right"/>
+              <select value={discountType || "percent"} onChange={e => setDiscountType(e.target.value)} className="px-1 py-1 rounded bg-slate-800 border border-slate-700 text-xs text-white"><option value="percent">%</option><option value="value">£</option></select>
+              <span className="text-white text-xs w-16 text-right">−£{totals.discountAmount.toFixed(2)}</span>
+            </span></div>
           <div className="flex justify-between text-slate-400"><span>VAT</span><span className="text-white">£{totals.vatTotal.toFixed(2)}</span></div>
           <div className="flex justify-between font-bold text-base border-t border-slate-700 pt-1.5"><span className="text-white">Total</span><span className="text-white">£{totals.grandTotal.toFixed(2)}</span></div>
         </div>
@@ -6207,7 +6219,7 @@ function DistPOView({ currentUser }) {
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { const [p, v, it, tx] = await Promise.all([fetchDistPurchaseOrders(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setPos(p); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
-  const newDoc = () => setCreating({ vendorId: "", orderDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, paymentTerms: "due_on_receipt", lines: [{ itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }] });
+  const newDoc = () => setCreating({ vendorId: "", orderDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", paymentTerms: "due_on_receipt", lines: [{ itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }] });
   const save = async (status) => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
     setBusy(true); setErr("");
@@ -6223,7 +6235,7 @@ function DistPOView({ currentUser }) {
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {pos.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No purchase orders yet.</div>}
-          {pos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent); return (
+          {pos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
             <div key={po.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
               <div><span className="text-white font-mono text-xs">{po.poNumber}</span> <span className="text-slate-400">{vName(po.vendorId)}</span><div className="text-[11px] text-slate-500">{po.lines.length} line{po.lines.length!==1?"s":""} · {po.orderDate}</div></div>
               <div className="flex items-center gap-3"><span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${po.status==="received"?"bg-emerald-900/50 text-emerald-300":po.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{po.status}</span></div>
@@ -6242,7 +6254,7 @@ function DistPOView({ currentUser }) {
               <label className="text-xs text-slate-400">Date<input type="date" value={creating.orderDate} onChange={e => setCreating({ ...creating, orderDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Expected delivery<input type="date" value={creating.expectedDate || ""} onChange={e => setCreating({ ...creating, expectedDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
             </div>
-            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })}/>
+            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
             <label className="text-xs text-slate-400 block">Notes<textarea value={creating.note || ""} onChange={e => setCreating({ ...creating, note: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white" placeholder="Will be displayed on the purchase order"/></label>
             <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={() => save("draft")} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold">Save as draft</button><button onClick={() => save("sent")} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Saving…":"Save and send"}</button></div>
           </div>
@@ -6320,7 +6332,7 @@ function DistBillsView({ currentUser }) {
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
-  const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
+  const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
   const save = async () => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
     setBusy(true); setErr("");
@@ -6335,7 +6347,7 @@ function DistBillsView({ currentUser }) {
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {bills.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No bills yet.</div>}
-          {bills.map(b => { const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent); return (
+          {bills.map(b => { const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType); return (
             <div key={b.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
               <div><span className="text-white font-mono text-xs">{b.billNumber}</span> <span className="text-slate-400">{vName(b.vendorId)}</span><div className="text-[11px] text-slate-500">{b.billDate}{b.dueDate?` · due ${b.dueDate}`:""}</div></div>
               <div className="flex items-center gap-3"><span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${b.status==="paid"?"bg-emerald-900/50 text-emerald-300":b.status==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-slate-800 text-slate-400"}`}>{b.status}</span></div>
@@ -6355,7 +6367,7 @@ function DistBillsView({ currentUser }) {
               <label className="text-xs text-slate-400">Due date<input type="date" value={creating.dueDate || ""} onChange={e => setCreating({ ...creating, dueDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Payment terms<select value={creating.paymentTerms || "due_on_receipt"} onChange={e => setCreating({ ...creating, paymentTerms: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">{DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
             </div>
-            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })}/>
+            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
             <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Create & post bill"}</button></div>
           </div>
         </Modal>
@@ -6366,9 +6378,9 @@ function DistBillsView({ currentUser }) {
 
 // ── PAYMENTS ──
 function DistPaymentsView({ currentUser }) {
-  const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]);
+  const [pays, setPays] = useState([]); const [vendors, setVendors] = useState([]); const [bills, setBills] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { setLoading(true); try { const [p, v, b] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] })]); setPays(p); setVendors(v); setBills(b); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const load = useCallback(async () => { setLoading(true); try { const [p, v, b, tx] = await Promise.all([fetchDistBillPayments(), fetchDistContacts({ kind: "vendor" }), fetchDistBills({ status: ["open","part_paid"] }), fetchDistTaxRates()]); setPays(p); setVendors(v); setBills(b); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const save = async () => {
     if (!creating?.vendorId || !(Number(creating.amount) > 0)) { setErr("Vendor and amount required"); return; }
@@ -6378,6 +6390,22 @@ function DistPaymentsView({ currentUser }) {
   };
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
   const vendorBills = creating ? bills.filter(b => b.vendorId === creating.vendorId) : [];
+  // Gross amount of a bill (from its lines), via the same totals helper.
+  const billGross = (b) => distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType).grandTotal;
+  const totalAllocated = (creating?.allocations || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const amountInExcess = +((Number(creating?.amount) || 0) - totalAllocated).toFixed(2);
+  // Auto-allocate the payment amount down the vendor's bills (oldest first).
+  const autoApply = () => {
+    let remaining = Number(creating.amount) || 0;
+    const allocs = [];
+    for (const b of vendorBills) {
+      if (remaining <= 0) break;
+      const due = billGross(b);
+      const amt = Math.min(remaining, due);
+      if (amt > 0) { allocs.push({ billId: b.id, amount: +amt.toFixed(2) }); remaining -= amt; }
+    }
+    setCreating({ ...creating, allocations: allocs });
+  };
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pays.length} payment{pays.length!==1?"s":""}</div><button onClick={() => setCreating({ method:"bank", bankCode:"1010", payDate: new Date().toISOString().slice(0,10), allocations: [] })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New payment</button></div>
@@ -6394,25 +6422,55 @@ function DistPaymentsView({ currentUser }) {
         </div>
       )}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="New bill payment" maxW="max-w-2xl">
-          <div className="space-y-3">
-            <p className="text-[11px] text-slate-500">Posts Dr Trade creditors / Cr Bank. Allocate across the vendor&#39;s open bills.</p>
-            <div className="grid grid-cols-3 gap-3">
-              <label className="text-xs text-slate-400">Vendor<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value, allocations: [] })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select…</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
-              <label className="text-xs text-slate-400">Amount £<input type="number" value={creating.amount || ""} onChange={e => setCreating({ ...creating, amount: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400">Paid through<select value={creating.bankCode || "1010"} onChange={e => setCreating({ ...creating, bankCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="1010">Bank (1010)</option><option value="1000">Cash (1000)</option></select></label>
+        <Modal onClose={() => setCreating(null)} title="Record Payment" maxW="max-w-4xl">
+          <div className="space-y-4">
+            <label className="text-xs text-slate-400 block">Vendor name *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value, allocations: [] })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
+            <div className="grid grid-cols-2 gap-4">
+              <label className="text-xs text-slate-400">Payment made (£) *<input type="number" value={creating.amount || ""} onChange={e => setCreating({ ...creating, amount: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Payment date *<input type="date" value={creating.payDate} onChange={e => setCreating({ ...creating, payDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="text-xs text-slate-400">Payment mode<select value={creating.method || "bank"} onChange={e => setCreating({ ...creating, method: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option><option value="card">Card</option></select></label>
+              <label className="text-xs text-slate-400">Paid through *<select value={creating.bankCode || "1010"} onChange={e => setCreating({ ...creating, bankCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="1010">Bank (1010)</option><option value="1000">Petty Cash (1000)</option></select></label>
+              <label className="text-xs text-slate-400 col-span-2">Reference#<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
             </div>
+
             {creating.vendorId && (
-              <div><div className="text-xs text-slate-400 mb-1">Allocate to bills</div>
-                {vendorBills.length === 0 ? <div className="text-xs text-slate-600">No open bills for this vendor.</div> : (
-                  <div className="space-y-1">{vendorBills.map(b => { const alloc = (creating.allocations || []).find(a => a.billId === b.id); return (
-                    <div key={b.id} className="flex items-center gap-2 text-xs"><span className="flex-1 text-slate-300 font-mono">{b.billNumber}</span>
-                      <input type="number" value={alloc?.amount || ""} onChange={e => { const others = (creating.allocations || []).filter(a => a.billId !== b.id); setCreating({ ...creating, allocations: e.target.value ? [...others, { billId: b.id, amount: Number(e.target.value) }] : others }); }} placeholder="£ allocate" className="w-28 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white"/></div>
-                  ); })}</div>
-                )}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-slate-300">Outstanding bills</div>
+                  <div className="flex gap-3">
+                    <button onClick={autoApply} className="text-[11px] text-indigo-400 hover:text-indigo-300">Auto-apply</button>
+                    <button onClick={() => setCreating({ ...creating, allocations: [] })} className="text-[11px] text-indigo-400 hover:text-indigo-300">Clear applied amount</button>
+                  </div>
+                </div>
+                <div className="border border-slate-800 rounded-xl overflow-hidden">
+                  <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-2">Date</div><div className="col-span-3">Bill#</div><div className="col-span-3 text-right">Bill amount</div><div className="col-span-2 text-right">Amount due</div><div className="col-span-2 text-right">Payment</div></div>
+                  {vendorBills.length === 0 ? <div className="px-3 py-6 text-center text-xs text-slate-600">There are no bills for this vendor.</div> : vendorBills.map(b => {
+                    const gross = billGross(b);
+                    const alloc = (creating.allocations || []).find(a => a.billId === b.id);
+                    return (
+                      <div key={b.id} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
+                        <div className="col-span-2 text-slate-400">{b.billDate}</div>
+                        <div className="col-span-3 text-white font-mono">{b.billNumber}</div>
+                        <div className="col-span-3 text-right text-slate-300">£{gross.toFixed(2)}</div>
+                        <div className="col-span-2 text-right text-slate-400">£{gross.toFixed(2)}</div>
+                        <div className="col-span-2"><input type="number" value={alloc?.amount || ""} onChange={e => { const others = (creating.allocations || []).filter(a => a.billId !== b.id); setCreating({ ...creating, allocations: e.target.value ? [...others, { billId: b.id, amount: Number(e.target.value) }] : others }); }} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Summary */}
+                <div className="flex justify-end">
+                  <div className="w-72 space-y-1.5 text-sm bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
+                    <div className="flex justify-between text-slate-400"><span>Amount paid</span><span className="text-white">£{(Number(creating.amount)||0).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-slate-400"><span>Amount used for payments</span><span className="text-white">£{totalAllocated.toFixed(2)}</span></div>
+                    <div className={`flex justify-between font-semibold ${amountInExcess < 0 ? "text-red-400" : "text-amber-300"}`}><span>{amountInExcess < 0 ? "Over-allocated" : "Amount in excess"}</span><span>£{Math.abs(amountInExcess).toFixed(2)}</span></div>
+                  </div>
+                </div>
               </div>
             )}
-            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Record payment"}</button></div>
+            <label className="text-xs text-slate-400 block">Notes (internal — not visible to vendor)<textarea value={creating.notes || ""} onChange={e => setCreating({ ...creating, notes: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+            {amountInExcess < 0 && <div className="text-xs text-red-400">Allocated more than the payment amount — reduce allocations.</div>}
+            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy || amountInExcess < 0} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Record payment"}</button></div>
           </div>
         </Modal>
       )}

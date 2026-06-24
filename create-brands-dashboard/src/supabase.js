@@ -8772,7 +8772,7 @@ const DIST_ENTITY = "brand-distribution";
 const mapDistPO = (o) => ({
   id: o.id, poNumber: o.po_number || "", vendorId: o.vendor_id || null, status: o.status || "draft",
   orderDate: o.order_date || null, expectedDate: o.expected_date || null, note: o.note || "",
-  vatMode: o.vat_mode || "exclusive", discountPercent: Number(o.discount_percent) || 0, reference: o.reference || "", paymentTerms: o.payment_terms || "",
+  vatMode: o.vat_mode || "exclusive", discountPercent: Number(o.discount_percent) || 0, discountType: o.discount_type || "percent", reference: o.reference || "", paymentTerms: o.payment_terms || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_purchase_order_lines || []).map(mapDistPOLine),
 });
 const mapDistPOLine = (l) => ({ id: l.id, poId: l.po_id, itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null });
@@ -8785,7 +8785,7 @@ const mapDistGRNLine = (l) => ({ id: l.id, grnId: l.grn_id, itemId: l.item_id, b
 const mapDistBill = (b) => ({
   id: b.id, billNumber: b.bill_number || "", vendorId: b.vendor_id || null, poId: b.po_id || null, grnId: b.grn_id || null,
   billDate: b.bill_date || null, dueDate: b.due_date || null, status: b.status || "open", note: b.note || "",
-  vatMode: b.vat_mode || "exclusive", discountPercent: Number(b.discount_percent) || 0, reference: b.reference || "", paymentTerms: b.payment_terms || "",
+  vatMode: b.vat_mode || "exclusive", discountPercent: Number(b.discount_percent) || 0, discountType: b.discount_type || "percent", reference: b.reference || "", paymentTerms: b.payment_terms || "",
   posted: !!b.posted, createdBy: b.created_by || null, createdAt: b.created_at, lines: (b.dist_bill_lines || []).map(mapDistBillLine),
 });
 const mapDistBillLine = (l) => ({ id: l.id, billId: l.bill_id, itemId: l.item_id, description: l.description || "", qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null, accountCode: l.account_code || null });
@@ -8817,7 +8817,7 @@ export async function createDistPurchaseOrder(po, lines = []) {
     id, po_number: po.poNumber || `PO-${Date.now().toString().slice(-6)}`, vendor_id: po.vendorId || null,
     status: po.status || "draft", order_date: po.orderDate || new Date().toISOString().slice(0, 10),
     expected_date: po.expectedDate || null, note: po.note || null, created_by: po.createdBy || null,
-    vat_mode: po.vatMode || "exclusive", discount_percent: Number(po.discountPercent) || 0,
+    vat_mode: po.vatMode || "exclusive", discount_percent: Number(po.discountPercent) || 0, discount_type: po.discountType || "percent",
     reference: po.reference || null, payment_terms: po.paymentTerms || null,
   };
   const { error } = await supabase.from("dist_purchase_orders").insert(row);
@@ -8911,22 +8911,35 @@ export async function postDistBill(bill, lines = []) {
     id, bill_number: bill.billNumber || `BILL-${Date.now().toString().slice(-6)}`, vendor_id: bill.vendorId || null,
     po_id: bill.poId || null, grn_id: bill.grnId || null, bill_date: billDate, due_date: bill.dueDate || null,
     status: "open", note: bill.note || null, created_by: bill.createdBy || null, posted: false,
-    vat_mode: bill.vatMode || "exclusive", discount_percent: Number(bill.discountPercent) || 0,
+    vat_mode: bill.vatMode || "exclusive", discount_percent: Number(bill.discountPercent) || 0, discount_type: bill.discountType || "percent",
     reference: bill.reference || null, payment_terms: bill.paymentTerms || null,
   };
   const { error } = await supabase.from("dist_bills").insert(head);
   if (error) throw error;
 
   const inclusive = (bill.vatMode || "exclusive") === "inclusive";
-  const discPct = Number(bill.discountPercent) || 0;
+  const discVal = Number(bill.discountPercent) || 0;
+  const discType = bill.discountType || "percent";
   const validLines = lines.filter(l => Number(l.qty) !== 0 || Number(l.unitPrice) !== 0);
-  let net = 0, vat = 0;
+
+  // First pass: line net before discount (back VAT out if inclusive).
+  const lineNets = [];
   for (const l of validLines) {
     const pct = await distTaxPercent(l.taxRateId);
     const raw = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
-    // VAT-inclusive: entered price already contains VAT, so back it out.
-    let lineNet = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
-    lineNet = lineNet * (1 - discPct / 100); // apply header discount to net
+    const baseNet = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
+    lineNets.push({ l, pct, baseNet });
+  }
+  const subtotal = lineNets.reduce((s, x) => s + x.baseNet, 0);
+  // Discount factor: percent applies directly; a £ value is spread proportionally
+  // across the document net (so each line is reduced by the same ratio).
+  const factor = discType === "value"
+    ? (subtotal > 0 ? Math.max(0, 1 - discVal / subtotal) : 1)
+    : (1 - discVal / 100);
+
+  let net = 0, vat = 0;
+  for (const { l, pct, baseNet } of lineNets) {
+    const lineNet = baseNet * factor;
     net += lineNet; vat += lineNet * pct / 100;
     await supabase.from("dist_bill_lines").insert({
       id: distId("dbilll"), bill_id: id, item_id: l.itemId || null, description: l.description || null,
@@ -8971,7 +8984,7 @@ export async function postDistBillPayment(pay, allocations = []) {
   const head = {
     id, payment_number: pay.paymentNumber || `PAY-${Date.now().toString().slice(-6)}`, vendor_id: pay.vendorId || null,
     pay_date: payDate, amount, method: pay.method || "bank", bank_code: pay.bankCode || "1010",
-    reference: pay.reference || null, created_by: pay.createdBy || null, posted: false,
+    reference: pay.reference || null, notes: pay.notes || null, created_by: pay.createdBy || null, posted: false,
   };
   const { error } = await supabase.from("dist_bill_payments").insert(head);
   if (error) throw error;
