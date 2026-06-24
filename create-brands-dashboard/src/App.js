@@ -152,6 +152,8 @@ import {
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
+  updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
+  fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6123,6 +6125,9 @@ function DistDocLinkProvider({ children }) {
         } else if (top.type === "customer") {
           const customers = await fetchDistContacts({ kind: "customer" });
           if (alive) setObj(customers.find(c => c.id === top.id) || null);
+        } else if (top.type === "vendor") {
+          const vendors = await fetchDistContacts({ kind: "vendor" });
+          if (alive) setObj(vendors.find(v => v.id === top.id) || null);
         } else { setObj({ id: top.id }); }
       } catch { if (alive) setObj(null); }
     })();
@@ -6135,8 +6140,12 @@ function DistDocLinkProvider({ children }) {
       {top && top.type === "invoice" && <DistInvoiceDetail invoiceId={top.id} onClose={close}/>}
       {top && top.type === "pick" && <DistPickDetail pickId={top.id} onClose={close}/>}
       {top && top.type === "dispatch" && <DistDispatchDetail dispatchId={top.id} onClose={close}/>}
+      {top && top.type === "po" && <DistPODetail poId={top.id} onClose={close}/>}
+      {top && top.type === "grn" && <DistGRNDetail grnId={top.id} onClose={close}/>}
+      {top && top.type === "bill" && <DistBillDetail billId={top.id} onClose={close}/>}
       {top && top.type === "so" && obj && <DistSalesOrderDetail so={obj} customer={aux.customers.find(c => c.id === obj.customerId)} items={aux.items} taxRates={aux.taxRates} onClose={close} onEdit={close}/>}
       {top && top.type === "customer" && obj && <DistCustomerDetail customer={obj} onClose={close} onEdit={close}/>}
+      {top && top.type === "vendor" && obj && <DistVendorDetail vendor={obj} onClose={close} onEdit={close}/>}
     </DistDocLinkContext.Provider>
   );
 }
@@ -6227,9 +6236,170 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
 }
 
 // ── VENDORS (rich Zoho-style form) ──
+// ── BUY-SIDE DRILL-DOWN DETAILS (Zoho-style) ────────────────────────────────
+function DistPODetail({ poId, onClose, onEdit, onDelete }) {
+  const { openDoc } = useDistDocLink();
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistPODetail(poId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [poId]);
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  return (
+    <Modal onClose={onClose} title={d?.poNumber || "Purchase Order"} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d.status==="received"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d.status||"").toUpperCase()}</span>}
+          {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
+          {onDelete && <button onClick={onDelete} className={`${onEdit?"":"ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (<>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Vendor</div><div className="text-sm"><DocLink type="vendor" id={d.vendor?.id}>{d.vendor?.displayName || "—"}</DocLink></div></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Order date</div><div className="text-sm text-white">{fmtDate(d.orderDate)}</div></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Expected</div><div className="text-sm text-white">{fmtDate(d.expectedDate)}</div></div>
+          </div>
+          <div className="rounded-xl border border-slate-800 overflow-hidden">
+            <table className="w-full text-xs"><thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+              <tbody>{d.lines.map((l, i) => (<tr key={i} className="border-t border-slate-800/60"><td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td><td className="px-3 py-2 text-right text-slate-300">{l.qty}</td><td className="px-3 py-2 text-right text-slate-300">{gbp(l.unitPrice)}</td><td className="px-3 py-2 text-right text-white">{gbp(l.amount)}</td></tr>))}</tbody></table>
+          </div>
+          <div className="flex justify-end"><div className="w-56"><div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-800"><span className="text-white">Total</span><span className="text-white">{gbp(d.total)}</span></div></div></div>
+          {(d.grns.length > 0 || d.bills.length > 0) && (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Linked documents</div>
+              {d.grns.map(g => <div key={g.id} className="text-xs"><span className="text-slate-500">Goods Receipt: </span><DocLink type="grn" id={g.id} className="font-mono">{g.grnNumber}</DocLink></div>)}
+              {d.bills.map(b => <div key={b.id} className="text-xs"><span className="text-slate-500">Bill: </span><DocLink type="bill" id={b.id} className="font-mono">{b.billNumber}</DocLink></div>)}
+            </div>
+          )}
+        </>)}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function DistGRNDetail({ grnId, onClose, onDelete }) {
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistGRNDetail(grnId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [grnId]);
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  return (
+    <Modal onClose={onClose} title={d?.grnNumber || "Goods Receipt"} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">{d?.posted ? "RECEIVED" : "DRAFT"}</span>
+          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete (reverse)</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (<>
+          <div className="grid grid-cols-4 gap-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Vendor</div><div className="text-sm"><DocLink type="vendor" id={d.vendor?.id}>{d.sourceKind==="central_kitchen"?"Central Kitchen":(d.vendor?.displayName||"—")}</DocLink></div></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">PO</div><div className="text-sm font-mono"><DocLink type="po" id={d.poId} className="font-mono">{d.poNumber||"—"}</DocLink></div></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Received</div><div className="text-sm text-white">{fmtDate(d.receivedDate)}</div></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Stock value</div><div className="text-sm text-emerald-300 font-semibold">{gbp(d.total)}</div></div>
+          </div>
+          <div className="rounded-xl border border-slate-800 overflow-hidden">
+            <table className="w-full text-xs"><thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch / Expiry</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Landed cost</th><th className="text-right px-3 py-2">Value</th></tr></thead>
+              <tbody>{d.lines.map((l, i) => (<tr key={i} className="border-t border-slate-800/60"><td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td><td className="px-3 py-2 text-slate-400">{l.expiryDate ? `exp ${fmtDate(l.expiryDate)}` : (l.batchId||"—")}</td><td className="px-3 py-2 text-right text-white font-semibold">{l.qty}</td><td className="px-3 py-2 text-right text-slate-300">{gbp(l.landedCost)}</td><td className="px-3 py-2 text-right text-white">{gbp(l.amount)}</td></tr>))}</tbody></table>
+          </div>
+          <p className="text-[11px] text-slate-500">Deleting reverses the stock (removes the received quantities) and posts a reversing journal (Dr GRNI / Cr Stock). Blocked if a bill references it.</p>
+        </>)}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function DistBillDetail({ billId, onClose, onDelete }) {
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistBillDetail(billId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [billId]);
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  const badge = (s) => s==="paid"?"bg-emerald-900/50 text-emerald-300":s==="overdue"?"bg-red-900/50 text-red-300":s==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-indigo-900/50 text-indigo-300";
+  return (
+    <Modal onClose={onClose} title={d?.billNumber || "Bill"} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${badge(d.status)}`}>{d.status.replace("_"," ").toUpperCase()}</span>}
+          {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
+        {d && (<>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+            <div className="flex justify-between items-start">
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">From Vendor</div><div className="text-sm font-semibold mt-0.5"><DocLink type="vendor" id={d.vendor?.id} className="font-semibold">{d.vendor?.displayName||"—"}</DocLink></div>{d.vendor?.billingAddress && <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{d.vendor.billingAddress}</div>}</div>
+              <div className="text-right"><div className="text-2xl font-bold text-white tracking-wide">BILL</div><div className="text-xs text-slate-400">Bill# <span className="font-mono text-white">{d.billNumber}</span></div><div className="mt-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Due</div><div className="text-lg font-bold text-amber-300">{gbp(d.balance)}</div></div></div>
+            </div>
+            <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-slate-800/60">
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Bill date</div><div className="text-sm text-white">{fmtDate(d.billDate)}</div></div>
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Due date</div><div className="text-sm text-white">{fmtDate(d.dueDate)}</div></div>
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">PO</div><div className="text-sm font-mono"><DocLink type="po" id={d.poId} className="font-mono">{d.poNumber||"—"}</DocLink></div></div>
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Goods Receipt</div><div className="text-sm font-mono"><DocLink type="grn" id={d.grnId} className="font-mono">{d.grnNumber||"—"}</DocLink></div></div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-800 overflow-hidden">
+            <table className="w-full text-xs"><thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2 w-8">#</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">VAT%</th><th className="text-right px-3 py-2">VAT</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+              <tbody>{d.lines.map((l, i) => (<tr key={i} className="border-t border-slate-800/60"><td className="px-3 py-2 text-slate-500">{i+1}</td><td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td><td className="px-3 py-2 text-right text-slate-300">{l.qty}</td><td className="px-3 py-2 text-right text-slate-300">{gbp(l.rate)}</td><td className="px-3 py-2 text-right text-slate-400">{l.vatPct?`${l.vatPct}%`:"0"}</td><td className="px-3 py-2 text-right text-slate-400">{gbp(l.vat)}</td><td className="px-3 py-2 text-right text-white">{gbp(l.amount)}</td></tr>))}</tbody></table>
+          </div>
+          <div className="flex justify-end"><div className="w-64 space-y-1.5">
+            <div className="flex justify-between text-xs"><span className="text-slate-400">Subtotal</span><span className="text-white">{gbp(d.net)}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-slate-400">VAT</span><span className="text-white">{gbp(d.vat)}</span></div>
+            <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-800"><span className="text-white">Total</span><span className="text-white">{gbp(d.grand)}</span></div>
+            {d.paid > 0 && <div className="flex justify-between text-xs"><span className="text-slate-400">Paid</span><span className="text-emerald-300">−{gbp(d.paid)}</span></div>}
+            <div className="flex justify-between text-sm font-bold"><span className="text-white">Balance Due</span><span className="text-amber-300">{gbp(d.balance)}</span></div>
+          </div></div>
+          {d.paid > 0 && <p className="text-[11px] text-amber-300/70">This bill has payments — delete is blocked until the payment is removed.</p>}
+        </>)}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function DistVendorDetail({ vendor, onClose, onEdit }) {
+  const [tab, setTab] = useState("overview");
+  const [d, setD] = useState(null); const [err, setErr] = useState("");
+  useEffect(() => { let a = true; fetchDistVendorDetail(vendor.id).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [vendor.id]);
+  const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
+  const TABS = [["overview","Overview"],["transactions","Transactions"]];
+  return (
+    <Modal onClose={onClose} title={vendor.displayName} maxW="max-w-3xl">
+      <div className="space-y-4">
+        <div className="flex items-center gap-1 border-b border-slate-800 -mt-1">
+          {TABS.map(([k,l]) => <button key={k} onClick={() => setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-400 hover:text-white"}`}>{l}</button>)}
+          {onEdit && <button onClick={onEdit} className="ml-auto mb-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        {tab === "overview" && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="space-y-3 lg:col-span-1">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-sm font-bold text-white">{vendor.companyName || vendor.displayName}</div>{vendor.email && <div className="text-xs text-indigo-300 mt-0.5">{vendor.email}</div>}{(vendor.workPhone||vendor.phone) && <div className="text-xs text-slate-400 mt-0.5">{vendor.workPhone||vendor.phone}</div>}</div>
+              {vendor.billingAddress && <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Address</div><div className="text-xs text-slate-300 whitespace-pre-line mt-0.5">{vendor.billingAddress}</div></div>}
+            </div>
+            <div className="lg:col-span-2"><div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Payable (we owe)</div><div className="text-2xl font-bold text-amber-300">{d ? gbp(d.payable) : "…"}</div></div></div>
+          </div>
+        )}
+        {tab === "transactions" && (d ? (
+          <div className="space-y-4">
+            <DistDetailSection title="Bills" count={d.bills.length}>{d.bills.length===0?<DistEmptyRow text="No bills."/>:(
+              <table className="w-full text-xs"><thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Bill#</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Balance</th></tr></thead><tbody>{d.bills.map(b => (<tr key={b.id} className="border-t border-slate-800/60"><td className="px-3 py-2 text-slate-400">{fmtDate(b.date)}</td><td className="px-3 py-2"><DocLink type="bill" id={b.id} className="font-mono">{b.billNumber}</DocLink></td><td className="px-3 py-2 text-right text-white">{gbp(b.amount)}</td><td className="px-3 py-2 text-right text-amber-300">{gbp(b.balance)}</td></tr>))}</tbody></table>
+            )}</DistDetailSection>
+            <DistDetailSection title="Purchase Orders" count={d.purchaseOrders.length}>{d.purchaseOrders.length===0?<DistEmptyRow text="No purchase orders."/>:(
+              <table className="w-full text-xs"><thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">PO#</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead><tbody>{d.purchaseOrders.map(p => (<tr key={p.id} className="border-t border-slate-800/60"><td className="px-3 py-2 text-slate-400">{fmtDate(p.date)}</td><td className="px-3 py-2"><DocLink type="po" id={p.id} className="font-mono">{p.poNumber}</DocLink></td><td className="px-3 py-2 text-right text-white">{gbp(p.total)}</td><td className="px-3 py-2 pl-4 text-slate-400 capitalize">{(p.status||"").replace(/_/g," ")}</td></tr>))}</tbody></table>
+            )}</DistDetailSection>
+          </div>
+        ) : <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>)}
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function DistVendorsView({ currentUser, stores = [] }) {
   const [vendors, setVendors] = useState([]); const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false);
+  const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false); const [search, setSearch] = useState(""); const [importOpen, setImportOpen] = useState(false); const [detail, setDetail] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { setVendors(await fetchDistContacts({ kind: "vendor" })); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const filtered = useMemo(() => { const q = search.trim().toLowerCase(); return q ? vendors.filter(v => `${v.displayName} ${v.companyName} ${v.email}`.toLowerCase().includes(q)) : vendors; }, [vendors, search]);
@@ -6248,16 +6418,26 @@ function DistVendorsView({ currentUser, stores = [] }) {
       </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No vendors yet. Add suppliers (and the Central Kitchen) here.</div>}
-          {filtered.map(v => (
-            <button key={v.id} onClick={() => setEdit(v)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50">
-              <div><span className="text-white">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CENTRAL KITCHEN</span>}<div className="text-[11px] text-slate-500">{v.companyName || v.email || "—"}{v.workPhone ? ` · ${v.workPhone}` : ""}</div></div>
-              <Edit size={13} className="text-slate-600"/>
-            </button>
-          ))}
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {filtered.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No vendors yet. Add suppliers (and the Central Kitchen) here.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Name</th><th className="text-left px-4 py-2.5 font-semibold">Company</th><th className="text-left px-4 py-2.5 font-semibold">Email</th><th className="text-left px-4 py-2.5 font-semibold">Phone</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
+                <tbody>{filtered.map(v => (
+                  <tr key={v.id} onClick={() => setDetail(v)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                    <td className="px-4 py-2.5"><span className="text-indigo-300 font-medium hover:underline">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CENTRAL KITCHEN</span>}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{v.companyName || "—"}</td>
+                    <td className="px-4 py-2.5 text-slate-400">{v.email || "—"}</td>
+                    <td className="px-4 py-2.5 text-slate-400">{v.workPhone || v.mobile || v.phone || "—"}</td>
+                    <td className="px-2 py-2.5 text-center"><button onClick={(e) => { e.stopPropagation(); setEdit(v); }} className="text-slate-600 hover:text-indigo-300"><Edit size={13}/></button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
+      {detail && <DistVendorDetail vendor={detail} onClose={() => setDetail(null)} onEdit={() => { setEdit(detail); setDetail(null); }}/>}
       {importOpen && <DistContactImportModal kind="vendor" stores={stores} onClose={() => setImportOpen(false)} onDone={load}/>}
       {edit && (
         <Modal onClose={() => setEdit(null)} title={edit.id ? "Edit vendor" : "New vendor"} maxW="max-w-3xl">
@@ -6307,16 +6487,21 @@ function DistVendorsView({ currentUser, stores = [] }) {
 // ── PURCHASE ORDERS ──
 function DistPOView({ currentUser }) {
   const [pos, setPos] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
-  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [p, v, it, tx] = await Promise.all([fetchDistPurchaseOrders(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setPos(p); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const newDoc = () => setCreating({ vendorId: "", orderDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", paymentTerms: "due_on_receipt", lines: [{ itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }] });
   const save = async (status) => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
     setBusy(true); setErr("");
-    try { await createDistPurchaseOrder({ ...creating, status, createdBy: currentUser?.id }, creating.lines || []); setCreating(null); await load(); }
+    try {
+      if (creating.id) await updateDistPurchaseOrder({ ...creating }, creating.lines || []);
+      else await createDistPurchaseOrder({ ...creating, status, createdBy: currentUser?.id }, creating.lines || []);
+      setCreating(null); await load();
+    }
     catch (e) { setErr(e.message); } setBusy(false);
   };
+  const editPO = (po) => setCreating({ ...po, lines: (po.lines || []).map(l => ({ ...l })) });
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
   const vendor = creating ? vendors.find(v => v.id === creating.vendorId) : null;
   return (
@@ -6324,18 +6509,34 @@ function DistPOView({ currentUser }) {
       <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pos.length} purchase order{pos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {pos.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No purchase orders yet.</div>}
-          {pos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
-            <div key={po.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{po.poNumber}</span> <span className="text-slate-400">{vName(po.vendorId)}</span><div className="text-[11px] text-slate-500">{po.lines.length} line{po.lines.length!==1?"s":""} · {po.orderDate}</div></div>
-              <div className="flex items-center gap-3"><span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${po.status==="received"?"bg-emerald-900/50 text-emerald-300":po.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{po.status}</span></div>
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {pos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No purchase orders yet.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">PO#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
+                <tbody>{pos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
+                  <tr key={po.id} onClick={() => setDetailId(po.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                    <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{po.orderDate}</td>
+                    <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{po.poNumber}</span></td>
+                    <td className="px-4 py-2.5 text-slate-300">{vName(po.vendorId)}</td>
+                    <td className="px-4 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full ${po.status==="received"?"bg-emerald-900/50 text-emerald-300":po.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{po.status}</span></td>
+                    <td className="px-4 py-2.5 text-right text-white whitespace-nowrap">{gbp(t.grandTotal)}</td>
+                    <td className="px-2 py-2.5 text-center"><button onClick={(e) => { e.stopPropagation(); editPO(po); }} className="text-slate-600 hover:text-indigo-300"><Edit size={13}/></button></td>
+                  </tr>
+                ); })}</tbody>
+              </table>
             </div>
-          ); })}
+          )}
         </div>
       )}
+      {detailId && <DistPODetail poId={detailId} onClose={() => setDetailId(null)} onEdit={async () => { const pd = await fetchDistPODetail(detailId).catch(() => null); if (pd) { editPO(pos.find(p => p.id === detailId)); setDetailId(null); } }} onDelete={async () => {
+        if (!window.confirm("Delete this purchase order? Blocked if it has receipts or bills.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistPurchaseOrder(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); alert(e.message); }
+        setBusy(false);
+      }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="New purchase order" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.poNumber || "purchase order"}` : "New purchase order"} maxW="max-w-4xl">
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <label className="text-xs text-slate-400">Vendor *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
@@ -6358,7 +6559,7 @@ function DistPOView({ currentUser }) {
 // ── GOODS IN (same Zoho table format; raises stock + journal) ──
 function DistGRNView({ currentUser }) {
   const [grns, setGrns] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
-  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [confirming, setConfirming] = useState(null);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [confirming, setConfirming] = useState(null); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [g, v, it, tx] = await Promise.all([fetchDistGoodsReceipts(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setGrns(g); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const itemName = (id) => { const it = items.find(x => x.id === id); return it ? `${it.name} (${it.sku})` : id; };
@@ -6398,16 +6599,31 @@ function DistGRNView({ currentUser }) {
         </div>
       )}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {grns.filter(g => !(g.status === "draft" && !g.posted)).length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No posted receipts yet. This is the event that raises stock.</div>}
-          {grns.filter(g => !(g.status === "draft" && !g.posted)).map(g => (
-            <div key={g.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{g.grnNumber}</span> <span className="text-slate-400">{vName(g.vendorId)}</span>{g.sourceKind==="central_kitchen" && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK</span>}<div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length!==1?"s":""} · {g.receivedDate}</div></div>
-              {g.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">posted</span>}
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {grns.filter(g => !(g.status === "draft" && !g.posted)).length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No posted receipts yet. This is the event that raises stock.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">GRN#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-right px-4 py-2.5 font-semibold">Lines</th><th className="text-left px-4 py-2.5 font-semibold pl-6">Status</th></tr></thead>
+                <tbody>{grns.filter(g => !(g.status === "draft" && !g.posted)).map(g => (
+                  <tr key={g.id} onClick={() => setDetailId(g.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                    <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{g.receivedDate}</td>
+                    <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{g.grnNumber}</span></td>
+                    <td className="px-4 py-2.5 text-slate-300">{g.sourceKind==="central_kitchen" ? <span>Central Kitchen <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK</span></span> : vName(g.vendorId)}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">{g.lines.length}</td>
+                    <td className="px-4 py-2.5 pl-6">{g.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">received</span>}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
             </div>
-          ))}
+          )}
         </div>
       )}
+      {detailId && <DistGRNDetail grnId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+        if (!window.confirm("Delete this goods receipt? This reverses the stock (removes received qty) and posts a reversing journal. Blocked if a bill references it.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistGoodsReceipt(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); alert(e.message); }
+        setBusy(false);
+      }}/>}
       {/* Confirm CK draft modal */}
       {confirming && (
         <Modal onClose={() => setConfirming(null)} title={`Confirm ${confirming.grnNumber}`} maxW="max-w-3xl">
@@ -6461,9 +6677,9 @@ function DistGRNView({ currentUser }) {
 
 // ── BILLS (Zoho table format) ──
 function DistBillsView({ currentUser }) {
-  const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map()); const [detailId, setDetailId] = useState(null);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { setLoading(true); try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const load = useCallback(async () => { setLoading(true); try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
   const save = async () => {
@@ -6478,16 +6694,48 @@ function DistBillsView({ currentUser }) {
       <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{bills.length} bill{bills.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {bills.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No bills yet.</div>}
-          {bills.map(b => { const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType); return (
-            <div key={b.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{b.billNumber}</span> <span className="text-slate-400">{vName(b.vendorId)}</span><div className="text-[11px] text-slate-500">{b.billDate}{b.dueDate?` · due ${b.dueDate}`:""}</div></div>
-              <div className="flex items-center gap-3"><span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${b.status==="paid"?"bg-emerald-900/50 text-emerald-300":b.status==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-slate-800 text-slate-400"}`}>{b.status}</span></div>
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {bills.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No bills yet.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Bill#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-left px-4 py-2.5 font-semibold">Due Date</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="text-right px-4 py-2.5 font-semibold">Balance Due</th></tr></thead>
+                <tbody>{bills.map(b => {
+                  const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType);
+                  const amount = t.grandTotal;
+                  const paid = paidMap.get(b.id) || 0;
+                  const balance = +(amount - paid).toFixed(2);
+                  let label = "Open", tone = "text-slate-400";
+                  if (balance <= 0.005) { label = "Paid"; tone = "text-emerald-400"; }
+                  else if (b.dueDate) {
+                    const today = new Date(); today.setHours(0,0,0,0); const due = new Date(b.dueDate); due.setHours(0,0,0,0);
+                    const days = Math.round((due - today) / 86400000);
+                    if (days < 0) { label = `Overdue by ${Math.abs(days)} day${Math.abs(days)!==1?"s":""}`; tone = "text-orange-400"; }
+                    else if (days === 0) { label = "Due Today"; tone = "text-blue-400"; }
+                    else { label = `Due in ${days} day${days!==1?"s":""}`; tone = "text-slate-300"; }
+                  } else if (paid > 0) { label = "Partially Paid"; tone = "text-amber-400"; }
+                  return (
+                    <tr key={b.id} onClick={() => setDetailId(b.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                      <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{b.billDate}</td>
+                      <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{b.billNumber}</span></td>
+                      <td className="px-4 py-2.5 text-slate-300">{vName(b.vendorId)}</td>
+                      <td className={`px-4 py-2.5 text-xs font-semibold ${tone}`}>{label}</td>
+                      <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{b.dueDate || "—"}</td>
+                      <td className="px-4 py-2.5 text-right text-white whitespace-nowrap">{gbp(amount)}</td>
+                      <td className={`px-4 py-2.5 text-right font-semibold whitespace-nowrap ${balance > 0 ? "text-amber-300" : "text-slate-500"}`}>{gbp(balance)}</td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
             </div>
-          ); })}
+          )}
         </div>
       )}
+      {detailId && <DistBillDetail billId={detailId} onClose={() => setDetailId(null)} onDelete={async () => {
+        if (!window.confirm("Delete this bill? This reverses the GRNI/VAT/AP journal. Blocked if it has payments.")) return;
+        setBusy(true); setErr("");
+        try { await deleteDistBill(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); alert(e.message); }
+        setBusy(false);
+      }}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title="New bill" maxW="max-w-4xl">
           <div className="space-y-4">
@@ -6545,14 +6793,30 @@ function DistPaymentsView({ currentUser }) {
       <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pays.length} payment{pays.length!==1?"s":""}</div><button onClick={() => setCreating({ method:"bank", bankCode:"1010", payDate: new Date().toISOString().slice(0,10), allocations: [] })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New payment</button></div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {pays.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No payments yet.</div>}
-          {pays.map(p => (
-            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{p.paymentNumber}</span> <span className="text-slate-400">{vName(p.vendorId)}</span><div className="text-[11px] text-slate-500">{p.payDate} · {p.method} · {p.allocations.length} bill{p.allocations.length!==1?"s":""}</div></div>
-              <span className="text-white font-semibold">£{p.amount.toFixed(2)}</span>
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {pays.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No payments yet.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Payment#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Method</th><th className="text-right px-4 py-2.5 font-semibold">Bills</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
+                <tbody>{pays.map(p => (
+                  <tr key={p.id} className="border-t border-slate-800/50 hover:bg-slate-800/40">
+                    <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{p.payDate}</td>
+                    <td className="px-4 py-2.5 font-mono text-slate-200">{p.paymentNumber}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{vName(p.vendorId)}</td>
+                    <td className="px-4 py-2.5 text-slate-400 capitalize">{p.method}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">{p.allocations.length}</td>
+                    <td className="px-4 py-2.5 text-right text-white font-semibold whitespace-nowrap">{gbp(p.amount)}</td>
+                    <td className="px-2 py-2.5 text-center"><button onClick={async () => {
+                      if (!window.confirm("Delete this payment? This reverses the AP/Bank journal and re-opens the bills it settled.")) return;
+                      setBusy(true); setErr("");
+                      try { await deleteDistBillPayment(p.id); await load(); } catch (e) { setErr(e.message); alert(e.message); }
+                      setBusy(false);
+                    }} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
             </div>
-          ))}
+          )}
         </div>
       )}
       {creating && (

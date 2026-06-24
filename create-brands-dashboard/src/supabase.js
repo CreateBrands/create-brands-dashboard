@@ -9246,8 +9246,210 @@ export async function postDistBillPayment(pay, allocations = []) {
 }
 
 // ============================================================================
-// DISTRIBUTION — SELL SIDE (A): customers (helpers), price lists, sales orders.
-// Orders COMMIT stock: committed = SUM open SO line qty. available = on_hand - committed.
+// BUY-SIDE: edit/delete (with reversals) + detail aggregators — sell-side parity
+// ============================================================================
+
+// ── Purchase Orders: update + delete (POs don't post stock or journals) ──
+export async function updateDistPurchaseOrder(po, lines = []) {
+  if (!po.id) throw new Error("PO id required for update.");
+  await supabase.from("dist_purchase_orders").update({
+    vendor_id: po.vendorId || null, order_date: po.orderDate || null, expected_date: po.expectedDate || null,
+    note: po.note || null, vat_mode: po.vatMode || "exclusive", discount_percent: Number(po.discountPercent) || 0,
+    discount_type: po.discountType || "percent", reference: po.reference || null, payment_terms: po.paymentTerms || null,
+  }).eq("id", po.id);
+  await supabase.from("dist_purchase_order_lines").delete().eq("po_id", po.id);
+  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
+    id: distId("dpol"), po_id: po.id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+  }));
+  if (lr.length) { const { error } = await supabase.from("dist_purchase_order_lines").insert(lr); if (error) throw error; }
+  return po.id;
+}
+export async function deleteDistPurchaseOrder(poId) {
+  const grns = await fetchDistGoodsReceipts().catch(() => []);
+  if (grns.some(g => g.poId === poId)) throw new Error("Cannot delete: this PO has goods receipts. Delete those first.");
+  const bills = await fetchDistBills({}).catch(() => []);
+  if (bills.some(b => b.poId === poId)) throw new Error("Cannot delete: this PO has bills. Delete those first.");
+  await supabase.from("dist_purchase_order_lines").delete().eq("po_id", poId);
+  const { error } = await supabase.from("dist_purchase_orders").delete().eq("id", poId);
+  if (error) throw error;
+  return true;
+}
+
+// ── Goods Receipt: delete reverses stock (negative movements) + Dr GRNI/Cr Stock ──
+export async function deleteDistGoodsReceipt(grnId) {
+  const bills = await fetchDistBills({}).catch(() => []);
+  if (bills.some(b => b.grnId === grnId)) throw new Error("Cannot delete: a bill references this receipt. Delete the bill first.");
+  const { data: head } = await supabase.from("dist_goods_receipts").select("*").eq("id", grnId).maybeSingle();
+  if (!head) throw new Error("Goods receipt not found.");
+  const { data: lines } = await supabase.from("dist_goods_receipt_lines").select("*").eq("grn_id", grnId);
+  let totalValue = 0;
+  for (const l of lines || []) {
+    // Reverse the +receipt with a -issue movement on the same batch.
+    await addDistMovement({
+      itemId: l.item_id, batchId: l.batch_id, qty: -Math.abs(Number(l.qty) || 0), type: "receipt_reversal",
+      sourceKind: "goods_receipt_reversal", sourceRef: `distrecvREV:${grnId}:${l.item_id}:${l.batch_id}`,
+    });
+    totalValue += (Number(l.qty) || 0) * (Number(l.landed_cost) || 0);
+  }
+  if (totalValue > 0) {
+    const [stock, grni] = await Promise.all([resolveAccountForEntity(DIST_ENTITY, "1200"), resolveAccountForEntity(DIST_ENTITY, "2050")]);
+    if (stock && grni) {
+      try {
+        await postJournalEntry({ entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of goods receipt ${head.grn_number}`, sourceKind: "dist_goods_receipt_reversal",
+          sourceRef: `distrecvREV:${grnId}`, lines: [{ accountId: grni, amount: +totalValue.toFixed(2) }, { accountId: stock, amount: -totalValue.toFixed(2) }] });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  // Delete the batches this GRN created, then lines + header.
+  for (const l of lines || []) { if (l.batch_id) await supabase.from("dist_batches").delete().eq("id", l.batch_id); }
+  await supabase.from("dist_goods_receipt_lines").delete().eq("grn_id", grnId);
+  const { error } = await supabase.from("dist_goods_receipts").delete().eq("id", grnId);
+  if (error) throw error;
+  if (head.po_id) await supabase.from("dist_purchase_orders").update({ status: "open" }).eq("id", head.po_id);
+  return true;
+}
+
+// ── Bill: delete reverses Dr GRNI+VAT / Cr AP. Blocked if it has payments. ──
+export async function deleteDistBill(billId) {
+  const paidMap = await fetchDistBillPaidMap([billId]).catch(() => new Map());
+  if ((paidMap.get(billId) || 0) > 0.005) throw new Error("Cannot delete: this bill has payments. Remove the payment first.");
+  const { data: head } = await supabase.from("dist_bills").select("*").eq("id", billId).maybeSingle();
+  if (!head) throw new Error("Bill not found.");
+  const { data: lines } = await supabase.from("dist_bill_lines").select("*").eq("bill_id", billId);
+  const mapped = (lines || []).map(l => ({ qty: l.qty, unitPrice: l.unit_price, discount: l.discount, discountType: l.discount_type, taxRateId: l.tax_rate_id }));
+  const { net, vat } = await distDocNetVat({ lines: mapped, vatMode: head.vat_mode, discountValue: head.discount_percent, discountType: head.discount_type }).catch(() => ({ net: 0, vat: 0 }));
+  const gross = +(net + vat).toFixed(2);
+  if (gross > 0) {
+    const [grni, vatAcc, ap] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "2050"), resolveAccountForEntity(DIST_ENTITY, "2100"), resolveAccountForEntity(DIST_ENTITY, "2000"),
+    ]);
+    if (grni && ap) {
+      const jlines = [{ accountId: grni, amount: -net }, { accountId: ap, amount: +gross }];
+      if (vat > 0 && vatAcc) jlines.push({ accountId: vatAcc, amount: -vat });
+      try {
+        await postJournalEntry({ entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of bill ${head.bill_number}`, sourceKind: "dist_bill_reversal",
+          sourceRef: `distbillREV:${billId}`, lines: jlines });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  await supabase.from("dist_bill_lines").delete().eq("bill_id", billId);
+  const { error } = await supabase.from("dist_bills").delete().eq("id", billId);
+  if (error) throw error;
+  return true;
+}
+
+// ── Bill payment: delete reverses Dr AP / Cr Bank + frees allocations. ──
+export async function deleteDistBillPayment(payId) {
+  const { data: head } = await supabase.from("dist_bill_payments").select("*").eq("id", payId).maybeSingle();
+  if (!head) throw new Error("Payment not found.");
+  const amount = +(Number(head.amount) || 0).toFixed(2);
+  if (amount > 0) {
+    const [ap, bank] = await Promise.all([resolveAccountForEntity(DIST_ENTITY, "2000"), resolveAccountForEntity(DIST_ENTITY, head.bank_code || "1010")]);
+    if (ap && bank) {
+      try {
+        await postJournalEntry({ entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of payment ${head.payment_number || payId}`, sourceKind: "dist_bill_payment_reversal",
+          sourceRef: `distbillpayREV:${payId}`, lines: [{ accountId: ap, amount: -amount }, { accountId: bank, amount }] });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  // Re-open bills this payment had settled.
+  const { data: allocs } = await supabase.from("dist_bill_payment_allocations").select("bill_id").eq("payment_id", payId);
+  await supabase.from("dist_bill_payment_allocations").delete().eq("payment_id", payId);
+  for (const a of allocs || []) {
+    const { data: rest } = await supabase.from("dist_bill_payment_allocations").select("amount").eq("bill_id", a.bill_id);
+    const paid = (rest || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    await supabase.from("dist_bills").update({ status: paid > 0 ? "part_paid" : "open" }).eq("id", a.bill_id);
+  }
+  const { error } = await supabase.from("dist_bill_payments").delete().eq("id", payId);
+  if (error) throw error;
+  return true;
+}
+
+// ── Detail aggregators for buy-side drill-downs ──
+export async function fetchDistPODetail(poId) {
+  const { data: head } = await supabase.from("dist_purchase_orders").select("*, dist_purchase_order_lines(*)").eq("id", poId).maybeSingle();
+  if (!head) return null;
+  const [items, vendors, grns, bills] = await Promise.all([
+    fetchDistItems().catch(() => []), fetchDistContacts({ kind: "vendor" }).catch(() => []),
+    fetchDistGoodsReceipts().catch(() => []), fetchDistBills({}).catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const vendor = vendors.find(v => v.id === head.vendor_id) || null;
+  const lines = (head.dist_purchase_order_lines || []).map(l => ({ itemId: l.item_id, item: itemById.get(l.item_id) || null, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, amount: +((Number(l.qty) || 0) * (Number(l.unit_price) || 0)).toFixed(2) }));
+  const total = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
+  return { id: head.id, poNumber: head.po_number, status: head.status, orderDate: head.order_date, expectedDate: head.expected_date,
+    reference: head.reference, vendor, lines, total,
+    grns: grns.filter(g => g.poId === poId), bills: bills.filter(b => b.poId === poId) };
+}
+
+export async function fetchDistGRNDetail(grnId) {
+  const { data: head } = await supabase.from("dist_goods_receipts").select("*, dist_goods_receipt_lines(*)").eq("id", grnId).maybeSingle();
+  if (!head) return null;
+  const [items, vendors, pos] = await Promise.all([
+    fetchDistItems().catch(() => []), fetchDistContacts({ kind: "vendor" }).catch(() => []), fetchDistPurchaseOrders({}).catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const vendor = vendors.find(v => v.id === head.vendor_id) || null;
+  const po = pos.find(p => p.id === head.po_id) || null;
+  const lines = (head.dist_goods_receipt_lines || []).map(l => ({ itemId: l.item_id, item: itemById.get(l.item_id) || null, batchId: l.batch_id, qty: Number(l.qty) || 0, landedCost: Number(l.landed_cost) || 0, expiryDate: l.expiry_date, amount: +((Number(l.qty) || 0) * (Number(l.landed_cost) || 0)).toFixed(2) }));
+  const total = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
+  return { id: head.id, grnNumber: head.grn_number, posted: !!head.posted, receivedDate: head.received_date, sourceKind: head.source_kind,
+    poId: head.po_id, poNumber: po?.poNumber || null, vendor, lines, total };
+}
+
+export async function fetchDistBillDetail(billId) {
+  const { data: head } = await supabase.from("dist_bills").select("*, dist_bill_lines(*)").eq("id", billId).maybeSingle();
+  if (!head) return null;
+  const [items, vendors, pos, grns, taxRates] = await Promise.all([
+    fetchDistItems().catch(() => []), fetchDistContacts({ kind: "vendor" }).catch(() => []),
+    fetchDistPurchaseOrders({}).catch(() => []), fetchDistGoodsReceipts().catch(() => []), fetchDistTaxRates().catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const trById = new Map(taxRates.map(t => [t.id, t]));
+  const vendor = vendors.find(v => v.id === head.vendor_id) || null;
+  const po = pos.find(p => p.id === head.po_id) || null;
+  const grn = grns.find(g => g.id === head.grn_id) || null;
+  const lines = (head.dist_bill_lines || []).map(l => {
+    const qty = Number(l.qty) || 0, rate = Number(l.unit_price) || 0, gross = qty * rate;
+    const net = l.discount_type === "percent" ? gross * (1 - (Number(l.discount) || 0) / 100) : gross - (Number(l.discount) || 0);
+    const pct = trById.get(l.tax_rate_id)?.percent || 0;
+    return { itemId: l.item_id, item: itemById.get(l.item_id) || null, qty, rate, vatPct: pct, vat: +(net * pct / 100).toFixed(2), amount: +net.toFixed(2) };
+  });
+  const net = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
+  const vat = +lines.reduce((s, l) => s + l.vat, 0).toFixed(2);
+  const grand = +(net + vat).toFixed(2);
+  const paidMap = await fetchDistBillPaidMap([billId]).catch(() => new Map());
+  const paid = paidMap.get(billId) || 0;
+  const balance = +(grand - paid).toFixed(2);
+  const overdue = balance > 0.005 && head.due_date && new Date(head.due_date) < new Date();
+  return { id: head.id, billNumber: head.bill_number, billDate: head.bill_date, dueDate: head.due_date, reference: head.reference,
+    poId: head.po_id, poNumber: po?.poNumber || null, grnId: head.grn_id, grnNumber: grn?.grnNumber || null,
+    vendor, lines, net, vat, grand, paid, balance,
+    status: balance <= 0.005 ? "paid" : overdue ? "overdue" : paid > 0 ? "part_paid" : "open" };
+}
+
+export async function fetchDistVendorDetail(vendorId) {
+  const [pos, grns, bills, payments] = await Promise.all([
+    fetchDistPurchaseOrders({ vendorId }).catch(() => []),
+    fetchDistGoodsReceipts().catch(() => []),
+    fetchDistBills({ vendorId }).catch(() => []),
+    fetchDistBillPayments({}).catch(() => []),
+  ]);
+  const paidMap = await fetchDistBillPaidMap(bills.map(b => b.id)).catch(() => new Map());
+  const billRows = bills.map(b => {
+    const gross = b.grandTotal != null && b.grandTotal > 0 ? b.grandTotal : 0;
+    const paid = paidMap.get(b.id) || 0;
+    return { id: b.id, billNumber: b.billNumber, date: b.billDate, dueDate: b.dueDate, amount: gross, balance: +(gross - paid).toFixed(2) };
+  }).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  const payable = +billRows.reduce((s, r) => s + r.balance, 0).toFixed(2);
+  const poRows = pos.map(p => ({ id: p.id, poNumber: p.poNumber, date: p.orderDate, status: p.status,
+    total: (p.lines || []).reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0) }))
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  return { purchaseOrders: poRows, bills: billRows, grns: grns.filter(g => g.vendorId === vendorId), payable };
+}
 // ============================================================================
 
 // ── Customers (reuse dist_contacts kind='customer') ──
