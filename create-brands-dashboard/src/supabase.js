@@ -9349,6 +9349,44 @@ export async function createDistSalesOrder(so, lines = []) {
   if (lr.length) { const { error: e2 } = await supabase.from("dist_sales_order_lines").insert(lr); if (e2) throw e2; }
   return id;
 }
+
+// Update an existing sales order: rewrite header + replace its lines. Safe
+// because committed stock is derived from open SO lines (no movement cleanup).
+export async function updateDistSalesOrder(so, lines = []) {
+  if (!so.id) throw new Error("Sales order id required for update.");
+  const row = {
+    customer_id: so.customerId || null, status: so.status || "draft",
+    order_date: so.orderDate || new Date().toISOString().slice(0, 10),
+    expected_ship: so.expectedShip || null, payment_terms: so.paymentTerms || null, reference: so.reference || null,
+    delivery_method: so.deliveryMethod || null, salesperson: so.salesperson || null,
+    vat_mode: so.vatMode || "exclusive", discount_percent: Number(so.discountPercent) || 0, discount_type: so.discountType || "percent",
+    shipping_charge: Number(so.shippingCharge) || 0, note: so.note || null, terms: so.terms || null,
+  };
+  const { error } = await supabase.from("dist_sales_orders").update(row).eq("id", so.id);
+  if (error) throw error;
+  // Replace lines.
+  await supabase.from("dist_sales_order_lines").delete().eq("so_id", so.id);
+  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
+    id: distId("dsol"), so_id: so.id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
+    discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
+  }));
+  if (lr.length) { const { error: e2 } = await supabase.from("dist_sales_order_lines").insert(lr); if (e2) throw e2; }
+  return so.id;
+}
+
+// Delete a sales order + its lines. Blocked if it has been picked/dispatched/
+// invoiced (those would leave orphaned downstream documents).
+export async function deleteDistSalesOrder(soId) {
+  const detail = await fetchDistSalesOrderDetail(soId).catch(() => null);
+  if (detail && (detail.picks.length || detail.dispatches.length || detail.invoices.length)) {
+    throw new Error("Cannot delete: this order has picks, dispatches or invoices. Cancel those first.");
+  }
+  await supabase.from("dist_sales_order_lines").delete().eq("so_id", soId);
+  const { error } = await supabase.from("dist_sales_orders").delete().eq("id", soId);
+  if (error) throw error;
+  return true;
+}
+
 export async function setDistSalesOrderStatus(id, status) {
   const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
   if (error) throw error;

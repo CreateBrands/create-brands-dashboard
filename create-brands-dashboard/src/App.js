@@ -150,6 +150,7 @@ import {
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
+  updateDistSalesOrder, deleteDistSalesOrder,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6962,7 +6963,7 @@ function DistPriceListView() {
 }
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
-function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit }) {
+function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete }) {
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   useEffect(() => {
@@ -6991,6 +6992,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit }
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{(so.status||"").toUpperCase()}</span>
           <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
+          {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
 
@@ -7098,16 +7100,27 @@ function DistSalesOrderView({ currentUser }) {
     const valid = (creating.lines || []).filter(l => l.itemId && Number(l.qty) > 0);
     if (!valid.length) { setErr("Add at least one line"); return; }
     setBusy(true); setErr("");
-    try { await createDistSalesOrder({ ...creating, status, createdBy: currentUser?.id }, valid); setCreating(null); await load(); }
+    try {
+      if (creating.id) await updateDistSalesOrder({ ...creating, status }, valid);
+      else await createDistSalesOrder({ ...creating, status, createdBy: currentUser?.id }, valid);
+      setCreating(null); await load();
+    }
     catch (e) { setErr(e.message); } setBusy(false);
   };
+  const removeSO = async (so) => {
+    if (!window.confirm(`Delete sales order ${so.soNumber}? This frees its committed stock and can't be undone.`)) return;
+    setBusy(true); setErr("");
+    try { await deleteDistSalesOrder(so.id); setDetail(null); await load(); }
+    catch (e) { setErr(e.message); } setBusy(false);
+  };
+  const editSO = (so) => setCreating({ ...so, lines: (so.lines || []).map(l => ({ ...l })) });
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{sos.length} sales order{sos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New sales order</button></div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {sos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No sales orders yet. An order commits stock (reserves it) without shipping.</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -7149,9 +7162,9 @@ function DistSalesOrderView({ currentUser }) {
           )}
         </div>
       )}
-      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { setDetail(null); }}/>}
+      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="New sales order" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.soNumber || "sales order"}` : "New sales order"} maxW="max-w-4xl">
           <div className="space-y-4">
             <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select or add a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
             <div className="grid grid-cols-2 gap-4">
@@ -11861,6 +11874,7 @@ function EmpThemeStyle() {
   --brown:        #844429;
   --brown-soft:   #A86A4D;
   --brown-faint:  #C9A98F;
+  --brown-mid:    #B07F5E;
   --tan:          #CDA07E;
   --ink:          #3A2418;
   --ink-soft:     #6B5443;
@@ -11931,6 +11945,14 @@ function EmpThemeStyle() {
 .emp-theme [class*="border-slate-700"],
 .emp-theme [class*="border-slate-800"],
 .emp-theme [class*="border-indigo-500"] { border-color: var(--brown-faint) !important; }
+
+/* Data tables: stronger, darker borders for definition (table outer + dividers) */
+.emp-theme .dist-table,
+.emp-theme .dist-table [class*="border-slate-800"],
+.emp-theme .dist-table [class*="border-slate-700"],
+.emp-theme .dist-table thead tr,
+.emp-theme .dist-table tbody tr { border-color: var(--brown-mid) !important; }
+.emp-theme .dist-table { border: 1.5px solid var(--brown-mid) !important; }
 
 /* Inputs / textareas */
 .emp-theme input,
