@@ -149,6 +149,7 @@ import {
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
+  fetchDistItemTransactions, fetchDistItemHistory,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -7649,89 +7650,179 @@ function DistOrderPortalView({ currentUser }) {
 
 // Item detail: all attributes + read-only stock (on-hand/committed/available)
 // + movement history (the audit trail behind on-hand). Edit/Delete actions.
-function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy }) {
+function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy, currentUser }) {
+  const [tab, setTab] = useState("overview");
   const [moves, setMoves] = useState(null);
-  const [mErr, setMErr] = useState("");
+  const [txns, setTxns] = useState(null);
+  const [txnFilter, setTxnFilter] = useState("all");
+  const [history, setHistory] = useState(null);
+  const [err, setErr] = useState("");
+
   useEffect(() => {
     let alive = true;
     (async () => {
       try { const m = await fetchDistMovements({ itemId: item.id }); if (alive) setMoves(m); }
-      catch (e) { if (alive) setMErr(e.message || "Could not load movements"); }
+      catch (e) { if (alive) setErr(e.message || "Could not load movements"); }
     })();
     return () => { alive = false; };
   }, [item.id]);
 
-  const Attr = ({ label, value }) => (
-    <div><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="text-sm text-white">{value ?? "—"}</div></div>
-  );
+  // Lazy-load transactions + history the first time their tab is opened.
+  useEffect(() => {
+    if (tab === "transactions" && txns == null) {
+      fetchDistItemTransactions(item.id, "all").then(setTxns).catch(e => setErr(e.message));
+    }
+    if (tab === "history" && history == null) {
+      fetchDistItemHistory(item.id).then(setHistory).catch(e => setErr(e.message));
+    }
+  }, [tab, item.id, txns, history]);
+
   const Stat = ({ label, value, tone }) => (
     <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3 text-center">
       <div className={`text-2xl font-bold ${tone}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-slate-500 mt-0.5">{label}</div>
     </div>
   );
+  const Attr = ({ label, value }) => (
+    <div><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="text-sm text-white">{value ?? "\u2014"}</div></div>
+  );
   const typeColor = (t) => t === "receipt" || t === "opening" ? "text-emerald-300" : t === "dispatch" ? "text-red-300" : "text-amber-300";
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "\u2014";
+  const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "\u2014";
+
+  const TABS = [["overview", "Overview"], ["transactions", "Transactions"], ["history", "History"]];
+  const filteredTxns = (txns || []).filter(t => txnFilter === "all" || (txnFilter === "sales" && t.direction === "out") || (txnFilter === "purchases" && t.direction === "in"));
 
   return (
-    <Modal onClose={onClose} title={item.name} maxW="max-w-2xl">
+    <Modal onClose={onClose} title={item.name} maxW="max-w-3xl">
       <div className="space-y-4">
-        {/* Stock summary (read-only — derived from the ledger) */}
-        <div className="grid grid-cols-3 gap-2">
-          <Stat label="On-hand" value={item.onHand} tone={item.negative ? "text-red-400" : "text-white"}/>
-          <Stat label="Committed" value={item.committed} tone="text-slate-300"/>
-          <Stat label="Available" value={item.available} tone={item.available < 0 ? "text-red-400" : "text-emerald-300"}/>
-        </div>
-        <p className="text-[11px] text-slate-500 -mt-2">Stock is derived live from the movement ledger and can&#39;t be edited directly — it changes through receipts, dispatches and adjustments.</p>
-
-        {/* Attributes */}
-        <div className="grid grid-cols-3 gap-3 bg-slate-950/40 border border-slate-800 rounded-xl p-3">
-          <Attr label="SKU" value={<span className="font-mono text-indigo-300">{item.sku || "—"}</span>}/>
-          <Attr label="Category" value={item.category}/>
-          <Attr label="Status" value={item.active === false ? "Inactive" : "Active"}/>
-          <Attr label="Pack" value={`${item.packCount} × ${item.packSize ?? "?"} ${item.packUnit || ""}`}/>
-          <Attr label="Tax rate" value={taxName(item.taxRateId)}/>
-          <Attr label="" value=""/>
-          <Attr label="Buy rate" value={item.purchaseRate != null ? `£${item.purchaseRate}` : "—"}/>
-          <Attr label="Sell rate" value={item.sellRate != null ? `£${item.sellRate}` : "—"}/>
-          <Attr label="" value=""/>
-          <Attr label="Income acct" value={<span className="font-mono">{item.incomeAccountCode || "—"}</span>}/>
-          <Attr label="Expense acct" value={<span className="font-mono">{item.expenseAccountCode || "—"}</span>}/>
-        </div>
-
-        {/* Movement history */}
-        <div>
-          <div className="text-xs font-semibold text-slate-300 mb-1.5">Movement history</div>
-          {mErr && <div className="text-xs text-red-400">{mErr}</div>}
-          {moves == null ? <div className="text-xs text-slate-500 py-3">Loading…</div> : moves.length === 0 ? (
-            <div className="text-xs text-slate-600 bg-slate-950/40 border border-slate-800 rounded-lg px-3 py-4 text-center">No movements yet. Stock appears here once opening stock is seeded or goods are received.</div>
-          ) : (
-            <div className="max-h-56 overflow-auto bg-slate-950 border border-slate-800 rounded-lg">
-              <table className="w-full text-[11px]">
-                <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Qty</th><th className="text-left px-2 py-1">Ref</th></tr></thead>
-                <tbody>{moves.map(m => (
-                  <tr key={m.id} className="border-t border-slate-800/60">
-                    <td className="px-2 py-1 text-slate-400">{m.movedAt ? new Date(m.movedAt).toLocaleDateString() : "—"}</td>
-                    <td className={`px-2 py-1 font-medium ${typeColor(m.type)}`}>{m.type}</td>
-                    <td className={`px-2 py-1 text-right font-semibold ${m.qty < 0 ? "text-red-300" : "text-emerald-300"}`}>{m.qty > 0 ? "+" : ""}{m.qty}</td>
-                    <td className="px-2 py-1 text-slate-500 font-mono truncate">{m.sourceRef || m.reasonCode || "—"}</td>
-                  </tr>))}</tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Actions */}
-        <div className="flex justify-between items-center pt-1">
-          <button onClick={onDelete} disabled={busy} className="px-3 py-2 rounded-xl bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-sm font-semibold flex items-center gap-1.5"><Trash2 size={14}/> Delete</button>
-          <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button>
-            <button onClick={onEdit} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Edit size={14}/> Edit</button>
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-slate-800 -mt-1">
+          {TABS.map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-400 hover:text-white"}`}>{l}</button>
+          ))}
+          <div className="ml-auto flex gap-2 pb-1">
+            <button onClick={onEdit} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
           </div>
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+
+        {/* OVERVIEW */}
+        {tab === "overview" && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-2">
+              <Stat label="On-hand" value={item.onHand} tone={item.negative ? "text-red-400" : "text-white"}/>
+              <Stat label="Committed" value={item.committed} tone="text-slate-300"/>
+              <Stat label="Available" value={item.available} tone={item.available < 0 ? "text-red-400" : "text-emerald-300"}/>
+            </div>
+            <p className="text-[11px] text-slate-500 -mt-2">Stock is derived live from the movement ledger and can&#39;t be edited directly \u2014 it changes through receipts, dispatches and adjustments.</p>
+            <div className="flex gap-3">
+              {item.imageUrl && <div className="w-24 h-24 rounded-xl bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800"><img src={item.imageUrl} alt="" className="w-full h-full object-contain p-1.5"/></div>}
+              <div className="grid grid-cols-3 gap-3 bg-slate-950/40 border border-slate-800 rounded-xl p-3 flex-1">
+                <Attr label="SKU" value={<span className="font-mono text-indigo-300">{item.sku || "\u2014"}</span>}/>
+                <Attr label="Category" value={item.category}/>
+                <Attr label="Status" value={item.active === false ? "Inactive" : "Active"}/>
+                <Attr label="Pack" value={`${item.packCount} \u00D7 ${item.packSize ?? "?"} ${item.packUnit || ""}`}/>
+                <Attr label="Tax rate" value={taxName(item.taxRateId)}/>
+                <Attr label="Reorder point" value={item.reorderPoint || 0}/>
+                <Attr label="Buy rate" value={item.purchaseRate != null ? `\u00A3${item.purchaseRate}` : "\u2014"}/>
+                <Attr label="Sell rate" value={item.sellRate != null ? `\u00A3${item.sellRate}` : "\u2014"}/>
+                <Attr label="" value=""/>
+                <Attr label="Income acct" value={<span className="font-mono">{item.incomeAccountCode || "\u2014"}</span>}/>
+                <Attr label="Expense acct" value={<span className="font-mono">{item.expenseAccountCode || "\u2014"}</span>}/>
+              </div>
+            </div>
+            {/* Movement ledger (the raw stock audit trail) */}
+            <div>
+              <div className="text-xs font-semibold text-slate-300 mb-1.5">Stock movements</div>
+              {moves == null ? <div className="text-xs text-slate-500 py-3">Loading\u2026</div> : moves.length === 0 ? (
+                <div className="text-xs text-slate-600 bg-slate-950/40 border border-slate-800 rounded-lg px-3 py-4 text-center">No movements yet.</div>
+              ) : (
+                <div className="max-h-44 overflow-auto bg-slate-950 border border-slate-800 rounded-lg">
+                  <table className="w-full text-[11px]">
+                    <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Type</th><th className="text-right px-2 py-1">Qty</th><th className="text-left px-2 py-1">Ref</th></tr></thead>
+                    <tbody>{moves.map(m => (
+                      <tr key={m.id} className="border-t border-slate-800/60">
+                        <td className="px-2 py-1 text-slate-400">{fmtDate(m.movedAt)}</td>
+                        <td className={`px-2 py-1 font-medium ${typeColor(m.type)}`}>{m.type}</td>
+                        <td className={`px-2 py-1 text-right font-semibold ${m.qty < 0 ? "text-red-300" : "text-emerald-300"}`}>{m.qty > 0 ? "+" : ""}{m.qty}</td>
+                        <td className="px-2 py-1 text-slate-500 font-mono truncate">{m.sourceRef || m.reasonCode || "\u2014"}</td>
+                      </tr>))}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TRANSACTIONS */}
+        {tab === "transactions" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">Filter by:</span>
+              {[["all", "All"], ["sales", "Sales Orders"], ["purchases", "Purchases"]].map(([k, l]) => (
+                <button key={k} onClick={() => setTxnFilter(k)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${txnFilter===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+            {txns == null ? <div className="text-sm text-slate-500 py-8 text-center">Loading\u2026</div> : filteredTxns.length === 0 ? (
+              <div className="text-sm text-slate-600 bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-8 text-center">No transactions for this filter.</div>
+            ) : (
+              <div className="overflow-auto border border-slate-800 rounded-xl max-h-96">
+                <table className="w-full text-xs">
+                  <thead className="text-slate-500 sticky top-0 bg-slate-900">
+                    <tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Reference</th><th className="text-left px-3 py-2">Party</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Price</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2">Status</th></tr>
+                  </thead>
+                  <tbody>{filteredTxns.map((t, idx) => (
+                    <tr key={idx} className="border-t border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-400">{fmtDate(t.date)}</td>
+                      <td className="px-3 py-2 text-slate-300">{t.docType}</td>
+                      <td className="px-3 py-2 font-mono text-indigo-300">{t.ref}</td>
+                      <td className="px-3 py-2 text-white truncate max-w-[10rem]">{t.party}</td>
+                      <td className={`px-3 py-2 text-right font-semibold ${t.direction==="out"?"text-red-300":"text-emerald-300"}`}>{t.direction==="out"?"\u2212":"+"}{t.qty}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{gbp(t.price)}</td>
+                      <td className="px-3 py-2 text-right text-white">{gbp(t.total)}</td>
+                      <td className="px-3 py-2 text-slate-400 capitalize">{t.status}</td>
+                    </tr>))}</tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* HISTORY */}
+        {tab === "history" && (
+          <div className="space-y-3">
+            {history == null ? <div className="text-sm text-slate-500 py-8 text-center">Loading\u2026</div> : history.length === 0 ? (
+              <div className="text-sm text-slate-600 bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-8 text-center">No history recorded yet. Edits to this item are logged here from now on.</div>
+            ) : (
+              <div className="overflow-auto border border-slate-800 rounded-xl max-h-96">
+                <table className="w-full text-xs">
+                  <thead className="text-slate-500 sticky top-0 bg-slate-900"><tr><th className="text-left px-3 py-2 w-40">Date</th><th className="text-left px-3 py-2">Details</th></tr></thead>
+                  <tbody>{history.map(h => (
+                    <tr key={h.id} className="border-t border-slate-800/60 align-top">
+                      <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{fmtDateTime(h.changedAt)}</td>
+                      <td className="px-3 py-2 text-slate-300">
+                        <span className="capitalize">{h.action}</span>{h.detail ? <span className="text-slate-400">. {h.detail}</span> : null}
+                        {h.changedBy ? <span className="text-slate-500 italic"> \u2014 {h.changedBy}</span> : null}
+                      </td>
+                    </tr>))}</tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Footer actions */}
+        <div className="flex justify-between items-center pt-1 border-t border-slate-800/60">
+          <button onClick={onDelete} disabled={busy} className="px-3 py-2 rounded-xl bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-sm font-semibold flex items-center gap-1.5"><Trash2 size={14}/> Delete</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button>
         </div>
       </div>
     </Modal>
   );
 }
+
 
 function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
@@ -7794,7 +7885,7 @@ function DistItemsView({ currentUser }) {
   const saveItem = async () => {
     if (!editItem?.name) { setErr("Name is required"); return; }
     setBusy(true); setErr("");
-    try { await upsertDistItem(editItem); setEditItem(null); await load(); }
+    try { await upsertDistItem({ ...editItem, changedBy: currentUser?.name || currentUser?.email || "" }); setEditItem(null); await load(); }
     catch (e) { setErr(e.message || "Save failed"); }
     setBusy(false);
   };
@@ -8009,7 +8100,7 @@ function DistItemsView({ currentUser }) {
       {detailItem && (
         <DistItemDetail item={detailItem} taxName={taxName} onClose={() => setDetailItem(null)}
           onEdit={() => { setEditItem(detailItem); setDetailItem(null); }}
-          onDelete={() => removeItem(detailItem)} busy={busy}/>
+          onDelete={() => removeItem(detailItem)} busy={busy} currentUser={currentUser}/>
       )}
 
       {/* Edit / new item modal */}

@@ -2646,29 +2646,6 @@ export async function fetchApplicationStatusHistory(applicationId) {
 // — someone can't guess "/applicant-photos/0001.jpg" to find other
 // candidates' photos.
 
-// Uploads a Distribution item product image to the `dist-item-images` bucket
-// and returns its public URL. Mirrors the applicant-photo pattern: deterministic
-// path, long cache, public URL (the ordering portal needs no auth to show it).
-export async function uploadDistItemImage(file) {
-  if (!file) throw new Error("No file provided.");
-  const ext = (file.name && file.name.includes(".")) ? file.name.split(".").pop().toLowerCase() : (file.type === "image/png" ? "png" : "jpg");
-  const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  const path = `items/${token}.${ext}`;
-  const { error: upErr } = await supabase.storage
-    .from("dist-item-images")
-    .upload(path, file, { contentType: file.type, cacheControl: "31536000", upsert: false });
-  if (upErr) throw upErr;
-  const { data: { publicUrl } } = supabase.storage.from("dist-item-images").getPublicUrl(path);
-  return { url: publicUrl, path };
-}
-
-// Deletes a Distribution item image by storage path (tolerates missing file).
-export async function deleteDistItemImage(path) {
-  if (!path) return;
-  const { error } = await supabase.storage.from("dist-item-images").remove([path]);
-  if (error && !/not found/i.test(error.message || "")) throw error;
-}
-
 export async function uploadApplicantPhoto(file) {
   if (!file) throw new Error("No file provided");
   if (!(file instanceof File || file instanceof Blob)) throw new Error("Invalid file");
@@ -8610,7 +8587,7 @@ const mapDistItem = (i) => ({
   sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
   ckProductId: i.ck_product_id || null,
-  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "", imageStoragePath: i.image_storage_path || "",
+  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -8665,6 +8642,22 @@ export async function fetchDistItems({ includeInactive } = {}) {
   if (error) throw error;
   return (data || []).map(mapDistItem);
 }
+// Upload a product image for a Distribution item to the 'dist-item-images'
+// storage bucket and return its public URL (stored on dist_items.image_url).
+// Mirrors the applicant-photos upload pattern. Bucket must exist + be public.
+export async function uploadDistItemImage(file) {
+  if (!file) throw new Error("No file provided.");
+  const ext = (file.name || "").split(".").pop()?.toLowerCase() || "jpg";
+  const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const path = `items/${token}.${ext}`;
+  const { error: upErr } = await supabase.storage
+    .from("dist-item-images")
+    .upload(path, file, { contentType: file.type, cacheControl: "3600", upsert: false });
+  if (upErr) throw upErr;
+  const { data: { publicUrl } } = supabase.storage.from("dist-item-images").getPublicUrl(path);
+  return { url: publicUrl, path };
+}
+
 export async function upsertDistItem(i) {
   const row = {
     id: i.id || distId("di"), sku: i.sku || null, name: i.name || "", category: i.category || null,
@@ -8675,12 +8668,107 @@ export async function upsertDistItem(i) {
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
-    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null, image_storage_path: i.imageStoragePath || null,
+    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null,
     active: i.active !== false,
   };
+  const isNew = !i.id;
+  // Capture the prior state for a field-level history diff (best-effort).
+  let before = null;
+  if (!isNew) { try { const { data: prev } = await supabase.from("dist_items").select("*").eq("id", i.id).maybeSingle(); before = prev; } catch { before = null; } }
   const { data, error } = await supabase.from("dist_items").upsert(row).select().maybeSingle();
   if (error) throw error;
+  // Log history (best-effort — never block the save).
+  try {
+    if (isNew) {
+      await logDistItemHistory(row.id, "created", "Item created", i.changedBy);
+    } else if (before) {
+      const detail = describeDistItemChanges(before, row);
+      if (detail) await logDistItemHistory(row.id, "updated", detail, i.changedBy);
+    }
+  } catch { /* history is non-blocking */ }
   return data ? mapDistItem(data) : null;
+}
+
+// Human-readable diff between the old DB row and the new row for history.
+function describeDistItemChanges(before, after) {
+  const fields = [
+    ["name", "Name"], ["sku", "SKU"], ["category", "Category"],
+    ["sell_rate", "Sell rate", "£"], ["purchase_rate", "Buy rate", "£"],
+    ["reorder_point", "Reorder point"], ["pack_count", "Pack count"], ["pack_size", "Pack size"],
+    ["pack_unit", "Pack unit"], ["tax_rate_id", "Tax rate"], ["active", "Status"],
+    ["image_url", "Image"], ["ck_product_id", "CK link"],
+  ];
+  const parts = [];
+  for (const [key, label, prefix = ""] of fields) {
+    const a = before[key], b = after[key];
+    if (String(a ?? "") === String(b ?? "")) continue;
+    if (key === "active") { parts.push(`Status ${b ? "→ Active" : "→ Inactive"}`); continue; }
+    if (key === "image_url") { parts.push(b ? "Image updated" : "Image removed"); continue; }
+    const fmt = (v) => v == null || v === "" ? "—" : `${prefix}${v}`;
+    parts.push(`${label} ${fmt(a)} → ${fmt(b)}`);
+  }
+  return parts.join("; ");
+}
+
+export async function logDistItemHistory(itemId, action, detail, changedBy) {
+  await supabase.from("dist_item_history").insert({
+    id: distId("dih"), item_id: itemId, action, detail: detail || "",
+    changed_by: changedBy || "", changed_at: new Date().toISOString(),
+  });
+}
+
+export async function fetchDistItemHistory(itemId) {
+  const { data, error } = await supabase.from("dist_item_history")
+    .select("*").eq("item_id", itemId).order("changed_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(h => ({ id: h.id, action: h.action, detail: h.detail || "",
+    changedBy: h.changed_by || "", changedAt: h.changed_at }));
+}
+
+// Rich Zoho-style transactions for one item: its lines across sales orders
+// (sell side) and goods receipts (buy side), with counterparty + price/total.
+export async function fetchDistItemTransactions(itemId, kind = "all") {
+  const out = [];
+  const [customers, vendors] = await Promise.all([
+    fetchDistContacts({ kind: "customer" }).catch(() => []),
+    fetchDistContacts({ kind: "vendor" }).catch(() => []),
+  ]);
+  const custName = new Map(customers.map(c => [c.id, c.displayName]));
+  const vendName = new Map(vendors.map(v => [v.id, v.displayName]));
+
+  if (kind === "all" || kind === "sales") {
+    const sos = await fetchDistSalesOrders({}).catch(() => []);
+    for (const so of sos) {
+      for (const l of (so.lines || [])) {
+        if (l.itemId !== itemId) continue;
+        const qty = Number(l.qty) || 0;
+        const price = Number(l.unitPrice) || 0;
+        out.push({
+          date: so.orderDate, docType: "Sales Order", ref: so.soNumber || so.id,
+          party: custName.get(so.customerId) || "\u2014", qty, direction: "out",
+          price, total: +(qty * price).toFixed(2), status: so.status || "",
+        });
+      }
+    }
+  }
+  if (kind === "all" || kind === "purchases") {
+    const grns = await fetchDistGoodsReceipts().catch(() => []);
+    for (const g of grns) {
+      for (const l of (g.lines || [])) {
+        if (l.itemId !== itemId) continue;
+        const qty = Number(l.qty) || 0;
+        const cost = Number(l.landedCost) || 0;
+        out.push({
+          date: g.receivedDate, docType: g.sourceKind === "central_kitchen" ? "CK Receipt" : "Goods Receipt",
+          ref: g.grnNumber || g.id, party: g.sourceKind === "central_kitchen" ? "Central Kitchen" : (vendName.get(g.vendorId) || "\u2014"),
+          qty, direction: "in", price: cost, total: +(qty * cost).toFixed(2),
+          status: g.posted ? "Received" : (g.status === "draft" ? "Draft" : ""),
+        });
+      }
+    }
+  }
+  out.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  return out;
 }
 
 // ── Batches ─────────────────────────────────────────────────────────────────
