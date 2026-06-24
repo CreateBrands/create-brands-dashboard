@@ -149,7 +149,7 @@ import {
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
-  fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer,
+  fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -6962,10 +6962,130 @@ function DistPriceListView() {
 }
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
+function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit }) {
+  const [detail, setDetail] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    fetchDistSalesOrderDetail(so.id).then(d => { if (alive) setDetail(d); }).catch(e => { if (alive) setErr(e.message); });
+    return () => { alive = false; };
+  }, [so.id]);
+
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const totals = distComputeTotals(so.lines, taxRates, so.vatMode, so.discountPercent, so.discountType);
+  const grand = totals.grandTotal + (Number(so.shippingCharge) || 0);
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+
+  const StatusRow = ({ label, value, tone }) => (
+    <div className="flex items-center justify-between py-1.5">
+      <span className="text-xs text-slate-500">{label}</span>
+      <span className={`text-xs font-semibold ${tone}`}>{value}</span>
+    </div>
+  );
+
+  return (
+    <Modal onClose={onClose} title={so.soNumber} maxW="max-w-4xl">
+      <div className="space-y-4">
+        {/* Header actions */}
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{(so.status||"").toUpperCase()}</span>
+          <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Status panel */}
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 lg:col-span-1">
+            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Status</div>
+            <div className="divide-y divide-slate-800/60">
+              <StatusRow label="Order" value={(so.status||"").toUpperCase()} tone={so.status==="dispatched"||so.status==="invoiced"?"text-emerald-300":"text-indigo-300"}/>
+              <StatusRow label="Invoice" value={detail ? (detail.status.invoiced ? "Invoiced" : "Not Invoiced") : "…"} tone={detail?.status.invoiced ? "text-emerald-300" : "text-slate-400"}/>
+              <StatusRow label="Payment" value={detail ? (detail.status.paid ? "Paid" : "Unpaid") : "…"} tone={detail?.status.paid ? "text-emerald-300" : "text-amber-300"}/>
+              <StatusRow label="Picked" value={detail ? (detail.status.picked ? "Picked" : "Pending") : "…"} tone={detail?.status.picked ? "text-emerald-300" : "text-amber-300"}/>
+              <StatusRow label="Shipment" value={detail ? (detail.status.dispatched ? "Dispatched" : "Pending") : "…"} tone={detail?.status.dispatched ? "text-emerald-300" : "text-amber-300"}/>
+            </div>
+            <div className="mt-3 pt-3 border-t border-slate-800/60 space-y-1.5">
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Order date</div><div className="text-sm text-white">{fmtDate(so.orderDate)}</div></div>
+              <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Payment terms</div><div className="text-sm text-white capitalize">{(so.paymentTerms||"").replace(/_/g," ")||"—"}</div></div>
+              {so.reference && <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Reference</div><div className="text-sm text-white">{so.reference}</div></div>}
+            </div>
+          </div>
+
+          {/* Addresses */}
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 lg:col-span-2 grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Billing address</div>
+              <div className="text-sm text-indigo-300 font-medium">{customer?.displayName || "—"}</div>
+              {customer?.billingAddress ? <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{customer.billingAddress}</div> : <div className="text-xs text-slate-600 mt-0.5">No billing address</div>}
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Shipping address</div>
+              <div className="text-sm text-indigo-300 font-medium">{customer?.displayName || "—"}</div>
+              {customer?.shippingAddress ? <div className="text-xs text-slate-400 whitespace-pre-line mt-0.5">{customer.shippingAddress}</div> : <div className="text-xs text-slate-600 mt-0.5">No shipping address</div>}
+            </div>
+          </div>
+        </div>
+
+        {/* Line items with images */}
+        <div className="rounded-xl border border-slate-800 overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="text-slate-500 bg-slate-950/40">
+              <tr><th className="text-left px-3 py-2">Item & Description</th><th className="text-right px-3 py-2">Ordered</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Discount</th><th className="text-right px-3 py-2">Amount</th></tr>
+            </thead>
+            <tbody>
+              {(so.lines || []).map((l, idx) => {
+                const it = itemById.get(l.itemId);
+                const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
+                const disc = Number(l.discount) || 0;
+                const gross = qty * rate;
+                const amount = l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc;
+                return (
+                  <tr key={idx} className="border-t border-slate-800/60">
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-9 h-9 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800">
+                          {it?.imageUrl ? <img src={it.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={14} className="text-slate-300"/>}
+                        </div>
+                        <div><div className="text-white">{cleanName(it?.name) || l.itemId}</div>{it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}</div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right text-slate-300">{qty}</td>
+                    <td className="px-3 py-2 text-right text-slate-300">{gbp(rate)}</td>
+                    <td className="px-3 py-2 text-right text-slate-400">{disc ? (l.discountType === "percent" ? `${disc}%` : gbp(disc)) : "0"}</td>
+                    <td className="px-3 py-2 text-right text-white">{gbp(amount)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Totals */}
+        <div className="flex justify-end">
+          <div className="w-64 space-y-1.5">
+            <div className="flex justify-between text-xs"><span className="text-slate-400">Subtotal</span><span className="text-white">{gbp(totals.subTotal)}</span></div>
+            {totals.discountAmount > 0 && <div className="flex justify-between text-xs"><span className="text-slate-400">Discount</span><span className="text-slate-300">−{gbp(totals.discountAmount)}</span></div>}
+            <div className="flex justify-between text-xs"><span className="text-slate-400">VAT</span><span className="text-white">{gbp(totals.vatTotal)}</span></div>
+            {Number(so.shippingCharge) > 0 && <div className="flex justify-between text-xs"><span className="text-slate-400">Shipping</span><span className="text-white">{gbp(Number(so.shippingCharge))}</span></div>}
+            <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-800"><span className="text-white">Total</span><span className="text-white">{gbp(grand)}</span></div>
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function DistSalesOrderView({ currentUser }) {
   const [sos, setSos] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { setLoading(true); try { const [s, c, it, tx] = await Promise.all([fetchDistSalesOrders(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates()]); setSos(s); setCustomers(c); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  const [detail, setDetail] = useState(null); const [statusMap, setStatusMap] = useState({});
+  const load = useCallback(async () => { setLoading(true); try { const [s, c, it, tx] = await Promise.all([fetchDistSalesOrders(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates()]); setSos(s); setCustomers(c); setItems(it); setTaxRates(tx);
+    // Resolve fulfilment status for each SO (for the pillar dots), in parallel.
+    try { const entries = await Promise.all(s.map(async so => [so.id, (await fetchDistSalesOrderDetail(so.id)).status])); setStatusMap(Object.fromEntries(entries)); } catch { /* pillars best-effort */ }
+  } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const newDoc = () => setCreating({ customerId: "", orderDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", shippingCharge: "", paymentTerms: "due_on_receipt", lines: [{ itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }] });
   // When customer changes, re-resolve each line's price from the price list.
@@ -6988,15 +7108,48 @@ function DistSalesOrderView({ currentUser }) {
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {sos.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No sales orders yet. An order commits stock (reserves it) without shipping.</div>}
-          {sos.map(so => { const t = distComputeTotals(so.lines, taxRates, so.vatMode, so.discountPercent, so.discountType); return (
-            <div key={so.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
-              <div><span className="text-white font-mono text-xs">{so.soNumber}</span> <span className="text-slate-400">{cName(so.customerId)}</span><div className="text-[11px] text-slate-500">{so.lines.length} line{so.lines.length!==1?"s":""} · {so.orderDate}</div></div>
-              <div className="flex items-center gap-3"><span className="text-white text-xs">£{(t.grandTotal + (Number(so.shippingCharge)||0)).toFixed(2)}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{so.status}</span></div>
+          {sos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No sales orders yet. An order commits stock (reserves it) without shipping.</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
+                  <tr>
+                    <th className="text-left px-3 py-2.5 font-semibold">Date</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">SO #</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Customer</th>
+                    <th className="text-left px-3 py-2.5 font-semibold">Status</th>
+                    <th className="text-center px-2 py-2.5 font-semibold">Invoiced</th>
+                    <th className="text-center px-2 py-2.5 font-semibold">Payment</th>
+                    <th className="text-center px-2 py-2.5 font-semibold">Picked</th>
+                    <th className="text-center px-2 py-2.5 font-semibold">Shipped</th>
+                    <th className="text-right px-3 py-2.5 font-semibold">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sos.map(so => {
+                    const t = distComputeTotals(so.lines, taxRates, so.vatMode, so.discountPercent, so.discountType);
+                    const st = statusMap[so.id] || {};
+                    const Dot = ({ on }) => <span className={`inline-block w-2 h-2 rounded-full ${on ? "bg-emerald-400" : "bg-slate-700"}`}></span>;
+                    return (
+                      <tr key={so.id} onClick={() => setDetail(so)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                        <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{so.orderDate}</td>
+                        <td className="px-3 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{so.soNumber}</span></td>
+                        <td className="px-3 py-2.5 text-slate-300">{cName(so.customerId)}</td>
+                        <td className="px-3 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{so.status}</span></td>
+                        <td className="px-2 py-2.5 text-center"><Dot on={st.invoiced}/></td>
+                        <td className="px-2 py-2.5 text-center"><Dot on={st.paid}/></td>
+                        <td className="px-2 py-2.5 text-center"><Dot on={st.picked}/></td>
+                        <td className="px-2 py-2.5 text-center"><Dot on={st.dispatched}/></td>
+                        <td className="px-3 py-2.5 text-right text-white whitespace-nowrap">{gbp(t.grandTotal + (Number(so.shippingCharge)||0))}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          ); })}
+          )}
         </div>
       )}
+      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { setDetail(null); }}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title="New sales order" maxW="max-w-4xl">
           <div className="space-y-4">

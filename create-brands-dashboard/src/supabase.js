@@ -9441,6 +9441,26 @@ export async function fetchDistDispatches({ soId } = {}) {
   if (error) throw error;
   return (data || []).map(mapDistDispatch);
 }
+
+// Resolve a sales order's fulfilment status across the chain for the
+// Zoho-style status pillars (invoiced / paid / picked / dispatched) + detail.
+export async function fetchDistSalesOrderDetail(soId) {
+  const [picks, dispatches, invoices] = await Promise.all([
+    fetchDistPicks({ soId }).catch(() => []),
+    fetchDistDispatches({ soId }).catch(() => []),
+    fetchDistInvoices({}).catch(() => []),
+  ]);
+  const soInvoices = invoices.filter(i => i.soId === soId);
+  let paid = false;
+  if (soInvoices.length) {
+    const paidMap = await fetchDistInvoicePaidMap(soInvoices.map(i => i.id)).catch(() => new Map());
+    paid = soInvoices.every(i => { const gt = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : 0; const p = paidMap.get(i.id) || 0; return gt > 0 ? p + 0.005 >= gt : false; });
+  }
+  return {
+    picks, dispatches, invoices: soInvoices,
+    status: { invoiced: soInvoices.length > 0, paid, picked: picks.length > 0, dispatched: dispatches.length > 0 },
+  };
+}
 // Dispatch: write a negative (issue) movement per line at its batch, then post
 // Dr COGS 5000 / Cr Stock 1200 at total landed cost. Idempotent on distdisp:.
 export async function postDistDispatch(dispatch, lines = []) {
