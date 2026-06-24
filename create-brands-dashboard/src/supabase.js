@@ -8548,3 +8548,188 @@ export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 }
     },
   };
 }
+
+// ============================================================================
+// DISTRIBUTION — PHASE 1 DATA LAYER (foundation: tax, contacts, items,
+// batches, append-only stock ledger + derived on-hand/available).
+// Stock is NEVER stored; on-hand is always SUM(dist_stock_movements.qty).
+// Tables: dist_tax_rates, dist_contacts, dist_items, dist_batches,
+//         dist_stock_movements.
+// ============================================================================
+
+const distId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+// ── Mappers (snake -> camel) ────────────────────────────────────────────────
+const mapDistTaxRate = (r) => ({ id: r.id, name: r.name || "", percent: Number(r.percent) || 0, active: r.active !== false });
+const mapDistContact = (c) => ({
+  id: c.id, kind: c.kind || "customer", displayName: c.display_name || "", companyName: c.company_name || "",
+  storeId: c.store_id || null, entityId: c.entity_id || null, isCentralKitchen: !!c.is_central_kitchen,
+  email: c.email || "", phone: c.phone || "", billingAddress: c.billing_address || "", shippingAddress: c.shipping_address || "",
+  openingBalance: Number(c.opening_balance) || 0, active: c.active !== false, createdAt: c.created_at,
+});
+const mapDistItem = (i) => ({
+  id: i.id, sku: i.sku || "", name: i.name || "", category: i.category || "",
+  packCount: i.pack_count != null ? Number(i.pack_count) : 1, packSize: i.pack_size != null ? Number(i.pack_size) : null,
+  packUnit: i.pack_unit || "", taxRateId: i.tax_rate_id || null,
+  sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
+  incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
+  active: i.active !== false, createdAt: i.created_at,
+});
+const mapDistBatch = (b) => ({
+  id: b.id, itemId: b.item_id, batchNo: b.batch_no || "", expiryDate: b.expiry_date || null, mfgDate: b.mfg_date || null,
+  landedCost: Number(b.landed_cost) || 0, costMethod: b.cost_method || null, sourceKind: b.source_kind || null, createdAt: b.created_at,
+});
+const mapDistMovement = (m) => ({
+  id: m.id, itemId: m.item_id, batchId: m.batch_id, qty: Number(m.qty) || 0, type: m.type,
+  sourceKind: m.source_kind || null, sourceRef: m.source_ref || null, reasonCode: m.reason_code || null,
+  movedAt: m.moved_at, createdBy: m.created_by || null,
+});
+
+// ── Tax rates ───────────────────────────────────────────────────────────────
+export async function fetchDistTaxRates() {
+  const { data, error } = await supabase.from("dist_tax_rates").select("*").order("percent", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(mapDistTaxRate);
+}
+
+// ── Contacts (customers + vendors) ──────────────────────────────────────────
+export async function fetchDistContacts({ kind } = {}) {
+  let q = supabase.from("dist_contacts").select("*").eq("active", true).order("display_name");
+  if (kind) q = q.eq("kind", kind);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistContact);
+}
+export async function upsertDistContact(c) {
+  const row = {
+    id: c.id || distId("dc"), kind: c.kind || "customer", display_name: c.displayName || "",
+    company_name: c.companyName || null, store_id: c.storeId || null, entity_id: c.entityId || null,
+    is_central_kitchen: !!c.isCentralKitchen, email: c.email || null, phone: c.phone || null,
+    billing_address: c.billingAddress || null, shipping_address: c.shippingAddress || null,
+    opening_balance: c.openingBalance != null && c.openingBalance !== "" ? Number(c.openingBalance) : 0,
+    active: c.active !== false,
+  };
+  const { data, error } = await supabase.from("dist_contacts").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistContact(data) : null;
+}
+
+// ── Items ───────────────────────────────────────────────────────────────────
+export async function fetchDistItems({ includeInactive } = {}) {
+  let q = supabase.from("dist_items").select("*").order("name");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistItem);
+}
+export async function upsertDistItem(i) {
+  const row = {
+    id: i.id || distId("di"), sku: i.sku || null, name: i.name || "", category: i.category || null,
+    pack_count: i.packCount != null && i.packCount !== "" ? Number(i.packCount) : 1,
+    pack_size: i.packSize != null && i.packSize !== "" ? Number(i.packSize) : null,
+    pack_unit: i.packUnit || null, tax_rate_id: i.taxRateId || null,
+    sell_rate: i.sellRate != null && i.sellRate !== "" ? Number(i.sellRate) : null,
+    purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
+    income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
+    active: i.active !== false,
+  };
+  const { data, error } = await supabase.from("dist_items").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistItem(data) : null;
+}
+
+// ── Batches ─────────────────────────────────────────────────────────────────
+export async function fetchDistBatches(itemId) {
+  let q = supabase.from("dist_batches").select("*").order("expiry_date", { ascending: true, nullsFirst: false });
+  if (itemId) q = q.eq("item_id", itemId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistBatch);
+}
+export async function createDistBatch(b) {
+  const row = {
+    id: b.id || distId("db"), item_id: b.itemId, batch_no: b.batchNo || null,
+    expiry_date: b.expiryDate || null, mfg_date: b.mfgDate || null,
+    landed_cost: b.landedCost != null && b.landedCost !== "" ? Number(b.landedCost) : 0,
+    cost_method: b.costMethod || null, source_kind: b.sourceKind || null,
+  };
+  const { data, error } = await supabase.from("dist_batches").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistBatch(data) : null;
+}
+
+// ── Stock movements (append-only; the single source of truth) ───────────────
+export async function fetchDistMovements({ itemId, batchId, type } = {}) {
+  let q = supabase.from("dist_stock_movements").select("*").order("moved_at", { ascending: false });
+  if (itemId) q = q.eq("item_id", itemId);
+  if (batchId) q = q.eq("batch_id", batchId);
+  if (type) q = Array.isArray(type) ? q.in("type", type) : q.eq("type", type);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistMovement);
+}
+
+// Insert a movement. source_ref makes it idempotent: if one already exists with
+// the same ref, we skip (returns the existing) rather than double-posting.
+export async function addDistMovement(m) {
+  if (m.sourceRef) {
+    const { data: existing } = await supabase.from("dist_stock_movements").select("*").eq("source_ref", m.sourceRef).limit(1);
+    if (existing && existing.length) return mapDistMovement(existing[0]);
+  }
+  const row = {
+    id: m.id || distId("dm"), item_id: m.itemId, batch_id: m.batchId,
+    qty: Number(m.qty) || 0, type: m.type || "adjustment", source_kind: m.sourceKind || null,
+    source_ref: m.sourceRef || null, reason_code: m.reasonCode || null, created_by: m.createdBy || null,
+  };
+  const { data, error } = await supabase.from("dist_stock_movements").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistMovement(data) : null;
+}
+
+// Seed opening stock as an 'opening' movement against an opening batch (NEVER
+// copy a divergent stored figure — this posts an agreed count as a movement).
+export async function seedDistOpeningStock({ itemId, qty, landedCost, expiryDate, createdBy }) {
+  const batch = await createDistBatch({
+    itemId, batchNo: "OPENING", expiryDate: expiryDate || null,
+    landedCost: landedCost != null ? landedCost : 0, costMethod: "opening", sourceKind: "opening",
+  });
+  if (!batch) throw new Error("opening batch create failed");
+  return addDistMovement({
+    itemId, batchId: batch.id, qty: Number(qty) || 0, type: "opening",
+    sourceKind: "opening", sourceRef: `distopen:${itemId}`, createdBy,
+  });
+}
+
+// ── Derivations (stock is computed, never stored) ───────────────────────────
+// on-hand per item = SUM(qty). Returns a Map<itemId, number>.
+export async function computeDistOnHand(itemId) {
+  let q = supabase.from("dist_stock_movements").select("item_id, qty");
+  if (itemId) q = q.eq("item_id", itemId);
+  const { data, error } = await q;
+  if (error) throw error;
+  const m = new Map();
+  for (const r of data || []) m.set(r.item_id, (m.get(r.item_id) || 0) + (Number(r.qty) || 0));
+  return m;
+}
+
+// on-hand per BATCH = SUM(qty) for that batch (drives FEFO available-by-batch).
+export async function computeDistBatchOnHand(itemId) {
+  let q = supabase.from("dist_stock_movements").select("batch_id, item_id, qty");
+  if (itemId) q = q.eq("item_id", itemId);
+  const { data, error } = await q;
+  if (error) throw error;
+  const m = new Map();
+  for (const r of data || []) m.set(r.batch_id, (m.get(r.batch_id) || 0) + (Number(r.qty) || 0));
+  return m;
+}
+
+// Full stock snapshot for the UI: per item, on-hand + (committed=0 until the
+// sell side exists) + available, plus a below-zero alarm flag.
+export async function fetchDistStockSnapshot() {
+  const [items, onHand] = await Promise.all([fetchDistItems(), computeDistOnHand()]);
+  return items.map((it) => {
+    const oh = onHand.get(it.id) || 0;
+    const committed = 0; // sell-side phase will populate this
+    return { ...it, onHand: oh, committed, available: oh - committed, negative: oh < 0 };
+  });
+}
