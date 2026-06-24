@@ -2646,6 +2646,29 @@ export async function fetchApplicationStatusHistory(applicationId) {
 // — someone can't guess "/applicant-photos/0001.jpg" to find other
 // candidates' photos.
 
+// Uploads a Distribution item product image to the `dist-item-images` bucket
+// and returns its public URL. Mirrors the applicant-photo pattern: deterministic
+// path, long cache, public URL (the ordering portal needs no auth to show it).
+export async function uploadDistItemImage(file) {
+  if (!file) throw new Error("No file provided.");
+  const ext = (file.name && file.name.includes(".")) ? file.name.split(".").pop().toLowerCase() : (file.type === "image/png" ? "png" : "jpg");
+  const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const path = `items/${token}.${ext}`;
+  const { error: upErr } = await supabase.storage
+    .from("dist-item-images")
+    .upload(path, file, { contentType: file.type, cacheControl: "31536000", upsert: false });
+  if (upErr) throw upErr;
+  const { data: { publicUrl } } = supabase.storage.from("dist-item-images").getPublicUrl(path);
+  return { url: publicUrl, path };
+}
+
+// Deletes a Distribution item image by storage path (tolerates missing file).
+export async function deleteDistItemImage(path) {
+  if (!path) return;
+  const { error } = await supabase.storage.from("dist-item-images").remove([path]);
+  if (error && !/not found/i.test(error.message || "")) throw error;
+}
+
 export async function uploadApplicantPhoto(file) {
   if (!file) throw new Error("No file provided");
   if (!(file instanceof File || file instanceof Blob)) throw new Error("Invalid file");
@@ -8587,7 +8610,7 @@ const mapDistItem = (i) => ({
   sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
   ckProductId: i.ck_product_id || null,
-  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
+  reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "", imageStoragePath: i.image_storage_path || "",
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -8652,7 +8675,7 @@ export async function upsertDistItem(i) {
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
-    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null,
+    reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null, image_storage_path: i.imageStoragePath || null,
     active: i.active !== false,
   };
   const { data, error } = await supabase.from("dist_items").upsert(row).select().maybeSingle();

@@ -148,7 +148,7 @@ import {
   fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
-  fetchDistCustomersForStores, fetchDistPortalCatalogue,
+  fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -7737,6 +7737,7 @@ function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
   const [taxRates, setTaxRates] = useState([]);
   const [ckProducts, setCkProducts] = useState([]);
+  const [imgUploading, setImgUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
@@ -8039,8 +8040,28 @@ function DistItemsView({ currentUser }) {
                 <span className="text-[10px] text-slate-500">When the CK dispatches this product to the warehouse, a draft goods receipt is created for this item.</span></label>
               <label className="text-xs text-slate-400">Reorder point
                 <input type="number" value={editItem.reorderPoint ?? ""} onChange={e => setEditItem({ ...editItem, reorderPoint: e.target.value })} placeholder="0" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400 col-span-2">Product image URL
-                <input value={editItem.imageUrl || ""} onChange={e => setEditItem({ ...editItem, imageUrl: e.target.value })} placeholder="https://… (shown on the store ordering portal)" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <div className="text-xs text-slate-400 col-span-2">Product image <span className="text-slate-600">(shown on the store ordering portal)</span>
+                <div className="mt-1 flex items-center gap-3">
+                  <div className="w-20 h-20 rounded-xl bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-700">
+                    {editItem.imageUrl
+                      ? <img src={editItem.imageUrl} alt="" className="w-full h-full object-contain p-1.5"/>
+                      : <Package size={24} className="text-slate-300"/>}
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className={`px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 w-fit ${imgUploading ? "bg-slate-700 text-slate-400" : "bg-slate-800 hover:bg-slate-700 text-white"}`}>
+                      <Upload size={13}/> {imgUploading ? "Uploading…" : editItem.imageUrl ? "Replace image" : "Upload image"}
+                      <input type="file" accept="image/*" disabled={imgUploading} className="hidden" onChange={async e => {
+                        const file = e.target.files?.[0]; if (!file) return;
+                        setImgUploading(true); setErr("");
+                        try { const { url, path } = await uploadDistItemImage(file); setEditItem(prev => ({ ...prev, imageUrl: url, imageStoragePath: path })); }
+                        catch (er) { setErr("Image upload failed: " + er.message); }
+                        setImgUploading(false); e.target.value = "";
+                      }}/>
+                    </label>
+                    {editItem.imageUrl && <button type="button" onClick={() => setEditItem({ ...editItem, imageUrl: "", imageStoragePath: "" })} className="text-[11px] text-slate-500 hover:text-red-400 w-fit">Remove</button>}
+                  </div>
+                </div>
+              </div>
               <label className="text-xs text-slate-400 col-span-2 flex items-center gap-2 mt-1">
                 <input type="checkbox" checked={editItem.active !== false} onChange={e => setEditItem({ ...editItem, active: e.target.checked })}/> Active</label>
             </div>
