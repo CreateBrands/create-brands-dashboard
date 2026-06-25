@@ -150,6 +150,7 @@ import {
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
+  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
@@ -7438,7 +7439,7 @@ function DistPriceListView() {
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
 function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate }) {
-  const { convert } = useDistDocLink();
+  const { navigate } = useDistDocLink();
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   useEffect(() => {
@@ -7469,18 +7470,28 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
           {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
-        {/* What's next — workflow conversion */}
+        {/* What's next — advance the order one stage (engine, in place) */}
         {detail && (() => {
-          const next = !detail.status.picked ? { label: "Convert to Pick", view: "dist-picks", target: "so", hint: "Allocate batches (FEFO) for this order." }
-            : !detail.status.dispatched ? { label: "Dispatch", view: "dist-dispatch", target: "pick", hint: "Ship the picked order — reduces stock, posts COGS." }
-            : !detail.status.invoiced ? { label: "Create Invoice", view: "dist-invoices", target: "dispatch", hint: "Bill the customer for this order." }
-            : null;
-          if (!next) return <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 px-3 py-2.5 text-xs text-emerald-300">This order is fully invoiced. ✓</div>;
-          const src = { ...detail, id: so.id, soId: so.id, soNumber: so.soNumber, customerId: so.customerId, lines: so.lines };
+          const next = !detail.status.picked ? { label: "Pick (auto-FEFO)", stage: "confirmed", hint: "Allocate batches (FEFO) and create the pick." }
+            : !detail.status.dispatched ? { label: "Dispatch", stage: "picked", hint: "Ship the picked order — reduces stock, posts COGS." }
+            : !detail.status.invoiced ? { label: "Create Invoice", stage: "dispatched", hint: "Bill the customer for this order." }
+            : { label: "Record Payment", stage: "invoiced", hint: "Record the customer's payment." };
+          const doAdvance = async () => {
+            setErr("");
+            try {
+              if (next.stage === "confirmed") await advanceDistOrderToPick(so.id);
+              else if (next.stage === "picked") await advanceDistOrderToDispatch(so.id);
+              else if (next.stage === "dispatched") await advanceDistOrderToInvoice(so.id);
+              else if (next.stage === "invoiced") { navigate("dist-receipts"); onClose(); return; }
+              // reload the order detail to reflect the new stage
+              const fresh = await fetchDistSalesOrderDetail(so.id).catch(() => null);
+              if (fresh) setDetail(fresh);
+            } catch (e) { setErr(e.message); alert(e.message); }
+          };
           return (
             <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 flex items-center justify-between gap-3">
               <div><span className="text-xs font-semibold text-white">What's next?</span> <span className="text-xs text-slate-400">{next.hint}</span></div>
-              <button onClick={() => { convert(next.target, next.view, src); onClose(); }} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
+              <button onClick={doAdvance} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{next.label} <ChevronRight size={13}/></button>
             </div>
           );
         })()}
@@ -7767,6 +7778,111 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
         <div className="flex justify-end pt-1 border-t border-slate-800/60"><button onClick={onClose} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Close</button></div>
       </div>
     </Modal>
+  );
+}
+
+// ── FULFILMENT (order-centric) ───────────────────────────────────────────────
+// One row per sales order in the pipeline. Shows the order's current STAGE and a
+// single button that advances it: Confirmed → Pick → Dispatch → Invoice → Paid.
+// Pick & Dispatch are transition states here — there are no separate create
+// flows, so an order can never fork into duplicate picks/dispatches.
+function DistFulfilmentView({ currentUser }) {
+  const { openDoc, navigate } = useDistDocLink();
+  const [rows, setRows] = useState([]); const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [busyId, setBusyId] = useState(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [r, c] = await Promise.all([fetchDistFulfilmentBoard(), fetchDistContacts({ kind: "customer" })]); setRows(r); setCustomers(c); }
+    catch (e) { setErr(e.message); } setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
+
+  const STAGES = [
+    { key: "confirmed",  label: "Confirmed" },
+    { key: "picked",     label: "Picked" },
+    { key: "dispatched", label: "Dispatched" },
+    { key: "invoiced",   label: "Invoiced" },
+    { key: "paid",       label: "Paid" },
+  ];
+  const stageIdx = (s) => STAGES.findIndex(x => x.key === s);
+
+  // The single advance action for a row, by current stage.
+  const advance = async (row) => {
+    setBusyId(row.soId); setErr("");
+    try {
+      if (row.stage === "confirmed") await advanceDistOrderToPick(row.soId, currentUser?.id);
+      else if (row.stage === "picked") await advanceDistOrderToDispatch(row.soId, currentUser?.id);
+      else if (row.stage === "dispatched") await advanceDistOrderToInvoice(row.soId, currentUser?.id);
+      else if (row.stage === "invoiced") { navigate("dist-receipts"); setBusyId(null); return; }
+      await load();
+    } catch (e) { setErr(e.message); alert(e.message); }
+    setBusyId(null);
+  };
+  const nextLabel = (stage) => stage === "confirmed" ? "Pick" : stage === "picked" ? "Dispatch" : stage === "dispatched" ? "Invoice" : stage === "invoiced" ? "Record payment" : null;
+
+  const active = rows.filter(r => r.stage !== "paid");
+  const done = rows.filter(r => r.stage === "paid");
+
+  const Stepper = ({ stage }) => {
+    const cur = stageIdx(stage);
+    return (
+      <div className="flex items-center gap-1">
+        {STAGES.map((s, i) => (
+          <div key={s.key} className="flex items-center gap-1">
+            <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${i < cur ? "bg-emerald-900/40 text-emerald-300" : i === cur ? "bg-indigo-700 text-white" : "bg-slate-800 text-slate-500"}`}>
+              {i < cur ? <Check size={10}/> : null}{s.label}
+            </div>
+            {i < STAGES.length - 1 && <ChevronRight size={11} className={i < cur ? "text-emerald-500" : "text-slate-700"}/>}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const Row = ({ row }) => {
+    const label = nextLabel(row.stage);
+    return (
+      <div className="px-4 py-3 border-b border-slate-800/50">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <button onClick={() => openDoc("so", row.soId)} className="font-mono text-sm text-indigo-300 hover:underline">{row.soNumber}</button>
+            <span className="text-slate-400 text-sm ml-2">{cName(row.customerId)}</span>
+            <div className="text-[11px] text-slate-500">{row.lineCount} line{row.lineCount!==1?"s":""} · {row.orderDate}</div>
+          </div>
+          {label && <button onClick={() => advance(row)} disabled={busyId === row.soId} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 flex-shrink-0">{busyId === row.soId ? "Working…" : <>{label} <ChevronRight size={13}/></>}</button>}
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <Stepper stage={row.stage}/>
+          <div className="flex items-center gap-2 text-[10px] text-slate-500">
+            {row.pickNumber && <button onClick={() => openDoc("pick", row.pickId)} className="font-mono hover:text-indigo-300">{row.pickNumber}</button>}
+            {row.dispatchNumber && <button onClick={() => openDoc("dispatch", row.dispatchId)} className="font-mono hover:text-indigo-300">{row.dispatchNumber}</button>}
+            {row.invoiceNumber && <button onClick={() => openDoc("invoice", row.invoiceId)} className="font-mono hover:text-indigo-300">{row.invoiceNumber}</button>}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-slate-400">{active.length} order{active.length!==1?"s":""} in fulfilment{done.length ? ` · ${done.length} completed` : ""}</div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
+        <>
+          <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">In fulfilment</div>
+            {active.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No orders in fulfilment. Confirm a sales order to start.</div> : active.map(r => <Row key={r.soId} row={r}/>)}
+          </div>
+          {done.length > 0 && (
+            <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">Completed (paid)</div>
+              {done.map(r => <Row key={r.soId} row={r}/>)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -43558,8 +43674,7 @@ export default function App() {
         { key: "dist-customers",  label: "Customers", icon: Users },
         { key: "dist-pricelists", label: "Price Lists", icon: Tag },
         { key: "dist-sales-orders", label: "Sales Orders", icon: ClipboardList },
-        { key: "dist-picks",      label: "Picks", icon: ClipboardList },
-        { key: "dist-dispatch",   label: "Dispatch", icon: Truck },
+        { key: "dist-fulfilment", label: "Fulfilment", icon: Truck },
         { key: "dist-invoices",   label: "Invoices", icon: FileText },
         { key: "dist-receipts",   label: "Payments Received", icon: PoundSterling },
         { key: "dist-credit-notes", label: "Credit Notes", icon: Receipt },
@@ -43931,8 +44046,8 @@ export default function App() {
             {effectiveActiveView === "dist-customers" && <DistCustomersView currentUser={currentUser} stores={stores}/>}
             {effectiveActiveView === "dist-pricelists" && <DistPriceListView/>}
             {effectiveActiveView === "dist-sales-orders" && <DistSalesOrderView currentUser={currentUser} setActiveView={setActiveView}/>}
-            {effectiveActiveView === "dist-picks" && <DistPicksView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
-            {effectiveActiveView === "dist-dispatch" && <DistDispatchView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
+            {effectiveActiveView === "dist-fulfilment" && <DistFulfilmentView currentUser={currentUser}/>}
+            {(effectiveActiveView === "dist-picks" || effectiveActiveView === "dist-dispatch") && <DistFulfilmentView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}

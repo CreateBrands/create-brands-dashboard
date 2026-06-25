@@ -9847,6 +9847,99 @@ export async function fetchDistSalesOrderDetail(soId) {
     status: { invoiced: soInvoices.length > 0, paid, picked: picks.length > 0, dispatched: dispatches.length > 0 },
   };
 }
+
+// ── ORDER-CENTRIC FULFILMENT ENGINE ─────────────────────────────────────────
+// Pick and Dispatch are TRANSITION STATES of a sales order, not standalone
+// documents you create independently. These functions advance ONE order one
+// stage at a time, fully server-side, each guarded so an order can never fork
+// into duplicate picks/dispatches/invoices.
+
+// Stage of an order in the fulfilment pipeline.
+//   confirmed → picked → dispatched → invoiced → paid
+export async function fetchDistFulfilmentBoard() {
+  const [orders, picks, dispatches, invoices] = await Promise.all([
+    fetchDistSalesOrders({ status: ["confirmed", "picking", "dispatched", "invoiced"] }).catch(() => []),
+    fetchDistPicks({}).catch(() => []),
+    fetchDistDispatches({}).catch(() => []),
+    fetchDistInvoices({}).catch(() => []),
+  ]);
+  const paidMap = await fetchDistInvoicePaidMap(invoices.map(i => i.id)).catch(() => new Map());
+  const rows = orders.map(so => {
+    const pick = picks.find(p => p.soId === so.id) || null;
+    const dispatch = dispatches.find(d => d.soId === so.id) || null;
+    const soInvoices = invoices.filter(i => i.soId === so.id);
+    const invoice = soInvoices[0] || null;
+    const fullyPaid = soInvoices.length > 0 && soInvoices.every(i => {
+      const gt = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : 0;
+      const p = paidMap.get(i.id) || 0; return gt > 0 ? p + 0.005 >= gt : false;
+    });
+    let stage = "confirmed";
+    if (fullyPaid) stage = "paid";
+    else if (invoice) stage = "invoiced";
+    else if (dispatch) stage = "dispatched";
+    else if (pick) stage = "picked";
+    return {
+      soId: so.id, soNumber: so.soNumber, customerId: so.customerId, orderDate: so.orderDate,
+      lineCount: (so.lines || []).length, stage,
+      pickId: pick?.id || null, pickNumber: pick?.pickNumber || null,
+      dispatchId: dispatch?.id || null, dispatchNumber: dispatch?.dispatchNumber || null,
+      invoiceId: invoice?.id || null, invoiceNumber: invoice?.invoiceNumber || null,
+    };
+  });
+  // Order by stage (earliest first) then date.
+  const rank = { confirmed: 0, picked: 1, dispatched: 2, invoiced: 3, paid: 4 };
+  rows.sort((a, b) => (rank[a.stage] - rank[b.stage]) || (new Date(b.orderDate || 0) - new Date(a.orderDate || 0)));
+  return rows;
+}
+
+// Advance: confirmed → picked. Auto-FEFO allocates batches for every SO line.
+// Guarded: throws if a pick already exists (createDistPick also guards).
+export async function advanceDistOrderToPick(soId, createdBy) {
+  const so = (await fetchDistSalesOrders({})).find(s => s.id === soId);
+  if (!so) throw new Error("Order not found.");
+  const existing = (await fetchDistPicks({})).filter(p => p.soId === soId && p.status !== "cancelled");
+  if (existing.length) throw new Error("This order already has a pick.");
+  // FEFO each line.
+  const lines = [];
+  for (const l of (so.lines || [])) {
+    if (!l.itemId || !(Number(l.qty) > 0)) continue;
+    const alloc = await suggestDistFefo(l.itemId, l.qty).catch(() => []);
+    const got = alloc.reduce((s, a) => s + a.qty, 0);
+    if (got + 0.0005 < Number(l.qty)) {
+      throw new Error(`Not enough stock to pick ${l.qty} of an item (only ${got.toFixed(2)} available). Receive stock first.`);
+    }
+    for (const a of alloc) lines.push({ itemId: l.itemId, batchId: a.batchId, qty: a.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null });
+  }
+  if (!lines.length) throw new Error("Nothing to pick on this order.");
+  return createDistPick({ soId, customerId: so.customerId, status: "picked", createdBy }, lines);
+}
+
+// Advance: picked → dispatched. Ships the order's pick (reduces stock, posts COGS).
+// Guarded: throws if already dispatched, or if no pick exists.
+export async function advanceDistOrderToDispatch(soId, createdBy) {
+  const picks = (await fetchDistPicks({})).filter(p => p.soId === soId);
+  const pick = picks.find(p => p.status === "picked") || picks[0];
+  if (!pick) throw new Error("This order hasn't been picked yet.");
+  const existing = (await fetchDistDispatches({})).filter(d => d.soId === soId);
+  if (existing.length) throw new Error("This order has already been dispatched.");
+  // Build dispatch lines from the pick's batch allocations.
+  const lines = (pick.lines || []).map(l => ({ itemId: l.itemId, batchId: l.batchId, qty: l.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null }));
+  if (!lines.length) throw new Error("This pick has no lines to dispatch.");
+  return postDistDispatch({ soId, pickId: pick.id, customerId: pick.customerId, createdBy }, lines);
+}
+
+// Advance: dispatched → invoiced. Bills the customer for the dispatch.
+// Guarded: throws if already invoiced, or if no dispatch exists.
+export async function advanceDistOrderToInvoice(soId, createdBy) {
+  const dispatches = (await fetchDistDispatches({})).filter(d => d.soId === soId);
+  const dispatch = dispatches[0];
+  if (!dispatch) throw new Error("This order hasn't been dispatched yet.");
+  const existing = (await fetchDistInvoices({})).filter(i => i.soId === soId);
+  if (existing.length) throw new Error("This order has already been invoiced.");
+  const lines = (dispatch.lines || []).map(l => ({ itemId: l.itemId, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null }));
+  if (!lines.length) throw new Error("This dispatch has no lines to invoice.");
+  return postDistInvoice({ soId, dispatchId: dispatch.id, customerId: dispatch.customerId, createdBy, vatMode: "exclusive" }, lines);
+}
 // Dispatch: write a negative (issue) movement per line at its batch, then post
 // Dr COGS 5000 / Cr Stock 1200 at total landed cost. Idempotent on distdisp:.
 export async function postDistDispatch(dispatch, lines = []) {
