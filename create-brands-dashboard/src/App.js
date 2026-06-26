@@ -9045,6 +9045,7 @@ const SETTINGS_ACCENTS = {
   amber:  { box: "bg-amber-500/15 text-amber-300",   ring: "border-amber-500/20" },
   indigo: { box: "bg-indigo-500/15 text-indigo-300", ring: "border-indigo-500/20" },
   rose:   { box: "bg-rose-500/15 text-rose-300",     ring: "border-rose-500/20" },
+  green:  { box: "bg-green-500/15 text-green-300",    ring: "border-green-500/20" },
   slate:  { box: "bg-slate-500/15 text-slate-300",   ring: "border-slate-500/20" },
 };
 function SettingsLanding({ title, description, sections, active, onSelect, renderPanel }) {
@@ -10329,7 +10330,7 @@ function DistItemsView({ currentUser }) {
   );
 }
 
-function CogsView({ stores = [], canFeature = () => true, initialTab, hideTabs }) {
+function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub, hideTabs }) {
   const [tab, setTab] = useState(initialTab || "inventory");
   const ALL_TABS = [
     { key: "inventory", label: "Inventory" },
@@ -10374,7 +10375,7 @@ function CogsView({ stores = [], canFeature = () => true, initialTab, hideTabs }
       {effectiveTab === "reconcile" && <CogsReconciliation stores={stores}/>}
       {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
       {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
-      {effectiveTab === "actualcogs" && <ActualCogs stores={stores}/>}
+      {effectiveTab === "actualcogs" && <ActualCogs stores={stores} initialSub={initialSub} hideTabs={hideTabs}/>}
     </div>
   );
 }
@@ -11568,10 +11569,10 @@ function OrderInspector({ stores = [] }) {
   );
 }
 
-function ActualCogs({ stores = [] }) {
+function ActualCogs({ stores = [], initialSub, hideTabs }) {
   const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
-  const [sub, setSub] = useState("counts"); // counts | purchases | variance
+  const [sub, setSub] = useState(initialSub || "counts"); // counts | purchases | variance | settings | pricechanges
   const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
   return (
@@ -11581,11 +11582,13 @@ function ActualCogs({ stores = [] }) {
           <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
             {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
           </select></div>
+        {!hideTabs && (
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
           {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].map(([k,l])=>(
             <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
+        )}
       </div>
       <p className="text-xs text-slate-500">Actual COGS = opening stock value + purchases − closing stock value. Weekly full counts: each count is both that week's closing and next week's opening. Variance compares actual against the theoretical (recipe × sales) engine — the gap is waste, over-portioning, or loss.</p>
       {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money}/>}
@@ -43666,8 +43669,10 @@ export default function App() {
   // COGS/Inventory, Notifications, Payslip Inbox. Legacy keys redirect.
   const [setupTab, setSetupTab] = useState(""); // "" = landing grid; else "panel" or "panel:subtab"
   // setupTab carries an optional deep-link sub-tab as "panel:subtab".
-  const setupPanel = setupTab.includes(":") ? setupTab.split(":")[0] : setupTab;
-  const setupSubtab = setupTab.includes(":") ? setupTab.split(":")[1] : undefined;
+  const _setupParts = setupTab.split(":");
+  const setupPanel = _setupParts[0] || "";
+  const setupSubtab = _setupParts[1];      // panel's sub-tab (e.g. "actualcogs")
+  const setupSubsub = _setupParts[2];      // deeper sub-tab (e.g. "counts" inside Actual COGS)
   const SETUP_TAB_KEYS = ["ops-settings", "admin", "access-control", "cogs", "notifications", "payslip-inbox"];
   useEffect(() => {
     if (SETUP_TAB_KEYS.includes(activeView)) setSetupTab(activeView);
@@ -45263,14 +45268,24 @@ export default function App() {
                 },
                 {
                   key: "menu-costing", label: "Menu & Costing", icon: BarChart2, accent: "rose",
-                  desc: "Recipes, products, and stock costing.",
+                  desc: "Recipes, products, and POS mapping.",
                   items: [
                     { key: "cogs:inventory", label: "Inventory", desc: "Raw ingredients and costs.", gate: gCogs },
                     { key: "cogs:preps", label: "Preps", desc: "Prepared components and sub-recipes.", gate: gCogs },
                     { key: "cogs:products", label: "Products", desc: "Menu items and their recipes.", gate: gCogs },
                     { key: "cogs:modifiers", label: "Modifiers", desc: "Add-ons and option costing.", gate: gCogs },
                     { key: "cogs:mapping", label: "Mapping", desc: "Map POS items to recipes.", gate: gCogs },
-                    { key: "cogs:actualcogs", label: "Stock & Actual COGS", desc: "Stock counts and actual cost of goods.", gate: gCogs },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "stock-actual", label: "Stock & Actual COGS", icon: ClipboardList, accent: "green",
+                  desc: "Counts, purchases, and variance.",
+                  items: [
+                    { key: "cogs:actualcogs:counts", label: "Stock Counts", desc: "Weekly stock counts per store.", gate: gCogs },
+                    { key: "cogs:actualcogs:purchases", label: "Purchases", desc: "Purchase records feeding actual COGS.", gate: gCogs },
+                    { key: "cogs:actualcogs:variance", label: "Variance vs Theoretical", desc: "Actual vs recipe-based COGS gap.", gate: gCogs },
+                    { key: "cogs:actualcogs:settings", label: "Store Inventory Settings", desc: "Per-store inventory configuration.", gate: gCogs },
+                    { key: "cogs:actualcogs:pricechanges", label: "Price Changes", desc: "Ingredient price change history.", gate: gCogs },
                   ].filter(i => i.gate()),
                 },
                 {
@@ -45347,7 +45362,7 @@ export default function App() {
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
             {effectiveActiveView === "team" && teamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} hideTabs={true}/>}
+            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
