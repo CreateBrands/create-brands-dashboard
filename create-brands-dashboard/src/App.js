@@ -10330,7 +10330,7 @@ function DistItemsView({ currentUser }) {
 }
 
 function CogsView({ stores = [], canFeature = () => true, initialTab }) {
-  const [tab, setTab] = useState(initialTab || "inventory");
+  const [tab, setTab] = useState(initialTab || "");  // "" = card landing
   const ALL_TABS = [
     { key: "inventory", label: "Inventory" },
     { key: "preps",     label: "Preps" },
@@ -10344,33 +10344,75 @@ function CogsView({ stores = [], canFeature = () => true, initialTab }) {
     { key: "actualcogs", label: "Stock & Actual COGS" },
   ];
   // Each tab is matrix-controlled via feat.cogs.<key>. Only show granted tabs.
-  const TABS = ALL_TABS.filter(t => canFeature(`feat.cogs.${t.key}`));
-  // If the active tab isn't permitted (or none are), fall back to the first allowed.
-  const allowedKeys = TABS.map(t => t.key);
-  const effectiveTab = allowedKeys.includes(tab) ? tab : (allowedKeys[0] || null);
+  const allowed = k => canFeature(`feat.cogs.${k}`);
+  // Themed grouping for the card landing. Gates travel per-item; empty cards hide.
+  const cogsSections = [
+    {
+      key: "build", label: "Build", icon: ClipboardList, accent: "blue",
+      desc: "Ingredients, recipes, and menu products.",
+      items: [
+        { key: "inventory", label: "Inventory", desc: "Raw ingredients and costs." },
+        { key: "preps", label: "Preps", desc: "Prepared components and sub-recipes." },
+        { key: "modifiers", label: "Modifiers", desc: "Add-ons and option costing." },
+        { key: "products", label: "Products", desc: "Menu items and their recipes." },
+      ].filter(i => allowed(i.key)),
+    },
+    {
+      key: "mapping", label: "POS Mapping", icon: BarChart2, accent: "teal",
+      desc: "Connect POS items to recipes.",
+      items: [
+        { key: "mapping", label: "Mapping", desc: "Map POS items to recipes." },
+        { key: "discover", label: "Discover Modifiers", desc: "Find unmapped modifiers." },
+        { key: "modmapper", label: "Modifier Mapper", desc: "Bulk-map modifiers to costs." },
+      ].filter(i => allowed(i.key)),
+    },
+    {
+      key: "reconcile", label: "Reconcile & Audit", icon: CheckCircle, accent: "amber",
+      desc: "Compare theoretical against actual.",
+      items: [
+        { key: "actualcogs", label: "Stock & Actual COGS", desc: "Stock counts and actual cost of goods." },
+        { key: "reconcile", label: "COGS Reconcile", desc: "Reconcile theoretical vs actual." },
+        { key: "tillaudit", label: "Till Audit", desc: "Audit till items against recipes." },
+      ].filter(i => allowed(i.key)),
+    },
+  ];
+  const anyAllowed = ALL_TABS.some(t => allowed(t.key));
+  // If a deep-linked/active tab isn't permitted, drop back to the landing grid.
+  const effectiveTab = tab && allowed(tab) ? tab : "";
+
+  if (!anyAllowed) {
+    return <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">You don't have access to any COGS tabs. Ask an admin to grant them in Access &amp; Roles.</div>;
+  }
+
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Recipes</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Build inventory, preps, modifiers, and products. Costs roll up from your inventory prices.</p>
-      </div>
-      <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
-        {TABS.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effectiveTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
-        ))}
-      </div>
-      {!effectiveTab && <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">You don't have access to any COGS tabs. Ask an admin to grant them in Access &amp; Roles.</div>}
-      {effectiveTab === "inventory" && <InventoryBuilder/>}
-      {effectiveTab === "preps"     && <RecipeBuilder mode="preps"/>}
-      {effectiveTab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
-      {effectiveTab === "products"  && <RecipeBuilder mode="products"/>}
-      {effectiveTab === "mapping"   && <PosMapper stores={stores}/>}
-      {effectiveTab === "discover"  && <ModifierDiscovery stores={stores}/>}
-      {effectiveTab === "reconcile" && <CogsReconciliation stores={stores}/>}
-      {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
-      {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
-      {effectiveTab === "actualcogs" && <ActualCogs stores={stores}/>}
+      {!effectiveTab ? (
+        <SettingsLanding
+          title="COGS / Recipes"
+          description="Build inventory, preps, modifiers, and products. Costs roll up from your inventory prices."
+          sections={cogsSections}
+          active=""
+          onSelect={setTab}
+          renderPanel={() => null}
+        />
+      ) : (
+        <>
+          <button onClick={() => setTab("")}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-white">
+            <ChevronLeft size={15} /> COGS / Recipes
+          </button>
+          {effectiveTab === "inventory" && <InventoryBuilder/>}
+          {effectiveTab === "preps"     && <RecipeBuilder mode="preps"/>}
+          {effectiveTab === "modifiers" && <RecipeBuilder mode="modifiers"/>}
+          {effectiveTab === "products"  && <RecipeBuilder mode="products"/>}
+          {effectiveTab === "mapping"   && <PosMapper stores={stores}/>}
+          {effectiveTab === "discover"  && <ModifierDiscovery stores={stores}/>}
+          {effectiveTab === "reconcile" && <CogsReconciliation stores={stores}/>}
+          {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
+          {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
+          {effectiveTab === "actualcogs" && <ActualCogs stores={stores}/>}
+        </>
+      )}
     </div>
   );
 }
@@ -45257,22 +45299,7 @@ export default function App() {
                   key: "menu-costing", label: "Menu & Costing", icon: BarChart2, accent: "rose",
                   desc: "Recipes, products, and stock costing.",
                   items: [
-                    { key: "cogs:inventory", label: "Inventory", desc: "Raw ingredients and costs.", gate: gCogs },
-                    { key: "cogs:preps", label: "Preps", desc: "Prepared components and sub-recipes.", gate: gCogs },
-                    { key: "cogs:products", label: "Products", desc: "Menu items and their recipes.", gate: gCogs },
-                    { key: "cogs:modifiers", label: "Modifiers", desc: "Add-ons and option costing.", gate: gCogs },
-                    { key: "cogs:mapping", label: "Mapping", desc: "Map POS items to recipes.", gate: gCogs },
-                    { key: "cogs:actualcogs", label: "Stock & Actual COGS", desc: "Stock counts and actual cost of goods.", gate: gCogs },
-                  ].filter(i => i.gate()),
-                },
-                {
-                  key: "costing-tools", label: "Costing Tools", icon: Settings, accent: "slate",
-                  desc: "Diagnostics and reconciliation.",
-                  items: [
-                    { key: "cogs:discover", label: "Discover Modifiers", desc: "Find unmapped modifiers.", gate: gCogs },
-                    { key: "cogs:reconcile", label: "COGS Reconcile", desc: "Reconcile theoretical vs actual.", gate: gCogs },
-                    { key: "cogs:tillaudit", label: "Till Audit", desc: "Audit till items against recipes.", gate: gCogs },
-                    { key: "cogs:modmapper", label: "Modifier Mapper", desc: "Bulk-map modifiers to costs.", gate: gCogs },
+                    { key: "cogs", label: "COGS / Recipes", desc: "Inventory, recipes, POS mapping, and stock reconciliation.", gate: gCogs },
                   ].filter(i => i.gate()),
                 },
                 {
