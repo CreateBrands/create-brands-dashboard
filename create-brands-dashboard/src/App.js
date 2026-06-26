@@ -10329,8 +10329,8 @@ function DistItemsView({ currentUser }) {
   );
 }
 
-function CogsView({ stores = [], canFeature = () => true }) {
-  const [tab, setTab] = useState("inventory");
+function CogsView({ stores = [], canFeature = () => true, initialTab }) {
+  const [tab, setTab] = useState(initialTab || "inventory");
   const ALL_TABS = [
     { key: "inventory", label: "Inventory" },
     { key: "preps",     label: "Preps" },
@@ -20994,9 +20994,9 @@ function AdminPanelView({
   onAddStore, onUpdateStore, onDeleteStore,
   onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
   onUpdateKPITargets, onBulkImport,
-  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole
+  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, initialTab
 }) {
-  const [tab, setTab] = useState("locations");
+  const [tab, setTab] = useState(initialTab || "locations");
   const [locModal, setLocModal] = useState(null);
   const [userModal, setUserModal] = useState(null);
   const [deleteModal, setDeleteModal] = useState(null);
@@ -33945,9 +33945,9 @@ function OpsSettingsView({
   onCopyStoreStructure,
   onOpenEmployeeProfile,         // slice 6 — open profile drill-down from team row
   appSettings = {}, onSaveOtRules,
-  currentUser
+  currentUser, initialTab
 }) {
-  const [tab, setTab] = useState("structure");
+  const [tab, setTab] = useState(initialTab || "structure");
   const [clModal, setClModal] = useState(null);
   const [tuModal, setTuModal] = useState(null);
   const [ctModal, setCtModal] = useState(null);
@@ -43656,7 +43656,10 @@ export default function App() {
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
   // Setup is a single tabbed page: Ops Setup, Admin, Access Control,
   // COGS/Inventory, Notifications, Payslip Inbox. Legacy keys redirect.
-  const [setupTab, setSetupTab] = useState(""); // "" = show the settings landing grid
+  const [setupTab, setSetupTab] = useState(""); // "" = landing grid; else "panel" or "panel:subtab"
+  // setupTab carries an optional deep-link sub-tab as "panel:subtab".
+  const setupPanel = setupTab.includes(":") ? setupTab.split(":")[0] : setupTab;
+  const setupSubtab = setupTab.includes(":") ? setupTab.split(":")[1] : undefined;
   const SETUP_TAB_KEYS = ["ops-settings", "admin", "access-control", "cogs", "notifications", "payslip-inbox"];
   useEffect(() => {
     if (SETUP_TAB_KEYS.includes(activeView)) setSetupTab(activeView);
@@ -45204,32 +45207,81 @@ export default function App() {
             {effectiveActiveView === "setup" && (() => {
               const isOwner = currentUser.role === "owner";
               const isHqOrOwner = isOwner || currentUser.role === "hq_staff";
-              // Grouped, gate-filtered settings sections. Items already filtered by
-              // gate(); SettingsLanding hides any section left with no items.
+              const gOps = () => true;                  // Ops Setup leaves: no extra gate
+              const gCogs = () => canSeeView("cogs");   // COGS leaves
+              const gOwner = () => isOwner;             // Admin + Access Control
+              const gHq = () => isHqOrOwner;            // Payslip
+              // Themed grouping of LEAF items across panels. Each item key is
+              // "panel:subtab" so selecting it deep-links straight to that sub-tab.
+              // Gates travel with each item; SettingsLanding hides empty sections.
               const setupSections = [
                 {
-                  key: "configuration", label: "Configuration", icon: Settings, accent: "blue",
-                  desc: "Operational setup and inventory costing.",
+                  key: "locations-brands", label: "Locations & Brands", icon: Building2, accent: "blue",
+                  desc: "Your chains and physical stores.",
                   items: [
-                    { key: "ops-settings", label: "Ops Setup", icon: Settings, desc: "Stores, departments, checklists, temperature units, and shift presets." },
-                    { key: "cogs", label: "COGS / Inventory", icon: BarChart2, desc: "Theoretical COGS, recipes, and stock costing.", gate: () => canSeeView("cogs") },
-                  ].filter(i => !i.gate || i.gate()),
+                    { key: "admin:brands", label: "Brands", desc: "Chains like Chocoberry and Tove.", gate: gOwner },
+                    { key: "admin:stores", label: "Stores", desc: "Individual physical locations and Flipdish links.", gate: gOwner },
+                  ].filter(i => i.gate()),
                 },
                 {
-                  key: "people-pay", label: "People & Pay", icon: Users, accent: "teal",
-                  desc: "Payslips and staff notifications.",
+                  key: "team-structure", label: "Team & Structure", icon: Users, accent: "teal",
+                  desc: "Departments, roles, access, and shifts.",
                   items: [
-                    { key: "payslip-inbox", label: "Payslip Inbox", icon: Inbox, desc: "Review and distribute staff payslips.", gate: () => isHqOrOwner },
-                    { key: "notifications", label: "Notifications", icon: Bell, desc: "Manage in-app and push notifications." },
-                  ].filter(i => !i.gate || i.gate()),
+                    { key: "ops-settings:structure", label: "Structure", desc: "Departments and roles per store.", gate: gOps },
+                    { key: "admin:managers", label: "Managers & Access", desc: "Assign managers and their access.", gate: gOwner },
+                    { key: "admin:roles", label: "Roles", desc: "Custom roles and base permissions.", gate: gOwner },
+                    { key: "ops-settings:presets", label: "Shift Presets", desc: "Reusable shift templates.", gate: gOps },
+                  ].filter(i => i.gate()),
                 },
                 {
-                  key: "owner", label: "Owner", icon: ShieldCheck, accent: "amber",
-                  desc: "Admin tools and access control.",
+                  key: "compliance-tasks", label: "Compliance & Tasks", icon: CheckCircle, accent: "indigo",
+                  desc: "Checklists, temperatures, and cleaning.",
                   items: [
-                    { key: "admin", label: "Admin", icon: ShieldCheck, desc: "Brands, stores, users, and Flipdish links.", gate: () => isOwner },
-                    { key: "access-control", label: "Access Control", icon: Lock, desc: "Roles, permissions, and entity access.", gate: () => isOwner },
-                  ].filter(i => !i.gate || i.gate()),
+                    { key: "ops-settings:checklists", label: "Checklists", desc: "Opening, closing, and routine checks.", gate: gOps },
+                    { key: "ops-settings:tempunits", label: "Temp Units", desc: "Fridge and freezer temperature limits.", gate: gOps },
+                    { key: "ops-settings:cleaning", label: "Cleaning Tasks", desc: "Scheduled cleaning duties.", gate: gOps },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "pay-hours", label: "Pay & Hours", icon: PoundSterling, accent: "amber",
+                  desc: "Overtime, wages, payroll, and targets.",
+                  items: [
+                    { key: "ops-settings:overtime", label: "Overtime", desc: "Overtime rules and thresholds.", gate: gOps },
+                    { key: "admin:minwage", label: "Minimum Wage", desc: "Minimum wage bands by age.", gate: gOwner },
+                    { key: "admin:payroll", label: "Payroll", desc: "Payroll settings and exports.", gate: gOwner },
+                    { key: "admin:kpis", label: "KPI Targets", desc: "Per-store performance targets.", gate: gOwner },
+                    { key: "payslip-inbox", label: "Payslip Inbox", desc: "Review and distribute payslips.", gate: gHq },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "menu-costing", label: "Menu & Costing", icon: BarChart2, accent: "rose",
+                  desc: "Recipes, products, and stock costing.",
+                  items: [
+                    { key: "cogs:inventory", label: "Inventory", desc: "Raw ingredients and costs.", gate: gCogs },
+                    { key: "cogs:preps", label: "Preps", desc: "Prepared components and sub-recipes.", gate: gCogs },
+                    { key: "cogs:products", label: "Products", desc: "Menu items and their recipes.", gate: gCogs },
+                    { key: "cogs:modifiers", label: "Modifiers", desc: "Add-ons and option costing.", gate: gCogs },
+                    { key: "cogs:mapping", label: "Mapping", desc: "Map POS items to recipes.", gate: gCogs },
+                    { key: "cogs:actualcogs", label: "Stock & Actual COGS", desc: "Stock counts and actual cost of goods.", gate: gCogs },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "costing-tools", label: "Costing Tools", icon: Settings, accent: "slate",
+                  desc: "Diagnostics and reconciliation.",
+                  items: [
+                    { key: "cogs:discover", label: "Discover Modifiers", desc: "Find unmapped modifiers.", gate: gCogs },
+                    { key: "cogs:reconcile", label: "COGS Reconcile", desc: "Reconcile theoretical vs actual.", gate: gCogs },
+                    { key: "cogs:tillaudit", label: "Till Audit", desc: "Audit till items against recipes.", gate: gCogs },
+                    { key: "cogs:modmapper", label: "Modifier Mapper", desc: "Bulk-map modifiers to costs.", gate: gCogs },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "system", label: "System", icon: ShieldCheck, accent: "amber",
+                  desc: "Notifications and access control.",
+                  items: [
+                    { key: "notifications", label: "Notifications", desc: "In-app and push notifications.", gate: gOps },
+                    { key: "access-control", label: "Access Control", desc: "Roles, permissions, and entity access.", gate: gOwner },
+                  ].filter(i => i.gate()),
                 },
               ];
               return (
@@ -45243,7 +45295,8 @@ export default function App() {
                 />
               );
             })()}
-            {effectiveActiveView === "setup" && setupTab === "ops-settings" && <OpsSettingsView
+            {effectiveActiveView === "setup" && setupPanel === "ops-settings" && <OpsSettingsView
+              initialTab={setupSubtab}
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
               checklists={checklists} tempUnits={tempUnits}
@@ -45269,7 +45322,8 @@ export default function App() {
               onAddComment={handleAddPunchComment}
               payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
             />}
-            {effectiveActiveView === "setup" && setupTab === "admin" && currentUser.role === "owner" && <AdminPanelView
+            {effectiveActiveView === "setup" && setupPanel === "admin" && currentUser.role === "owner" && <AdminPanelView
+              initialTab={setupSubtab}
               brands={brands} users={users} entries={entries}
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
@@ -45281,11 +45335,11 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
-            {effectiveActiveView === "setup" && setupTab === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "setup" && setupTab === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
+            {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
             {effectiveActiveView === "team" && teamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
+            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
@@ -45303,7 +45357,7 @@ export default function App() {
             {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
-            {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "setup" && setupPanel === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
