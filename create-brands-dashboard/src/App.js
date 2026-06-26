@@ -6581,6 +6581,7 @@ function DistVendorsView({ currentUser, stores = [] }) {
 // ── PURCHASE ORDERS ──
 function DistPOView({ currentUser }) {
   const [pos, setPos] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [poQuery, setPoQuery] = useState(""); const [poStatus, setPoStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [p, v, it, tx] = await Promise.all([fetchDistPurchaseOrders(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setPos(p); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
@@ -6598,17 +6599,28 @@ function DistPOView({ currentUser }) {
   const editPO = (po) => setCreating({ ...po, lines: (po.lines || []).map(l => ({ ...l })) });
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
   const vendor = creating ? vendors.find(v => v.id === creating.vendorId) : null;
+  const visiblePos = pos.filter(po => {
+    if (poStatus !== "all" && (po.status || "") !== poStatus) return false;
+    if (poQuery.trim()) { const n = poQuery.trim().toLowerCase(); if (!((po.poNumber || "").toLowerCase().includes(n) || vName(po.vendorId).toLowerCase().includes(n))) return false; }
+    return true;
+  });
+  const poStatuses = [...new Set(pos.map(p => p.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pos.length} purchase order{pos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visiblePos.length} of {pos.length} purchase order{pos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div>
+      <div className="flex gap-2 flex-wrap">
+        <input value={poQuery} onChange={e => setPoQuery(e.target.value)} placeholder="Search PO# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+        <select value={poStatus} onChange={e => setPoStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{poStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
+        {(poQuery || poStatus !== "all") && <button onClick={() => { setPoQuery(""); setPoStatus("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+      </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {pos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No purchase orders yet.</div> : (
+          {visiblePos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{pos.length === 0 ? "No purchase orders yet." : "No purchase orders match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">PO#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
-                <tbody>{pos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
+                <tbody>{visiblePos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
                   <tr key={po.id} onClick={() => setDetailId(po.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{po.orderDate}</td>
                     <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{po.poNumber}</span></td>
@@ -6800,6 +6812,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
 // ── BILLS (Zoho table format) ──
 function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map()); const [detailId, setDetailId] = useState(null);
+  const [billQuery, setBillQuery] = useState(""); const [billStatus, setBillStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
@@ -6834,17 +6847,30 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
+  const visibleBills = bills.filter(b => {
+    if (billStatus !== "all" && (b.status || "") !== billStatus) return false;
+    if (billQuery.trim()) { const n = billQuery.trim().toLowerCase(); if (!((b.billNumber || "").toLowerCase().includes(n) || vName(b.vendorId).toLowerCase().includes(n))) return false; }
+    return true;
+  });
+  const billStatuses = [...new Set(bills.map(b => b.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{bills.length} bill{bills.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleBills.length} of {bills.length} bill{bills.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
+      {bills.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <input value={billQuery} onChange={e => setBillQuery(e.target.value)} placeholder="Search bill# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+          <select value={billStatus} onChange={e => setBillStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{billStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
+          {(billQuery || billStatus !== "all") && <button onClick={() => { setBillQuery(""); setBillStatus("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+        </div>
+      )}
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {bills.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No bills yet.</div> : (
+          {visibleBills.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{bills.length === 0 ? "No bills yet." : "No bills match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Bill#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-left px-4 py-2.5 font-semibold">Due Date</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="text-right px-4 py-2.5 font-semibold">Balance Due</th></tr></thead>
-                <tbody>{bills.map(b => {
+                <tbody>{visibleBills.map(b => {
                   const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType);
                   const amount = t.grandTotal;
                   const paid = paidMap.get(b.id) || 0;
@@ -8241,6 +8267,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
 function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
   const [invoices, setInvoices] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [dispatches, setDispatches] = useState([]);
   const [paidMap, setPaidMap] = useState(new Map()); const [soNumMap, setSoNumMap] = useState(new Map());
+  const [invQuery, setInvQuery] = useState(""); const [invStatus, setInvStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [inv, c, it, tx, d, sos] = await Promise.all([fetchDistInvoices(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates(), fetchDistDispatches(), fetchDistSalesOrders({})]); setInvoices(inv); setCustomers(c); setItems(it); setTaxRates(tx); setDispatches(d); setSoNumMap(new Map(sos.map(so => [so.id, so.soNumber]))); try { setPaidMap(await fetchDistInvoicePaidMap(inv.map(i => i.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
@@ -8269,10 +8296,23 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
+  const visibleInvoices = invoices.filter(inv => {
+    if (invStatus !== "all" && (inv.status || "") !== invStatus) return false;
+    if (invQuery.trim()) { const n = invQuery.trim().toLowerCase(); if (!((inv.invoiceNumber || "").toLowerCase().includes(n) || cName(inv.customerId).toLowerCase().includes(n))) return false; }
+    return true;
+  });
+  const invStatuses = [...new Set(invoices.map(i => i.status).filter(Boolean))];
   const uninvoicedDispatches = dispatches.filter(d => !invoices.some(inv => inv.dispatchId === d.id));
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{invoices.length} invoice{invoices.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New invoice</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleInvoices.length} of {invoices.length} invoice{invoices.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New invoice</button></div>
+      {invoices.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <input value={invQuery} onChange={e => setInvQuery(e.target.value)} placeholder="Search invoice# or customer…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+          <select value={invStatus} onChange={e => setInvStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{invStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
+          {(invQuery || invStatus !== "all") && <button onClick={() => { setInvQuery(""); setInvStatus("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+        </div>
+      )}
       {err && <div className="text-xs text-red-400">{err}</div>}
       {uninvoicedDispatches.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
@@ -8289,6 +8329,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {invoices.length === 0 && uninvoicedDispatches.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices yet.</div> : invoices.length > 0 && (
             <div className="overflow-x-auto">
+              {visibleInvoices.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices match your search/filter.</div> : (
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
                   <tr>
@@ -8303,7 +8344,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {invoices.map(inv => {
+                  {visibleInvoices.map(inv => {
                     const t = distComputeTotals(inv.lines, taxRates, inv.vatMode, inv.discountPercent, inv.discountType);
                     const amount = t.grandTotal + (Number(inv.shippingCharge) || 0);
                     const paid = paidMap.get(inv.id) || 0;
@@ -8334,6 +8375,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
                   })}
                 </tbody>
               </table>
+              )}
             </div>
           )}
         </div>
