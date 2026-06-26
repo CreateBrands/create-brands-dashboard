@@ -9025,6 +9025,114 @@ function DistGlobalSearch({ onClose }) {
   );
 }
 
+// ─── SettingsLanding ──────────────────────────────────────────────────────────
+// Reusable Zoho-style grouped settings landing. Renders a searchable grid of
+// icon-headed section cards (each listing its items); selecting an item swaps
+// the grid out for that item's panel with a "back to grid" button.
+//
+// Props:
+//   title       — page heading (e.g. "Setup")
+//   description — one line under the heading
+//   sections    — [{ key, label, icon, desc, accent, items: [{ key, label, icon, desc }] }]
+//                 items already gate-filtered by the caller; empty sections are hidden.
+//   active      — currently-selected item key ("" / null = show the grid)
+//   onSelect    — (itemKey) => void   (called with "" to return to the grid)
+//   renderPanel — (itemKey) => ReactNode   the panel for the selected item
+// The same pattern can later replace the COGS and Distribution tab rows.
+const SETTINGS_ACCENTS = {
+  blue:   { box: "bg-blue-500/15 text-blue-300",     ring: "border-blue-500/20" },
+  teal:   { box: "bg-teal-500/15 text-teal-300",     ring: "border-teal-500/20" },
+  amber:  { box: "bg-amber-500/15 text-amber-300",   ring: "border-amber-500/20" },
+  indigo: { box: "bg-indigo-500/15 text-indigo-300", ring: "border-indigo-500/20" },
+  rose:   { box: "bg-rose-500/15 text-rose-300",     ring: "border-rose-500/20" },
+  slate:  { box: "bg-slate-500/15 text-slate-300",   ring: "border-slate-500/20" },
+};
+function SettingsLanding({ title, description, sections, active, onSelect, renderPanel }) {
+  const [q, setQ] = useState("");
+  const visibleSections = (sections || []).filter(s => (s.items || []).length > 0);
+
+  // Find the active item (and its section) across all sections.
+  let activeItem = null, activeSection = null;
+  if (active) {
+    for (const s of visibleSections) {
+      const it = (s.items || []).find(i => i.key === active);
+      if (it) { activeItem = it; activeSection = s; break; }
+    }
+  }
+
+  // Sub-view: a single item selected.
+  if (activeItem) {
+    const AItemIcon = activeItem.icon || activeSection.icon;
+    const acc = SETTINGS_ACCENTS[activeSection.accent] || SETTINGS_ACCENTS.slate;
+    return (
+      <div>
+        <button onClick={() => onSelect("")}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-white mb-4">
+          <ChevronLeft size={15} /> {title}
+        </button>
+        <div className="flex items-center gap-2.5 mb-1">
+          <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg ${acc.box}`}>
+            {AItemIcon && <AItemIcon size={17} />}
+          </span>
+          <span className="text-lg font-bold text-white">{activeItem.label}</span>
+        </div>
+        {activeItem.desc && <p className="text-xs text-slate-500 mb-4 ml-[42px]">{activeItem.desc}</p>}
+        <div className="mt-2">{renderPanel(activeItem.key)}</div>
+      </div>
+    );
+  }
+
+  // Landing grid.
+  const term = q.trim().toLowerCase();
+  const filtered = term
+    ? visibleSections
+        .map(s => ({ ...s, items: s.items.filter(i => i.label.toLowerCase().includes(term) || (i.desc || "").toLowerCase().includes(term)) }))
+        .filter(s => s.items.length > 0)
+    : visibleSections;
+
+  return (
+    <div>
+      <div className="mb-1"><span className="text-lg font-bold text-white">{title}</span></div>
+      {description && <p className="text-sm text-slate-400 mb-4">{description}</p>}
+      <div className="relative mb-5 max-w-xs">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search settings"
+          className="w-full bg-slate-900/60 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none" />
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-sm text-slate-500 py-8 text-center">No settings match "{q}".</div>
+      ) : (
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))" }}>
+          {filtered.map(s => {
+            const acc = SETTINGS_ACCENTS[s.accent] || SETTINGS_ACCENTS.slate;
+            const SIcon = s.icon;
+            return (
+              <div key={s.key} className={`bg-slate-900/40 border ${acc.ring} rounded-xl p-4`}>
+                <div className="flex items-center gap-2.5 mb-1">
+                  <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg ${acc.box}`}>
+                    {SIcon && <SIcon size={16} />}
+                  </span>
+                  <span className="text-sm font-semibold text-white">{s.label}</span>
+                </div>
+                {s.desc && <p className="text-xs text-slate-500 mb-3 leading-snug">{s.desc}</p>}
+                <div className="flex flex-col">
+                  {s.items.map(it => (
+                    <button key={it.key} onClick={() => onSelect(it.key)}
+                      className="text-left text-sm text-indigo-300 hover:text-indigo-200 py-1.5">
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DistDashboard({ currentUser }) {
   const { navigate } = useDistDocLink();
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
@@ -43548,7 +43656,7 @@ export default function App() {
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
   // Setup is a single tabbed page: Ops Setup, Admin, Access Control,
   // COGS/Inventory, Notifications, Payslip Inbox. Legacy keys redirect.
-  const [setupTab, setSetupTab] = useState("ops-settings");
+  const [setupTab, setSetupTab] = useState(""); // "" = show the settings landing grid
   const SETUP_TAB_KEYS = ["ops-settings", "admin", "access-control", "cogs", "notifications", "payslip-inbox"];
   useEffect(() => {
     if (SETUP_TAB_KEYS.includes(activeView)) setSetupTab(activeView);
@@ -45096,26 +45204,46 @@ export default function App() {
             {effectiveActiveView === "setup" && (() => {
               const isOwner = currentUser.role === "owner";
               const isHqOrOwner = isOwner || currentUser.role === "hq_staff";
-              const setupTabs = [
-                { key: "ops-settings",  label: "Ops Setup" },
-                { key: "cogs",          label: "COGS / Inventory", gate: () => canSeeView("cogs") },
-                { key: "payslip-inbox", label: "Payslip Inbox", gate: () => isHqOrOwner },
-                { key: "notifications", label: "Notifications" },
-                { key: "admin",         label: "Admin", gate: () => isOwner },
-                { key: "access-control",label: "Access Control", gate: () => isOwner },
-              ].filter(t => !t.gate || t.gate());
-              const setupKeys = setupTabs.map(t => t.key);
-              const effSetupTab = setupKeys.includes(setupTab) ? setupTab : "ops-settings";
+              // Grouped, gate-filtered settings sections. Items already filtered by
+              // gate(); SettingsLanding hides any section left with no items.
+              const setupSections = [
+                {
+                  key: "configuration", label: "Configuration", icon: Settings, accent: "blue",
+                  desc: "Operational setup and inventory costing.",
+                  items: [
+                    { key: "ops-settings", label: "Ops Setup", icon: Settings, desc: "Stores, departments, checklists, temperature units, and shift presets." },
+                    { key: "cogs", label: "COGS / Inventory", icon: BarChart2, desc: "Theoretical COGS, recipes, and stock costing.", gate: () => canSeeView("cogs") },
+                  ].filter(i => !i.gate || i.gate()),
+                },
+                {
+                  key: "people-pay", label: "People & Pay", icon: Users, accent: "teal",
+                  desc: "Payslips and staff notifications.",
+                  items: [
+                    { key: "payslip-inbox", label: "Payslip Inbox", icon: Inbox, desc: "Review and distribute staff payslips.", gate: () => isHqOrOwner },
+                    { key: "notifications", label: "Notifications", icon: Bell, desc: "Manage in-app and push notifications." },
+                  ].filter(i => !i.gate || i.gate()),
+                },
+                {
+                  key: "owner", label: "Owner", icon: ShieldCheck, accent: "amber",
+                  desc: "Admin tools and access control.",
+                  items: [
+                    { key: "admin", label: "Admin", icon: ShieldCheck, desc: "Brands, stores, users, and Flipdish links.", gate: () => isOwner },
+                    { key: "access-control", label: "Access Control", icon: Lock, desc: "Roles, permissions, and entity access.", gate: () => isOwner },
+                  ].filter(i => !i.gate || i.gate()),
+                },
+              ];
               return (
-                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
-                  {setupTabs.map(t => (
-                    <button key={t.key} onClick={() => setSetupTab(t.key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effSetupTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
-                  ))}
-                </div>
+                <SettingsLanding
+                  title="Setup"
+                  description="Configure operations, people, pay, and ownership controls."
+                  sections={setupSections}
+                  active={setupTab}
+                  onSelect={setSetupTab}
+                  renderPanel={() => null}
+                />
               );
             })()}
-            {effectiveActiveView === "setup" && !["admin","access-control","cogs","notifications","payslip-inbox"].includes(setupTab) && <OpsSettingsView
+            {effectiveActiveView === "setup" && setupTab === "ops-settings" && <OpsSettingsView
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
               checklists={checklists} tempUnits={tempUnits}
