@@ -9039,6 +9039,115 @@ function DistGlobalSearch({ onClose }) {
 //   onSelect    — (itemKey) => void   (called with "" to return to the grid)
 //   renderPanel — (itemKey) => ReactNode   the panel for the selected item
 // The same pattern can later replace the COGS and Distribution tab rows.
+// ─── SubNav ───────────────────────────────────────────────────────────────────
+// Reusable collapsible left-rail sub-navigation. Replaces overflowing horizontal
+// tab rows. Accessible (role=tablist, arrow-key nav, aria-selected, aria-label on
+// collapsed icons), badge-aware, never overflows. Collapsed by default; the
+// expand/collapse choice persists in localStorage. On narrow screens it renders
+// as a dropdown so content stays full-width.
+//
+// Props:
+//   items    — [{ key, label, icon?, badge? }]  (already gate-filtered by caller)
+//   active   — current item key
+//   onSelect — (key) => void
+//   ariaLabel— accessible name for the nav (e.g. "Operations")
+//   children — the panel content for the active item (renders to the right)
+//   storageKey — localStorage key for the collapsed preference (default shared)
+function SubNav({ items = [], active, onSelect, ariaLabel = "Section", children, storageKey = "subnav.collapsed" }) {
+  const readPref = () => {
+    try { const v = window.localStorage.getItem(storageKey); return v == null ? true : v === "1"; }
+    catch { return true; }
+  };
+  const [collapsed, setCollapsed] = useState(readPref);
+  const [isNarrow, setIsNarrow] = useState(() => { try { return window.innerWidth < 768; } catch { return false; } });
+  const navRef = useRef(null);
+
+  useEffect(() => {
+    const onResize = () => { try { setIsNarrow(window.innerWidth < 768); } catch { /* noop */ } };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const toggle = () => {
+    setCollapsed(c => {
+      const next = !c;
+      try { window.localStorage.setItem(storageKey, next ? "1" : "0"); } catch { /* noop */ }
+      return next;
+    });
+  };
+
+  // Keyboard: up/down (or left/right) move between tabs; Home/End jump to ends.
+  const onKeyDown = (e) => {
+    const keys = items.map(i => i.key);
+    const idx = keys.indexOf(active);
+    let next = null;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") next = keys[(idx + 1) % keys.length];
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = keys[(idx - 1 + keys.length) % keys.length];
+    else if (e.key === "Home") next = keys[0];
+    else if (e.key === "End") next = keys[keys.length - 1];
+    if (next != null) { e.preventDefault(); onSelect(next); }
+  };
+
+  // Single item: no nav chrome needed.
+  if (items.length <= 1) {
+    return <div>{children}</div>;
+  }
+
+  // Mobile / narrow: dropdown selector above the content.
+  if (isNarrow) {
+    return (
+      <div className="space-y-3">
+        <select aria-label={ariaLabel} value={active} onChange={e => onSelect(e.target.value)}
+          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white">
+          {items.map(it => (
+            <option key={it.key} value={it.key}>{it.label}{it.badge ? ` (${it.badge})` : ""}</option>
+          ))}
+        </select>
+        <div>{children}</div>
+      </div>
+    );
+  }
+
+  // Desktop: collapsible left rail.
+  return (
+    <div className="flex gap-3">
+      <nav ref={navRef} role="tablist" aria-label={ariaLabel} aria-orientation="vertical"
+        onKeyDown={onKeyDown}
+        className={`flex-shrink-0 flex flex-col gap-0.5 ${collapsed ? "w-12 items-center" : "w-44"}`}>
+        <button onClick={toggle} aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+          className={`text-slate-500 hover:text-slate-300 p-1.5 mb-1 ${collapsed ? "" : "self-end"}`}>
+          {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
+        </button>
+        {items.map(it => {
+          const Icon = it.icon || ChevronRight;
+          const isActive = it.key === active;
+          if (collapsed) {
+            return (
+              <button key={it.key} role="tab" aria-selected={isActive} tabIndex={isActive ? 0 : -1}
+                onClick={() => onSelect(it.key)}
+                aria-label={it.badge ? `${it.label}, ${it.badge} pending` : it.label}
+                title={it.label}
+                className={`relative w-9 h-9 rounded-lg flex items-center justify-center ${isActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>
+                <Icon size={17} />
+                {it.badge ? <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" aria-hidden="true" /> : null}
+              </button>
+            );
+          }
+          return (
+            <button key={it.key} role="tab" aria-selected={isActive} tabIndex={isActive ? 0 : -1}
+              onClick={() => onSelect(it.key)}
+              className={`text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between gap-2 ${isActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>
+              <span className="flex items-center gap-2.5 min-w-0"><Icon size={16} className="flex-shrink-0" /><span className="truncate">{it.label}</span></span>
+              {it.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold flex-shrink-0">{it.badge}</span> : null}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
 const SETTINGS_ACCENTS = {
   blue:   { box: "bg-blue-500/15 text-blue-300",     ring: "border-blue-500/20" },
   teal:   { box: "bg-teal-500/15 text-teal-300",     ring: "border-teal-500/20" },
@@ -36557,12 +36666,12 @@ function CommunicationView({
           })}
         </div>
       ) : (
-        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 flex-wrap">
+        <div role="tablist" aria-label="Communication" className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 overflow-x-auto">
           {TABS.map(t => {
             const TIcon = t.icon;
             return (
-              <button key={t.key} onClick={() => setTab(t.key)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
+              <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all whitespace-nowrap ${
                   tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
                 }`}>
                 <TIcon size={13}/>
@@ -45104,27 +45213,19 @@ export default function App() {
               // Build the dashboard tabs available to this user. Same gates as the
               // old top-level views: Chain = owner/HQ; Store Analytics = canSeeView.
               const dashTabs = [
-                { key: "overview", label: "Dashboard" },
-                ...(isHqOrOwner && !ckOnly ? [{ key: "chain", label: "Chain Performance" }] : []),
-                ...(canSeeView("store-analytics") && !ckOnly ? [{ key: "store-analytics", label: "Store Analytics" }] : []),
+                { key: "overview", label: "Dashboard", icon: LayoutDashboard },
+                ...(isHqOrOwner && !ckOnly ? [{ key: "chain", label: "Chain Performance", icon: Globe }] : []),
+                ...(canSeeView("store-analytics") && !ckOnly ? [{ key: "store-analytics", label: "Store Analytics", icon: BarChart2 }] : []),
               ];
               const dashKeys = dashTabs.map(t => t.key);
               const effDashTab = dashKeys.includes(dashTab) ? dashTab : "overview";
               return (
-                <div className="space-y-4">
-                  {dashTabs.length > 1 && (
-                    <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
-                      {dashTabs.map(t => (
-                        <button key={t.key} onClick={() => setDashTab(t.key)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effDashTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
-                      ))}
-                    </div>
-                  )}
+                <SubNav items={dashTabs} active={effDashTab} onSelect={setDashTab} ariaLabel="Dashboard" storageKey="subnav.dashboard">
                   {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
                   {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
                   {effDashTab === "chain" && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
                   {effDashTab === "store-analytics" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
-                </div>
+                </SubNav>
               );
             })()}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
@@ -45133,51 +45234,28 @@ export default function App() {
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "operations" && (() => {
               const opsTabs = [
-                { key: "ops-network",    label: "Ops Overview" },
-                { key: "ops-tasks",      label: "Today's Tasks" },
-                { key: "ops-temps",      label: "Temperatures" },
-                { key: "ops-deliveries", label: "Deliveries" },
-                { key: "issues",         label: "Issues", badge: openIssueCount > 0 ? openIssueCount : null },
-                { key: "ops-assigns",    label: "Assignments" },
+                { key: "ops-network",    label: "Ops Overview",  icon: LayoutDashboard },
+                { key: "ops-tasks",      label: "Today's Tasks", icon: ListChecks },
+                { key: "ops-temps",      label: "Temperatures",  icon: Thermometer },
+                { key: "ops-deliveries", label: "Deliveries",    icon: Truck },
+                { key: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount : null },
+                { key: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
               ];
               const effOpsTab = OPS_TAB_KEYS.includes(opsTab) ? opsTab : "ops-network";
               return (
-                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
-                  {opsTabs.map(t => (
-                    <button key={t.key} onClick={() => setOpsTab(t.key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${effOpsTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
-                      {t.label}{t.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span> : null}
-                    </button>
-                  ))}
-                </div>
+                <SubNav items={opsTabs} active={effOpsTab} onSelect={setOpsTab} ariaLabel="Operations" storageKey="subnav.operations">
+                  {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+                  {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
+                  {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
+                  {effOpsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+                  {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+                  {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+                </SubNav>
               );
             })()}
-            {effectiveActiveView === "operations" && opsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-            {effectiveActiveView === "team" && teamTab === "hiring" && <HiringView
-              brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
-              applications={applications} opsTeam={opsTeam} currentUser={currentUser}
-              onAdd={addApplication} onUpdate={updateApplicationRow}
-              onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
-              onAddOpsTeam={addOpsTeam}
-              onOpenEmployeeProfile={openEmployeeProfile}
-              advertisedRoles={advertisedRoles}
-              onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
-            />}
-            {effectiveActiveView === "team" && teamTab === "training" && <TrainingAdminView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
-              opsTeam={opsTeam} currentUser={currentUser}
-            />}
-            {effectiveActiveView === "team" && teamTab === "contracts" && <ContractsAdminView
-              stores={stores} opsTeam={opsTeam} currentUser={currentUser}
-            />}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
               employeeId={selectedEmployeeId}
               brands={visibleBrands} stores={stores}
@@ -45188,35 +45266,54 @@ export default function App() {
             />}
             {effectiveActiveView === "team" && (() => {
               const teamTabs = [
-                { key: "team",            label: "Team", badge: pendingSetupCount > 0 ? pendingSetupCount : null },
-                { key: "time-attend",     label: "Time & Attendance" },
-                { key: "hiring",          label: "Hiring", badge: hiringBadge > 0 ? hiringBadge : null, gate: () => canSeeView("hiring") },
-                { key: "onboarding-board",label: "Onboarding Board", gate: () => canSeeView("onboarding-board") },
-                { key: "training",        label: "Training" },
-                { key: "contracts",       label: "Contracts" },
+                { key: "team",            label: "Team",              icon: Users,         badge: pendingSetupCount > 0 ? pendingSetupCount : null },
+                { key: "time-attend",     label: "Time & Attendance", icon: Clock },
+                { key: "hiring",          label: "Hiring",            icon: UserPlus,      badge: hiringBadge > 0 ? hiringBadge : null, gate: () => canSeeView("hiring") },
+                { key: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gate: () => canSeeView("onboarding-board") },
+                { key: "training",        label: "Training",          icon: GraduationCap },
+                { key: "contracts",       label: "Contracts",         icon: FileText },
               ].filter(t => !t.gate || t.gate());
               const teamKeys = teamTabs.map(t => t.key);
               const effTeamTab = teamKeys.includes(teamTab) ? teamTab : "team";
               return (
-                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
-                  {teamTabs.map(t => (
-                    <button key={t.key} onClick={() => setTeamTab(t.key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${effTeamTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
-                      {t.label}{t.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span> : null}
-                    </button>
-                  ))}
-                </div>
+                <SubNav items={teamTabs} active={effTeamTab} onSelect={setTeamTab} ariaLabel="Team" storageKey="subnav.team">
+                  {effTeamTab === "team" && <OpsTeamView
+                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+                    storeDepartments={storeDepartments} storeRoles={storeRoles}
+                    opsTeam={opsTeam} users={users}
+                    customRoles={customRoles}
+                    onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+                    onOpenEmployeeProfile={openEmployeeProfile}
+                    currentUser={currentUser}
+                  />}
+                  {effTeamTab === "hiring" && <HiringView
+                    brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
+                    applications={applications} opsTeam={opsTeam} currentUser={currentUser}
+                    onAdd={addApplication} onUpdate={updateApplicationRow}
+                    onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
+                    onAddOpsTeam={addOpsTeam}
+                    onOpenEmployeeProfile={openEmployeeProfile}
+                    advertisedRoles={advertisedRoles}
+                    onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
+                  />}
+                  {effTeamTab === "training" && <TrainingAdminView
+                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+                    opsTeam={opsTeam} currentUser={currentUser}
+                  />}
+                  {effTeamTab === "contracts" && <ContractsAdminView
+                    stores={stores} opsTeam={opsTeam} currentUser={currentUser}
+                  />}
+                  {effTeamTab === "time-attend" && <TimeAttendanceView
+                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
+                    punchRecords={punchRecords} currentUser={currentUser}
+                    onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
+                    onAddComment={handleAddPunchComment}
+                    payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
+                  />}
+                  {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
+                </SubNav>
               );
             })()}
-            {effectiveActiveView === "team" && !["time-attend","hiring","onboarding-board","training","contracts"].includes(teamTab) && <OpsTeamView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
-              storeDepartments={storeDepartments} storeRoles={storeRoles}
-              opsTeam={opsTeam} users={users}
-              customRoles={customRoles}
-              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
-              onOpenEmployeeProfile={openEmployeeProfile}
-              currentUser={currentUser}
-            />}
             {effectiveActiveView === "setup" && (() => {
               const isOwner = currentUser.role === "owner";
               const isHqOrOwner = isOwner || currentUser.role === "hq_staff";
@@ -45338,13 +45435,6 @@ export default function App() {
               appSettings={appSettings} onSaveOtRules={saveOtRules}
               currentUser={currentUser}
             />}
-            {effectiveActiveView === "team" && teamTab === "time-attend" && <TimeAttendanceView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
-              punchRecords={punchRecords} currentUser={currentUser}
-              onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
-              onAddComment={handleAddPunchComment}
-              payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
-            />}
             {effectiveActiveView === "setup" && setupPanel === "admin" && currentUser.role === "owner" && <AdminPanelView
               initialTab={setupSubtab} hideTabs={true}
               brands={brands} users={users} entries={entries}
@@ -45360,7 +45450,6 @@ export default function App() {
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
-            {effectiveActiveView === "team" && teamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
