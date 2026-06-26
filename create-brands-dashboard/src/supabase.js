@@ -852,6 +852,40 @@ export async function removeAvailability(id) {
   if (error) throw error;
 }
 
+// ── BUSY PERIODS (festivals / holidays the schedule flags as busy) ──
+function appBusyPeriodToDb(p) {
+  return {
+    id: p.id, name: p.name, faith: p.faith || null,
+    start_date: p.startDate, end_date: p.endDate,
+    intensity: p.intensity || "busy", staffing_note: p.staffingNote || null,
+    brand_id: p.brandId || null, store_id: p.storeId || null,
+    created_by: p.createdBy || null, updated_at: new Date().toISOString(),
+  };
+}
+function dbBusyPeriodToApp(p) {
+  return {
+    id: p.id, name: p.name, faith: p.faith || null,
+    startDate: p.start_date, endDate: p.end_date,
+    intensity: p.intensity || "busy", staffingNote: p.staffing_note || "",
+    brandId: p.brand_id || null, storeId: p.store_id || null,
+    createdBy: p.created_by || null, createdAt: p.created_at,
+  };
+}
+export async function fetchBusyPeriods() {
+  const { data, error } = await supabase.from("busy_periods").select("*").order("start_date", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(dbBusyPeriodToApp);
+}
+export async function upsertBusyPeriod(p) {
+  const { data, error } = await supabase.from("busy_periods").upsert(appBusyPeriodToDb(p), { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return dbBusyPeriodToApp(data);
+}
+export async function removeBusyPeriod(id) {
+  const { error } = await supabase.from("busy_periods").delete().eq("id", id);
+  if (error) throw error;
+}
+
 function appAvailToDb(a) {
   return {
     id: a.id, brand_id: a.brandId,

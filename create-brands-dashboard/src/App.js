@@ -35,6 +35,7 @@ import {
   fetchChecklistStates, upsertChecklistState,
   fetchAuditTrail, insertAuditEntry, clearAuditTrail,
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
+  fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
@@ -33874,7 +33875,7 @@ function AddAvailabilityModal({ brands, stores = [], opsTeam, onSave, onClose })
 }
 
 // ── Manager: Availability Tracker ─────────────────────────────────────────────
-function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, currentUser, onUpdate, onAdd, onDelete }) {
+function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, currentUser, onUpdate, onAdd, onDelete, busyPeriods = [] }) {
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   // Store scope: HQ/owner see everything; a manager sees only availability for
@@ -33936,7 +33937,20 @@ function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, c
   });
 
   const pendingCount = availability.filter(a => inMyScope(a) && a.status === "pending").length;
-  const handleApprove = (a) => onUpdate({ ...a, status: "approved", updatedAt: new Date().toISOString() });
+  const handleApprove = (a) => {
+    // Warn if this leave/unavailability overlaps a flagged busy festival/holiday period.
+    if (a.available === false) {
+      const aStart = a.date || a.startDate;
+      const aEnd = a.endDate || a.date || a.startDate;
+      const clashes = (busyPeriods || []).filter(p => rangesOverlap(aStart, aEnd, p.startDate, p.endDate)
+        && (!p.storeId || !a.storeId || p.storeId === a.storeId));
+      if (clashes.length) {
+        const names = clashes.map(p => `${p.name} (${p.startDate}${p.endDate && p.endDate !== p.startDate ? `–${p.endDate}` : ""})${p.intensity === "very_busy" ? " — VERY BUSY" : ""}`).join(", ");
+        if (!window.confirm(`⚠ Busy period clash\n\nThis time off overlaps a flagged busy period: ${names}.\n\nThese are your busier trading times — you may need MORE staff, not fewer. Approve anyway?`)) return;
+      }
+    }
+    onUpdate({ ...a, status: "approved", updatedAt: new Date().toISOString() });
+  };
   const handleReject  = (a, note) => onUpdate({ ...a, status: "rejected", managerNotes: note, updatedAt: new Date().toISOString() });
 
   const employeeOptions = [...new Map(
@@ -36035,7 +36049,136 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
 // SCHEDULE VIEW — totals, costs, copy-week, conflicts, coverage, drag-resize,
 // auto-fill, forecasted SPLH, lock, multi-select bulk, mobile day view
 // ═══════════════════════════════════════════════════════════════════════════════
-function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore, onUpdateMember }) {
+// ── Built-in multi-faith festival / holiday name list (dates entered by managers) ──
+// Names only — actual dates vary yearly and are set per-period by managers so
+// they're always correct for the year/locale.
+const FESTIVAL_LIST = [
+  { faith: "Secular / UK", items: ["New Year's Day", "Valentine's Day", "Mother's Day", "Father's Day", "Halloween", "Bonfire Night", "Bank Holiday", "Black Friday", "Boxing Day", "New Year's Eve"] },
+  { faith: "Christian", items: ["Christmas", "Christmas Eve", "Good Friday", "Easter Sunday", "Easter Monday", "Lent", "Pancake Day", "Advent", "Epiphany"] },
+  { faith: "Muslim", items: ["Ramadan", "Eid al-Fitr", "Eid al-Adha", "Muharram", "Mawlid", "Laylat al-Qadr"] },
+  { faith: "Hindu", items: ["Diwali", "Holi", "Navratri", "Dussehra", "Raksha Bandhan", "Janmashtami", "Ganesh Chaturthi", "Makar Sankranti"] },
+  { faith: "Sikh", items: ["Vaisakhi", "Guru Nanak Gurpurab", "Bandi Chhor Divas", "Hola Mohalla", "Guru Gobind Singh Jayanti"] },
+  { faith: "Jewish", items: ["Rosh Hashanah", "Yom Kippur", "Hanukkah", "Passover", "Purim", "Sukkot"] },
+  { faith: "Other / Cultural", items: ["Chinese New Year", "Vasakhi", "Vesak", "Navroz", "Local festival", "Sporting event", "School holidays", "Other"] },
+];
+
+// Does a date (yyyy-mm-dd) fall within any busy period? Returns the matching periods.
+function busyPeriodsOnDate(periods, dateStr, brandId, storeId) {
+  if (!dateStr) return [];
+  return (periods || []).filter(p => {
+    if (!p.startDate || !p.endDate) return false;
+    if (dateStr < p.startDate || dateStr > p.endDate) return false;
+    // Scope: a period with a brand/store set only applies there; null = all.
+    if (p.storeId && storeId && p.storeId !== storeId) return false;
+    if (p.brandId && brandId && p.brandId !== brandId && !p.storeId) return false;
+    return true;
+  });
+}
+
+// Do two date ranges overlap? (yyyy-mm-dd strings, inclusive)
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  if (!aStart || !bStart) return false;
+  const as = aStart, ae = aEnd || aStart, bs = bStart, be = bEnd || bStart;
+  return as <= be && bs <= ae;
+}
+
+// Banner on the schedule showing busy festival/holiday periods in/near the viewed week.
+function ScheduleBusyBanner({ busyPeriods, weekStart, weekEnd, brandId, storeId }) {
+  const relevant = (busyPeriods || []).filter(p => {
+    if (!rangesOverlap(p.startDate, p.endDate, weekStart, weekEnd)) return false;
+    if (p.storeId && storeId && p.storeId !== storeId) return false;
+    if (p.brandId && brandId && p.brandId !== brandId && !p.storeId) return false;
+    return true;
+  }).sort((a,b) => (a.startDate||"").localeCompare(b.startDate||""));
+  if (!relevant.length) return null;
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 px-4 py-3 mb-3">
+      <div className="flex items-center gap-2 mb-1.5"><span className="text-base">🎉</span><span className="text-sm font-bold text-amber-200">Busy period this week — plan staffing accordingly</span></div>
+      <div className="flex flex-wrap gap-2">
+        {relevant.map(p => (
+          <div key={p.id} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${p.intensity === "very_busy" ? "bg-red-900/40 text-red-200 border border-red-500/30" : "bg-amber-900/40 text-amber-100 border border-amber-500/30"}`}>
+            {p.name} · {p.startDate}{p.endDate && p.endDate !== p.startDate ? `–${p.endDate}` : ""}{p.intensity === "very_busy" ? " · VERY BUSY" : ""}{p.staffingNote ? ` · ${p.staffingNote}` : ""}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Manager screen to add/edit the festival/holiday busy periods.
+function BusyPeriodsManager({ busyPeriods, brands = [], stores = [], currentUser, onSave, onDelete, onClose }) {
+  const blank = { id: "", name: "", faith: "", startDate: "", endDate: "", intensity: "busy", staffingNote: "", brandId: "", storeId: "" };
+  const [editing, setEditing] = useState(null);
+  const [pick, setPick] = useState(""); // festival quick-pick
+  const startEdit = (p) => { setEditing(p ? { ...p } : { ...blank, id: `bp-${Date.now()}` }); setPick(""); };
+  const set = (k, v) => setEditing(e => ({ ...e, [k]: v }));
+  const save = async () => {
+    if (!editing.name.trim()) { alert("Give the period a name (pick a festival or type one)."); return; }
+    if (!editing.startDate) { alert("Set a start date."); return; }
+    const e = { ...editing, endDate: editing.endDate || editing.startDate, createdBy: currentUser?.id };
+    await onSave(e); setEditing(null);
+  };
+  const upcoming = [...(busyPeriods || [])].sort((a,b) => (a.startDate||"").localeCompare(b.startDate||""));
+  const todayStr = new Date().toISOString().slice(0,10);
+
+  return (
+    <Modal title="Festival & holiday periods" onClose={onClose} maxW="max-w-2xl"
+      footer={<button onClick={onClose} className="w-full py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Done</button>}>
+      <div className="space-y-4">
+        <p className="text-xs text-slate-400">Add the festivals and holidays that make your stores busy. These flag on the schedule and warn you when leave overlaps a busy period — so you can staff up instead of down.</p>
+
+        {!editing && <button onClick={() => startEdit(null)} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">+ Add busy period</button>}
+
+        {editing && (
+          <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-3 space-y-3">
+            <div>
+              <label className={labelCls}>Pick a festival (or type your own below)</label>
+              <select value={pick} onChange={e => { const v = e.target.value; setPick(v); if (v) { const [faith, name] = v.split("||"); setEditing(ed => ({ ...ed, name, faith })); } }} className={inputCls}>
+                <option value="">— Choose from list —</option>
+                {FESTIVAL_LIST.map(g => <optgroup key={g.faith} label={g.faith}>{g.items.map(it => <option key={it} value={`${g.faith}||${it}`}>{it}</option>)}</optgroup>)}
+              </select>
+            </div>
+            <div><label className={labelCls}>Name *</label><input value={editing.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Diwali, Christmas week, Eid" className={inputCls}/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>Start date *</label><input type="date" value={editing.startDate} onChange={e => set("startDate", e.target.value)} className={inputCls}/></div>
+              <div><label className={labelCls}>End date</label><input type="date" value={editing.endDate} onChange={e => set("endDate", e.target.value)} className={inputCls}/></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>How busy?</label><select value={editing.intensity} onChange={e => set("intensity", e.target.value)} className={inputCls}><option value="busy">Busy</option><option value="very_busy">Very busy</option></select></div>
+              <div><label className={labelCls}>Applies to</label><select value={editing.storeId || ""} onChange={e => set("storeId", e.target.value)} className={inputCls}><option value="">All stores</option>{stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}</select></div>
+            </div>
+            <div><label className={labelCls}>Staffing note (optional)</label><input value={editing.staffingNote} onChange={e => set("staffingNote", e.target.value)} placeholder="e.g. +2 FOH, expect long queues, limit leave" className={inputCls}/></div>
+            <div className="flex gap-2">
+              <button onClick={save} className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Save</button>
+              <button onClick={() => setEditing(null)} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {upcoming.length === 0 && !editing && <div className="text-sm text-slate-600 text-center py-6">No busy periods yet. Add Diwali, Christmas, Eid and others your stores feel.</div>}
+          {upcoming.map(p => {
+            const past = (p.endDate || p.startDate) < todayStr;
+            return (
+              <div key={p.id} className={`flex items-center justify-between rounded-xl border px-3 py-2.5 ${past ? "border-slate-800 bg-slate-900/40 opacity-60" : p.intensity === "very_busy" ? "border-red-500/30 bg-red-950/20" : "border-amber-500/30 bg-amber-950/10"}`}>
+                <div>
+                  <div className="text-sm font-bold text-white">{p.name} {p.intensity === "very_busy" && <span className="text-[10px] text-red-300">VERY BUSY</span>}</div>
+                  <div className="text-[11px] text-slate-500">{p.startDate}{p.endDate && p.endDate !== p.startDate ? `–${p.endDate}` : ""}{p.faith ? ` · ${p.faith}` : ""}{p.storeId ? " · 1 store" : " · all stores"}{p.staffingNote ? ` · ${p.staffingNote}` : ""}</div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => startEdit(p)} className="text-slate-500 hover:text-indigo-300"><Edit size={14}/></button>
+                  <button onClick={async () => { if (window.confirm(`Delete "${p.name}"?`)) await onDelete(p.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], busyPeriods = [], onSaveBusyPeriod, onDeleteBusyPeriod, onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore, onUpdateMember }) {
   const { user } = useAuth();
 
   // Store-first scoping (the new pattern). We pick a SINGLE store for the
@@ -36078,6 +36221,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   );
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [showBusyMgr, setShowBusyMgr] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
     if (!fullscreen) return;
@@ -36509,6 +36653,10 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           className="text-xs font-semibold px-3 py-1.5 rounded-lg border bg-slate-800 border-slate-700 text-slate-400 hover:text-white flex items-center gap-1">
           <Plus size={13}/> Add staff
         </button>
+        <button onClick={()=>setShowBusyMgr(true)} title="Manage festival & holiday busy periods"
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg border bg-amber-950/30 border-amber-500/30 text-amber-200 hover:text-white flex items-center gap-1">
+          🎉 Festivals
+        </button>
 
         <div className="flex items-center gap-2 flex-wrap ml-auto">
           {allWeekSlots.length > 0 && (
@@ -36566,6 +36714,9 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           )}
         </div>
       </div>
+
+      {/* ── Busy festival/holiday period banner ───────────────────────────── */}
+      <ScheduleBusyBanner busyPeriods={busyPeriods} weekStart={weekStartStr} weekEnd={weekDayStrs[6]} brandId={(stores.find(s=>s.id===storeId)?.brandId)||null} storeId={storeId}/>
 
       {/* ── Bulk action bar ─────────────────────────────────────────────── */}
       {selected.size > 0 && (
@@ -37241,6 +37392,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           onClose={()=>setSalesModal(false)}
         />
       )}
+      {showBusyMgr && <BusyPeriodsManager busyPeriods={busyPeriods} brands={brands} stores={stores} currentUser={currentUser} onSave={onSaveBusyPeriod} onDelete={onDeleteBusyPeriod} onClose={()=>setShowBusyMgr(false)}/>}
     </div>
   );
 }
@@ -42441,6 +42593,7 @@ export default function App() {
   const [hdTickets,       setHdTickets]      = useState([]);
   const [messages,        setMessages]       = useState([]);
   const [availability,    setAvailability]   = useState([]);
+  const [busyPeriods,     setBusyPeriods]    = useState([]);
   const [schedules,       setSchedules]      = useState([]);
   const [shiftPresets,    setShiftPresets]   = useState([]);
   const [punchRecords,    setPunchRecords]   = useState([]);
@@ -42876,6 +43029,7 @@ export default function App() {
     const interval = setInterval(() => {
       fetchHelpdeskTickets().then(setHdTickets).catch(()=>{});
       fetchAvailability().then(setAvailability).catch(()=>{});
+      fetchBusyPeriods().then(setBusyPeriods).catch(()=>{});
       fetchPunchRecords().then(setPunchRecords).catch(()=>{});  // belt + braces: catch any missed realtime updates
     }, 30000);
     return () => {
@@ -42885,6 +43039,9 @@ export default function App() {
       supabase.removeChannel(msgChannel);
     };
   }, [dbReady]);
+
+  // Initial load of busy periods (festival/holiday flags for the schedule).
+  useEffect(() => { if (dbReady) fetchBusyPeriods().then(setBusyPeriods).catch(()=>{}); }, [dbReady]);
 
   // ── Login / logout / impersonation ─────────────────────────────────────────
   const handleLogin  = useCallback(user => {
@@ -43487,6 +43644,8 @@ export default function App() {
   const handleClearAudit = useCallback(async()=>{try{await clearAuditTrail();setAuditTrail([]);showToast("Cleared");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const addAvailability    = useCallback(async a=>{const s=await insertAvailability(a);setAvailability(av=>av.some(x=>x.id===s.id)?av.map(x=>x.id===s.id?s:x):[s,...av]);}, []);
   const updateAvailability = useCallback(async a=>{const s=await upsertAvailability(a);setAvailability(av=>av.map(x=>x.id===s.id?s:x));}, []);
+  const saveBusyPeriod = useCallback(async p=>{const s=await upsertBusyPeriod(p);setBusyPeriods(bp=>bp.some(x=>x.id===s.id)?bp.map(x=>x.id===s.id?s:x):[...bp,s]);}, []);
+  const deleteBusyPeriod = useCallback(async id=>{await removeBusyPeriod(id);setBusyPeriods(bp=>bp.filter(x=>x.id!==id));}, []);
   const deleteAvailability = useCallback(async id=>{await removeAvailability(id);setAvailability(av=>av.filter(x=>x.id!==id));}, []);
   const addSchedule    = useCallback(async s=>{const saved=await upsertSchedule(s);setSchedules(ss=>ss.some(x=>x.id===saved.id)?ss.map(x=>x.id===saved.id?saved:x):[saved,...ss]);}, []);
   const deleteSchedule = useCallback(async id=>{await removeSchedule(id);setSchedules(ss=>ss.filter(x=>x.id!==id));}, []);
@@ -43915,8 +44074,8 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
-            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
-            {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})}/>}
+            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} busyPeriods={busyPeriods||[]} onSaveBusyPeriod={saveBusyPeriod} onDeleteBusyPeriod={deleteBusyPeriod} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
+            {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})} busyPeriods={busyPeriods||[]}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "operations" && (() => {
               const opsTabs = [
