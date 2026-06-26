@@ -42752,7 +42752,8 @@ function ApplyField({ label, hint, children }) {
 
 // ── Sidebar Component ─────────────────────────────────────────────────────────
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed,
-                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null }) {
+                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null,
+                    onSelectSub = null, subActiveTab = {} }) {
   // Only an actual owner gets the view-as picker. Impersonated views never show it
   // (avoid the "view as X → view as Y" rabbit hole).
   const canImpersonate = actualUser?.role === "owner" && onImpersonate;
@@ -42798,6 +42799,28 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     const count = parseInt(it.badge, 10) || 0;
     return count > (badgeSeen[it.key] ?? 0) ? it.badge : null;
   };
+
+  // ── Sub-item routing ────────────────────────────────────────────────────────
+  // A child with a `tab` field is a tab WITHIN a parent view (Operations/Team/
+  // Dashboard) — selecting it sets both the view and the tab via onSelectSub.
+  // A child without `tab` is its own view (e.g. Distribution) — plain navigation.
+  const selectChild = (c) => {
+    if (c.tab && c.view && onSelectSub) onSelectSub(c.view, c.tab);
+    else setActiveView(c.key);
+  };
+  const childIsActive = (c) => {
+    if (c.tab && c.view) return activeView === c.view && (subActiveTab[c.view] === c.tab);
+    return activeView === c.key;
+  };
+  const parentIsActive = (n) => {
+    if (!n.children) return activeView === n.key;
+    if (n.children[0]?.view) return activeView === n.children[0].view; // tab-style children
+    return activeView === n.key || n.children.some(c => c.key === activeView);
+  };
+
+  // Flyout when collapsed: which parent's children are showing, and whether pinned.
+  const [flyoutKey, setFlyoutKey] = useState(null);
+  const [flyoutPinned, setFlyoutPinned] = useState(false);
   const impersonationTargets = canImpersonate
     ? users.filter(u => u.id !== actualUser.id).sort((a, b) => {
         const order = { hq_staff: 0, manager: 1, staff: 2, owner: 3 };
@@ -42834,29 +42857,55 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
             {g.items.map(n => {
               const NIcon = n.icon;
               const active = activeView === n.key;
-              // Collapsible parent: has children (sub-views). Expanded when the
-              // parent or any child is the active view.
+              // Collapsible parent: has children (sub-views or sub-tabs).
               if (n.children && n.children.length) {
-                const childActive = n.children.some(c => c.key === activeView);
-                const expanded = active || childActive;
+                const isParentActive = parentIsActive(n);
+                const expanded = isParentActive;
+                const openParent = () => selectChild(n.children[0]);
+                const flyoutOpen = collapsed && flyoutKey === n.key;
                 return (
-                  <div key={n.key}>
-                    <button onClick={() => setActiveView(n.children[0].key)}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${childActive ? "text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
+                  <div key={n.key} className="relative"
+                    onMouseEnter={() => { if (collapsed && !flyoutPinned) setFlyoutKey(n.key); }}
+                    onMouseLeave={() => { if (collapsed && !flyoutPinned) setFlyoutKey(k => k === n.key ? null : k); }}>
+                    <button onClick={() => { if (collapsed) { setFlyoutPinned(p => !(flyoutKey === n.key && p)); setFlyoutKey(n.key); } else { openParent(); } }}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${isParentActive ? "text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
                       <NIcon size={15} className="flex-shrink-0"/>
                       {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
+                      {!collapsed && displayBadge(n) && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{displayBadge(n)}</span>}
                       {!collapsed && <ChevronDownIcon size={13} className={`flex-shrink-0 transition-transform ${expanded ? "" : "-rotate-90"}`}/>}
                     </button>
+                    {/* Expanded sidebar: inline accordion */}
                     {!collapsed && expanded && (
                       <div className="ml-3 pl-2 border-l border-slate-800 space-y-0.5 mt-0.5">
                         {n.children.map(c => {
                           const CIcon = c.icon;
-                          const cActive = activeView === c.key;
+                          const cActive = childIsActive(c);
                           return (
-                            <button key={c.key} onClick={() => setActiveView(c.key)}
-                              className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
-                              {CIcon && <CIcon size={13} className="flex-shrink-0"/>}
-                              <span className="flex-1 text-left truncate">{c.label}</span>
+                            <button key={c.key} onClick={() => selectChild(c)}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
+                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={13} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
+                              {c.badge && <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold flex-shrink-0">{c.badge}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Collapsed sidebar: flyout popout (hover to peek, click to pin) */}
+                    {flyoutOpen && (
+                      <div className="absolute left-full top-0 ml-1 z-50 min-w-[180px] bg-slate-900 border border-slate-700 rounded-xl shadow-xl p-1.5"
+                        onMouseLeave={() => { if (!flyoutPinned) setFlyoutKey(null); }}>
+                        <div className="text-xs font-bold text-slate-500 px-2 py-1 flex items-center justify-between">
+                          {n.label}
+                          {flyoutPinned && <button onClick={() => { setFlyoutPinned(false); setFlyoutKey(null); }} className="text-slate-600 hover:text-slate-300"><X size={12}/></button>}
+                        </div>
+                        {n.children.map(c => {
+                          const CIcon = c.icon;
+                          const cActive = childIsActive(c);
+                          return (
+                            <button key={c.key} onClick={() => { selectChild(c); setFlyoutPinned(false); setFlyoutKey(null); }}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
+                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={14} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
+                              {c.badge && <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold flex-shrink-0">{c.badge}</span>}
                             </button>
                           );
                         })}
@@ -44998,13 +45047,24 @@ export default function App() {
   // render an orphan header. Recomputed every render — cheap, no hook needed.
   const NAV_GROUPS_RAW = [
     { group: "OVERVIEW", items: [
-      { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
+      { key: "dashboard",   label: "Dashboard",     icon: BarChart2, children: [
+        { key: "dashboard:overview", view: "dashboard", tab: "overview", label: "Dashboard", icon: LayoutDashboard },
+        ...((currentUser.role === "owner" || currentUser.role === "hq_staff") ? [{ key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe }] : []),
+        ...(canSeeView("store-analytics") ? [{ key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2 }] : []),
+      ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
       { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
     ]},
     { group: "OPERATIONS", items: [
-      { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+      { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
+        { key: "operations:ops-network",    view: "operations", tab: "ops-network",    label: "Ops Overview",  icon: LayoutDashboard },
+        { key: "operations:ops-tasks",      view: "operations", tab: "ops-tasks",      label: "Today's Tasks", icon: ListChecks },
+        { key: "operations:ops-temps",      view: "operations", tab: "ops-temps",      label: "Temperatures",  icon: Thermometer },
+        { key: "operations:ops-deliveries", view: "operations", tab: "ops-deliveries", label: "Deliveries",    icon: Truck },
+        { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+        { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
+      ]},
       { key: "dist-order",     label: "Order from Distribution", icon: ShoppingCart, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
@@ -45030,7 +45090,14 @@ export default function App() {
       { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
-      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
+      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, children: [
+        { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
+        { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
+        ...(canSeeView("hiring") ? [{ key: "team:hiring", view: "team", tab: "hiring", label: "Hiring", icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null }] : []),
+        ...(canSeeView("onboarding-board") ? [{ key: "team:onboarding-board", view: "team", tab: "onboarding-board", label: "Onboarding Board", icon: ClipboardList }] : []),
+        { key: "team:training",        view: "team", tab: "training",        label: "Training",          icon: GraduationCap },
+        { key: "team:contracts",       view: "team", tab: "contracts",       label: "Contracts",         icon: FileText },
+      ]},
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
       { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
       { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
@@ -45143,6 +45210,12 @@ export default function App() {
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
+          onSelectSub={(view, tab) => {
+            const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab };
+            if (setters[view]) setters[view](tab);
+            setActiveView(view);
+          }}
+          subActiveTab={{ operations: opsTab, team: teamTab, dashboard: dashTab }}
           onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
@@ -45210,22 +45283,15 @@ export default function App() {
             {distSearchOpen && <DistGlobalSearch onClose={() => setDistSearchOpen(false)}/>}
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
-              // Build the dashboard tabs available to this user. Same gates as the
-              // old top-level views: Chain = owner/HQ; Store Analytics = canSeeView.
-              const dashTabs = [
-                { key: "overview", label: "Dashboard", icon: LayoutDashboard },
-                ...(isHqOrOwner && !ckOnly ? [{ key: "chain", label: "Chain Performance", icon: Globe }] : []),
-                ...(canSeeView("store-analytics") && !ckOnly ? [{ key: "store-analytics", label: "Store Analytics", icon: BarChart2 }] : []),
-              ];
-              const dashKeys = dashTabs.map(t => t.key);
+              const dashKeys = ["overview", ...(isHqOrOwner && !ckOnly ? ["chain"] : []), ...(canSeeView("store-analytics") && !ckOnly ? ["store-analytics"] : [])];
               const effDashTab = dashKeys.includes(dashTab) ? dashTab : "overview";
               return (
-                <SubNav items={dashTabs} active={effDashTab} onSelect={setDashTab} ariaLabel="Dashboard" storageKey="subnav.dashboard">
+                <div>
                   {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
                   {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
                   {effDashTab === "chain" && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
                   {effDashTab === "store-analytics" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
-                </SubNav>
+                </div>
               );
             })()}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
@@ -45233,24 +45299,16 @@ export default function App() {
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})} busyPeriods={busyPeriods||[]}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "operations" && (() => {
-              const opsTabs = [
-                { key: "ops-network",    label: "Ops Overview",  icon: LayoutDashboard },
-                { key: "ops-tasks",      label: "Today's Tasks", icon: ListChecks },
-                { key: "ops-temps",      label: "Temperatures",  icon: Thermometer },
-                { key: "ops-deliveries", label: "Deliveries",    icon: Truck },
-                { key: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount : null },
-                { key: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
-              ];
               const effOpsTab = OPS_TAB_KEYS.includes(opsTab) ? opsTab : "ops-network";
               return (
-                <SubNav items={opsTabs} active={effOpsTab} onSelect={setOpsTab} ariaLabel="Operations" storageKey="subnav.operations">
+                <div>
                   {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
                   {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
                   {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
                   {effOpsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
                   {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
                   {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-                </SubNav>
+                </div>
               );
             })()}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
@@ -45265,18 +45323,11 @@ export default function App() {
               onClose={closeEmployeeProfile}
             />}
             {effectiveActiveView === "team" && (() => {
-              const teamTabs = [
-                { key: "team",            label: "Team",              icon: Users,         badge: pendingSetupCount > 0 ? pendingSetupCount : null },
-                { key: "time-attend",     label: "Time & Attendance", icon: Clock },
-                { key: "hiring",          label: "Hiring",            icon: UserPlus,      badge: hiringBadge > 0 ? hiringBadge : null, gate: () => canSeeView("hiring") },
-                { key: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gate: () => canSeeView("onboarding-board") },
-                { key: "training",        label: "Training",          icon: GraduationCap },
-                { key: "contracts",       label: "Contracts",         icon: FileText },
-              ].filter(t => !t.gate || t.gate());
-              const teamKeys = teamTabs.map(t => t.key);
-              const effTeamTab = teamKeys.includes(teamTab) ? teamTab : "team";
+              const teamGate = { hiring: () => canSeeView("hiring"), "onboarding-board": () => canSeeView("onboarding-board") };
+              const allowed = (k) => !teamGate[k] || teamGate[k]();
+              const effTeamTab = allowed(teamTab) ? teamTab : "team";
               return (
-                <SubNav items={teamTabs} active={effTeamTab} onSelect={setTeamTab} ariaLabel="Team" storageKey="subnav.team">
+                <div>
                   {effTeamTab === "team" && <OpsTeamView
                     brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
                     storeDepartments={storeDepartments} storeRoles={storeRoles}
@@ -45311,7 +45362,7 @@ export default function App() {
                     payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
                   />}
                   {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
-                </SubNav>
+                </div>
               );
             })()}
             {effectiveActiveView === "setup" && (() => {
