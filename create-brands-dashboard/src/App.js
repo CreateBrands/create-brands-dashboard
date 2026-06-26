@@ -177,7 +177,7 @@ import {
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
-  Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon
+  Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -1930,7 +1930,291 @@ function SafeMarkdown({ text }) {
 
 // Employee self-service onboarding: their own tax declaration + policy
 // acknowledgements. Bank details are NOT here (owner/HR only). Shown in portal.
-function SteppedModuleContent({ content }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// BLOCK-BASED TRAINING CONTENT
+// New training modules store an array of typed blocks as JSON in the module's
+// `content` column. Legacy modules (plain text / markdown) still render via
+// SafeMarkdown — parseModuleContent detects which format a module uses.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Returns { format: 'blocks'|'legacy', blocks: [...] }.
+// New format: JSON string like {"v":1,"blocks":[...]}. Legacy: anything else.
+function parseModuleContent(content) {
+  if (!content || !content.trim()) return { format: "blocks", blocks: [] };
+  const t = content.trim();
+  if (t.startsWith("{") && t.includes('"blocks"')) {
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && Array.isArray(parsed.blocks)) return { format: "blocks", blocks: parsed.blocks };
+    } catch { /* fall through to legacy */ }
+  }
+  return { format: "legacy", blocks: [{ id: "legacy", type: "markdown", text: content }] };
+}
+
+function serializeBlocks(blocks) {
+  return JSON.stringify({ v: 1, blocks });
+}
+
+// Generate a short unique block id.
+function newBlockId() { return `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`; }
+
+// ── A single rendered block (trainee view) ──────────────────────────────────
+function RenderedBlock({ block }) {
+  const calloutStyle = {
+    info:    { bar: "border-sky-500",     bg: "bg-sky-950/30",     icon: Info,          ic: "text-sky-300" },
+    warning: { bar: "border-amber-500",   bg: "bg-amber-950/30",   icon: AlertTriangle, ic: "text-amber-300" },
+    tip:     { bar: "border-violet-500",  bg: "bg-violet-950/30",  icon: Lightbulb,     ic: "text-violet-300" },
+    success: { bar: "border-emerald-500", bg: "bg-emerald-950/30", icon: CheckCircle,   ic: "text-emerald-300" },
+  };
+  const ytId = (u) => { const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/.exec(u || ""); return m ? m[1] : null; };
+  const vimeoId = (u) => { const m = /vimeo\.com\/(?:video\/)?(\d+)/.exec(u || ""); return m ? m[1] : null; };
+
+  switch (block.type) {
+    case "markdown":
+      return <SafeMarkdown text={block.text} />;
+    case "heading": {
+      const lvl = block.level || 1;
+      const cls = lvl === 1 ? "text-xl font-bold text-white" : lvl === 2 ? "text-lg font-bold text-white" : "text-base font-bold text-slate-200";
+      return <div className={cls}>{block.text}</div>;
+    }
+    case "text":
+      return <SafeMarkdown text={block.text} />;
+    case "image":
+      return block.url ? (
+        <figure className="my-1">
+          <img src={block.url} alt={block.caption || ""} className="w-full rounded-xl border border-slate-800" />
+          {block.caption && <figcaption className="text-[11px] text-slate-500 mt-1 text-center">{block.caption}</figcaption>}
+        </figure>
+      ) : null;
+    case "video": {
+      const yt = ytId(block.url); const vm = vimeoId(block.url);
+      const src = yt ? `https://www.youtube.com/embed/${yt}` : vm ? `https://player.vimeo.com/video/${vm}` : null;
+      if (!src) return block.url ? <a href={block.url} target="_blank" rel="noopener noreferrer" className="text-indigo-300 underline">Watch video ↗</a> : null;
+      return (
+        <div className="my-1 rounded-xl overflow-hidden border border-slate-800" style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+          <iframe src={src} title="Training video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }} />
+        </div>
+      );
+    }
+    case "callout": {
+      const st = calloutStyle[block.kind] || calloutStyle.info;
+      const Icon = st.icon;
+      return (
+        <div className={`flex gap-2.5 rounded-xl border-l-4 ${st.bar} ${st.bg} px-3 py-2.5`}>
+          <Icon size={16} className={`${st.ic} flex-shrink-0 mt-0.5`} />
+          <div className="min-w-0 flex-1"><SafeMarkdown text={block.text} /></div>
+        </div>
+      );
+    }
+    case "quote":
+      return <div className="border-l-4 border-indigo-500/60 pl-3 py-1 italic text-slate-200"><SafeMarkdown text={block.text} /></div>;
+    case "table": {
+      const rows = block.rows || [];
+      if (!rows.length) return null;
+      const [head, ...body] = block.hasHeader ? rows : [null, ...rows];
+      return (
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-xs">
+            {head && <thead className="bg-slate-800/60"><tr>{head.map((c, ci) => <th key={ci} className="text-left px-3 py-2 font-semibold text-slate-200 border-b border-slate-700">{c}</th>)}</tr></thead>}
+            <tbody>{body.map((r, ri) => <tr key={ri} className="even:bg-slate-900/40">{r.map((c, ci) => <td key={ci} className="px-3 py-2 text-slate-300 border-b border-slate-800/50">{c}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+    }
+    case "divider":
+      return <hr className="border-slate-800" />;
+    default:
+      return null;
+  }
+}
+
+// ── Interactive quiz block (trainee answers, gets scored) ───────────────────
+// block: { type:'quiz', passMark:80, questions:[{ id, prompt, options:[...], correct:[indices], multi:bool }] }
+function QuizBlock({ block, onResult }) {
+  const questions = block.questions || [];
+  const passMark = Number(block.passMark) || 80;
+  const [answers, setAnswers] = useState({});   // qId -> Set of selected option indices
+  const [submitted, setSubmitted] = useState(false);
+
+  const toggle = (qId, idx, multi) => {
+    if (submitted) return;
+    setAnswers(a => {
+      const cur = new Set(a[qId] || []);
+      if (multi) { cur.has(idx) ? cur.delete(idx) : cur.add(idx); }
+      else { cur.clear(); cur.add(idx); }
+      return { ...a, [qId]: cur };
+    });
+  };
+
+  const score = useMemo(() => {
+    if (!questions.length) return 100;
+    let correct = 0;
+    questions.forEach(q => {
+      const sel = answers[q.id] || new Set();
+      const want = new Set(q.correct || []);
+      const ok = sel.size === want.size && [...sel].every(i => want.has(i));
+      if (ok) correct += 1;
+    });
+    return Math.round((correct / questions.length) * 100);
+  }, [answers, questions]);
+
+  const passed = score >= passMark;
+  const allAnswered = questions.every(q => (answers[q.id] && answers[q.id].size > 0));
+
+  const submit = () => {
+    setSubmitted(true);
+    onResult?.({ score, passed });
+  };
+  const retry = () => { setAnswers({}); setSubmitted(false); };
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <GraduationCap size={16} className="text-indigo-300" />
+        <span className="text-sm font-bold text-white">{block.title || "Quick check"}</span>
+        <span className="text-[10px] text-slate-500 ml-auto">Pass mark {passMark}%</span>
+      </div>
+
+      {questions.map((q, qi) => (
+        <div key={q.id} className="space-y-2">
+          <div className="text-sm text-slate-200 font-medium">{qi + 1}. {q.prompt}{q.multi && <span className="text-[10px] text-slate-500 ml-1">(select all that apply)</span>}</div>
+          <div className="space-y-1.5">
+            {(q.options || []).map((opt, oi) => {
+              const sel = (answers[q.id] || new Set()).has(oi);
+              const isCorrect = (q.correct || []).includes(oi);
+              let cls = "border-slate-700 bg-slate-950/40 hover:bg-slate-800/50 text-slate-300";
+              if (submitted) {
+                if (isCorrect) cls = "border-emerald-500/50 bg-emerald-950/30 text-emerald-200";
+                else if (sel && !isCorrect) cls = "border-rose-500/50 bg-rose-950/30 text-rose-200";
+                else cls = "border-slate-800 bg-slate-950/40 text-slate-500";
+              } else if (sel) {
+                cls = "border-indigo-500 bg-indigo-950/40 text-white";
+              }
+              return (
+                <button key={oi} type="button" onClick={() => toggle(q.id, oi, q.multi)} disabled={submitted}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors flex items-center gap-2 ${cls}`}>
+                  <span className={`w-4 h-4 rounded-${q.multi ? "" : "full"} border flex items-center justify-center flex-shrink-0 ${sel ? "border-current" : "border-slate-600"}`}>
+                    {sel && <span className="w-2 h-2 rounded-full bg-current" />}
+                  </span>
+                  <span className="flex-1">{opt}</span>
+                  {submitted && isCorrect && <CheckCircle size={14} className="text-emerald-400 flex-shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {!submitted ? (
+        <button onClick={submit} disabled={!allAnswered}
+          className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed">
+          {allAnswered ? "Submit answers" : "Answer all questions to submit"}
+        </button>
+      ) : (
+        <div className={`rounded-xl px-4 py-3 flex items-center justify-between ${passed ? "bg-emerald-950/40 border border-emerald-500/40" : "bg-rose-950/40 border border-rose-500/40"}`}>
+          <div className="flex items-center gap-2">
+            {passed ? <CheckCircle size={18} className="text-emerald-300" /> : <AlertTriangle size={18} className="text-rose-300" />}
+            <div>
+              <div className={`text-sm font-bold ${passed ? "text-emerald-200" : "text-rose-200"}`}>{passed ? "Passed" : "Not yet"} — {score}%</div>
+              <div className="text-[11px] text-slate-400">{passed ? "Great work." : `You need ${passMark}% to pass.`}</div>
+            </div>
+          </div>
+          {!passed && <button onClick={retry} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold hover:bg-slate-700">Try again</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Block-based module player (trainee view) ────────────────────────────────
+// Renders blocks. "step" blocks split content into guided cards with a progress
+// bar (like the old --- behaviour). A quiz must be passed before the module can
+// be marked complete — onQuizState reports whether all quizzes are passed.
+function BlockModulePlayer({ blocks, onQuizState }) {
+  // Split blocks into step-pages on divider blocks marked isStep.
+  const pages = useMemo(() => {
+    const out = [[]]; 
+    blocks.forEach(b => {
+      if (b.type === "step") out.push([]);
+      else out[out.length - 1].push(b);
+    });
+    return out.filter(p => p.length > 0);
+  }, [blocks]);
+
+  const quizzes = useMemo(() => blocks.filter(b => b.type === "quiz"), [blocks]);
+  const [quizResults, setQuizResults] = useState({});   // blockId -> {score,passed}
+
+  useEffect(() => {
+    if (!quizzes.length) { onQuizState?.(true); return; }
+    const allPassed = quizzes.every(q => quizResults[q.id]?.passed);
+    onQuizState?.(allPassed);
+  }, [quizResults, quizzes, onQuizState]);
+
+  const [pi, setPi] = useState(0);
+  useEffect(() => { if (pi > pages.length - 1) setPi(0); }, [pages.length, pi]);
+
+  const renderBlocks = (arr) => arr.map(b => (
+    <div key={b.id}>
+      {b.type === "quiz"
+        ? <QuizBlock block={b} onResult={(r) => setQuizResults(s => ({ ...s, [b.id]: r }))} />
+        : <RenderedBlock block={b} />}
+    </div>
+  ));
+
+  if (pages.length <= 1) {
+    return <div className="space-y-3">{renderBlocks(pages[0] || blocks)}</div>;
+  }
+
+  const pct = Math.round(((pi + 1) / pages.length) * 100);
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+          <span>Step {pi + 1} of {pages.length}</span><span>{pct}%</span>
+        </div>
+        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      <div className="min-h-[60px] space-y-3">{renderBlocks(pages[pi])}</div>
+      <div className="flex items-center justify-center gap-1.5">
+        {pages.map((_, idx) => (
+          <button key={idx} onClick={() => setPi(idx)} aria-label={`Go to step ${idx + 1}`}
+            className={`h-2 rounded-full transition-all ${idx === pi ? "w-5 bg-indigo-500" : "w-2 bg-slate-700 hover:bg-slate-600"}`} />
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => setPi(n => Math.max(0, n - 1))} disabled={pi === 0}
+          className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-30">
+          <ChevronLeft size={14} /> Back
+        </button>
+        {pi < pages.length - 1 ? (
+          <button onClick={() => setPi(n => Math.min(pages.length - 1, n + 1))}
+            className="flex items-center gap-1 px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500">
+            Next <ChevronRight size={14} />
+          </button>
+        ) : (
+          <span className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-400 font-semibold">
+            <CheckCircle size={14} /> End of module
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SteppedModuleContent({ content, onQuizState }) {
+  // New block-format modules route to the block player (handles steps + quizzes).
+  // Legacy markdown modules keep the original ---/SafeMarkdown behaviour below.
+  const parsed = useMemo(() => parseModuleContent(content), [content]);
+  if (parsed.format === "blocks") {
+    if (!parsed.blocks.length) return <div className="text-xs text-slate-600">No content for this module.</div>;
+    return <BlockModulePlayer blocks={parsed.blocks} onQuizState={onQuizState} />;
+  }
+  return <LegacySteppedContent content={content} />;
+}
+
+function LegacySteppedContent({ content }) {
   // Split a module's Markdown into steps on a horizontal-rule line (--- on its
   // own line). 2+ steps → guided card flow with a progress bar; otherwise the
   // content renders as a single block (fully backward-compatible with existing
@@ -3134,6 +3418,12 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
   const [loading, setLoading] = useState(true);
   const [openModuleId, setOpenModuleId] = useState(null);  // which module is expanded
   const [busyId, setBusyId] = useState(null);      // module being toggled
+  const [quizPass, setQuizPass] = useState({});    // moduleId -> bool (all quizzes passed)
+  // Does a module contain a quiz block? (quiz must be passed before completing.)
+  const moduleHasQuiz = (mod) => {
+    const parsed = parseModuleContent(mod?.content || "");
+    return parsed.format === "blocks" && parsed.blocks.some(b => b.type === "quiz");
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -3274,14 +3564,16 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                     const done = !!p?.completedAt;
                     const verified = !!p?.verifiedAt;
                     const open = openModuleId === mod.id;
+                    const hasQuiz = moduleHasQuiz(mod);
+                    const quizOk = !hasQuiz || quizPass[mod.id] || done;
                     return (
                       <div key={mod.id} className={`rounded-xl border ${done ? "bg-emerald-950/20 border-emerald-900" : "bg-slate-900 border-slate-800"}`}>
                         <div className="p-3 flex items-start gap-3">
                           <button
-                            onClick={() => handleToggle(mod, !done)}
-                            disabled={busyId === mod.id}
+                            onClick={() => { if (!quizOk && !done) { setOpenModuleId(mod.id); return; } handleToggle(mod, !done); }}
+                            disabled={busyId === mod.id || (!quizOk && !done)}
                             className={`mt-0.5 w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border ${done ? "bg-emerald-600 border-emerald-600" : "border-slate-600 hover:border-slate-400"} disabled:opacity-50`}
-                            title={done ? "Mark not done" : "Mark complete"}
+                            title={done ? "Mark not done" : (!quizOk ? "Pass the quiz first" : "Mark complete")}
                           >
                             {done && <Check size={13} className="text-white"/>}
                           </button>
@@ -3291,9 +3583,11 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                               {mod.required
                                 ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Required</span>
                                 : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Optional</span>}
+                              {hasQuiz && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-800 text-indigo-300 font-semibold">Quiz</span>}
                               {verified && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold">✓ Verified</span>}
                             </div>
                             {mod.description && <div className="text-xs text-slate-500 mt-0.5">{mod.description}</div>}
+                            {hasQuiz && !quizOk && <div className="text-[11px] text-amber-400/80 mt-0.5">Open the module and pass the quiz to complete it.</div>}
                           </div>
                           {mod.content && (
                             <button onClick={() => setOpenModuleId(open ? null : mod.id)} className="p-1 text-slate-500 hover:text-white flex-shrink-0">
@@ -3303,7 +3597,7 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                         </div>
                         {open && mod.content && (
                           <div className="px-3 pb-3 pt-1 border-t border-slate-800/60">
-                            <SteppedModuleContent content={mod.content}/>
+                            <SteppedModuleContent content={mod.content} onQuizState={(ok) => setQuizPass(s => s[mod.id] === ok ? s : { ...s, [mod.id]: ok })}/>
                           </div>
                         )}
                       </div>
@@ -23470,71 +23764,273 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
 // "Full guide (PDF)" link in the editor. Leave "" to hide the link.
 const TRAINING_GUIDE_PDF_URL = "";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BLOCK EDITOR (author side) — visual, add/edit/reorder blocks. No markdown
+// typing, no external libraries. Produces the block JSON stored in `content`.
+// ═══════════════════════════════════════════════════════════════════════════
+const BLOCK_TYPES = [
+  { type: "heading", label: "Heading", icon: Hash, make: () => ({ id: newBlockId(), type: "heading", level: 2, text: "" }) },
+  { type: "text",    label: "Text",    icon: Type, make: () => ({ id: newBlockId(), type: "text", text: "" }) },
+  { type: "image",   label: "Image",   icon: Image, make: () => ({ id: newBlockId(), type: "image", url: "", caption: "" }) },
+  { type: "video",   label: "Video",   icon: Video, make: () => ({ id: newBlockId(), type: "video", url: "" }) },
+  { type: "callout", label: "Callout", icon: Info, make: () => ({ id: newBlockId(), type: "callout", kind: "info", text: "" }) },
+  { type: "quote",   label: "Quote",   icon: Quote, make: () => ({ id: newBlockId(), type: "quote", text: "" }) },
+  { type: "table",   label: "Table",   icon: TableIcon, make: () => ({ id: newBlockId(), type: "table", hasHeader: true, rows: [["Column A", "Column B"], ["", ""]] }) },
+  { type: "quiz",    label: "Quiz",    icon: GraduationCap, make: () => ({ id: newBlockId(), type: "quiz", title: "Quick check", passMark: 80, questions: [{ id: newBlockId(), prompt: "", options: ["", ""], correct: [], multi: false }] }) },
+  { type: "step",    label: "Step break", icon: Minimize2, make: () => ({ id: newBlockId(), type: "step" }) },
+];
+
+function BlockEditor({ value, onChange, onInsertImage, uploadingImg }) {
+  const blocks = value;
+  const [addOpen, setAddOpen] = useState(false);
+  const inCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  const update = (id, patch) => onChange(blocks.map(b => b.id === id ? { ...b, ...patch } : b));
+  const remove = (id) => onChange(blocks.filter(b => b.id !== id));
+  const move = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= blocks.length) return;
+    const next = [...blocks];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    onChange(next);
+  };
+  const addBlock = (make) => { onChange([...blocks, make()]); setAddOpen(false); };
+
+  return (
+    <div className="space-y-2">
+      {blocks.length === 0 && (
+        <div className="text-center py-8 text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl">
+          No content yet. Click <span className="text-indigo-400 font-semibold">+ Add block</span> below to start building.
+        </div>
+      )}
+
+      {blocks.map((b, idx) => {
+        const meta = BLOCK_TYPES.find(t => t.type === b.type) || { label: b.type, icon: Type };
+        const Icon = meta.icon;
+        return (
+          <div key={b.id} className="rounded-xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-900/80 border-b border-slate-800">
+              <Icon size={13} className="text-slate-400" />
+              <span className="text-[11px] uppercase tracking-wide font-semibold text-slate-500">{meta.label}</span>
+              <div className="ml-auto flex items-center gap-0.5">
+                <button type="button" onClick={() => move(idx, -1)} disabled={idx === 0} title="Move up" className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-slate-200 disabled:opacity-30"><ChevronUp size={14} /></button>
+                <button type="button" onClick={() => move(idx, 1)} disabled={idx === blocks.length - 1} title="Move down" className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-slate-200 disabled:opacity-30"><ChevronDown size={14} /></button>
+                <button type="button" onClick={() => remove(b.id)} title="Delete" className="p-1 rounded hover:bg-rose-950 text-slate-500 hover:text-rose-300"><Trash2 size={14} /></button>
+              </div>
+            </div>
+            <div className="p-2.5">
+              <BlockFields block={b} update={(patch) => update(b.id, patch)} inCls={inCls} onInsertImage={onInsertImage} uploadingImg={uploadingImg} />
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Add block */}
+      <div className="relative">
+        <button type="button" onClick={() => setAddOpen(o => !o)}
+          className="w-full py-2 rounded-xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-indigo-500 text-sm font-semibold flex items-center justify-center gap-1.5">
+          <Plus size={15} /> Add block
+        </button>
+        {addOpen && (
+          <div className="absolute z-20 left-0 right-0 mt-1 bg-slate-900 border border-slate-700 rounded-xl shadow-xl p-2 grid grid-cols-3 gap-1.5">
+            {BLOCK_TYPES.map(t => {
+              const I = t.icon;
+              return (
+                <button key={t.type} type="button" onClick={() => addBlock(t.make)}
+                  className="flex flex-col items-center gap-1 py-2.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white text-[11px] font-semibold">
+                  <I size={16} /> {t.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Per-block field editors
+function BlockFields({ block, update, inCls, onInsertImage, uploadingImg }) {
+  switch (block.type) {
+    case "heading":
+      return (
+        <div className="flex gap-2">
+          <select value={block.level} onChange={e => update({ level: Number(e.target.value) })} className="px-2 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-300">
+            <option value={1}>H1</option><option value={2}>H2</option><option value={3}>H3</option>
+          </select>
+          <input value={block.text} onChange={e => update({ text: e.target.value })} placeholder="Heading text" className={inCls} />
+        </div>
+      );
+    case "text":
+      return <textarea value={block.text} onChange={e => update({ text: e.target.value })} rows={3} placeholder="Write text here. **bold**, *italic*, - bullets and [links](url) work." className={`${inCls} resize-y`} />;
+    case "quote":
+      return <textarea value={block.text} onChange={e => update({ text: e.target.value })} rows={2} placeholder="A key takeaway to highlight…" className={`${inCls} resize-y`} />;
+    case "callout":
+      return (
+        <div className="space-y-2">
+          <div className="flex gap-1.5">
+            {["info", "warning", "tip", "success"].map(k => (
+              <button key={k} type="button" onClick={() => update({ kind: k })}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border ${block.kind === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{k}</button>
+            ))}
+          </div>
+          <textarea value={block.text} onChange={e => update({ text: e.target.value })} rows={2} placeholder="Callout message…" className={`${inCls} resize-y`} />
+        </div>
+      );
+    case "image":
+      return (
+        <div className="space-y-2">
+          {block.url ? <img src={block.url} alt="" className="w-full max-h-48 object-contain rounded-lg border border-slate-800" /> : (
+            <label className={`flex items-center justify-center gap-2 py-6 rounded-lg border border-dashed border-slate-700 cursor-pointer text-sm ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
+              <Image size={16} /> {uploadingImg ? "Uploading…" : "Upload image"}
+              <input type="file" accept=".jpg,.jpeg,.png,.webp" disabled={uploadingImg} className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; onInsertImage(f, (url) => update({ url })); }} />
+            </label>
+          )}
+          {block.url && <button type="button" onClick={() => update({ url: "" })} className="text-[11px] text-rose-400 hover:text-rose-300">Remove image</button>}
+          <input value={block.caption || ""} onChange={e => update({ caption: e.target.value })} placeholder="Caption (optional)" className={inCls} />
+        </div>
+      );
+    case "video":
+      return (
+        <div className="space-y-1">
+          <input value={block.url} onChange={e => update({ url: e.target.value })} placeholder="Paste a YouTube or Vimeo link" className={inCls} />
+          <div className="text-[10px] text-slate-600">e.g. https://youtu.be/abc123 — it becomes an inline player for trainees.</div>
+        </div>
+      );
+    case "table":
+      return <TableBlockEditor block={block} update={update} inCls={inCls} />;
+    case "quiz":
+      return <QuizBlockEditor block={block} update={update} inCls={inCls} />;
+    case "step":
+      return <div className="text-[11px] text-slate-500 italic text-center py-1">— Everything after this becomes a new step card (with progress bar) —</div>;
+    default:
+      return null;
+  }
+}
+
+function TableBlockEditor({ block, update, inCls }) {
+  const rows = block.rows || [];
+  const setCell = (r, c, v) => { const next = rows.map(row => [...row]); next[r][c] = v; update({ rows: next }); };
+  const addRow = () => update({ rows: [...rows, rows[0]?.map(() => "") || ["", ""]] });
+  const addCol = () => update({ rows: rows.map(r => [...r, ""]) });
+  const delRow = (r) => update({ rows: rows.filter((_, i) => i !== r) });
+  const delCol = (c) => update({ rows: rows.map(r => r.filter((_, i) => i !== c)) });
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-[11px] text-slate-400">
+        <input type="checkbox" checked={!!block.hasHeader} onChange={e => update({ hasHeader: e.target.checked })} /> First row is a header
+      </label>
+      <div className="overflow-x-auto">
+        <table className="border-collapse">
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, c) => (
+                  <td key={c} className="p-0.5">
+                    <input value={cell} onChange={e => setCell(r, c, e.target.value)}
+                      className={`px-2 py-1 bg-slate-950 border border-slate-800 rounded text-xs text-slate-200 w-28 ${r === 0 && block.hasHeader ? "font-semibold" : ""}`} />
+                  </td>
+                ))}
+                <td className="p-0.5"><button type="button" onClick={() => delRow(r)} className="p-1 text-slate-600 hover:text-rose-400"><Trash2 size={12} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={addRow} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">+ Row</button>
+        <button type="button" onClick={addCol} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">+ Column</button>
+        {rows[0]?.length > 1 && <button type="button" onClick={() => delCol(rows[0].length - 1)} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-400 hover:bg-slate-700">− Column</button>}
+      </div>
+    </div>
+  );
+}
+
+function QuizBlockEditor({ block, update, inCls }) {
+  const questions = block.questions || [];
+  const setQ = (qid, patch) => update({ questions: questions.map(q => q.id === qid ? { ...q, ...patch } : q) });
+  const addQ = () => update({ questions: [...questions, { id: newBlockId(), prompt: "", options: ["", ""], correct: [], multi: false }] });
+  const delQ = (qid) => update({ questions: questions.filter(q => q.id !== qid) });
+  const setOpt = (q, oi, v) => setQ(q.id, { options: q.options.map((o, i) => i === oi ? v : o) });
+  const addOpt = (q) => setQ(q.id, { options: [...q.options, ""] });
+  const delOpt = (q, oi) => setQ(q.id, { options: q.options.filter((_, i) => i !== oi), correct: (q.correct || []).filter(i => i !== oi).map(i => i > oi ? i - 1 : i) });
+  const toggleCorrect = (q, oi) => {
+    const cur = new Set(q.correct || []);
+    if (q.multi) { cur.has(oi) ? cur.delete(oi) : cur.add(oi); }
+    else { cur.clear(); cur.add(oi); }
+    setQ(q.id, { correct: [...cur] });
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2 items-center">
+        <input value={block.title || ""} onChange={e => update({ title: e.target.value })} placeholder="Quiz title" className={inCls} />
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <span className="text-[11px] text-slate-500">Pass</span>
+          <input type="number" min={0} max={100} value={block.passMark} onChange={e => update({ passMark: Number(e.target.value) })} className="w-16 px-2 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200" />
+          <span className="text-[11px] text-slate-500">%</span>
+        </div>
+      </div>
+      {questions.map((q, qi) => (
+        <div key={q.id} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2.5 space-y-2">
+          <div className="flex gap-2 items-start">
+            <span className="text-xs text-slate-500 font-bold mt-2">{qi + 1}.</span>
+            <input value={q.prompt} onChange={e => setQ(q.id, { prompt: e.target.value })} placeholder="Question" className={inCls} />
+            <button type="button" onClick={() => delQ(q.id)} className="p-2 text-slate-600 hover:text-rose-400"><Trash2 size={13} /></button>
+          </div>
+          <label className="flex items-center gap-2 text-[11px] text-slate-400 ml-5">
+            <input type="checkbox" checked={!!q.multi} onChange={e => setQ(q.id, { multi: e.target.checked, correct: [] })} /> Allow multiple correct answers
+          </label>
+          <div className="space-y-1 ml-5">
+            {q.options.map((opt, oi) => {
+              const isCorrect = (q.correct || []).includes(oi);
+              return (
+                <div key={oi} className="flex items-center gap-2">
+                  <button type="button" onClick={() => toggleCorrect(q, oi)} title="Mark correct"
+                    className={`w-5 h-5 rounded-${q.multi ? "" : "full"} border flex items-center justify-center flex-shrink-0 ${isCorrect ? "bg-emerald-600 border-emerald-600 text-white" : "border-slate-600 text-transparent"}`}>
+                    <CheckCircle size={12} />
+                  </button>
+                  <input value={opt} onChange={e => setOpt(q, oi, e.target.value)} placeholder={`Option ${oi + 1}`} className={`${inCls} text-xs`} />
+                  {q.options.length > 2 && <button type="button" onClick={() => delOpt(q, oi)} className="p-1 text-slate-600 hover:text-rose-400"><X size={12} /></button>}
+                </div>
+              );
+            })}
+            <button type="button" onClick={() => addOpt(q)} className="text-[11px] text-indigo-400 hover:text-indigo-300 ml-7">+ Add option</button>
+          </div>
+          <div className="text-[10px] text-slate-600 ml-5">Tick the circle/box next to the correct answer{q.multi ? "s" : ""}.</div>
+        </div>
+      ))}
+      <button type="button" onClick={addQ} className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 font-semibold">+ Add question</button>
+    </div>
+  );
+}
+
 function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [title, setTitle]             = useState(module?.title || "");
   const [description, setDescription] = useState(module?.description || "");
   const [category, setCategory]       = useState(module?.category || "");
-  const [content, setContent]         = useState(module?.content || "");
+  // Parse existing content into blocks. Legacy markdown modules become a single
+  // editable "text" block so they can be opened and gradually re-built.
+  const initial = useMemo(() => {
+    const parsed = parseModuleContent(module?.content || "");
+    if (parsed.format === "blocks") return parsed.blocks;
+    return [{ id: newBlockId(), type: "text", text: module?.content || "" }];
+  }, [module]);
+  const [blocks, setBlocks]           = useState(initial);
   const [required, setRequired]       = useState(module?.required ?? true);
   const [type, setType]               = useState(module?.type || "onboarding");
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
   const [uploadingImg, setUploadingImg] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  const [preview, setPreview] = useState(false);
-  const contentRef = useRef(null);
+  const [preview, setPreview]         = useState(false);
 
-  // Insert text at the cursor (or append). Optionally place the caret inside.
-  const insertAtCursor = (snippet, caretOffsetFromEnd = 0) => {
-    const el = contentRef.current;
-    if (el && typeof el.selectionStart === "number") {
-      const start = el.selectionStart, end = el.selectionEnd;
-      const selected = content.slice(start, end);
-      const text = snippet.includes("$SEL") ? snippet.replace("$SEL", selected || "") : snippet;
-      const next = content.slice(0, start) + text + content.slice(end);
-      setContent(next);
-      // restore focus + caret after React updates
-      requestAnimationFrame(() => {
-        el.focus();
-        const pos = start + text.length - caretOffsetFromEnd;
-        el.setSelectionRange(pos, pos);
-      });
-    } else {
-      setContent(c => c + snippet.replace("$SEL", ""));
-    }
-  };
-  // Wrap the current selection (e.g. **bold**); if nothing selected, insert markers with caret between.
-  const wrapSelection = (before, after) => {
-    const el = contentRef.current;
-    if (el && typeof el.selectionStart === "number") {
-      const start = el.selectionStart, end = el.selectionEnd;
-      const sel = content.slice(start, end) || "";
-      const text = before + sel + after;
-      const next = content.slice(0, start) + text + content.slice(end);
-      setContent(next);
-      requestAnimationFrame(() => {
-        el.focus();
-        const pos = sel ? start + text.length : start + before.length;
-        el.setSelectionRange(pos, pos);
-      });
-    }
-  };
-
-  // Upload an image and insert a Markdown image tag at the cursor (or append).
-  const handleInsertImage = async (file) => {
+  // Upload an image, then hand the URL back to the calling block.
+  const handleBlockImage = async (file, setUrl) => {
     if (!file) return;
-    setUploadingImg(true);
-    setError("");
+    setUploadingImg(true); setError("");
     try {
       const { url } = await uploadEmployeeDocument(file);
-      const tag = `\n![${file.name.replace(/\.[^.]+$/, "")}](${url})\n`;
-      const el = contentRef.current;
-      if (el && typeof el.selectionStart === "number") {
-        const start = el.selectionStart, end = el.selectionEnd;
-        setContent(c => c.slice(0, start) + tag + c.slice(end));
-      } else {
-        setContent(c => c + tag);
-      }
+      setUrl(url);
     } catch (err) {
       console.error("Image upload failed:", err);
       setError(err?.message || "Image upload failed.");
@@ -23547,7 +24043,16 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
     if (!title.trim()) { setError("Title is required."); return; }
     setSaving(true); setError("");
     try {
-      await onSave({ title, description, category, content, required, type });
+      // Strip empty trailing blocks; serialize to JSON for storage.
+      const clean = blocks.filter(b => {
+        if (b.type === "step" || b.type === "divider") return true;
+        if (b.type === "image") return !!b.url;
+        if (b.type === "video") return !!b.url;
+        if (b.type === "quiz") return (b.questions || []).length > 0;
+        if (b.type === "table") return (b.rows || []).length > 0;
+        return (b.text || "").trim().length > 0;
+      });
+      await onSave({ title, description, category, content: serializeBlocks(clean), required, type });
     } catch (err) {
       console.error("Save module failed:", err);
       setError(err?.message || "Save failed.");
@@ -23557,6 +24062,9 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
 
   const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
   const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  // Quiz state for the preview (so preview behaves like the trainee view).
+  const previewContent = useMemo(() => serializeBlocks(blocks), [blocks]);
 
   return (
     <Modal onClose={onCancel} title={`${module ? "Edit" : "New"} ${isTemplate ? "template" : "module"}`}>
@@ -23580,125 +24088,33 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
           <label className={labelCls}>Short description</label>
           <input value={description} onChange={e => setDescription(e.target.value)} className={inputCls} placeholder="One line shown in the module list"/>
         </div>
+
         <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className={labelCls + " mb-0"}>Content</label>
-            <div className="flex items-center gap-3">
-              <button type="button" onClick={() => setPreview(p => !p)} className={`text-[11px] font-semibold ${preview ? "text-indigo-300" : "text-slate-400 hover:text-slate-200"}`}>
-                {preview ? "✎ Edit" : "👁 Preview"}
-              </button>
-              <button type="button" onClick={() => setShowHelp(h => !h)} className="text-[11px] font-semibold text-slate-400 hover:text-slate-200">
-                {showHelp ? "Hide help" : "Formatting help"}
-              </button>
-              <label className={`text-[11px] font-semibold cursor-pointer ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
-                {uploadingImg ? "Uploading…" : "+ Insert image"}
-                <input
-                  type="file"
-                  accept=".jpg,.jpeg,.png,.webp"
-                  disabled={uploadingImg}
-                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; handleInsertImage(f); }}
-                  className="hidden"
-                />
-              </label>
-            </div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className={labelCls + " mb-0"}>Module content</label>
+            <button type="button" onClick={() => setPreview(p => !p)} className={`text-[11px] font-semibold ${preview ? "text-indigo-300" : "text-slate-400 hover:text-slate-200"}`}>
+              {preview ? "✎ Back to editing" : "👁 Preview as trainee"}
+            </button>
           </div>
-          {/* Rich toolbar — click to insert, no Markdown typing required */}
-          {!preview && (() => {
-            const TBtn = ({ onClick, title, children }) => (
-              <button type="button" title={title} onClick={onClick}
-                className="px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1">
-                {children}
-              </button>
-            );
-            return (
-              <div className="flex flex-wrap gap-1.5 mb-2 p-2 bg-slate-950 border border-slate-800 rounded-xl">
-                <TBtn title="Big heading" onClick={() => insertAtCursor("\n# $SEL", 0)}><HeadingIcon size={13}/>H1</TBtn>
-                <TBtn title="Sub-heading" onClick={() => insertAtCursor("\n## $SEL", 0)}><HeadingIcon size={12}/>H2</TBtn>
-                <TBtn title="Bold" onClick={() => wrapSelection("**", "**")}><BoldIcon size={13}/></TBtn>
-                <TBtn title="Italic" onClick={() => wrapSelection("*", "*")}><span className="italic">I</span></TBtn>
-                <TBtn title="Bullet list" onClick={() => insertAtCursor("\n- $SEL", 0)}><ListChecks size={13}/></TBtn>
-                <TBtn title="Numbered list" onClick={() => insertAtCursor("\n1. $SEL", 0)}><ListOrdered size={13}/></TBtn>
-                <span className="w-px bg-slate-700 mx-0.5"/>
-                <TBtn title="Info box" onClick={() => insertAtCursor("\n:::info\n$SEL\n:::\n", 5)}><Info size={13} className="text-sky-300"/>Info</TBtn>
-                <TBtn title="Warning box" onClick={() => insertAtCursor("\n:::warning\n$SEL\n:::\n", 5)}><AlertTriangle size={13} className="text-amber-300"/>Warning</TBtn>
-                <TBtn title="Tip box" onClick={() => insertAtCursor("\n:::tip\n$SEL\n:::\n", 5)}><Lightbulb size={13} className="text-violet-300"/>Tip</TBtn>
-                <TBtn title="Success / Do box" onClick={() => insertAtCursor("\n:::success\n$SEL\n:::\n", 5)}><CheckCircle size={13} className="text-emerald-300"/>Do</TBtn>
-                <span className="w-px bg-slate-700 mx-0.5"/>
-                <TBtn title="Quote / key takeaway" onClick={() => insertAtCursor("\n> $SEL", 0)}><Quote size={13}/>Quote</TBtn>
-                <TBtn title="Embed a video (paste YouTube/Vimeo link)" onClick={() => insertAtCursor("\n:::video https://\n", 0)}><Video size={13} className="text-rose-300"/>Video</TBtn>
-                <TBtn title="Insert a table" onClick={() => insertAtCursor("\n| Column A | Column B |\n| --- | --- |\n| Row 1 | Value |\n| Row 2 | Value |\n", 0)}><TableIcon size={13}/>Table</TBtn>
-                <span className="w-px bg-slate-700 mx-0.5"/>
-                <TBtn title="Split into a new step card (with progress bar)" onClick={() => insertAtCursor("\n\n---\n\n", 0)}><Minimize2 size={12}/>Step break</TBtn>
-              </div>
-            );
-          })()}
-          {showHelp && (
-            <div className="mb-2 bg-slate-950 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 space-y-2">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                <div><code className="text-slate-300"># Heading</code> · big section title</div>
-                <div><code className="text-slate-300">## Sub-heading</code> · smaller</div>
-                <div><code className="text-slate-300">**bold**</code> · <b className="text-slate-200">bold</b></div>
-                <div><code className="text-slate-300">*italic*</code> · <i className="text-slate-200">italic</i></div>
-                <div><code className="text-slate-300">- item</code> · bullet list</div>
-                <div><code className="text-slate-300">1. item</code> · numbered list</div>
-                <div><code className="text-slate-300">[text](url)</code> · link</div>
-                <div>“+ Insert image” · upload a picture</div>
-              </div>
-              <div className="pt-2 border-t border-slate-800">
-                <div className="text-slate-300 font-semibold mb-1">Rich blocks (use the toolbar buttons)</div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                  <div><Info size={11} className="inline text-sky-300"/> <b className="text-slate-200">Info / Warning / Tip / Do</b> · highlighted boxes</div>
-                  <div><Video size={11} className="inline text-rose-300"/> <b className="text-slate-200">Video</b> · paste a YouTube/Vimeo link</div>
-                  <div><Quote size={11} className="inline"/> <b className="text-slate-200">Quote</b> · key takeaway</div>
-                  <div><TableIcon size={11} className="inline"/> <b className="text-slate-200">Table</b> · rows &amp; columns</div>
-                </div>
-                <div className="mt-1.5 text-slate-500">For video, just paste the link after <code className="text-slate-400">:::video</code> — e.g. <code className="text-slate-400">:::video https://youtu.be/abc123</code></div>
-              </div>
-              <div className="pt-2 border-t border-slate-800">
-                <div className="text-slate-300 font-semibold mb-1">Image beside text</div>
-                <pre className="bg-slate-900 border border-slate-800 rounded p-2 text-[10px] text-slate-300 whitespace-pre-wrap font-mono">{`:::row
-(click + Insert image here)
-Text that sits beside the image.
-:::`}</pre>
-                <div className="mt-1.5 text-slate-500">Markers <code className="text-slate-400">:::row</code> and <code className="text-slate-400">:::</code> each on their own line. Use <code className="text-slate-400">:::row-right</code> to put the image on the right. <b className="text-amber-400">Don't</b> type <code className="text-slate-400">![alt](</code> yourself before inserting — let the button add the whole image.</div>
-              </div>
-              <div className="pt-2 border-t border-slate-800 text-slate-500">
-                Use the <b className="text-slate-300">Preview</b> button to see exactly what trainees will see.
-                {TRAINING_GUIDE_PDF_URL && <> · <a href={TRAINING_GUIDE_PDF_URL} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 font-semibold">Full guide (PDF) ↗</a></>}
-              </div>
-            </div>
-          )}
           {preview ? (
-            <div className="w-full min-h-[240px] px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl">
-              {content.trim() ? <SteppedModuleContent content={content}/> : <div className="text-xs text-slate-600">Nothing to preview yet — switch to Edit and add some content.</div>}
+            <div className="px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl min-h-[200px]">
+              {blocks.length ? <SteppedModuleContent content={previewContent}/> : <div className="text-xs text-slate-600">Nothing to preview yet — add some blocks.</div>}
             </div>
           ) : (
-          <textarea
-            ref={contentRef}
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            rows={12}
-            className={`${inputCls} font-mono text-xs leading-relaxed`}
-            placeholder={"Click the buttons above to build your module — no code needed.\n\nOr type directly:\n# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis"}
-          />
+            <BlockEditor value={blocks} onChange={setBlocks} onInsertImage={handleBlockImage} uploadingImg={uploadingImg}/>
           )}
-          <div className="text-[10px] text-slate-600 mt-1">Build with the toolbar buttons above — or type directly. Hit <span className="text-indigo-400/80">Preview</span> to see what trainees see. <span className="text-indigo-400/80">Tip: use <code className="text-indigo-300">Step break</code> to split the module into guided cards with a progress bar.</span></div>
+          <div className="text-[10px] text-slate-600 mt-1.5">Build the module from blocks — text, images, video, callouts, tables and quizzes. Add a <b className="text-slate-400">Quiz</b> block to test understanding; trainees must pass it to complete the module.</div>
         </div>
+
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setType("onboarding")}
-              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "onboarding" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
-            >
+            <button type="button" onClick={() => setType("onboarding")}
+              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "onboarding" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}>
               🎓 Onboarding<div className="text-[10px] font-normal opacity-80 mt-0.5">New starters only</div>
             </button>
-            <button
-              type="button"
-              onClick={() => setType("training")}
-              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "training" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
-            >
+            <button type="button" onClick={() => setType("training")}
+              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "training" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}>
               📚 Training<div className="text-[10px] font-normal opacity-80 mt-0.5">All staff (reference library)</div>
             </button>
           </div>
@@ -23719,6 +24135,7 @@ Text that sits beside the image.
     </Modal>
   );
 }
+
 
 // ─── Hiring View ──────────────────────────────────────────────────────────────
 // Slice 1 of the staff onboarding pipeline. Lets managers + HQ + owner:
