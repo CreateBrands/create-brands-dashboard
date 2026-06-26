@@ -21589,7 +21589,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                         {!doneToday && a.type !== "temp" && <button onClick={() => onSignOff(a, taskName)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors">Sign off</button>}
                       </div>
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">Window: {a.winStart}–{a.winEnd}{a.role ? ` · 🎭 ${a.role}` : ""}</div>
+                    <div className="text-xs text-slate-500 mt-1">{(a.winStart || a.winEnd) ? `Window: ${a.winStart || "—"}–${a.winEnd || "—"}` : "Anytime today"}{a.role ? ` · 🎭 ${a.role}` : ""}</div>
                     {cl && totalItems > 0 && <div className="mt-2"><div className="flex justify-between text-xs text-slate-600 mb-1"><span>{doneItems}/{totalItems} items</span><span>{pct}%</span></div><div className="h-1.5 bg-slate-800 rounded-full"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/></div></div>}
                   </div>
                 </div>
@@ -22003,15 +22003,15 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
     weekday: item?.weekday || "Monday",
     date: item?.date || "",
     customDays: item?.customDays || [],
-    winStart: item?.winStart || "08:00",
-    winEnd: item?.winEnd || "10:00",
+    winStart: item?.winStart || "",
+    winEnd: item?.winEnd || "",
     priority: item?.priority || "normal",
     notes: item?.notes || "",
   });
   // Multi-check builder: when creating, you can add several checks for the same
   // task, each with its own time window + assignee. Editing works on a single
   // assignment (one check), so this list is only used in create mode.
-  const blankCheck = () => ({ winStart: "09:00", winEnd: "10:00", assignTo: "role", role: "", department: "", personId: "" });
+  const blankCheck = () => ({ winStart: "", winEnd: "", assignTo: "role", role: "", department: "", personId: "" });
   const [checks, setChecks] = useState(item ? [] : [blankCheck()]);
   const setCheck = (i, patch) => setChecks(cs => cs.map((c, idx) => idx === i ? { ...c, ...patch } : c));
   const addCheck = () => setChecks(cs => [...cs, blankCheck()]);
@@ -22068,9 +22068,11 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
       if (form.assignTo === "role" && !form.role) { alert("Please pick a role."); return; }
       if (form.assignTo === "department" && !form.department) { alert("Please pick a department."); return; }
       if (form.assignTo === "employee" && !form.personId) { alert("Please pick an employee."); return; }
+      if (form.winStart && form.winEnd && form.winEnd <= form.winStart) { alert("End time must be after start time."); return; }
       onSave({
         id: item.id,
         ...form,
+        winStart: form.winStart || null, winEnd: form.winEnd || null,
         role:       form.assignTo === "role" ? form.role : "",
         department: form.assignTo === "department" ? form.department : "",
         personId:   form.assignTo === "employee" ? form.personId : "",
@@ -22097,7 +22099,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
     const assignments = checks.map((c, i) => ({
       ...base,
       id: `as-${Date.now()}-${i}`,
-      winStart: c.winStart, winEnd: c.winEnd,
+      winStart: c.winStart || null, winEnd: c.winEnd || null,
       assignTo: c.assignTo,
       role:       c.assignTo === "role" ? c.role : "",
       department: c.assignTo === "department" ? c.department : "",
@@ -22157,7 +22159,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
         {form.freq === "weekly" && <div><label className={labelCls}>Day of week</label><select value={form.weekday} onChange={e => set("weekday", e.target.value)} className={inputCls}>{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d => <option key={d}>{d}</option>)}</select></div>}
         {form.freq === "once" && <div><label className={labelCls}>Date</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} className={inputCls}/></div>}
         {form.freq === "custom" && <div><label className={labelCls}>Custom days</label><div className="flex gap-2 flex-wrap">{days.map(d => <button key={d} onClick={() => set("customDays", form.customDays.includes(d) ? form.customDays.filter(x => x !== d) : [...form.customDays, d])} className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${form.customDays.includes(d) ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-600"}`}>{d}</button>)}</div></div>}
-        {item && <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Window Start</label><input type="time" value={form.winStart} onChange={e => set("winStart", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Window End</label><input type="time" value={form.winEnd} onChange={e => set("winEnd", e.target.value)} className={inputCls}/></div></div>}
+        {item && <div><div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Window Start</label><input type="time" value={form.winStart} onChange={e => set("winStart", e.target.value)} className={inputCls}/></div><div><label className={labelCls}>Window End</label><input type="time" value={form.winEnd} onChange={e => set("winEnd", e.target.value)} className={inputCls}/></div></div><p className="text-[11px] text-slate-500 mt-1">Leave blank for <span className="text-slate-300">anytime today</span> — the task won't be marked overdue.</p></div>}
 
         {!item && (
           <div className="space-y-2">
@@ -22176,6 +22178,7 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
                   <div><label className="text-[10px] uppercase text-slate-500">Start</label><input type="time" value={c.winStart} onChange={e => setCheck(i, { winStart: e.target.value })} className={inputCls}/></div>
                   <div><label className="text-[10px] uppercase text-slate-500">End</label><input type="time" value={c.winEnd} onChange={e => setCheck(i, { winEnd: e.target.value })} className={inputCls}/></div>
                 </div>
+                <p className="text-[10px] text-slate-500 -mt-1">Leave blank = anytime today (never overdue).</p>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[10px] uppercase text-slate-500">Assign to</label>
@@ -22284,7 +22287,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
               <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 ${od ? "bg-red-500/25" : "bg-slate-800"}`}>{{ checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" }[a.type] || "📋"}</div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
-                  <div><div className="text-sm font-bold text-white">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">Window: {a.winStart}–{a.winEnd}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
+                  <div><div className="text-sm font-bold text-white">{getTaskName(a.type, a.taskId)}</div><div className="flex items-center gap-2 mt-1 flex-wrap">{brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</span>}<span className="text-xs text-slate-500">{(a.winStart || a.winEnd) ? `Window: ${a.winStart || "—"}–${a.winEnd || "—"}` : "Anytime today"}</span>{od && <Badge label="⚠ OVERDUE" color="red"/>}{done && <Badge label="✓ Done today" color="emerald"/>}</div><div className="flex gap-2 mt-1.5 flex-wrap">{a.role && <Badge label={`🎭 ${a.role}`} color="violet"/>}<Badge label={a.freq} color="slate"/><Badge label={a.priority} color={a.priority==="critical"?"red":a.priority==="high"?"amber":"slate"}/></div></div>
                   {isManagerOrAbove(user.role) && <div className="flex gap-1.5 flex-shrink-0"><button onClick={() => { setEditItem(a); setShowForm(true); }} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button><button onClick={() => setDeleteId(a.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button></div>}
                 </div>
               </div>
