@@ -45065,7 +45065,7 @@ export default function App() {
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
         { key: "operations:ops-network",    view: "operations", tab: "ops-network",    label: "Ops Overview",  icon: LayoutDashboard },
-        { key: "operations:ops-tasks",      view: "operations", tab: "ops-tasks",      label: "Today's Tasks", icon: ListChecks },
+        { key: "operations:ops-tasks",      view: "operations", tab: "ops-tasks",      label: "Tasks", icon: ListChecks },
         { key: "operations:ops-temps",      view: "operations", tab: "ops-temps",      label: "Temperatures",  icon: Thermometer },
         { key: "operations:ops-deliveries", view: "operations", tab: "ops-deliveries", label: "Deliveries",    icon: Truck },
         { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
