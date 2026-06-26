@@ -176,7 +176,8 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package
+  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
+  Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -1762,9 +1763,22 @@ function SafeMarkdown({ text }) {
   // opens; ":::" closes. Inside, the first image goes on one side and all other
   // lines render as markdown on the other. Stacks on mobile.
   let row = null;   // { side: 'left'|'right', lines: [] }
+  // Callout boxes: ":::info" / ":::warning" / ":::tip" / ":::success" open, ":::" closes.
+  let callout = null; // { kind, lines: [] }
+
+  const flushCallout = () => {
+    if (callout) { blocks.push({ type: "callout", kind: callout.kind, lines: callout.lines }); callout = null; }
+  };
 
   for (const raw of lines) {
     const line = raw.trimEnd();
+
+    // Inside a callout block: collect until closing :::
+    if (callout) {
+      if (/^:::\s*$/.test(line.trim())) { flushCallout(); }
+      else { callout.lines.push(line); }
+      continue;
+    }
 
     // Inside a row block: collect lines until the closing :::
     if (row) {
@@ -1776,8 +1790,39 @@ function SafeMarkdown({ text }) {
       }
       continue;
     }
+
+    // Video embed: ":::video <url>" on its own line.
+    const vid = /^:::video\s+(\S+)\s*$/.exec(line.trim());
+    if (vid) { flushPara(); flushList(); blocks.push({ type: "video", url: vid[1] }); continue; }
+
+    // Callout open
+    const calloutOpen = /^:::(info|warning|tip|success)\b/.exec(line.trim());
+    if (calloutOpen) { flushPara(); flushList(); callout = { kind: calloutOpen[1], lines: [] }; continue; }
+
     const rowOpen = /^:::row(-right)?\b/.exec(line.trim());
     if (rowOpen) { flushPara(); flushList(); row = { side: rowOpen[1] ? "right" : "left", lines: [] }; continue; }
+
+    // Blockquote / key takeaway: lines beginning "> "
+    const bq = /^>\s?(.*)$/.exec(line);
+    if (bq) { flushPara(); flushList(); blocks.push({ type: "quote", text: bq[1] }); continue; }
+
+    // Table: a line with pipes, where the next-ish line is a separator (|---|).
+    if (/^\s*\|.*\|\s*$/.test(line) && /\|/.test(line)) {
+      flushPara(); flushList();
+      if (!list && blocks.length && blocks[blocks.length - 1].type === "table" && !blocks[blocks.length - 1].closed) {
+        // append row to open table
+        const tb = blocks[blocks.length - 1];
+        if (/^\s*\|?[\s:|-]+\|?\s*$/.test(line)) { tb.hasHeader = true; } // separator row
+        else { tb.rows.push(line.split("|").slice(1, -1).map(c => c.trim())); }
+      } else {
+        blocks.push({ type: "table", rows: [line.split("|").slice(1, -1).map(c => c.trim())], hasHeader: false, closed: false });
+      }
+      continue;
+    }
+    // close any open table when a non-table line appears
+    if (blocks.length && blocks[blocks.length - 1].type === "table" && !blocks[blocks.length - 1].closed) {
+      blocks[blocks.length - 1].closed = true;
+    }
 
     if (!line.trim()) { flushPara(); flushList(); continue; }
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
@@ -1790,7 +1835,20 @@ function SafeMarkdown({ text }) {
   }
   // Unclosed row (no trailing :::): render what we have.
   if (row) { blocks.push({ type: "row", side: row.side, lines: row.lines }); row = null; }
+  if (callout) { flushCallout(); }
   flushPara(); flushList();
+
+  const calloutStyle = {
+    info:    { bar: "border-sky-500",    bg: "bg-sky-950/30",    icon: Info,          ic: "text-sky-300" },
+    warning: { bar: "border-amber-500",  bg: "bg-amber-950/30",  icon: AlertTriangle, ic: "text-amber-300" },
+    tip:     { bar: "border-violet-500", bg: "bg-violet-950/30", icon: Lightbulb,     ic: "text-violet-300" },
+    success: { bar: "border-emerald-500",bg: "bg-emerald-950/30",icon: CheckCircle,   ic: "text-emerald-300" },
+  };
+  const ytId = (u) => {
+    const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/.exec(u || "");
+    return m ? m[1] : null;
+  };
+  const vimeoId = (u) => { const m = /vimeo\.com\/(?:video\/)?(\d+)/.exec(u || ""); return m ? m[1] : null; };
 
   return (
     <div className="space-y-2 text-sm text-slate-300 leading-relaxed">
@@ -1807,6 +1865,45 @@ function SafeMarkdown({ text }) {
             <Tag key={bi} className={b.ordered ? "list-decimal pl-5 space-y-1" : "list-disc pl-5 space-y-1"}>
               {b.items.map((it, ii) => <li key={ii}>{renderInline(it, `l${bi}-${ii}`)}</li>)}
             </Tag>
+          );
+        }
+        if (b.type === "callout") {
+          const st = calloutStyle[b.kind] || calloutStyle.info;
+          const Icon = st.icon;
+          return (
+            <div key={bi} className={`flex gap-2.5 rounded-xl border-l-4 ${st.bar} ${st.bg} px-3 py-2.5 my-2`}>
+              <Icon size={16} className={`${st.ic} flex-shrink-0 mt-0.5`}/>
+              <div className="min-w-0 flex-1"><SafeMarkdown text={b.lines.join("\n")}/></div>
+            </div>
+          );
+        }
+        if (b.type === "quote") {
+          return (
+            <div key={bi} className="border-l-4 border-indigo-500/60 pl-3 py-1 my-2 italic text-slate-200">
+              {renderInline(b.text, `q${bi}`)}
+            </div>
+          );
+        }
+        if (b.type === "video") {
+          const yt = ytId(b.url); const vm = vimeoId(b.url);
+          const src = yt ? `https://www.youtube.com/embed/${yt}` : vm ? `https://player.vimeo.com/video/${vm}` : null;
+          if (!src) return <a key={bi} href={b.url} target="_blank" rel="noopener noreferrer" className="text-indigo-300 underline">Watch video ↗</a>;
+          return (
+            <div key={bi} className="my-2 rounded-xl overflow-hidden border border-slate-800" style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+              <iframe src={src} title="Training video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}/>
+            </div>
+          );
+        }
+        if (b.type === "table") {
+          const [head, ...body] = b.hasHeader ? b.rows : [null, ...b.rows];
+          return (
+            <div key={bi} className="my-2 overflow-x-auto rounded-xl border border-slate-800">
+              <table className="w-full text-xs">
+                {head && <thead className="bg-slate-800/60"><tr>{head.map((c, ci) => <th key={ci} className="text-left px-3 py-2 font-semibold text-slate-200 border-b border-slate-700">{renderInline(c, `th${bi}-${ci}`)}</th>)}</tr></thead>}
+                <tbody>{body.map((r, ri) => <tr key={ri} className="even:bg-slate-900/40">{r.map((c, ci) => <td key={ci} className="px-3 py-2 text-slate-300 border-b border-slate-800/50">{renderInline(c, `td${bi}-${ri}-${ci}`)}</td>)}</tr>)}</tbody>
+              </table>
+            </div>
           );
         }
         if (b.type === "row") {
@@ -23384,7 +23481,44 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [error, setError]             = useState("");
   const [uploadingImg, setUploadingImg] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [preview, setPreview] = useState(false);
   const contentRef = useRef(null);
+
+  // Insert text at the cursor (or append). Optionally place the caret inside.
+  const insertAtCursor = (snippet, caretOffsetFromEnd = 0) => {
+    const el = contentRef.current;
+    if (el && typeof el.selectionStart === "number") {
+      const start = el.selectionStart, end = el.selectionEnd;
+      const selected = content.slice(start, end);
+      const text = snippet.includes("$SEL") ? snippet.replace("$SEL", selected || "") : snippet;
+      const next = content.slice(0, start) + text + content.slice(end);
+      setContent(next);
+      // restore focus + caret after React updates
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + text.length - caretOffsetFromEnd;
+        el.setSelectionRange(pos, pos);
+      });
+    } else {
+      setContent(c => c + snippet.replace("$SEL", ""));
+    }
+  };
+  // Wrap the current selection (e.g. **bold**); if nothing selected, insert markers with caret between.
+  const wrapSelection = (before, after) => {
+    const el = contentRef.current;
+    if (el && typeof el.selectionStart === "number") {
+      const start = el.selectionStart, end = el.selectionEnd;
+      const sel = content.slice(start, end) || "";
+      const text = before + sel + after;
+      const next = content.slice(0, start) + text + content.slice(end);
+      setContent(next);
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = sel ? start + text.length : start + before.length;
+        el.setSelectionRange(pos, pos);
+      });
+    }
+  };
 
   // Upload an image and insert a Markdown image tag at the cursor (or append).
   const handleInsertImage = async (file) => {
@@ -23448,8 +23582,11 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
         </div>
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className={labelCls + " mb-0"}>Content (Markdown)</label>
+            <label className={labelCls + " mb-0"}>Content</label>
             <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setPreview(p => !p)} className={`text-[11px] font-semibold ${preview ? "text-indigo-300" : "text-slate-400 hover:text-slate-200"}`}>
+                {preview ? "✎ Edit" : "👁 Preview"}
+              </button>
               <button type="button" onClick={() => setShowHelp(h => !h)} className="text-[11px] font-semibold text-slate-400 hover:text-slate-200">
                 {showHelp ? "Hide help" : "Formatting help"}
               </button>
@@ -23465,6 +23602,36 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
               </label>
             </div>
           </div>
+          {/* Rich toolbar — click to insert, no Markdown typing required */}
+          {!preview && (() => {
+            const TBtn = ({ onClick, title, children }) => (
+              <button type="button" title={title} onClick={onClick}
+                className="px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1">
+                {children}
+              </button>
+            );
+            return (
+              <div className="flex flex-wrap gap-1.5 mb-2 p-2 bg-slate-950 border border-slate-800 rounded-xl">
+                <TBtn title="Big heading" onClick={() => insertAtCursor("\n# $SEL", 0)}><HeadingIcon size={13}/>H1</TBtn>
+                <TBtn title="Sub-heading" onClick={() => insertAtCursor("\n## $SEL", 0)}><HeadingIcon size={12}/>H2</TBtn>
+                <TBtn title="Bold" onClick={() => wrapSelection("**", "**")}><BoldIcon size={13}/></TBtn>
+                <TBtn title="Italic" onClick={() => wrapSelection("*", "*")}><span className="italic">I</span></TBtn>
+                <TBtn title="Bullet list" onClick={() => insertAtCursor("\n- $SEL", 0)}><ListChecks size={13}/></TBtn>
+                <TBtn title="Numbered list" onClick={() => insertAtCursor("\n1. $SEL", 0)}><ListOrdered size={13}/></TBtn>
+                <span className="w-px bg-slate-700 mx-0.5"/>
+                <TBtn title="Info box" onClick={() => insertAtCursor("\n:::info\n$SEL\n:::\n", 5)}><Info size={13} className="text-sky-300"/>Info</TBtn>
+                <TBtn title="Warning box" onClick={() => insertAtCursor("\n:::warning\n$SEL\n:::\n", 5)}><AlertTriangle size={13} className="text-amber-300"/>Warning</TBtn>
+                <TBtn title="Tip box" onClick={() => insertAtCursor("\n:::tip\n$SEL\n:::\n", 5)}><Lightbulb size={13} className="text-violet-300"/>Tip</TBtn>
+                <TBtn title="Success / Do box" onClick={() => insertAtCursor("\n:::success\n$SEL\n:::\n", 5)}><CheckCircle size={13} className="text-emerald-300"/>Do</TBtn>
+                <span className="w-px bg-slate-700 mx-0.5"/>
+                <TBtn title="Quote / key takeaway" onClick={() => insertAtCursor("\n> $SEL", 0)}><Quote size={13}/>Quote</TBtn>
+                <TBtn title="Embed a video (paste YouTube/Vimeo link)" onClick={() => insertAtCursor("\n:::video https://\n", 0)}><Video size={13} className="text-rose-300"/>Video</TBtn>
+                <TBtn title="Insert a table" onClick={() => insertAtCursor("\n| Column A | Column B |\n| --- | --- |\n| Row 1 | Value |\n| Row 2 | Value |\n", 0)}><TableIcon size={13}/>Table</TBtn>
+                <span className="w-px bg-slate-700 mx-0.5"/>
+                <TBtn title="Split into a new step card (with progress bar)" onClick={() => insertAtCursor("\n\n---\n\n", 0)}><Minimize2 size={12}/>Step break</TBtn>
+              </div>
+            );
+          })()}
           {showHelp && (
             <div className="mb-2 bg-slate-950 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 space-y-2">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
@@ -23478,6 +23645,16 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
                 <div>“+ Insert image” · upload a picture</div>
               </div>
               <div className="pt-2 border-t border-slate-800">
+                <div className="text-slate-300 font-semibold mb-1">Rich blocks (use the toolbar buttons)</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  <div><Info size={11} className="inline text-sky-300"/> <b className="text-slate-200">Info / Warning / Tip / Do</b> · highlighted boxes</div>
+                  <div><Video size={11} className="inline text-rose-300"/> <b className="text-slate-200">Video</b> · paste a YouTube/Vimeo link</div>
+                  <div><Quote size={11} className="inline"/> <b className="text-slate-200">Quote</b> · key takeaway</div>
+                  <div><TableIcon size={11} className="inline"/> <b className="text-slate-200">Table</b> · rows &amp; columns</div>
+                </div>
+                <div className="mt-1.5 text-slate-500">For video, just paste the link after <code className="text-slate-400">:::video</code> — e.g. <code className="text-slate-400">:::video https://youtu.be/abc123</code></div>
+              </div>
+              <div className="pt-2 border-t border-slate-800">
                 <div className="text-slate-300 font-semibold mb-1">Image beside text</div>
                 <pre className="bg-slate-900 border border-slate-800 rounded p-2 text-[10px] text-slate-300 whitespace-pre-wrap font-mono">{`:::row
 (click + Insert image here)
@@ -23486,20 +23663,26 @@ Text that sits beside the image.
                 <div className="mt-1.5 text-slate-500">Markers <code className="text-slate-400">:::row</code> and <code className="text-slate-400">:::</code> each on their own line. Use <code className="text-slate-400">:::row-right</code> to put the image on the right. <b className="text-amber-400">Don't</b> type <code className="text-slate-400">![alt](</code> yourself before inserting — let the button add the whole image.</div>
               </div>
               <div className="pt-2 border-t border-slate-800 text-slate-500">
-                Not supported: tables, quote blocks, nested lists.
+                Use the <b className="text-slate-300">Preview</b> button to see exactly what trainees will see.
                 {TRAINING_GUIDE_PDF_URL && <> · <a href={TRAINING_GUIDE_PDF_URL} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 font-semibold">Full guide (PDF) ↗</a></>}
               </div>
             </div>
           )}
+          {preview ? (
+            <div className="w-full min-h-[240px] px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl">
+              {content.trim() ? <SteppedModuleContent content={content}/> : <div className="text-xs text-slate-600">Nothing to preview yet — switch to Edit and add some content.</div>}
+            </div>
+          ) : (
           <textarea
             ref={contentRef}
             value={content}
             onChange={e => setContent(e.target.value)}
-            rows={10}
+            rows={12}
             className={`${inputCls} font-mono text-xs leading-relaxed`}
-            placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
+            placeholder={"Click the buttons above to build your module — no code needed.\n\nOr type directly:\n# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis"}
           />
-          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown — click "Formatting help" for the full list. The trainee sees this formatted in their portal. <span className="text-indigo-400/80">Tip: put <code className="text-indigo-300">---</code> on its own line to split the module into guided step-by-step cards with a progress bar.</span></div>
+          )}
+          <div className="text-[10px] text-slate-600 mt-1">Build with the toolbar buttons above — or type directly. Hit <span className="text-indigo-400/80">Preview</span> to see what trainees see. <span className="text-indigo-400/80">Tip: use <code className="text-indigo-300">Step break</code> to split the module into guided cards with a progress bar.</span></div>
         </div>
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
