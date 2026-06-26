@@ -10589,3 +10589,76 @@ export async function fetchDistReorderReport() {
   return snap.filter(it => (Number(it.reorderPoint) || 0) > 0 && it.available <= (Number(it.reorderPoint) || 0))
     .map(it => ({ itemId: it.id, sku: it.sku, name: it.name, onHand: it.onHand, committed: it.committed, available: it.available, reorderPoint: Number(it.reorderPoint) || 0, shortfall: +((Number(it.reorderPoint) || 0) - it.available).toFixed(3) }));
 }
+
+// ── DISTRIBUTION GLOBAL SEARCH INDEX ─────────────────────────────────────────
+// Loads the searchable entities once (parallel), returning lightweight records
+// the client filters in-memory. One batch load per search-open, not per keystroke.
+export async function fetchDistSearchIndex() {
+  const [items, contacts, sos, pos, invoices, bills] = await Promise.all([
+    fetchDistItems().catch(() => []),
+    fetchDistContacts().catch(() => []),
+    fetchDistSalesOrders({}).catch(() => []),
+    fetchDistPurchaseOrders({}).catch(() => []),
+    fetchDistInvoices({}).catch(() => []),
+    fetchDistBills({}).catch(() => []),
+  ]);
+  const out = [];
+  (items || []).forEach(i => out.push({ kind: "item", id: i.id, title: i.name, sub: i.sku || "", view: "dist-items" }));
+  (contacts || []).forEach(c => out.push({ kind: c.kind === "vendor" ? "vendor" : "customer", id: c.id, title: c.displayName, sub: c.email || c.phone || "", view: c.kind === "vendor" ? "dist-vendors" : "dist-customers" }));
+  (sos || []).forEach(s => out.push({ kind: "sales order", id: s.id, title: s.soNumber, sub: s.customerId || "", view: "dist-sales-orders", docType: "so" }));
+  (pos || []).forEach(p => out.push({ kind: "purchase order", id: p.id, title: p.poNumber, sub: p.vendorId || "", view: "dist-pos", docType: "po" }));
+  (invoices || []).forEach(i => out.push({ kind: "invoice", id: i.id, title: i.invoiceNumber, sub: i.customerId || "", view: "dist-invoices", docType: "invoice" }));
+  (bills || []).forEach(b => out.push({ kind: "bill", id: b.id, title: b.billNumber, sub: b.vendorId || "", view: "dist-bills", docType: "bill" }));
+  return out;
+}
+
+// ── DISTRIBUTION DASHBOARD ───────────────────────────────────────────────────
+// One coordinated fetch for the Distribution home: headline KPIs + the
+// "needs attention" lists. Reuses the existing (optimised) report functions and
+// runs them in parallel — far lighter than the dashboard firing many separate
+// fetches, and avoids adding to DB I/O pressure.
+export async function fetchDistDashboard() {
+  const [valuation, reorder, debtors, creditors, board, openPOs] = await Promise.all([
+    fetchDistStockValuation().catch(() => ({ rows: [], totalValue: 0 })),
+    fetchDistReorderReport().catch(() => []),
+    fetchDistAgedDebtors().catch(() => ({ rows: [], buckets: {}, total: 0 })),
+    fetchDistAgedCreditors().catch(() => ({ rows: [], buckets: {}, total: 0 })),
+    fetchDistFulfilmentBoard().catch(() => []),
+    fetchDistPurchaseOrders({ status: ["open", "partially_received"] }).catch(() => []),
+  ]);
+
+  // Overdue split out of the aged reports (anything not in the "current" bucket).
+  const overdueInvoices = (debtors.rows || []).filter(r => r.bucket !== "current");
+  const overdueBills = (creditors.rows || []).filter(r => r.bucket !== "current");
+  const overdueInvoicesTotal = +overdueInvoices.reduce((s, r) => s + r.due, 0).toFixed(2);
+  const overdueBillsTotal = +overdueBills.reduce((s, r) => s + r.due, 0).toFixed(2);
+
+  // Fulfilment pipeline: count orders at each active stage.
+  const pipeline = { confirmed: 0, picked: 0, dispatched: 0, invoiced: 0 };
+  (board || []).forEach(r => { if (pipeline[r.stage] != null) pipeline[r.stage] += 1; });
+  const ordersToFulfil = (board || []).filter(r => r.stage !== "paid").length;
+
+  return {
+    kpis: {
+      stockValue: valuation.totalValue || 0,
+      stockItems: (valuation.rows || []).filter(r => r.onHand !== 0).length,
+      negativeStock: (valuation.rows || []).filter(r => r.negative).length,
+      receivables: debtors.total || 0,
+      payables: creditors.total || 0,
+      lowStockCount: (reorder || []).length,
+      posToReceive: (openPOs || []).length,
+      ordersToFulfil,
+    },
+    needsAttention: {
+      lowStock: (reorder || []).slice(0, 8),
+      overdueInvoices: overdueInvoices.slice(0, 8),
+      overdueInvoicesTotal, overdueInvoicesCount: overdueInvoices.length,
+      overdueBills: overdueBills.slice(0, 8),
+      overdueBillsTotal, overdueBillsCount: overdueBills.length,
+      posToReceive: (openPOs || []).slice(0, 8),
+    },
+    pipeline,
+    debtorBuckets: debtors.buckets || {},
+    creditorBuckets: creditors.buckets || {},
+  };
+}

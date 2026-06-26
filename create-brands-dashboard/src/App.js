@@ -149,6 +149,8 @@ import {
   fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
+  fetchDistDashboard,
+  fetchDistSearchIndex,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
   fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice,
@@ -7586,9 +7588,22 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
   const [sos, setSos] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState(null); const [statusMap, setStatusMap] = useState({});
+  const [query, setQuery] = useState(""); const [statusFilter, setStatusFilter] = useState("all");
   const load = useCallback(async () => { setLoading(true); try { const [s, c, it, tx] = await Promise.all([fetchDistSalesOrders(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates()]); setSos(s); setCustomers(c); setItems(it); setTaxRates(tx);
-    // Resolve fulfilment status for each SO (for the pillar dots), in parallel.
-    try { const entries = await Promise.all(s.map(async so => [so.id, (await fetchDistSalesOrderDetail(so.id)).status])); setStatusMap(Object.fromEntries(entries)); } catch { /* pillars best-effort */ }
+    // Resolve fulfilment status for the pillar dots in ONE coordinated call
+    // (fetchDistFulfilmentBoard), instead of fetching each SO's full detail in a
+    // loop — the old version was an N+1 query (one detail fetch per order) that
+    // got heavy and added real DB I/O load on busy lists.
+    try {
+      const board = await fetchDistFulfilmentBoard();
+      const rank = { confirmed: 0, picked: 1, dispatched: 2, invoiced: 3, paid: 4 };
+      const map = {};
+      board.forEach(r => {
+        const n = rank[r.stage] ?? 0;
+        map[r.soId] = { picked: n >= 1, dispatched: n >= 2, invoiced: n >= 3, paid: n >= 4 };
+      });
+      setStatusMap(map);
+    } catch { /* pillars best-effort */ }
   } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
   const newDoc = () => setCreating({ customerId: "", orderDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", shippingCharge: "", paymentTerms: "due_on_receipt", lines: [{ itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }] });
@@ -7617,13 +7632,28 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
   };
   const editSO = (so) => setCreating({ ...so, lines: (so.lines || []).map(l => ({ ...l })) });
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
+  const cName2 = (id) => customers.find(c => c.id === id)?.displayName || "";
+  const visibleSos = sos.filter(so => {
+    if (statusFilter !== "all" && (so.status || "") !== statusFilter) return false;
+    if (query.trim()) {
+      const n = query.trim().toLowerCase();
+      if (!((so.soNumber || "").toLowerCase().includes(n) || cName2(so.customerId).toLowerCase().includes(n))) return false;
+    }
+    return true;
+  });
+  const soStatuses = [...new Set(sos.map(s => s.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{sos.length} sales order{sos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New sales order</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleSos.length} of {sos.length} sales order{sos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New sales order</button></div>
+      <div className="flex gap-2 flex-wrap">
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search SO# or customer…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{soStatuses.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        {(query || statusFilter !== "all") && <button onClick={() => { setQuery(""); setStatusFilter("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+      </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {sos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No sales orders yet. An order commits stock (reserves it) without shipping.</div> : (
+          {visibleSos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{sos.length === 0 ? "No sales orders yet. An order commits stock (reserves it) without shipping." : "No orders match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
@@ -7640,7 +7670,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {sos.map(so => {
+                  {visibleSos.map(so => {
                     const t = distComputeTotals(so.lines, taxRates, so.vatMode, so.discountPercent, so.discountType);
                     const st = statusMap[so.id] || {};
                     const Dot = ({ on }) => <span className={`inline-block w-2 h-2 rounded-full ${on ? "bg-emerald-400" : "bg-slate-700"}`}></span>;
@@ -8489,6 +8519,221 @@ function distItemNameFrom(items, itemId) {
 // DISTRIBUTION — REPORTS (tabbed): Stock Valuation, Expiry, Aged Debtors,
 // Aged Creditors, P&L, Reorder. Read-only views over derived data.
 // ============================================================================
+// ── DISTRIBUTION DASHBOARD (home/overview) ───────────────────────────────────
+// The product "front door": headline KPIs, what needs attention, the fulfilment
+// pipeline at a glance, and quick actions. Everything is clickable through to the
+// relevant view. Matches the dark slate/indigo Distribution theme.
+// ── DISTRIBUTION GLOBAL SEARCH (command palette) ─────────────────────────────
+// Opens a modal, loads the search index once, filters in-memory as you type.
+// Items/customers/vendors navigate to their list; documents open their drilldown.
+function DistGlobalSearch({ onClose }) {
+  const { navigate, openDoc } = useDistDocLink();
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const [index, setIndex] = useState(null);
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState("");
+  const inputRef = useRef(null);
+  useEffect(() => {
+    fetchDistSearchIndex().then(setIndex).catch(e => setErr(e.message));
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, []);
+
+  const results = useMemo(() => {
+    if (!index || !q.trim()) return [];
+    const needle = q.trim().toLowerCase();
+    return index
+      .filter(r => (r.title || "").toLowerCase().includes(needle) || (r.sub || "").toLowerCase().includes(needle) || r.kind.includes(needle))
+      .slice(0, 40);
+  }, [index, q]);
+
+  const go = (r) => {
+    if (r.docType) { openDoc(r.docType, r.id); }
+    else { navigate(r.view); }
+    onClose();
+  };
+
+  const KIND_COLOR = {
+    item: "text-emerald-300", customer: "text-indigo-300", vendor: "text-amber-300",
+    "sales order": "text-indigo-300", "purchase order": "text-amber-300",
+    invoice: "text-indigo-300", bill: "text-amber-300",
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-start justify-center pt-20 px-4" onClick={onClose}>
+      <div className="w-full max-w-xl bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800">
+          <Search size={16} className="text-slate-500"/>
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Search items, customers, vendors, orders, invoices, bills…"
+            className="flex-1 bg-transparent text-sm text-white placeholder-slate-600 focus:outline-none"/>
+          <button onClick={onClose} className="text-slate-600 hover:text-white text-xs">esc</button>
+        </div>
+        <div className="max-h-96 overflow-y-auto">
+          {err && <div className="px-4 py-3 text-xs text-red-400">{err}</div>}
+          {!index && !err && <div className="px-4 py-6 text-center text-xs text-slate-600">Loading…</div>}
+          {index && !q.trim() && <div className="px-4 py-6 text-center text-xs text-slate-600">Type to search across Distribution.</div>}
+          {index && q.trim() && results.length === 0 && <div className="px-4 py-6 text-center text-xs text-slate-600">No matches for "{q}".</div>}
+          {results.map(r => (
+            <button key={`${r.kind}-${r.id}`} onClick={() => go(r)} className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/60 text-left border-b border-slate-800/50">
+              <div className="min-w-0">
+                <div className="text-sm text-white truncate">{cleanName(r.title) || r.title || r.id}</div>
+                {r.sub && <div className="text-[11px] text-slate-500 truncate">{r.sub}</div>}
+              </div>
+              <span className={`text-[10px] uppercase tracking-wide font-semibold flex-shrink-0 ml-3 ${KIND_COLOR[r.kind] || "text-slate-400"}`}>{r.kind}</span>
+            </button>
+          ))}
+        </div>
+        {results.length > 0 && <div className="px-4 py-2 text-[10px] text-slate-600 border-t border-slate-800">{results.length} result{results.length !== 1 ? "s" : ""}{results.length === 40 ? " (showing first 40)" : ""}</div>}
+      </div>
+    </div>
+  );
+}
+
+function DistDashboard({ currentUser }) {
+  const { navigate } = useDistDocLink();
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchDistDashboard().then(setData).catch(e => setErr(e.message)).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const k = data?.kpis || {};
+  const na = data?.needsAttention || {};
+  const pipe = data?.pipeline || {};
+
+  // KPI card — clickable, with an accent and optional alert styling.
+  const Kpi = ({ label, value, sub, accent = "text-white", to, alert }) => (
+    <button onClick={() => to && navigate(to)} className={`text-left rounded-2xl border px-4 py-3.5 transition-colors ${alert ? "border-amber-500/40 bg-amber-950/20 hover:bg-amber-950/30" : "border-slate-800 bg-slate-900 hover:bg-slate-800/60"} ${to ? "cursor-pointer" : "cursor-default"}`}>
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`text-2xl font-bold mt-0.5 ${accent}`}>{value}</div>
+      {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+    </button>
+  );
+
+  const PIPE_STAGES = [
+    { key: "confirmed", label: "To pick", to: "dist-fulfilment" },
+    { key: "picked", label: "To dispatch", to: "dist-fulfilment" },
+    { key: "dispatched", label: "To invoice", to: "dist-fulfilment" },
+    { key: "invoiced", label: "To collect", to: "dist-receipts" },
+  ];
+
+  const quickActions = [
+    { label: "New Sales Order", to: "dist-sales-orders", icon: ClipboardList },
+    { label: "New Purchase Order", to: "dist-pos", icon: FileText },
+    { label: "Receive Goods", to: "dist-grn", icon: Truck },
+    { label: "Fulfilment", to: "dist-fulfilment", icon: ArrowRight },
+    { label: "Reports", to: "dist-reports", icon: BarChart2 },
+  ];
+
+  if (loading) return <div className="text-sm text-slate-500 py-12 text-center">Loading dashboard…</div>;
+  if (err) return <div className="text-xs text-red-400 py-4">{err} <button onClick={load} className="underline ml-2">Retry</button></div>;
+
+  return (
+    <div className="space-y-5">
+      {/* Header + quick actions */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white">Distribution</h2>
+          <p className="text-xs text-slate-500">Overview of stock, money, and orders.</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          {quickActions.map(a => (
+            <button key={a.to} onClick={() => navigate(a.to)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold transition-colors">
+              <a.icon size={13}/> {a.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Kpi label="Stock value" value={gbp(k.stockValue)} sub={`${k.stockItems || 0} items in stock`} accent="text-emerald-300" to="dist-reports"/>
+        <Kpi label="Receivables" value={gbp(k.receivables)} sub="owed to you" accent="text-indigo-300" to="dist-invoices"/>
+        <Kpi label="Payables" value={gbp(k.payables)} sub="you owe" accent="text-rose-300" to="dist-bills"/>
+        <Kpi label="Orders in fulfilment" value={k.ordersToFulfil || 0} sub="not yet paid" accent="text-white" to="dist-fulfilment"/>
+        <Kpi label="Low stock" value={k.lowStockCount || 0} sub="at/below reorder point" accent={k.lowStockCount ? "text-amber-300" : "text-slate-400"} to="dist-reports" alert={k.lowStockCount > 0}/>
+        <Kpi label="POs to receive" value={k.posToReceive || 0} sub="open / partial" accent={k.posToReceive ? "text-amber-300" : "text-slate-400"} to="dist-grn" alert={k.posToReceive > 0}/>
+        <Kpi label="Negative stock" value={k.negativeStock || 0} sub="needs correcting" accent={k.negativeStock ? "text-rose-300" : "text-slate-400"} to="dist-reports" alert={k.negativeStock > 0}/>
+        <Kpi label="Stock items" value={k.stockItems || 0} sub="distinct SKUs" accent="text-white" to="dist-items"/>
+      </div>
+
+      {/* Fulfilment pipeline strip */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold text-white">Fulfilment pipeline</h3>
+          <button onClick={() => navigate("dist-fulfilment")} className="text-xs text-indigo-300 hover:underline flex items-center gap-1">Open <ArrowRight size={12}/></button>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          {PIPE_STAGES.map(s => (
+            <button key={s.key} onClick={() => navigate(s.to)} className="rounded-xl border border-slate-800 bg-slate-950/40 hover:bg-slate-800/50 px-3 py-3 text-center transition-colors">
+              <div className="text-2xl font-bold text-white">{pipe[s.key] || 0}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{s.label}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Needs attention */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Low stock */}
+        <AttentionCard title="Low stock" count={k.lowStockCount} accent="amber" onSeeAll={() => navigate("dist-reports")} icon={AlertTriangle} empty="All items above reorder point.">
+          {(na.lowStock || []).map(r => (
+            <button key={r.itemId} onClick={() => navigate("dist-items")} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-800/50 text-left">
+              <span className="text-xs text-white truncate">{cleanName(r.name)}</span>
+              <span className="text-[11px] text-amber-300 font-mono flex-shrink-0 ml-2">{r.available} / {r.reorderPoint}</span>
+            </button>
+          ))}
+        </AttentionCard>
+
+        {/* Overdue invoices (money in) */}
+        <AttentionCard title="Overdue invoices" count={na.overdueInvoicesCount} sub={na.overdueInvoicesTotal ? gbp(na.overdueInvoicesTotal) : null} accent="rose" onSeeAll={() => navigate("dist-invoices")} icon={Clock} empty="No overdue invoices.">
+          {(na.overdueInvoices || []).map(r => (
+            <button key={r.id} onClick={() => navigate("dist-invoices")} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-800/50 text-left">
+              <span className="text-xs text-white truncate font-mono">{r.ref}</span>
+              <span className="text-[11px] text-rose-300 flex-shrink-0 ml-2">{gbp(r.due)} · {r.days}d</span>
+            </button>
+          ))}
+        </AttentionCard>
+
+        {/* POs to receive */}
+        <AttentionCard title="POs to receive" count={k.posToReceive} accent="indigo" onSeeAll={() => navigate("dist-grn")} icon={Truck} empty="Nothing awaiting receipt.">
+          {(na.posToReceive || []).map(r => (
+            <button key={r.id} onClick={() => navigate("dist-pos")} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-800/50 text-left">
+              <span className="text-xs text-white truncate font-mono">{r.poNumber}</span>
+              <span className="text-[11px] text-slate-400 flex-shrink-0 ml-2">{(r.status || "").replace(/_/g, " ")}</span>
+            </button>
+          ))}
+        </AttentionCard>
+      </div>
+    </div>
+  );
+}
+
+// Reusable "needs attention" card with a count badge + see-all link.
+function AttentionCard({ title, count, sub, accent = "slate", onSeeAll, icon: Icon, empty, children }) {
+  const accentCls = accent === "amber" ? "text-amber-300" : accent === "rose" ? "text-rose-300" : accent === "indigo" ? "text-indigo-300" : "text-slate-300";
+  const hasItems = Array.isArray(children) ? children.length > 0 : !!children;
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden flex flex-col">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-800">
+        <div className="flex items-center gap-2">
+          {Icon && <Icon size={14} className={accentCls}/>}
+          <span className="text-sm font-bold text-white">{title}</span>
+          {count > 0 && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-800 ${accentCls}`}>{count}</span>}
+        </div>
+        {sub && <span className={`text-xs font-semibold ${accentCls}`}>{sub}</span>}
+      </div>
+      <div className="divide-y divide-slate-800/60 flex-1">
+        {hasItems ? children : <div className="px-3 py-6 text-center text-xs text-slate-600">{empty}</div>}
+      </div>
+      {count > 0 && <button onClick={onSeeAll} className="px-3 py-2 text-[11px] text-indigo-300 hover:bg-slate-800/50 border-t border-slate-800 text-center">See all →</button>}
+    </div>
+  );
+}
+
 function DistReportsView() {
   const [tab, setTab] = useState("valuation");
   const TABS = [
@@ -42635,6 +42880,7 @@ export default function App() {
   const [toast,           setToast]          = useState(null);
   const [activeView,      setActiveView]     = useState("dashboard");
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
+  const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
   // are now tabs inside Dashboard to slim the sidebar. "overview" = the main
   // dashboard. Gated per-tab by the same role/matrix checks as before.
@@ -43884,6 +44130,7 @@ export default function App() {
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "WAREHOUSE", items: [
+      { key: "dist-dashboard", label: "Dashboard", icon: BarChart2, requiresEntity: "brand-distribution" },
       { key: "dist-items",  label: "Items",  icon: Tag, requiresEntity: "brand-distribution" },
       { key: "dist-buy", label: "Purchasing", icon: Truck, requiresEntity: "brand-distribution", children: [
         { key: "dist-vendors", label: "Vendors", icon: Users },
@@ -44075,6 +44322,13 @@ export default function App() {
           {/* Content */}
           <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
             <DistDocLinkProvider onNavigate={setActiveView} onConvert={setPendingConvert}>
+            {String(effectiveActiveView).startsWith("dist-") && (
+              <button onClick={() => setDistSearchOpen(true)} title="Search Distribution (items, customers, orders, invoices…)"
+                className="fixed bottom-5 right-5 z-[55] flex items-center gap-2 px-4 py-2.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-900/40 transition-colors">
+                <Search size={16}/> Search
+              </button>
+            )}
+            {distSearchOpen && <DistGlobalSearch onClose={() => setDistSearchOpen(false)}/>}
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
               // Build the dashboard tabs available to this user. Same gates as the
@@ -44259,6 +44513,7 @@ export default function App() {
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser} stores={stores}/>}
             {effectiveActiveView === "dist-pos" && <DistPOView currentUser={currentUser}/>}
