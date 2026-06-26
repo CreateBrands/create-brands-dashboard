@@ -527,14 +527,14 @@ function formatKPI(v, format) {
 // ─── Shared Components ────────────────────────────────────────────────────────
 function Badge({ label, color = "slate" }) {
   const colors = {
-    green: "bg-emerald-500/25 text-emerald-400 border border-emerald-500/30",
-    red: "bg-red-500/25 text-red-400 border border-red-500/30",
-    amber: "bg-amber-500/20 text-amber-400 border border-amber-500/30",
+    green: "bg-emerald-500/25 text-emerald-200 border border-emerald-500/30",
+    red: "bg-red-500/25 text-red-200 border border-red-500/30",
+    amber: "bg-amber-500/20 text-amber-200 border border-amber-500/30",
     slate: "bg-slate-700 text-slate-700 border border-slate-600",
-    indigo: "bg-indigo-950/30 text-indigo-400 border border-indigo-500/30",
-    violet: "bg-violet-500/20 text-violet-400 border border-violet-500/30",
-    fuchsia: "bg-fuchsia-500/20 text-fuchsia-400 border border-fuchsia-500/30",
-    emerald: "bg-emerald-500/25 text-emerald-400 border border-emerald-500/30",
+    indigo: "bg-indigo-950/30 text-indigo-200 border border-indigo-500/30",
+    violet: "bg-violet-500/20 text-violet-200 border border-violet-500/30",
+    fuchsia: "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30",
+    emerald: "bg-emerald-500/25 text-emerald-200 border border-emerald-500/30",
   };
   return <span className={`inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold ${colors[color] || colors.slate}`}>{label}</span>;
 }
@@ -619,7 +619,7 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     const isPositive = invertDelta ? delta < 0 : delta > 0;
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-500/25 text-emerald-400" : "bg-red-500/25 text-red-400"}`}>
+      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-500/25 text-emerald-200" : "bg-red-500/25 text-red-200"}`}>
         {isPositive ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {sign}{delta.toFixed(1)}% vs {prevLabel}
       </span>
     );
@@ -3695,7 +3695,7 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
             {counts.map(c => (
               <div key={c.id} className="bg-slate-900 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-white">{c.countDate ? new Date(c.countDate).toLocaleDateString("en-GB") : "Count"} <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded ${c.status==="finalised"?"bg-emerald-900/40 text-emerald-300":"bg-amber-900/40 text-amber-300"}`}>{c.status || "draft"}</span></div>
+                  <div className="text-sm font-semibold text-white">{c.countDate ? new Date(c.countDate).toLocaleDateString("en-GB") : "Count"} <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded ${c.status==="finalised"?"bg-emerald-900/40 text-emerald-200":"bg-amber-900/40 text-amber-200"}`}>{c.status || "draft"}</span></div>
                   <div className="text-[11px] text-slate-500 mt-0.5">{c.countedBy ? `By ${c.countedBy}` : ""}</div>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -4688,7 +4688,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-slate-200 flex items-center gap-2 flex-wrap">
                     {s.name}
-                    {s.low && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">low</span>}
+                    {s.low && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-200 uppercase">low</span>}
                   </div>
                   {((s.allergens||[]).length>0 || (s.mayContain||[]).length>0) && (
                     <div className="flex flex-col gap-1 mt-1.5">
@@ -5011,8 +5011,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                         <div className="text-[11px] text-slate-500 mt-0.5">{comps.length} ingredient{comps.length!==1?"s":""}</div>
                         <div className="text-[11px] mt-1 flex flex-wrap gap-1.5">
                           {al.derived.length === 0 && al.mayContain.length === 0 ? <span className="text-slate-600">No allergens</span> :
-                            <>{al.derived.map(a=><span key={a} className="px-1.5 py-0.5 rounded bg-red-600/20 text-red-300 capitalize">{a}</span>)}
-                            {al.mayContain.map(a=><span key={a} className="px-1.5 py-0.5 rounded bg-amber-600/15 text-amber-300/90 capitalize">may contain {a}</span>)}</>}
+                            <>{al.derived.map(a=><span key={a} className="px-1.5 py-0.5 rounded bg-red-600/20 text-red-200 capitalize">{a}</span>)}
+                            {al.mayContain.map(a=><span key={a} className="px-1.5 py-0.5 rounded bg-amber-600/15 text-amber-200/90 capitalize">may contain {a}</span>)}</>}
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
@@ -5119,7 +5119,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                                       <select value={job.slot} onChange={e=>updateJob(job.id,{slot:e.target.value})} className="px-1.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-slate-300">
                                         {SLOTS.map(([k,l])=><option key={k} value={k}>{l}</option>)}
                                       </select>
-                                      {Number(job.qty)>0 && <button onClick={()=>jobToRun(job)} className="text-[10px] px-2 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-bold whitespace-nowrap">→ Run</button>}
+                                      {Number(job.qty)>0 && <button onClick={()=>jobToRun(job)} className="text-[10px] px-2 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-200 font-bold whitespace-nowrap">→ Run</button>}
                                       <button onClick={()=>removeJob(job.id)} className="text-slate-600 hover:text-red-400"><X size={14}/></button>
                                     </div>
                                     {/* Staff assignment */}
@@ -5263,7 +5263,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                           return (
                             <tr key={r.ingredientId} className={`border-b border-slate-800/40 ${covered?"opacity-60":""}`}>
                               <td className="py-1.5 text-slate-200">{r.name}
-                                {covered && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300 uppercase">in stock</span>}
+                                {covered && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-200 uppercase">in stock</span>}
                               </td>
                               <td className="py-1.5 text-right text-slate-400 whitespace-nowrap">{r.needed} {r.unit}</td>
                               <td className={`py-1.5 text-right whitespace-nowrap ${r.inStock>0?"text-emerald-400":"text-slate-600"}`}>{r.inStock} {r.unit}</td>
@@ -5430,7 +5430,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                           {f.productName}
                           <span className="text-indigo-300 text-[11px]">{f.finishedBatchNo}</span>
                           {expired ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-600/30 text-red-200 uppercase">expired</span>
-                            : expiringSoon ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase">use soon</span> : null}
+                            : expiringSoon ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-200 uppercase">use soon</span> : null}
                         </div>
                         <div className="text-[11px] text-slate-500 flex flex-wrap gap-2 mt-0.5">
                           <span>made {f.runDate}</span>
@@ -5472,7 +5472,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                       <div className="text-[11px] text-slate-500">sent {d.sentDate}{d.sentBy?` by ${d.sentBy}`:""}{d.receivedDate?` · received ${d.receivedDate}`:""}</div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className={`text-[10px] px-2 py-0.5 rounded uppercase font-bold ${d.status==="received"?"bg-emerald-600/20 text-emerald-300":d.status==="sent"?"bg-amber-600/20 text-amber-300":"bg-slate-700 text-slate-400"}`}>{d.status}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded uppercase font-bold ${d.status==="received"?"bg-emerald-600/20 text-emerald-200":d.status==="sent"?"bg-amber-600/20 text-amber-200":"bg-slate-700 text-slate-400"}`}>{d.status}</span>
                       {d.status==="sent" && <button onClick={()=>openRecv(d)} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold">Confirm receipt</button>}
                       {d.status==="sent" && <button onClick={async()=>{ if(window.confirm("Cancel this dispatch?")){ try{await cancelDispatch(d.id); load();}catch(e){setErr(e?.message||String(e));} } }} className="text-slate-600 hover:text-red-400"><X size={14}/></button>}
                     </div>
@@ -5770,7 +5770,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                     <div key={idx} className="flex items-center gap-2">
                       {c.kind === "prep" ? (
                         <>
-                          <span className="text-[9px] px-1.5 py-1 rounded bg-emerald-600/20 text-emerald-300 uppercase font-bold flex-shrink-0">prep</span>
+                          <span className="text-[9px] px-1.5 py-1 rounded bg-emerald-600/20 text-emerald-200 uppercase font-bold flex-shrink-0">prep</span>
                           <select value={c.prepId||""} onChange={e=>{ const p=ckPreps.find(x=>String(x.id)===e.target.value); setProdComp(idx,{ prepId:e.target.value, ingredientName:p?.name||"", unit:p?.yieldUnit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
                             <option value="">— pick prep —</option>
                             {ckPreps.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
@@ -5797,7 +5797,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
               <label className={labelCls}>Allergens (auto-derived)</label>
               <div className="flex flex-wrap gap-1.5 mt-1">
                 {editingDerived.length === 0 ? <span className="text-[11px] text-slate-600">None — tag ingredient allergens in the Stock tab.</span> :
-                  editingDerived.map(a=><span key={a} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-300 text-xs capitalize">{a}</span>)}
+                  editingDerived.map(a=><span key={a} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-200 text-xs capitalize">{a}</span>)}
               </div>
             </div>
             <div>
@@ -6269,7 +6269,7 @@ function DistPODetail({ poId, onClose, onEdit, onDelete }) {
     <Modal onClose={onClose} title={d?.poNumber || "Purchase Order"} maxW="max-w-3xl">
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d.status==="received"?"bg-emerald-900/50 text-emerald-300":d.status==="partially_received"?"bg-amber-900/50 text-amber-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d.status||"").replace(/_/g," ").toUpperCase()}</span>}
+          {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d.status==="received"?"bg-emerald-900/50 text-emerald-200":d.status==="partially_received"?"bg-amber-900/50 text-amber-200":"bg-indigo-900/50 text-indigo-200"}`}>{(d.status||"").replace(/_/g," ").toUpperCase()}</span>}
           {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
           {onDelete && <button onClick={onDelete} className={`${onEdit?"":"ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
         </div>
@@ -6314,7 +6314,7 @@ function DistGRNDetail({ grnId, onClose, onDelete, onEdit }) {
     <Modal onClose={onClose} title={d?.grnNumber || "Goods Receipt"} maxW="max-w-3xl">
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">{d?.posted ? "RECEIVED" : "DRAFT"}</span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-200">{d?.posted ? "RECEIVED" : "DRAFT"}</span>
           {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
           {onDelete && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete (reverse)</button>}
         </div>
@@ -6347,7 +6347,7 @@ function DistBillDetail({ billId, onClose, onDelete }) {
   useEffect(() => { let a = true; fetchDistBillDetail(billId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [billId]);
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
-  const badge = (s) => s==="paid"?"bg-emerald-900/50 text-emerald-300":s==="overdue"?"bg-red-900/50 text-red-300":s==="part_paid"?"bg-amber-900/50 text-amber-300":"bg-indigo-900/50 text-indigo-300";
+  const badge = (s) => s==="paid"?"bg-emerald-900/50 text-emerald-200":s==="overdue"?"bg-red-900/50 text-red-200":s==="part_paid"?"bg-amber-900/50 text-amber-200":"bg-indigo-900/50 text-indigo-200";
   return (
     <Modal onClose={onClose} title={d?.billNumber || "Bill"} maxW="max-w-3xl">
       <div className="space-y-4">
@@ -6441,7 +6441,7 @@ function DistPaymentDetail({ payId, onClose, onDelete }) {
     <Modal onClose={onClose} title={d?.paymentNumber || "Payment"} maxW="max-w-2xl">
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">PAYMENT MADE</span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-200">PAYMENT MADE</span>
           {onDelete && <button onClick={onDelete} className="ml-auto px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
@@ -6515,7 +6515,7 @@ function DistVendorsView({ currentUser, stores = [] }) {
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Name</th><th className="text-left px-4 py-2.5 font-semibold">Company</th><th className="text-left px-4 py-2.5 font-semibold">Email</th><th className="text-left px-4 py-2.5 font-semibold">Phone</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
                 <tbody>{filtered.map(v => (
                   <tr key={v.id} onClick={() => setDetail(v)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
-                    <td className="px-4 py-2.5"><span className="text-indigo-300 font-medium hover:underline">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CENTRAL KITCHEN</span>}</td>
+                    <td className="px-4 py-2.5"><span className="text-indigo-300 font-medium hover:underline">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200">CENTRAL KITCHEN</span>}</td>
                     <td className="px-4 py-2.5 text-slate-300">{v.companyName || "—"}</td>
                     <td className="px-4 py-2.5 text-slate-400">{v.email || "—"}</td>
                     <td className="px-4 py-2.5 text-slate-400">{v.workPhone || v.mobile || v.phone || "—"}</td>
@@ -6609,7 +6609,7 @@ function DistPOView({ currentUser }) {
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{po.orderDate}</td>
                     <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{po.poNumber}</span></td>
                     <td className="px-4 py-2.5 text-slate-300">{vName(po.vendorId)}</td>
-                    <td className="px-4 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full ${po.status==="received"?"bg-emerald-900/50 text-emerald-300":po.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{po.status}</span></td>
+                    <td className="px-4 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full ${po.status==="received"?"bg-emerald-900/50 text-emerald-200":po.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-200"}`}>{po.status}</span></td>
                     <td className="px-4 py-2.5 text-right text-white whitespace-nowrap">{gbp(t.grandTotal)}</td>
                     <td className="px-2 py-2.5 text-center"><button onClick={(e) => { e.stopPropagation(); editPO(po); }} className="text-slate-600 hover:text-indigo-300"><Edit size={13}/></button></td>
                   </tr>
@@ -6704,7 +6704,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
           <div className="px-4 py-2 text-[10px] uppercase tracking-wide text-amber-300/80 border-b border-amber-900/30">From Central Kitchen — review &amp; confirm to raise stock</div>
           {grns.filter(g => g.status === "draft" && !g.posted).map(g => (
             <div key={g.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-amber-900/20">
-              <div><span className="text-white font-mono text-xs">{g.grnNumber}</span> <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK DRAFT</span><div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length!==1?"s":""} · {g.receivedDate}</div></div>
+              <div><span className="text-white font-mono text-xs">{g.grnNumber}</span> <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200">CK DRAFT</span><div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length!==1?"s":""} · {g.receivedDate}</div></div>
               <button onClick={() => setConfirming({ ...g, lines: g.lines.map(l => ({ ...l })) })} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Review &amp; confirm</button>
             </div>
           ))}
@@ -6720,9 +6720,9 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
                   <tr key={g.id} onClick={() => setDetailId(g.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{g.receivedDate}</td>
                     <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{g.grnNumber}</span></td>
-                    <td className="px-4 py-2.5 text-slate-300">{g.sourceKind==="central_kitchen" ? <span>Central Kitchen <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">CK</span></span> : vName(g.vendorId)}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{g.sourceKind==="central_kitchen" ? <span>Central Kitchen <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200">CK</span></span> : vName(g.vendorId)}</td>
                     <td className="px-4 py-2.5 text-right text-slate-300">{g.lines.length}</td>
-                    <td className="px-4 py-2.5 pl-6">{g.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">received</span>}</td>
+                    <td className="px-4 py-2.5 pl-6">{g.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-200">received</span>}</td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -7348,7 +7348,7 @@ function DistCustomersView({ currentUser, stores = [] }) {
                       <tr key={c.id} onClick={() => setDetail(c)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                         <td className="px-4 py-2.5">
                           <span className="text-indigo-300 font-medium hover:underline">{c.displayName}</span>
-                          {c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/50 text-indigo-300">{storeName(c.storeId)}</span>}
+                          {c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/50 text-indigo-200">{storeName(c.storeId)}</span>}
                         </td>
                         <td className="px-4 py-2.5 text-slate-300">{c.companyName || "—"}</td>
                         <td className="px-4 py-2.5 text-slate-400">{c.email || "—"}</td>
@@ -7469,7 +7469,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
       <div className="space-y-4">
         {/* Header actions */}
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{(so.status||"").toUpperCase()}</span>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-200":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-200"}`}>{(so.status||"").toUpperCase()}</span>
           <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
           {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
@@ -7679,7 +7679,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
                         <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{so.orderDate}</td>
                         <td className="px-3 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{so.soNumber}</span></td>
                         <td className="px-3 py-2.5 text-slate-300">{cName(so.customerId)}</td>
-                        <td className="px-3 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-300":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-300"}`}>{so.status}</span></td>
+                        <td className="px-3 py-2.5"><span className={`text-[10px] px-2 py-0.5 rounded-full ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-900/50 text-emerald-200":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-900/50 text-indigo-200"}`}>{so.status}</span></td>
                         <td className="px-2 py-2.5 text-center"><Dot on={st.invoiced}/></td>
                         <td className="px-2 py-2.5 text-center"><Dot on={st.paid}/></td>
                         <td className="px-2 py-2.5 text-center"><Dot on={st.picked}/></td>
@@ -7735,7 +7735,7 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
     <Modal onClose={onClose} title={d?.pickNumber || "Pick"} maxW="max-w-3xl">
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d?.status==="dispatched"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{(d?.status||"").toUpperCase()}</span>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d?.status==="dispatched"?"bg-emerald-900/50 text-emerald-200":"bg-indigo-900/50 text-indigo-200"}`}>{(d?.status||"").toUpperCase()}</span>
           {onEdit && d?.status !== "dispatched" && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
           {onDelete && d?.status !== "dispatched" && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
         </div>
@@ -7776,7 +7776,7 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
     <Modal onClose={onClose} title={d?.dispatchNumber || "Dispatch"} maxW="max-w-3xl">
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-300">{d?.posted ? "POSTED" : "DRAFT"}</span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-900/50 text-emerald-200">{d?.posted ? "POSTED" : "DRAFT"}</span>
           {onEdit && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
           {onDelete && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete (reverse)</button>}
         </div>
@@ -7861,7 +7861,7 @@ function DistFulfilmentView({ currentUser }) {
       <div className="flex items-center gap-1">
         {STAGES.map((s, i) => (
           <div key={s.key} className="flex items-center gap-1">
-            <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${i < cur ? "bg-emerald-900/40 text-emerald-300" : i === cur ? "bg-indigo-700 text-white" : "bg-slate-800 text-slate-500"}`}>
+            <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${i < cur ? "bg-emerald-900/40 text-emerald-200" : i === cur ? "bg-indigo-700 text-white" : "bg-slate-800 text-slate-500"}`}>
               {i < cur ? <Check size={10}/> : null}{s.label}
             </div>
             {i < STAGES.length - 1 && <ChevronRight size={11} className={i < cur ? "text-emerald-500" : "text-slate-700"}/>}
@@ -7997,7 +7997,7 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
           {picks.map(p => (
             <div key={p.id} onClick={() => setDetailId(p.id)} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
               <div><span className="text-indigo-300 font-mono text-xs hover:underline">{p.pickNumber}</span><div className="text-[11px] text-slate-500">{p.lines.length} line{p.lines.length!==1?"s":""} · {p.pickDate}</div></div>
-              <span className={`text-[10px] px-2 py-0.5 rounded-full ${p.status==="dispatched"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{p.status}</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${p.status==="dispatched"?"bg-emerald-900/50 text-emerald-200":"bg-indigo-900/50 text-indigo-200"}`}>{p.status}</span>
             </div>
           ))}
         </div>
@@ -8022,7 +8022,7 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
               {(creating.lines || []).map((l, i) => {
                 return (
                   <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
-                    <div className="col-span-4 text-white truncate">{distItemNameFrom(items, l.itemId)}{l.short > 0 && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-300">short {l.short}</span>}</div>
+                    <div className="col-span-4 text-white truncate">{distItemNameFrom(items, l.itemId)}{l.short > 0 && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-200">short {l.short}</span>}</div>
                     <div className="col-span-5"><select value={l.batchId || ""} onChange={e => updLine(i, { batchId: e.target.value })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white"><option value="">Select batch…</option>{(batches[l.itemId] || []).map(b => <option key={b.id} value={b.id}>{b.batchNo || "batch"}{b.expiryDate ? ` · exp ${b.expiryDate}` : ""} · £{b.landedCost}</option>)}</select></div>
                     <div className="col-span-2"><input type="number" value={l.qty} onChange={e => updLine(i, { qty: e.target.value })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
                     <div className="col-span-1 text-right"><button onClick={() => setCreating({ ...creating, lines: creating.lines.filter((_, j) => j !== i) })} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
@@ -8112,7 +8112,7 @@ function DistDispatchView({ currentUser, pendingConvert, setPendingConvert }) {
           {dispatches.map(d => (
             <div key={d.id} onClick={() => setDetailId(d.id)} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
               <div><span className="text-indigo-300 font-mono text-xs hover:underline">{d.dispatchNumber}</span><div className="text-[11px] text-slate-500">{d.lines.length} line{d.lines.length!==1?"s":""} · {d.dispatchDate}</div></div>
-              {d.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">posted</span>}
+              {d.posted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-200">posted</span>}
             </div>
           ))}
         </div>
@@ -8159,7 +8159,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
   useEffect(() => { let a = true; fetchDistInvoiceDetail(invoiceId).then(x => { if (a) setD(x); }).catch(e => { if (a) setErr(e.message); }); return () => { a = false; }; }, [invoiceId]);
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
-  const statusBadge = (s) => s === "paid" ? "bg-emerald-900/50 text-emerald-300" : s === "overdue" ? "bg-red-900/50 text-red-300" : s === "part_paid" ? "bg-amber-900/50 text-amber-300" : "bg-indigo-900/50 text-indigo-300";
+  const statusBadge = (s) => s === "paid" ? "bg-emerald-900/50 text-emerald-200" : s === "overdue" ? "bg-red-900/50 text-red-200" : s === "part_paid" ? "bg-amber-900/50 text-amber-200" : "bg-indigo-900/50 text-indigo-200";
 
   return (
     <Modal onClose={onClose} title={d?.invoiceNumber || "Invoice"} maxW="max-w-3xl">
@@ -8801,7 +8801,7 @@ function DistValuationReport() {
 function DistExpiryReport() {
   const [data, setData] = useState(null); const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
   useEffect(() => { fetchDistExpiryReport().then(setData).catch(e => setErr(e.message)).finally(() => setLoading(false)); }, []);
-  const badge = (s) => s === "expired" ? "bg-red-900/50 text-red-300" : s === "critical" ? "bg-amber-900/50 text-amber-300" : s === "soon" ? "bg-yellow-900/40 text-yellow-300" : "bg-slate-800 text-slate-400";
+  const badge = (s) => s === "expired" ? "bg-red-900/50 text-red-200" : s === "critical" ? "bg-amber-900/50 text-amber-200" : s === "soon" ? "bg-yellow-900/40 text-yellow-300" : "bg-slate-800 text-slate-400";
   return (
     <DistReportShell loading={loading} err={err}>
       {data && (
@@ -9762,7 +9762,7 @@ function DistItemsView({ currentUser }) {
                     <thead className="text-slate-500 sticky top-0 bg-slate-950"><tr><th className="text-left px-2 py-1">Status</th><th className="text-left px-2 py-1">SKU</th><th className="text-left px-2 py-1">Name</th><th className="px-2 py-1">Pack</th><th className="px-2 py-1">Tax</th><th className="px-2 py-1 text-right">Open</th></tr></thead>
                     <tbody>{importPreview.map((r, i) => (
                       <tr key={i} className="border-t border-slate-800/60">
-                        <td className="px-2 py-1"><span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${r._status==="new"?"bg-emerald-900/50 text-emerald-300":"bg-indigo-900/50 text-indigo-300"}`}>{r._status === "new" ? "NEW" : (updateStrategy === "skip" ? "SKIP" : "UPDATE")}</span></td>
+                        <td className="px-2 py-1"><span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${r._status==="new"?"bg-emerald-900/50 text-emerald-200":"bg-indigo-900/50 text-indigo-200"}`}>{r._status === "new" ? "NEW" : (updateStrategy === "skip" ? "SKIP" : "UPDATE")}</span></td>
                         <td className="px-2 py-1 font-mono text-indigo-300">{r.sku}</td>
                         <td className="px-2 py-1 text-white">{r.name}</td>
                         <td className="px-2 py-1 text-center text-slate-400">{r.packCount}&times;{r.packSize ?? "?"}{r.packUnit}</td>
@@ -10943,10 +10943,10 @@ function OrderInspector({ stores = [] }) {
           <div className="min-w-0 flex items-center gap-2 flex-wrap">
             <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{typeHint}</span>
             <span className="text-[13px] text-slate-200 truncate">{qty>1?`${qty}× `:""}{name || <span className="text-slate-600 italic">(no name)</span>}</span>
-            {zero && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300">£0</span>}
+            {zero && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-200">£0</span>}
             {rm && (rm.mapped
-              ? <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300">→ {rm.productName}</span>
-              : <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-red-600/20 text-red-300">unmapped</span>)}
+              ? <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-200">→ {rm.productName}</span>
+              : <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-red-600/20 text-red-200">unmapped</span>)}
           </div>
           <span className={`text-[12px] tabular-nums flex-shrink-0 ${zero?"text-amber-400":"text-slate-400"}`}>{money(price)}</span>
         </div>
@@ -11289,7 +11289,7 @@ function StockCounts({ storeId, money }) {
             {counts.map(c=>(
               <tr key={c.id} className="border-t border-slate-800/60">
                 <td className="px-3 py-2 text-white cursor-pointer hover:text-indigo-300" onClick={()=>setOpenId(c.id)}>{c.countDate}</td>
-                <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${c.status==="finalised"?"bg-emerald-900/50 text-emerald-300":"bg-slate-800 text-slate-400"}`}>{c.status}</span></td>
+                <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${c.status==="finalised"?"bg-emerald-900/50 text-emerald-200":"bg-slate-800 text-slate-400"}`}>{c.status}</span></td>
                 <td className="px-3 py-2 text-slate-400">{c.countedBy||"—"}</td>
                 <td className="px-3 py-2 text-right"><button onClick={()=>setOpenId(c.id)} className="text-indigo-400 text-xs mr-3">Edit</button><button onClick={()=>remove(c.id)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
               </tr>
@@ -11694,8 +11694,8 @@ function ModifierMapper({ stores = [] }) {
   });
   const counts = (caps || []).reduce((a,c)=>{a[c.status]=(a[c.status]||0)+1;return a;},{});
 
-  const badge = (s) => s === "mapped" ? <span className="text-[11px] px-2 py-0.5 rounded bg-violet-900/50 text-violet-300">mapped</span>
-    : s === "auto" ? <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/50 text-emerald-300">auto</span>
+  const badge = (s) => s === "mapped" ? <span className="text-[11px] px-2 py-0.5 rounded bg-violet-900/50 text-violet-200">mapped</span>
+    : s === "auto" ? <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/50 text-emerald-200">auto</span>
     : <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">unmatched</span>;
 
   return (
@@ -11964,8 +11964,8 @@ function CogsReconciliation({ stores = [] }) {
                   <td className="px-3 py-2 text-right font-mono text-slate-500">{p.qty}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-300">{money(p.cogs)}</td>
                   <td className="px-3 py-2 text-[11px]">
-                    {p.baseUncosted && <span className="px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300 mr-1">base uncosted</span>}
-                    {p.modUncosted && <span className="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400">modifier uncosted</span>}
+                    {p.baseUncosted && <span className="px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 mr-1">base uncosted</span>}
+                    {p.modUncosted && <span className="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300">modifier uncosted</span>}
                   </td>
                 </tr>
               ))}
@@ -12050,7 +12050,7 @@ function ModifierDiscovery({ stores = [] }) {
                   <td className="px-3 py-2 text-right text-slate-300 font-mono">{r.occurrences}</td>
                   <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.distinctParents}</td>
                   <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.maxPrice ? "£"+r.maxPrice.toFixed(2) : "—"}</td>
-                  <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${r.suggestGlobal?"bg-emerald-900/50 text-emerald-300":"bg-slate-800 text-slate-400"}`}>{r.suggestGlobal?"global":"scoped"}</span></td>
+                  <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${r.suggestGlobal?"bg-emerald-900/50 text-emerald-200":"bg-slate-800 text-slate-400"}`}>{r.suggestGlobal?"global":"scoped"}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     <button disabled={busy===r.captionNorm} onClick={()=>create(r,true)} className="text-xs px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white mr-1 disabled:opacity-50">Global</button>
                     <button disabled={busy===r.captionNorm} onClick={()=>create(r,false)} className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-white mr-1 disabled:opacity-50">Scoped</button>
@@ -13265,7 +13265,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
   };
 
   const StatusBadge = ({ s }) => {
-    const m = { submitted:["bg-amber-600/20 text-amber-300","Submitted"], approved:["bg-indigo-600/20 text-indigo-300","Approved"], reconciled:["bg-emerald-600/20 text-emerald-300","Paid / reconciled"], rejected:["bg-red-600/20 text-red-300","Rejected"] };
+    const m = { submitted:["bg-amber-600/20 text-amber-200","Submitted"], approved:["bg-indigo-600/20 text-indigo-200","Approved"], reconciled:["bg-emerald-600/20 text-emerald-200","Paid / reconciled"], rejected:["bg-red-600/20 text-red-200","Rejected"] };
     const [cls,lab] = m[s] || ["bg-slate-700 text-slate-300", s];
     return <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${cls}`}>{lab}</span>;
   };
@@ -13580,7 +13580,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 {clockBusy ? "Checking location…" : myOpenPunch ? "⏹ Clock out" : "▶ Clock in"}
               </button>
               {myOpenPunch && <div className="text-[11px] text-slate-500 text-center mt-1.5">Clocked in since {new Date(myOpenPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}{myClockStore ? ` · ${myClockStore.shortName || myClockStore.name}` : ""}</div>}
-              {clockMsg && <div className={`mt-2 text-xs font-semibold rounded-lg px-3 py-2 text-center ${clockMsg.type === "error" ? "bg-red-950/40 text-red-300" : "bg-emerald-950/40 text-emerald-300"}`}>{clockMsg.msg}</div>}
+              {clockMsg && <div className={`mt-2 text-xs font-semibold rounded-lg px-3 py-2 text-center ${clockMsg.type === "error" ? "bg-red-950/40 text-red-200" : "bg-emerald-950/40 text-emerald-200"}`}>{clockMsg.msg}</div>}
             </div>
           )}
 
@@ -14087,9 +14087,9 @@ function InvoiceLineRow({ line, domain, onChanged }) {
 
   const ok = line.matched_store_item_id && Number(line.pack_qty_base) > 0 && line.pack_price_ex_vat !== null;
   const badge =
-    line.status === "confirmed" ? "bg-emerald-600/20 text-emerald-300 border-emerald-700/40" :
+    line.status === "confirmed" ? "bg-emerald-600/20 text-emerald-200 border-emerald-700/40" :
     line.status === "skipped"   ? "bg-slate-700/30 text-slate-500 border-slate-700/40" :
-                                   "bg-amber-600/20 text-amber-300 border-amber-700/40";
+                                   "bg-amber-600/20 text-amber-200 border-amber-700/40";
 
   return (
     <div className="border border-slate-800 rounded-xl p-3 bg-slate-900/60 space-y-2">
@@ -14337,9 +14337,9 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
   };
 
   const statusChip = (s) =>
-    s === "approved" ? "bg-emerald-600/20 text-emerald-300 border-emerald-700/40" :
-    s === "pending_review" ? "bg-amber-600/20 text-amber-300 border-amber-700/40" :
-    s === "failed" || s === "rejected" ? "bg-rose-600/20 text-rose-300 border-rose-700/40" :
+    s === "approved" ? "bg-emerald-600/20 text-emerald-200 border-emerald-700/40" :
+    s === "pending_review" ? "bg-amber-600/20 text-amber-200 border-amber-700/40" :
+    s === "failed" || s === "rejected" ? "bg-rose-600/20 text-rose-200 border-rose-700/40" :
     "bg-slate-700/30 text-slate-400 border-slate-700/40";
 
   return (
@@ -14412,7 +14412,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
                 {inv.invoice_date ? <span>· {inv.invoice_date}</span> : null}
                 {inv.total_ex_vat != null ? <span>· £{inv.total_ex_vat}</span> : null}
                 {inv.category ? <span className="text-indigo-400">· {inv.category}</span> : null}
-                <span className={`px-1 py-0.5 rounded text-[8px] uppercase ${isOverdue(inv)?"bg-red-600/20 text-red-300":(inv.payment_status==="paid"?"bg-emerald-600/20 text-emerald-300":(inv.payment_status==="partial"?"bg-amber-600/20 text-amber-300":"bg-slate-700/30 text-slate-400"))}`}>{isOverdue(inv)?"overdue":(inv.payment_status||"unpaid")}</span>
+                <span className={`px-1 py-0.5 rounded text-[8px] uppercase ${isOverdue(inv)?"bg-red-600/20 text-red-200":(inv.payment_status==="paid"?"bg-emerald-600/20 text-emerald-200":(inv.payment_status==="partial"?"bg-amber-600/20 text-amber-200":"bg-slate-700/30 text-slate-400"))}`}>{isOverdue(inv)?"overdue":(inv.payment_status||"unpaid")}</span>
               </div>
             </button>
           ))}
@@ -14538,7 +14538,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
               )}
               <div className="flex items-center justify-end mt-2">
                 <button onClick={doDelete} disabled={busy}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600/15 text-red-300 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600/15 text-red-200 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
                   <Trash2 size={14}/> Delete invoice
                 </button>
               </div>
@@ -14895,10 +14895,10 @@ function OnboardingBoard({ stores, opsTeam }) {
 
   // Status chip model: { state: 'done'|'progress'|'missing'|'rejected', label }
   const CHIP_CLS = {
-    done:     "bg-emerald-600/15 text-emerald-300 border-emerald-600/30",
-    progress: "bg-amber-500/10 text-amber-300 border-amber-500/30",
+    done:     "bg-emerald-600/15 text-emerald-200 border-emerald-600/30",
+    progress: "bg-amber-500/10 text-amber-200 border-amber-500/30",
     missing:  "bg-slate-800/60 text-slate-500 border-slate-700/50",
-    rejected: "bg-red-600/15 text-red-300 border-red-600/30",
+    rejected: "bg-red-600/15 text-red-200 border-red-600/30",
   };
   const Chip = ({ s }) => (
     <span className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-semibold whitespace-nowrap ${CHIP_CLS[s.state]}`}>{s.label}</span>
@@ -17223,9 +17223,9 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
                     </td>
                     <td className="px-3 py-2.5">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                        r.store.ownershipModel === "owned" ? "bg-indigo-950/30 text-indigo-400" :
-                        r.store.ownershipModel === "joint_venture" ? "bg-sky-950/30 text-sky-400" :
-                        "bg-amber-950/30 text-amber-400"
+                        r.store.ownershipModel === "owned" ? "bg-indigo-950/30 text-indigo-200" :
+                        r.store.ownershipModel === "joint_venture" ? "bg-sky-950/30 text-sky-200" :
+                        "bg-amber-950/30 text-amber-200"
                       }`}>
                         {r.store.ownershipModel === "joint_venture" ? "JV" : r.store.ownershipModel}
                       </span>
@@ -18510,8 +18510,8 @@ const EOD_AMEND_FIELDS = [
 function EodReconBadge({ status }) {
   const map = {
     open:     "bg-slate-700/40 text-slate-300 border-slate-600/50",
-    queried:  "bg-amber-600/20 text-amber-300 border-amber-700/50",
-    resolved: "bg-emerald-600/20 text-emerald-300 border-emerald-700/50",
+    queried:  "bg-amber-600/20 text-amber-200 border-amber-700/50",
+    resolved: "bg-emerald-600/20 text-emerald-200 border-emerald-700/50",
   };
   const label = { open: "Open", queried: "Queried", resolved: "Resolved" }[status] || status;
   return <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase font-semibold ${map[status] || map.open}`}>{label}</span>;
@@ -18666,7 +18666,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                 <div className="flex items-center gap-1.5">
                   {(() => {
                     const v = (Number(e.physicalCash)||0) - ((Number(e.cashExpected)||0) - (Number(e.lopay)||0) - (Number(e.unreportedExpense)||0));
-                    return Math.abs(v) >= 0.005 ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">{v>=0?"+":""}{fmtMoney(v)}</span> : null;
+                    return Math.abs(v) >= 0.005 ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-200">{v>=0?"+":""}{fmtMoney(v)}</span> : null;
                   })()}
                   <EodReconBadge status={e.reconStatus || "open"} />
                 </div>
@@ -18698,7 +18698,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                           try { await onDeleteEntry(selected.id); setSelId(null); }
                           catch (e) { window.alert("Couldn't delete: " + (e?.message || e)); }
                         }}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600/15 text-red-300 border border-red-600/30 hover:bg-red-600/25 text-xs font-semibold"
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600/15 text-red-200 border border-red-600/30 hover:bg-red-600/25 text-xs font-semibold"
                       >
                         <Trash2 size={13}/> Delete
                       </button>
@@ -19150,7 +19150,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
       <div className="flex gap-2">
         {zones.map((z,i) => (
           <button key={i} onClick={() => i < zone && setZone(i)}
-            className={`flex-1 rounded-xl py-2 text-xs font-semibold transition-all ${i===zone?"bg-indigo-600 text-white":i<zone?"bg-emerald-600/30 text-emerald-400 cursor-pointer hover:bg-emerald-600/40":"bg-slate-800 text-slate-500"}`}>
+            className={`flex-1 rounded-xl py-2 text-xs font-semibold transition-all ${i===zone?"bg-indigo-600 text-white":i<zone?"bg-emerald-600/30 text-emerald-200 cursor-pointer hover:bg-emerald-600/40":"bg-slate-800 text-slate-500"}`}>
             {i<zone&&<span className="mr-1">✓</span>}{z}
           </button>
         ))}
@@ -19397,7 +19397,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
         </div>
         <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
           <div className="flex items-center gap-3 bg-slate-950 border border-slate-800/60 rounded-xl p-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-300 flex items-center justify-center text-sm font-bold">{avatar}</div>
+            <div className="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-200 flex items-center justify-center text-sm font-bold">{avatar}</div>
             <div><div className="text-sm font-semibold text-white">{name||"Full Name"}</div><div className="text-xs text-slate-600">{email||"email"}</div></div>
           </div>
           <div><label className="text-xs text-slate-600 font-semibold mb-1.5 block">Full Name *</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
@@ -19470,7 +19470,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
                                   {checked && <Check size={11} className="text-white"/>}
                                 </div>
                                 <span className="text-sm text-slate-200">{s.shortName || s.name}</span>
-                                {FACILITY_SITE_TYPES.has(s.siteType) && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-300 uppercase tracking-wide">{s.siteType === "central_kitchen" ? "Kitchen" : s.siteType === "distribution" ? "Depot" : "Facility"}</span>}
+                                {FACILITY_SITE_TYPES.has(s.siteType) && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-200 uppercase tracking-wide">{s.siteType === "central_kitchen" ? "Kitchen" : s.siteType === "distribution" ? "Depot" : "Facility"}</span>}
                               </div>
                               {s.ownershipModel && <span className="text-[10px] text-slate-600 uppercase">{s.ownershipModel === "joint_venture" ? "JV" : s.ownershipModel}</span>}
                             </button>
@@ -20200,7 +20200,7 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
               {selRoleObj?.custom && (
                 <div className="flex gap-2">
                   <button onClick={()=>setRoleModal(selRoleObj)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Edit</button>
-                  <button onClick={async()=>{ if(window.confirm(`Delete role "${selRoleObj.label}"? People holding it revert to their built-in role.`)){ await onArchiveRole?.(selRoleObj.key); setSelRole("manager"); onReload?.(); } }} className="px-2.5 py-1 rounded-lg bg-red-600/20 text-red-300 text-[11px] font-semibold">Delete</button>
+                  <button onClick={async()=>{ if(window.confirm(`Delete role "${selRoleObj.label}"? People holding it revert to their built-in role.`)){ await onArchiveRole?.(selRoleObj.key); setSelRole("manager"); onReload?.(); } }} className="px-2.5 py-1 rounded-lg bg-red-600/20 text-red-200 text-[11px] font-semibold">Delete</button>
                 </div>
               )}
             </div>
@@ -20374,7 +20374,7 @@ function RolesManager({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRol
         <div className="space-y-2">
           {customRoles.map(role => (
             <div key={role.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
-              <div className="w-9 h-9 rounded-xl bg-fuchsia-600/20 text-fuchsia-300 flex items-center justify-center flex-shrink-0"><Lock size={15}/></div>
+              <div className="w-9 h-9 rounded-xl bg-fuchsia-600/20 text-fuchsia-200 flex items-center justify-center flex-shrink-0"><Lock size={15}/></div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-bold text-white">{role.name}</span>
@@ -20532,7 +20532,7 @@ function AdminPanelView({
           <div className="flex justify-end"><button onClick={()=>setUserModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/>Add Manager</button></div>
           {users.map(u=>(
             <div key={u.id} className="flex items-center gap-4 bg-slate-900 border border-slate-700 rounded-2xl px-5 py-4">
-              <div className="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-300 flex items-center justify-center text-sm font-bold flex-shrink-0">{u.avatar}</div>
+              <div className="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-200 flex items-center justify-center text-sm font-bold flex-shrink-0">{u.avatar}</div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-bold text-white">{u.name}</span><RoleBadge role={u.role}/></div>
                 <div className="text-xs text-slate-600">{u.email}</div>
@@ -20697,7 +20697,7 @@ function StoreKPIPanel({ brands, stores, onSaveStoreKPIs }) {
                   <td className="px-4 py-2.5 text-right">
                     <button
                       onClick={() => setEditing(s)}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
                     >Edit Targets</button>
                   </td>
                 </tr>
@@ -20974,8 +20974,8 @@ function StoreManagementSection({
                   <td className="px-3 py-2.5 text-slate-300">{brand?.name || s.brandId}</td>
                   <td className="px-3 py-2.5">
                     <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
-                      s.ownershipModel === "owned"         ? "bg-indigo-950/30 text-indigo-400" :
-                      s.ownershipModel === "joint_venture" ? "bg-sky-950/30 text-sky-400" :
+                      s.ownershipModel === "owned"         ? "bg-indigo-950/30 text-indigo-200" :
+                      s.ownershipModel === "joint_venture" ? "bg-sky-950/30 text-sky-200" :
                                                               "bg-slate-800/60 text-slate-400"
                     }`}>
                       {s.ownershipModel === "joint_venture" ? "JV" : s.ownershipModel || "—"}
@@ -21365,9 +21365,9 @@ function FlipdishLinkModal({ store, flipdishStores, onLink, onUnlink, onClose })
                 onClick={() => toggle(fs)}
                 disabled={busyId === fs.id || (linkedElse && !linkedHere)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  linkedHere ? "bg-rose-600/30 text-rose-300 hover:bg-rose-600/40"
+                  linkedHere ? "bg-rose-600/30 text-rose-200 hover:bg-rose-600/40"
                             : linkedElse ? "bg-slate-800 text-slate-600 cursor-not-allowed"
-                                          : "bg-indigo-600/30 text-indigo-300 hover:bg-indigo-600/40"
+                                          : "bg-indigo-600/30 text-indigo-200 hover:bg-indigo-600/40"
                 }`}
               >
                 {busyId === fs.id ? "…" : linkedHere ? "Unlink" : linkedElse ? "linked elsewhere" : "Link"}
@@ -21384,7 +21384,7 @@ function FlipdishLinkModal({ store, flipdishStores, onLink, onUnlink, onClose })
 function UserChip({ user, onLogout, compact }) {
   return (
     <div className={`flex items-center ${compact?"gap-2":"gap-3"}`}>
-      <div className="w-8 h-8 rounded-xl bg-indigo-600/20 text-indigo-300 flex items-center justify-center text-sm font-bold flex-shrink-0">{user.avatar}</div>
+      <div className="w-8 h-8 rounded-xl bg-indigo-600/20 text-indigo-200 flex items-center justify-center text-sm font-bold flex-shrink-0">{user.avatar}</div>
       {!compact&&(
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-white truncate">{user.name}</div>
@@ -22078,7 +22078,7 @@ function CkOrderView({ stores = [], visibleStoreIds = [], currentUser }) {
   };
 
   const statusBadge = (s) => {
-    const map = { draft:"bg-slate-700 text-slate-300", submitted:"bg-amber-900/40 text-amber-300", fulfilled:"bg-emerald-900/40 text-emerald-300", cancelled:"bg-red-900/30 text-red-300" };
+    const map = { draft:"bg-slate-700 text-slate-300", submitted:"bg-amber-900/40 text-amber-200", fulfilled:"bg-emerald-900/40 text-emerald-200", cancelled:"bg-red-900/30 text-red-200" };
     return <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${map[s]||map.draft}`}>{s}</span>;
   };
 
@@ -23881,7 +23881,7 @@ function AdvertisedRolesModal({ advertisedRoles, onAdd, onUpdate, onArchive, onC
                       <div className="text-sm text-slate-200">{r.title}{!r.active && <span className="text-[10px] text-slate-500 ml-2">(hidden)</span>}</div>
                       {r.description && <div className="text-[11px] text-slate-600">{r.description}</div>}
                     </div>
-                    <button onClick={() => toggleActive(r)} title={r.active ? "Hide from applicants" : "Show to applicants"} className={`px-2 py-1 rounded text-[11px] font-semibold ${r.active ? "bg-emerald-950/40 text-emerald-300 border border-emerald-800" : "bg-slate-800 text-slate-400"}`}>{r.active ? "Active" : "Hidden"}</button>
+                    <button onClick={() => toggleActive(r)} title={r.active ? "Hide from applicants" : "Show to applicants"} className={`px-2 py-1 rounded text-[11px] font-semibold ${r.active ? "bg-emerald-950/40 text-emerald-200 border border-emerald-800" : "bg-slate-800 text-slate-400"}`}>{r.active ? "Active" : "Hidden"}</button>
                     <button onClick={() => { setEditId(r.id); setEditTitle(r.title); }} className="p-1.5 rounded bg-slate-800 text-slate-400 hover:text-white"><Edit size={12}/></button>
                     <button onClick={() => remove(r)} className="p-1.5 rounded bg-slate-800 text-slate-600 hover:text-red-400"><Trash2 size={12}/></button>
                   </>
@@ -24453,7 +24453,7 @@ function HiringView({
                               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                                 isReject
                                   ? "bg-slate-800 text-slate-400 hover:bg-red-950/40 hover:text-red-300"
-                                  : "bg-indigo-950/40 text-indigo-300 hover:bg-indigo-600 hover:text-white"
+                                  : "bg-indigo-950/40 text-indigo-200 hover:bg-indigo-600 hover:text-white"
                               }`}>
                               {tinfo?.label || t}
                             </button>
@@ -24507,8 +24507,8 @@ function HiringView({
                       {retryResult?.id === app.id && (
                         <span className={`flex items-center px-2 py-1 rounded-lg text-xs font-semibold ${
                           retryResult.ok
-                            ? "bg-emerald-950/40 text-emerald-300"
-                            : "bg-amber-950/40 text-amber-300"
+                            ? "bg-emerald-950/40 text-emerald-200"
+                            : "bg-amber-950/40 text-amber-200"
                         }`}>
                           {retryResult.ok ? "✓ Sent" : `✗ ${retryResult.message}`}
                         </span>
@@ -25029,7 +25029,7 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
             <div key={req.id} className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-semibold text-white">Requested {fmtGBP(req.amountRequested)}</span>
-                <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-amber-600/20 text-amber-300">{req.status.replace("_"," ")}</span>
+                <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-amber-600/20 text-amber-200">{req.status.replace("_"," ")}</span>
               </div>
               {req.reason && <div className="text-xs text-slate-500">{req.reason}</div>}
               {/* Contract (optional) */}
@@ -29857,7 +29857,7 @@ function OpsTeamView({
                       <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#844429") + "30", color: m.color || "#844429" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}{!m.photoUrl && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-300 uppercase font-bold align-middle">no photo</span>}</div>
+                          <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}{!m.photoUrl && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-200 uppercase font-bold align-middle">no photo</span>}</div>
                           {m.status === "pending_setup" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">⚠ Pending setup</span>}
                           {m.isManager && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-700 text-purple-300 font-semibold">Manager</span>}
                         </div>
@@ -29972,7 +29972,7 @@ function SuppliersView({ stores = [], storeFilter = "all" }) {
                         <div key={inv.id} className="flex items-center justify-between text-[11px] py-1">
                           <span className="text-slate-400">{inv.invoice_number||"(no #)"} · {inv.invoice_date||"—"}</span>
                           <span className="flex items-center gap-2">
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase ${inv.payment_status==="paid"?"bg-emerald-600/20 text-emerald-300":"bg-slate-700/30 text-slate-400"}`}>{inv.payment_status||"unpaid"}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase ${inv.payment_status==="paid"?"bg-emerald-600/20 text-emerald-200":"bg-slate-700/30 text-slate-400"}`}>{inv.payment_status||"unpaid"}</span>
                             <span className="text-slate-300 tabular-nums">{money(inv.total_ex_vat)}</span>
                           </span>
                         </div>
@@ -30920,7 +30920,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   }, [recon, bankTransactions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const StatusBadge = ({ s }) => {
-    const m = { submitted:["bg-amber-600/20 text-amber-300","Submitted"], approved:["bg-indigo-600/20 text-indigo-300","Approved"], reconciled:["bg-emerald-600/20 text-emerald-300","Reconciled"], rejected:["bg-red-600/20 text-red-300","Rejected"] };
+    const m = { submitted:["bg-amber-600/20 text-amber-200","Submitted"], approved:["bg-indigo-600/20 text-indigo-200","Approved"], reconciled:["bg-emerald-600/20 text-emerald-200","Reconciled"], rejected:["bg-red-600/20 text-red-200","Rejected"] };
     const [cls,lab] = m[s] || ["bg-slate-700 text-slate-300", s];
     return <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${cls}`}>{lab}</span>;
   };
@@ -30954,7 +30954,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
         <div className="flex gap-1.5 mt-2 flex-wrap">
           {c.status==="submitted" && <>
             <button onClick={()=>handlers.approve?.(c.id)} className="px-2.5 py-1 rounded-lg bg-indigo-600/30 text-indigo-200 text-[11px] font-semibold">Approve</button>
-            <button onClick={()=>{ const r = window.prompt("Reason for rejection?"); if(r!==null) handlers.reject?.(c.id, r); }} className="px-2.5 py-1 rounded-lg bg-red-600/20 text-red-300 text-[11px] font-semibold">Reject</button>
+            <button onClick={()=>{ const r = window.prompt("Reason for rejection?"); if(r!==null) handlers.reject?.(c.id, r); }} className="px-2.5 py-1 rounded-lg bg-red-600/20 text-red-200 text-[11px] font-semibold">Reject</button>
           </>}
           {c.status==="approved" && <>
             <button onClick={()=>openRecon(c)} className="px-2.5 py-1 rounded-lg bg-emerald-600/30 text-emerald-200 text-[11px] font-semibold">Reconcile</button>
@@ -31183,9 +31183,9 @@ function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledg
                         <div className={`text-lg font-bold ${(balances[a.id]||0)<0?"text-red-400":"text-white"}`}>{money(balances[a.id]||0)}</div>
                       </div>
                       <div className="flex gap-1.5 mt-3 flex-wrap">
-                        {kind==="revenue" && <button onClick={()=>openMove("income", a.id)} className="px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-300 text-[11px] font-semibold">+ In</button>}
-                        <button onClick={()=>openMove("transfer", a.id)} className="px-2 py-1 rounded-lg bg-indigo-600/20 text-indigo-300 text-[11px] font-semibold">Transfer</button>
-                        <button onClick={()=>openMove("expense", a.id)} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-300 text-[11px] font-semibold">− Out</button>
+                        {kind==="revenue" && <button onClick={()=>openMove("income", a.id)} className="px-2 py-1 rounded-lg bg-emerald-600/20 text-emerald-200 text-[11px] font-semibold">+ In</button>}
+                        <button onClick={()=>openMove("transfer", a.id)} className="px-2 py-1 rounded-lg bg-indigo-600/20 text-indigo-200 text-[11px] font-semibold">Transfer</button>
+                        <button onClick={()=>openMove("expense", a.id)} className="px-2 py-1 rounded-lg bg-red-600/20 text-red-200 text-[11px] font-semibold">− Out</button>
                         <button onClick={()=>{setSelAccount(a.id); setTab("ledger");}} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold">Statement</button>
                       </div>
                     </div>
@@ -31978,7 +31978,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                 <div key={tx.id} className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 border ${tx.reconciled?"bg-emerald-950/15 border-emerald-800/40":"bg-slate-900 border-slate-800"}`}>
                   <div className="min-w-0">
                     <div className="text-sm text-slate-200 font-semibold truncate flex items-center gap-2">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold ${d.dir==="in"?"bg-emerald-600/20 text-emerald-300":d.dir==="out"?"bg-red-600/20 text-red-300":"bg-slate-700 text-slate-300"}`}>{d.label}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold ${d.dir==="in"?"bg-emerald-600/20 text-emerald-200":d.dir==="out"?"bg-red-600/20 text-red-200":"bg-slate-700 text-slate-300"}`}>{d.label}</span>
                       {tx.reference || (acct?.name) || "Cash movement"}
                     </div>
                     <div className="text-[11px] text-slate-500">{tx.txnDate}{acct?` · ${acct.name}`:""}{tx.sourceRef?.startsWith("exp:")?" · expense":tx.sourceRef?.startsWith("eod:")?" · EOD takings":""}</div>
@@ -34385,7 +34385,7 @@ function ManagerAvailabilityView({ brands, stores = [], opsTeam, availability, c
                   <div className="space-y-1">
                     {dayAvail.map(a => (
                       <button key={a.id} onClick={() => setDetailItem(a)}
-                        className={`w-full text-xs rounded-lg px-1.5 py-1 truncate font-medium text-left transition-all ${a.available ? "bg-emerald-500/25 text-emerald-300 hover:bg-emerald-500/30" : "bg-red-500/25 text-red-300 hover:bg-red-500/30"}`}
+                        className={`w-full text-xs rounded-lg px-1.5 py-1 truncate font-medium text-left transition-all ${a.available ? "bg-emerald-500/25 text-emerald-200 hover:bg-emerald-500/30" : "bg-red-500/25 text-red-200 hover:bg-red-500/30"}`}
                         title={`${a.employeeName} · ${fmtAvailTime(a)}`}>
                         {a.employeeName.split(" ")[0]}
                       </button>
@@ -34641,7 +34641,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                   const assigned = assignedId === p.id || assignedId === p.name;
                   return (
                     <button key={p.id} onClick={() => canAssign && assignHandler(ticket, p.id, p.name)} disabled={!canAssign}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-300" : "text-slate-500 hover:bg-slate-950"} ${!canAssign ? "opacity-60 cursor-not-allowed" : ""}`}>
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600/20 text-indigo-200" : "text-slate-500 hover:bg-slate-950"} ${!canAssign ? "opacity-60 cursor-not-allowed" : ""}`}>
                       <span className="truncate">{p.name}{p.role ? <span className="text-slate-600 ml-1">({p.role})</span> : ""}</span>
                       {assigned && <Check size={11} className="text-indigo-400 flex-shrink-0"/>}
                     </button>
@@ -36931,7 +36931,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
 
         <div className="flex items-center gap-2 flex-wrap ml-auto">
           {allWeekSlots.length > 0 && (
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-500/25 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isWeekPublished ? "bg-emerald-500/25 text-emerald-200" : "bg-amber-500/20 text-amber-200"}`}>
               {isWeekPublished ? "✓ Published" : "Draft"}
             </span>
           )}
@@ -36944,7 +36944,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           )}
           {isWeekPublished && !locked && (
             <button onClick={()=>setLocked(true)}
-              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors">
+              className="flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 transition-colors">
               🔓 Editing — lock again
             </button>
           )}
@@ -36958,7 +36958,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             {showCosts ? <Eye size={13}/> : <EyeOff size={13}/>} Costs
           </button>
           <button onClick={()=>setAutofillModal({})} disabled={editLocked}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 hover:bg-indigo-600/20 text-indigo-300 text-xs font-semibold transition-colors disabled:opacity-40" title="Auto-fill shifts from availability">
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 hover:bg-indigo-600/20 text-indigo-200 text-xs font-semibold transition-colors disabled:opacity-40" title="Auto-fill shifts from availability">
             <Zap size={13}/> Auto-fill
           </button>
           {!isMobile && (
@@ -37511,7 +37511,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                 const maxCount = Math.max(...row.counts, 1);
                 return (
                   <div key={row.date} className="grid gap-1 mb-1" style={{gridTemplateColumns:"100px repeat(24, 1fr)"}}>
-                    <div className={`flex items-center px-2 py-1.5 rounded-xl text-xs font-semibold ${isToday?"bg-indigo-950/30 text-indigo-300":"bg-slate-900 text-slate-700"}`}>
+                    <div className={`flex items-center px-2 py-1.5 rounded-xl text-xs font-semibold ${isToday?"bg-indigo-950/30 text-indigo-200":"bg-slate-900 text-slate-700"}`}>
                       {day.toLocaleDateString("en-GB",{weekday:"short",day:"numeric"})}
                     </div>
                     {row.counts.map((c, h) => {
@@ -39275,10 +39275,10 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
               const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
               const locked = isPunchLocked && isPunchLocked(r);
               let pill = null;
-              if (r.status === "open") pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Clocked in</span>;
-              else if (needsApproval || needsOTApproval) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Needs approval</span>;
-              else if (isRejected) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">OT rejected</span>;
-              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">✓ Approved</span>;
+              if (r.status === "open") pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-200 border border-amber-500/30">Clocked in</span>;
+              else if (needsApproval || needsOTApproval) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-200 border border-amber-500/30">Needs approval</span>;
+              else if (isRejected) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-200 border border-red-500/30">OT rejected</span>;
+              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-200 border border-emerald-500/30">✓ Approved</span>;
               const attention = needsApproval || needsOTApproval || r.status === "open";
               return (
                 <div key={r.id} className={`p-3 ${attention ? "bg-amber-950/10" : ""}`}>
@@ -39359,10 +39359,10 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
             // Status pill
             let statusPill = null;
-            if (r.status === "open") statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Clocked in</span>;
-            else if (needsApproval || needsOTApproval) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">Needs approval</span>;
-            else if (isRejected) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">OT rejected</span>;
-            else if (r.approved || isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">✓ Approved</span>;
+            if (r.status === "open") statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-200 border border-amber-500/30">Clocked in</span>;
+            else if (needsApproval || needsOTApproval) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-200 border border-amber-500/30">Needs approval</span>;
+            else if (isRejected) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-200 border border-red-500/30">OT rejected</span>;
+            else if (r.approved || isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-200 border border-emerald-500/30">✓ Approved</span>;
 
             return (
               <Fragment key={r.id}>
@@ -39603,9 +39603,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-semibold text-white text-sm">{s.name}</span>
-                      {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold">{s.pendingApproval} pending</span>}
-                      {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold">{s.pendingOT} OT</span>}
-                      {s.wtdBreached && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-300 font-bold">⚠ 48h+</span>}
+                      {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-200 font-bold">{s.pendingApproval} pending</span>}
+                      {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-200 font-bold">{s.pendingOT} OT</span>}
+                      {s.wtdBreached && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-200 font-bold">⚠ 48h+</span>}
                     </div>
                     <div className="text-[10px] text-slate-500">{s.role}{s.isSalaried ? " · Salaried" : ""}</div>
                   </div>
@@ -39658,9 +39658,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-white">{s.name}</span>
-                      {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold">{s.pendingApproval} pending</span>}
-                      {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold">{s.pendingOT} OT</span>}
-                      {s.wtdBreached && <span title="A week exceeds the 48h Working Time Directive average limit" className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-300 font-bold">⚠ 48h+</span>}
+                      {s.pendingApproval > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-200 font-bold">{s.pendingApproval} pending</span>}
+                      {s.pendingOT > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-200 font-bold">{s.pendingOT} OT</span>}
+                      {s.wtdBreached && <span title="A week exceeds the 48h Working Time Directive average limit" className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-200 font-bold">⚠ 48h+</span>}
                     </div>
                     <div className="text-[10px] text-slate-500">{s.role}</div>
                   </td>
@@ -40276,11 +40276,11 @@ function MyLoansView({ currentUser, opsTeam = [] }) {
   };
 
   const statusChip = (s) => ({
-    pending:"bg-amber-600/20 text-amber-300", approved:"bg-emerald-600/20 text-emerald-300",
-    active:"bg-indigo-600/20 text-indigo-300", declined:"bg-red-600/20 text-red-300",
+    pending:"bg-amber-600/20 text-amber-200", approved:"bg-emerald-600/20 text-emerald-200",
+    active:"bg-indigo-600/20 text-indigo-200", declined:"bg-red-600/20 text-red-200",
     settled:"bg-slate-700/30 text-slate-400", cancelled:"bg-slate-700/30 text-slate-500",
-    confirmed:"bg-emerald-600/20 text-emerald-300", rejected:"bg-red-600/20 text-red-300",
-    contract_sent:"bg-amber-600/20 text-amber-300", contract_signed:"bg-indigo-600/20 text-indigo-300",
+    confirmed:"bg-emerald-600/20 text-emerald-200", rejected:"bg-red-600/20 text-red-200",
+    contract_sent:"bg-amber-600/20 text-amber-200", contract_signed:"bg-indigo-600/20 text-indigo-200",
   }[s] || "bg-slate-700/30 text-slate-400");
 
   return (
@@ -42103,7 +42103,7 @@ function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
           </div>
           {err && <div className="text-xs text-rose-400">{err}</div>}
           <div className="flex items-center justify-between gap-2 pt-1">
-            <button onClick={del} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600/15 text-red-300 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
+            <button onClick={del} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600/15 text-red-200 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
               <Trash2 size={14}/> Delete
             </button>
             <div className="flex items-center gap-2">
@@ -42255,11 +42255,11 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   const fmtMoney = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
 
   const TILES = [
-    { key:"on", label:"On", icon: UserCheck, value: onShift.length, cls:"bg-emerald-500/10 text-emerald-300 border-emerald-500/20" },
-    { key:"break", label:"Break", icon: Coffee, value: onBreak.length, cls: onBreak.length?"bg-amber-500/10 text-amber-300 border-amber-500/20":"bg-slate-500/10 text-slate-300 border-slate-500/20" },
-    { key:"overdue", label:"Overdue", icon: AlertTriangle, value: overdue.length, cls: overdue.length? "bg-amber-500/10 text-amber-300 border-amber-500/20":"bg-slate-500/10 text-slate-400 border-slate-500/20" },
+    { key:"on", label:"On", icon: UserCheck, value: onShift.length, cls:"bg-emerald-500/10 text-emerald-200 border-emerald-500/20" },
+    { key:"break", label:"Break", icon: Coffee, value: onBreak.length, cls: onBreak.length?"bg-amber-500/10 text-amber-200 border-amber-500/20":"bg-slate-500/10 text-slate-300 border-slate-500/20" },
+    { key:"overdue", label:"Overdue", icon: AlertTriangle, value: overdue.length, cls: overdue.length? "bg-amber-500/10 text-amber-200 border-amber-500/20":"bg-slate-500/10 text-slate-400 border-slate-500/20" },
     { key:"upcoming", label:"Upcoming", icon: Clock, value: upcoming.length, cls:"bg-slate-500/10 text-slate-300 border-slate-500/20" },
-    { key:"out", label:"Out", icon: LogOut, value: out.length, cls:"bg-indigo-500/10 text-indigo-300 border-indigo-500/20" },
+    { key:"out", label:"Out", icon: LogOut, value: out.length, cls:"bg-indigo-500/10 text-indigo-200 border-indigo-500/20" },
   ];
 
   // Row showing just name + clock-in / clock-out. Clicking opens the editor
