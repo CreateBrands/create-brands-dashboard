@@ -13415,7 +13415,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
                 checklistStates={checklistStates} onSignOff={onSignOff}
                 onChecklistItemToggle={onChecklistItemToggle} onTempLog={onTempLog} currentUser={currentUser}
-                storeRoles={storeRoles} opsTeam={opsTeam}
+                storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}
               />
             </>
           )}
@@ -21204,15 +21204,26 @@ function isOverdue(a) {
   const now = new Date(); return now.getHours()*60+now.getMinutes() > h*60+m;
 }
 function tempLimitText(u) {
-  if (u.min != null && u.max != null) return `${u.min}°C–${u.max}°C`;
-  if (u.min != null) return `Min ${u.min}°C`;
-  if (u.max != null) return `Max ${u.max}°C`;
+  const a = u.min != null ? Number(u.min) : null;
+  const b = u.max != null ? Number(u.max) : null;
+  if (a != null && b != null) { const lo = Math.min(a, b), hi = Math.max(a, b); return `${lo}°C–${hi}°C`; }
+  if (a != null) return `Min ${a}°C`;
+  if (b != null) return `Max ${b}°C`;
   return "No limit";
 }
 function checkTemp(u, v) {
   const n = parseFloat(v);
-  if (u.min != null && n < u.min) return false;
-  if (u.max != null && n > u.max) return false;
+  if (isNaN(n)) return true;
+  // Normalise: treat the lower bound as the floor and the higher as the ceiling,
+  // regardless of which field they were entered in. This prevents false breaches
+  // when a unit's min/max are entered swapped (e.g. min -18, max -22 on a freezer).
+  const a = u.min != null ? Number(u.min) : null;
+  const b = u.max != null ? Number(u.max) : null;
+  let lo = null, hi = null;
+  if (a != null && b != null) { lo = Math.min(a, b); hi = Math.max(a, b); }
+  else { lo = a; hi = b; }
+  if (lo != null && n < lo) return false;
+  if (hi != null && n > hi) return false;
   return true;
 }
 
@@ -21409,7 +21420,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 }
 
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [] }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [] }) {
   const { user } = useAuth();
 
   // visibleStores = the stores this user can see (already filtered upstream
@@ -21489,7 +21500,26 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     return true;                                 // untargeted/legacy → visible to all
   };
 
-  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a) && targetedAtMe(a));
+  // ── On-shift gate (Option C) ──
+  // A non-manager only sees tasks while they're clocked in. Fallback: if NOBODY
+  // is clocked in at the task's store, still show them (so opening/closing tasks
+  // aren't invisible during gaps). Managers always see everything.
+  const myOnShift = (punchRecords || []).some(p => p.status === "open" && p.employeeId === (currentUser?.opsTeamMemberId || currentUser?.id));
+  const storesWithSomeoneOnShift = useMemo(() => {
+    const s = new Set();
+    (punchRecords || []).forEach(p => { if (p.status === "open" && p.storeId) s.add(p.storeId); });
+    return s;
+  }, [punchRecords]);
+  const onShiftGate = (a) => {
+    if (isManager) return true;          // managers exempt
+    if (myOnShift) return true;          // I'm clocked in → see my tasks
+    // I'm NOT clocked in: only show if nobody at this store is on shift (gap cover).
+    const storeId = a.storeId || null;
+    if (storeId && storesWithSomeoneOnShift.has(storeId)) return false; // someone else is covering
+    return true;                          // no one on shift here → don't hide the tasks
+  };
+
+  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a) && targetedAtMe(a) && onShiftGate(a));
   const overdue = bAssigns.filter(isOverdue);
 
   const getTaskName = (type, taskId) => {
@@ -43907,7 +43937,7 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "operations" && opsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "operations" && opsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
             {effectiveActiveView === "operations" && opsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
