@@ -176,7 +176,8 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package
+  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
+  Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -1762,9 +1763,22 @@ function SafeMarkdown({ text }) {
   // opens; ":::" closes. Inside, the first image goes on one side and all other
   // lines render as markdown on the other. Stacks on mobile.
   let row = null;   // { side: 'left'|'right', lines: [] }
+  // Callout boxes: ":::info" / ":::warning" / ":::tip" / ":::success" open, ":::" closes.
+  let callout = null; // { kind, lines: [] }
+
+  const flushCallout = () => {
+    if (callout) { blocks.push({ type: "callout", kind: callout.kind, lines: callout.lines }); callout = null; }
+  };
 
   for (const raw of lines) {
     const line = raw.trimEnd();
+
+    // Inside a callout block: collect until closing :::
+    if (callout) {
+      if (/^:::\s*$/.test(line.trim())) { flushCallout(); }
+      else { callout.lines.push(line); }
+      continue;
+    }
 
     // Inside a row block: collect lines until the closing :::
     if (row) {
@@ -1776,8 +1790,39 @@ function SafeMarkdown({ text }) {
       }
       continue;
     }
+
+    // Video embed: ":::video <url>" on its own line.
+    const vid = /^:::video\s+(\S+)\s*$/.exec(line.trim());
+    if (vid) { flushPara(); flushList(); blocks.push({ type: "video", url: vid[1] }); continue; }
+
+    // Callout open
+    const calloutOpen = /^:::(info|warning|tip|success)\b/.exec(line.trim());
+    if (calloutOpen) { flushPara(); flushList(); callout = { kind: calloutOpen[1], lines: [] }; continue; }
+
     const rowOpen = /^:::row(-right)?\b/.exec(line.trim());
     if (rowOpen) { flushPara(); flushList(); row = { side: rowOpen[1] ? "right" : "left", lines: [] }; continue; }
+
+    // Blockquote / key takeaway: lines beginning "> "
+    const bq = /^>\s?(.*)$/.exec(line);
+    if (bq) { flushPara(); flushList(); blocks.push({ type: "quote", text: bq[1] }); continue; }
+
+    // Table: a line with pipes, where the next-ish line is a separator (|---|).
+    if (/^\s*\|.*\|\s*$/.test(line) && /\|/.test(line)) {
+      flushPara(); flushList();
+      if (!list && blocks.length && blocks[blocks.length - 1].type === "table" && !blocks[blocks.length - 1].closed) {
+        // append row to open table
+        const tb = blocks[blocks.length - 1];
+        if (/^\s*\|?[\s:|-]+\|?\s*$/.test(line)) { tb.hasHeader = true; } // separator row
+        else { tb.rows.push(line.split("|").slice(1, -1).map(c => c.trim())); }
+      } else {
+        blocks.push({ type: "table", rows: [line.split("|").slice(1, -1).map(c => c.trim())], hasHeader: false, closed: false });
+      }
+      continue;
+    }
+    // close any open table when a non-table line appears
+    if (blocks.length && blocks[blocks.length - 1].type === "table" && !blocks[blocks.length - 1].closed) {
+      blocks[blocks.length - 1].closed = true;
+    }
 
     if (!line.trim()) { flushPara(); flushList(); continue; }
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
@@ -1790,7 +1835,20 @@ function SafeMarkdown({ text }) {
   }
   // Unclosed row (no trailing :::): render what we have.
   if (row) { blocks.push({ type: "row", side: row.side, lines: row.lines }); row = null; }
+  if (callout) { flushCallout(); }
   flushPara(); flushList();
+
+  const calloutStyle = {
+    info:    { bar: "border-sky-500",    bg: "bg-sky-950/30",    icon: Info,          ic: "text-sky-300" },
+    warning: { bar: "border-amber-500",  bg: "bg-amber-950/30",  icon: AlertTriangle, ic: "text-amber-300" },
+    tip:     { bar: "border-violet-500", bg: "bg-violet-950/30", icon: Lightbulb,     ic: "text-violet-300" },
+    success: { bar: "border-emerald-500",bg: "bg-emerald-950/30",icon: CheckCircle,   ic: "text-emerald-300" },
+  };
+  const ytId = (u) => {
+    const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/.exec(u || "");
+    return m ? m[1] : null;
+  };
+  const vimeoId = (u) => { const m = /vimeo\.com\/(?:video\/)?(\d+)/.exec(u || ""); return m ? m[1] : null; };
 
   return (
     <div className="space-y-2 text-sm text-slate-300 leading-relaxed">
@@ -1807,6 +1865,45 @@ function SafeMarkdown({ text }) {
             <Tag key={bi} className={b.ordered ? "list-decimal pl-5 space-y-1" : "list-disc pl-5 space-y-1"}>
               {b.items.map((it, ii) => <li key={ii}>{renderInline(it, `l${bi}-${ii}`)}</li>)}
             </Tag>
+          );
+        }
+        if (b.type === "callout") {
+          const st = calloutStyle[b.kind] || calloutStyle.info;
+          const Icon = st.icon;
+          return (
+            <div key={bi} className={`flex gap-2.5 rounded-xl border-l-4 ${st.bar} ${st.bg} px-3 py-2.5 my-2`}>
+              <Icon size={16} className={`${st.ic} flex-shrink-0 mt-0.5`}/>
+              <div className="min-w-0 flex-1"><SafeMarkdown text={b.lines.join("\n")}/></div>
+            </div>
+          );
+        }
+        if (b.type === "quote") {
+          return (
+            <div key={bi} className="border-l-4 border-indigo-500/60 pl-3 py-1 my-2 italic text-slate-200">
+              {renderInline(b.text, `q${bi}`)}
+            </div>
+          );
+        }
+        if (b.type === "video") {
+          const yt = ytId(b.url); const vm = vimeoId(b.url);
+          const src = yt ? `https://www.youtube.com/embed/${yt}` : vm ? `https://player.vimeo.com/video/${vm}` : null;
+          if (!src) return <a key={bi} href={b.url} target="_blank" rel="noopener noreferrer" className="text-indigo-300 underline">Watch video ↗</a>;
+          return (
+            <div key={bi} className="my-2 rounded-xl overflow-hidden border border-slate-800" style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+              <iframe src={src} title="Training video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}/>
+            </div>
+          );
+        }
+        if (b.type === "table") {
+          const [head, ...body] = b.hasHeader ? b.rows : [null, ...b.rows];
+          return (
+            <div key={bi} className="my-2 overflow-x-auto rounded-xl border border-slate-800">
+              <table className="w-full text-xs">
+                {head && <thead className="bg-slate-800/60"><tr>{head.map((c, ci) => <th key={ci} className="text-left px-3 py-2 font-semibold text-slate-200 border-b border-slate-700">{renderInline(c, `th${bi}-${ci}`)}</th>)}</tr></thead>}
+                <tbody>{body.map((r, ri) => <tr key={ri} className="even:bg-slate-900/40">{r.map((c, ci) => <td key={ci} className="px-3 py-2 text-slate-300 border-b border-slate-800/50">{renderInline(c, `td${bi}-${ri}-${ci}`)}</td>)}</tr>)}</tbody>
+              </table>
+            </div>
           );
         }
         if (b.type === "row") {
@@ -1833,7 +1930,291 @@ function SafeMarkdown({ text }) {
 
 // Employee self-service onboarding: their own tax declaration + policy
 // acknowledgements. Bank details are NOT here (owner/HR only). Shown in portal.
-function SteppedModuleContent({ content }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// BLOCK-BASED TRAINING CONTENT
+// New training modules store an array of typed blocks as JSON in the module's
+// `content` column. Legacy modules (plain text / markdown) still render via
+// SafeMarkdown — parseModuleContent detects which format a module uses.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Returns { format: 'blocks'|'legacy', blocks: [...] }.
+// New format: JSON string like {"v":1,"blocks":[...]}. Legacy: anything else.
+function parseModuleContent(content) {
+  if (!content || !content.trim()) return { format: "blocks", blocks: [] };
+  const t = content.trim();
+  if (t.startsWith("{") && t.includes('"blocks"')) {
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && Array.isArray(parsed.blocks)) return { format: "blocks", blocks: parsed.blocks };
+    } catch { /* fall through to legacy */ }
+  }
+  return { format: "legacy", blocks: [{ id: "legacy", type: "markdown", text: content }] };
+}
+
+function serializeBlocks(blocks) {
+  return JSON.stringify({ v: 1, blocks });
+}
+
+// Generate a short unique block id.
+function newBlockId() { return `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`; }
+
+// ── A single rendered block (trainee view) ──────────────────────────────────
+function RenderedBlock({ block }) {
+  const calloutStyle = {
+    info:    { bar: "border-sky-500",     bg: "bg-sky-950/30",     icon: Info,          ic: "text-sky-300" },
+    warning: { bar: "border-amber-500",   bg: "bg-amber-950/30",   icon: AlertTriangle, ic: "text-amber-300" },
+    tip:     { bar: "border-violet-500",  bg: "bg-violet-950/30",  icon: Lightbulb,     ic: "text-violet-300" },
+    success: { bar: "border-emerald-500", bg: "bg-emerald-950/30", icon: CheckCircle,   ic: "text-emerald-300" },
+  };
+  const ytId = (u) => { const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/.exec(u || ""); return m ? m[1] : null; };
+  const vimeoId = (u) => { const m = /vimeo\.com\/(?:video\/)?(\d+)/.exec(u || ""); return m ? m[1] : null; };
+
+  switch (block.type) {
+    case "markdown":
+      return <SafeMarkdown text={block.text} />;
+    case "heading": {
+      const lvl = block.level || 1;
+      const cls = lvl === 1 ? "text-xl font-bold text-white" : lvl === 2 ? "text-lg font-bold text-white" : "text-base font-bold text-slate-200";
+      return <div className={cls}>{block.text}</div>;
+    }
+    case "text":
+      return <SafeMarkdown text={block.text} />;
+    case "image":
+      return block.url ? (
+        <figure className="my-1">
+          <img src={block.url} alt={block.caption || ""} className="w-full rounded-xl border border-slate-800" />
+          {block.caption && <figcaption className="text-[11px] text-slate-500 mt-1 text-center">{block.caption}</figcaption>}
+        </figure>
+      ) : null;
+    case "video": {
+      const yt = ytId(block.url); const vm = vimeoId(block.url);
+      const src = yt ? `https://www.youtube.com/embed/${yt}` : vm ? `https://player.vimeo.com/video/${vm}` : null;
+      if (!src) return block.url ? <a href={block.url} target="_blank" rel="noopener noreferrer" className="text-indigo-300 underline">Watch video ↗</a> : null;
+      return (
+        <div className="my-1 rounded-xl overflow-hidden border border-slate-800" style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+          <iframe src={src} title="Training video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }} />
+        </div>
+      );
+    }
+    case "callout": {
+      const st = calloutStyle[block.kind] || calloutStyle.info;
+      const Icon = st.icon;
+      return (
+        <div className={`flex gap-2.5 rounded-xl border-l-4 ${st.bar} ${st.bg} px-3 py-2.5`}>
+          <Icon size={16} className={`${st.ic} flex-shrink-0 mt-0.5`} />
+          <div className="min-w-0 flex-1"><SafeMarkdown text={block.text} /></div>
+        </div>
+      );
+    }
+    case "quote":
+      return <div className="border-l-4 border-indigo-500/60 pl-3 py-1 italic text-slate-200"><SafeMarkdown text={block.text} /></div>;
+    case "table": {
+      const rows = block.rows || [];
+      if (!rows.length) return null;
+      const [head, ...body] = block.hasHeader ? rows : [null, ...rows];
+      return (
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="w-full text-xs">
+            {head && <thead className="bg-slate-800/60"><tr>{head.map((c, ci) => <th key={ci} className="text-left px-3 py-2 font-semibold text-slate-200 border-b border-slate-700">{c}</th>)}</tr></thead>}
+            <tbody>{body.map((r, ri) => <tr key={ri} className="even:bg-slate-900/40">{r.map((c, ci) => <td key={ci} className="px-3 py-2 text-slate-300 border-b border-slate-800/50">{c}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+    }
+    case "divider":
+      return <hr className="border-slate-800" />;
+    default:
+      return null;
+  }
+}
+
+// ── Interactive quiz block (trainee answers, gets scored) ───────────────────
+// block: { type:'quiz', passMark:80, questions:[{ id, prompt, options:[...], correct:[indices], multi:bool }] }
+function QuizBlock({ block, onResult }) {
+  const questions = block.questions || [];
+  const passMark = Number(block.passMark) || 80;
+  const [answers, setAnswers] = useState({});   // qId -> Set of selected option indices
+  const [submitted, setSubmitted] = useState(false);
+
+  const toggle = (qId, idx, multi) => {
+    if (submitted) return;
+    setAnswers(a => {
+      const cur = new Set(a[qId] || []);
+      if (multi) { cur.has(idx) ? cur.delete(idx) : cur.add(idx); }
+      else { cur.clear(); cur.add(idx); }
+      return { ...a, [qId]: cur };
+    });
+  };
+
+  const score = useMemo(() => {
+    if (!questions.length) return 100;
+    let correct = 0;
+    questions.forEach(q => {
+      const sel = answers[q.id] || new Set();
+      const want = new Set(q.correct || []);
+      const ok = sel.size === want.size && [...sel].every(i => want.has(i));
+      if (ok) correct += 1;
+    });
+    return Math.round((correct / questions.length) * 100);
+  }, [answers, questions]);
+
+  const passed = score >= passMark;
+  const allAnswered = questions.every(q => (answers[q.id] && answers[q.id].size > 0));
+
+  const submit = () => {
+    setSubmitted(true);
+    onResult?.({ score, passed });
+  };
+  const retry = () => { setAnswers({}); setSubmitted(false); };
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <GraduationCap size={16} className="text-indigo-300" />
+        <span className="text-sm font-bold text-white">{block.title || "Quick check"}</span>
+        <span className="text-[10px] text-slate-500 ml-auto">Pass mark {passMark}%</span>
+      </div>
+
+      {questions.map((q, qi) => (
+        <div key={q.id} className="space-y-2">
+          <div className="text-sm text-slate-200 font-medium">{qi + 1}. {q.prompt}{q.multi && <span className="text-[10px] text-slate-500 ml-1">(select all that apply)</span>}</div>
+          <div className="space-y-1.5">
+            {(q.options || []).map((opt, oi) => {
+              const sel = (answers[q.id] || new Set()).has(oi);
+              const isCorrect = (q.correct || []).includes(oi);
+              let cls = "border-slate-700 bg-slate-950/40 hover:bg-slate-800/50 text-slate-300";
+              if (submitted) {
+                if (isCorrect) cls = "border-emerald-500/50 bg-emerald-950/30 text-emerald-200";
+                else if (sel && !isCorrect) cls = "border-rose-500/50 bg-rose-950/30 text-rose-200";
+                else cls = "border-slate-800 bg-slate-950/40 text-slate-500";
+              } else if (sel) {
+                cls = "border-indigo-500 bg-indigo-950/40 text-white";
+              }
+              return (
+                <button key={oi} type="button" onClick={() => toggle(q.id, oi, q.multi)} disabled={submitted}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors flex items-center gap-2 ${cls}`}>
+                  <span className={`w-4 h-4 rounded-${q.multi ? "" : "full"} border flex items-center justify-center flex-shrink-0 ${sel ? "border-current" : "border-slate-600"}`}>
+                    {sel && <span className="w-2 h-2 rounded-full bg-current" />}
+                  </span>
+                  <span className="flex-1">{opt}</span>
+                  {submitted && isCorrect && <CheckCircle size={14} className="text-emerald-400 flex-shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {!submitted ? (
+        <button onClick={submit} disabled={!allAnswered}
+          className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed">
+          {allAnswered ? "Submit answers" : "Answer all questions to submit"}
+        </button>
+      ) : (
+        <div className={`rounded-xl px-4 py-3 flex items-center justify-between ${passed ? "bg-emerald-950/40 border border-emerald-500/40" : "bg-rose-950/40 border border-rose-500/40"}`}>
+          <div className="flex items-center gap-2">
+            {passed ? <CheckCircle size={18} className="text-emerald-300" /> : <AlertTriangle size={18} className="text-rose-300" />}
+            <div>
+              <div className={`text-sm font-bold ${passed ? "text-emerald-200" : "text-rose-200"}`}>{passed ? "Passed" : "Not yet"} — {score}%</div>
+              <div className="text-[11px] text-slate-400">{passed ? "Great work." : `You need ${passMark}% to pass.`}</div>
+            </div>
+          </div>
+          {!passed && <button onClick={retry} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold hover:bg-slate-700">Try again</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Block-based module player (trainee view) ────────────────────────────────
+// Renders blocks. "step" blocks split content into guided cards with a progress
+// bar (like the old --- behaviour). A quiz must be passed before the module can
+// be marked complete — onQuizState reports whether all quizzes are passed.
+function BlockModulePlayer({ blocks, onQuizState }) {
+  // Split blocks into step-pages on divider blocks marked isStep.
+  const pages = useMemo(() => {
+    const out = [[]]; 
+    blocks.forEach(b => {
+      if (b.type === "step") out.push([]);
+      else out[out.length - 1].push(b);
+    });
+    return out.filter(p => p.length > 0);
+  }, [blocks]);
+
+  const quizzes = useMemo(() => blocks.filter(b => b.type === "quiz"), [blocks]);
+  const [quizResults, setQuizResults] = useState({});   // blockId -> {score,passed}
+
+  useEffect(() => {
+    if (!quizzes.length) { onQuizState?.(true); return; }
+    const allPassed = quizzes.every(q => quizResults[q.id]?.passed);
+    onQuizState?.(allPassed);
+  }, [quizResults, quizzes, onQuizState]);
+
+  const [pi, setPi] = useState(0);
+  useEffect(() => { if (pi > pages.length - 1) setPi(0); }, [pages.length, pi]);
+
+  const renderBlocks = (arr) => arr.map(b => (
+    <div key={b.id}>
+      {b.type === "quiz"
+        ? <QuizBlock block={b} onResult={(r) => setQuizResults(s => ({ ...s, [b.id]: r }))} />
+        : <RenderedBlock block={b} />}
+    </div>
+  ));
+
+  if (pages.length <= 1) {
+    return <div className="space-y-3">{renderBlocks(pages[0] || blocks)}</div>;
+  }
+
+  const pct = Math.round(((pi + 1) / pages.length) * 100);
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+          <span>Step {pi + 1} of {pages.length}</span><span>{pct}%</span>
+        </div>
+        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      <div className="min-h-[60px] space-y-3">{renderBlocks(pages[pi])}</div>
+      <div className="flex items-center justify-center gap-1.5">
+        {pages.map((_, idx) => (
+          <button key={idx} onClick={() => setPi(idx)} aria-label={`Go to step ${idx + 1}`}
+            className={`h-2 rounded-full transition-all ${idx === pi ? "w-5 bg-indigo-500" : "w-2 bg-slate-700 hover:bg-slate-600"}`} />
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => setPi(n => Math.max(0, n - 1))} disabled={pi === 0}
+          className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-30">
+          <ChevronLeft size={14} /> Back
+        </button>
+        {pi < pages.length - 1 ? (
+          <button onClick={() => setPi(n => Math.min(pages.length - 1, n + 1))}
+            className="flex items-center gap-1 px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500">
+            Next <ChevronRight size={14} />
+          </button>
+        ) : (
+          <span className="flex items-center gap-1 px-3 py-1.5 text-xs text-emerald-400 font-semibold">
+            <CheckCircle size={14} /> End of module
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SteppedModuleContent({ content, onQuizState }) {
+  // New block-format modules route to the block player (handles steps + quizzes).
+  // Legacy markdown modules keep the original ---/SafeMarkdown behaviour below.
+  const parsed = useMemo(() => parseModuleContent(content), [content]);
+  if (parsed.format === "blocks") {
+    if (!parsed.blocks.length) return <div className="text-xs text-slate-600">No content for this module.</div>;
+    return <BlockModulePlayer blocks={parsed.blocks} onQuizState={onQuizState} />;
+  }
+  return <LegacySteppedContent content={content} />;
+}
+
+function LegacySteppedContent({ content }) {
   // Split a module's Markdown into steps on a horizontal-rule line (--- on its
   // own line). 2+ steps → guided card flow with a progress bar; otherwise the
   // content renders as a single block (fully backward-compatible with existing
@@ -3037,6 +3418,12 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
   const [loading, setLoading] = useState(true);
   const [openModuleId, setOpenModuleId] = useState(null);  // which module is expanded
   const [busyId, setBusyId] = useState(null);      // module being toggled
+  const [quizPass, setQuizPass] = useState({});    // moduleId -> bool (all quizzes passed)
+  // Does a module contain a quiz block? (quiz must be passed before completing.)
+  const moduleHasQuiz = (mod) => {
+    const parsed = parseModuleContent(mod?.content || "");
+    return parsed.format === "blocks" && parsed.blocks.some(b => b.type === "quiz");
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -3177,14 +3564,16 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                     const done = !!p?.completedAt;
                     const verified = !!p?.verifiedAt;
                     const open = openModuleId === mod.id;
+                    const hasQuiz = moduleHasQuiz(mod);
+                    const quizOk = !hasQuiz || quizPass[mod.id] || done;
                     return (
                       <div key={mod.id} className={`rounded-xl border ${done ? "bg-emerald-950/20 border-emerald-900" : "bg-slate-900 border-slate-800"}`}>
                         <div className="p-3 flex items-start gap-3">
                           <button
-                            onClick={() => handleToggle(mod, !done)}
-                            disabled={busyId === mod.id}
+                            onClick={() => { if (!quizOk && !done) { setOpenModuleId(mod.id); return; } handleToggle(mod, !done); }}
+                            disabled={busyId === mod.id || (!quizOk && !done)}
                             className={`mt-0.5 w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border ${done ? "bg-emerald-600 border-emerald-600" : "border-slate-600 hover:border-slate-400"} disabled:opacity-50`}
-                            title={done ? "Mark not done" : "Mark complete"}
+                            title={done ? "Mark not done" : (!quizOk ? "Pass the quiz first" : "Mark complete")}
                           >
                             {done && <Check size={13} className="text-white"/>}
                           </button>
@@ -3194,9 +3583,11 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                               {mod.required
                                 ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-800 text-amber-300 font-semibold">Required</span>
                                 : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">Optional</span>}
+                              {hasQuiz && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-800 text-indigo-300 font-semibold">Quiz</span>}
                               {verified && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold">✓ Verified</span>}
                             </div>
                             {mod.description && <div className="text-xs text-slate-500 mt-0.5">{mod.description}</div>}
+                            {hasQuiz && !quizOk && <div className="text-[11px] text-amber-400/80 mt-0.5">Open the module and pass the quiz to complete it.</div>}
                           </div>
                           {mod.content && (
                             <button onClick={() => setOpenModuleId(open ? null : mod.id)} className="p-1 text-slate-500 hover:text-white flex-shrink-0">
@@ -3206,7 +3597,7 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
                         </div>
                         {open && mod.content && (
                           <div className="px-3 pb-3 pt-1 border-t border-slate-800/60">
-                            <SteppedModuleContent content={mod.content}/>
+                            <SteppedModuleContent content={mod.content} onQuizState={(ok) => setQuizPass(s => s[mod.id] === ok ? s : { ...s, [mod.id]: ok })}/>
                           </div>
                         )}
                       </div>
@@ -6581,6 +6972,7 @@ function DistVendorsView({ currentUser, stores = [] }) {
 // ── PURCHASE ORDERS ──
 function DistPOView({ currentUser }) {
   const [pos, setPos] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
+  const [poQuery, setPoQuery] = useState(""); const [poStatus, setPoStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [p, v, it, tx] = await Promise.all([fetchDistPurchaseOrders(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setPos(p); setVendors(v); setItems(it); setTaxRates(tx); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
@@ -6598,17 +6990,28 @@ function DistPOView({ currentUser }) {
   const editPO = (po) => setCreating({ ...po, lines: (po.lines || []).map(l => ({ ...l })) });
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
   const vendor = creating ? vendors.find(v => v.id === creating.vendorId) : null;
+  const visiblePos = pos.filter(po => {
+    if (poStatus !== "all" && (po.status || "") !== poStatus) return false;
+    if (poQuery.trim()) { const n = poQuery.trim().toLowerCase(); if (!((po.poNumber || "").toLowerCase().includes(n) || vName(po.vendorId).toLowerCase().includes(n))) return false; }
+    return true;
+  });
+  const poStatuses = [...new Set(pos.map(p => p.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{pos.length} purchase order{pos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visiblePos.length} of {pos.length} purchase order{pos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div>
+      <div className="flex gap-2 flex-wrap">
+        <input value={poQuery} onChange={e => setPoQuery(e.target.value)} placeholder="Search PO# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+        <select value={poStatus} onChange={e => setPoStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{poStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
+        {(poQuery || poStatus !== "all") && <button onClick={() => { setPoQuery(""); setPoStatus("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+      </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {pos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No purchase orders yet.</div> : (
+          {visiblePos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{pos.length === 0 ? "No purchase orders yet." : "No purchase orders match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">PO#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
-                <tbody>{pos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
+                <tbody>{visiblePos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
                   <tr key={po.id} onClick={() => setDetailId(po.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{po.orderDate}</td>
                     <td className="px-4 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{po.poNumber}</span></td>
@@ -6800,6 +7203,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
 // ── BILLS (Zoho table format) ──
 function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map()); const [detailId, setDetailId] = useState(null);
+  const [billQuery, setBillQuery] = useState(""); const [billStatus, setBillStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const load = useCallback(async () => { setLoading(true); try { const [b, v, it, tx] = await Promise.all([fetchDistBills(), fetchDistContacts({ kind: "vendor" }), fetchDistItems(), fetchDistTaxRates()]); setBills(b); setVendors(v); setItems(it); setTaxRates(tx); try { setPaidMap(await fetchDistBillPaidMap(b.map(x => x.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
@@ -6834,17 +7238,30 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const vName = (id) => vendors.find(v => v.id === id)?.displayName || "—";
+  const visibleBills = bills.filter(b => {
+    if (billStatus !== "all" && (b.status || "") !== billStatus) return false;
+    if (billQuery.trim()) { const n = billQuery.trim().toLowerCase(); if (!((b.billNumber || "").toLowerCase().includes(n) || vName(b.vendorId).toLowerCase().includes(n))) return false; }
+    return true;
+  });
+  const billStatuses = [...new Set(bills.map(b => b.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{bills.length} bill{bills.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleBills.length} of {bills.length} bill{bills.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
+      {bills.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <input value={billQuery} onChange={e => setBillQuery(e.target.value)} placeholder="Search bill# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+          <select value={billStatus} onChange={e => setBillStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{billStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
+          {(billQuery || billStatus !== "all") && <button onClick={() => { setBillQuery(""); setBillStatus("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+        </div>
+      )}
       {err && <div className="text-xs text-red-400">{err}</div>}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          {bills.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No bills yet.</div> : (
+          {visibleBills.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{bills.length === 0 ? "No bills yet." : "No bills match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Bill#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-left px-4 py-2.5 font-semibold">Due Date</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="text-right px-4 py-2.5 font-semibold">Balance Due</th></tr></thead>
-                <tbody>{bills.map(b => {
+                <tbody>{visibleBills.map(b => {
                   const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType);
                   const amount = t.grandTotal;
                   const paid = paidMap.get(b.id) || 0;
@@ -8241,6 +8658,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
 function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
   const [invoices, setInvoices] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [dispatches, setDispatches] = useState([]);
   const [paidMap, setPaidMap] = useState(new Map()); const [soNumMap, setSoNumMap] = useState(new Map());
+  const [invQuery, setInvQuery] = useState(""); const [invStatus, setInvStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
   const load = useCallback(async () => { setLoading(true); try { const [inv, c, it, tx, d, sos] = await Promise.all([fetchDistInvoices(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates(), fetchDistDispatches(), fetchDistSalesOrders({})]); setInvoices(inv); setCustomers(c); setItems(it); setTaxRates(tx); setDispatches(d); setSoNumMap(new Map(sos.map(so => [so.id, so.soNumber]))); try { setPaidMap(await fetchDistInvoicePaidMap(inv.map(i => i.id))); } catch { setPaidMap(new Map()); } } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
@@ -8269,10 +8687,23 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
     catch (e) { setErr(e.message); } setBusy(false);
   };
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
+  const visibleInvoices = invoices.filter(inv => {
+    if (invStatus !== "all" && (inv.status || "") !== invStatus) return false;
+    if (invQuery.trim()) { const n = invQuery.trim().toLowerCase(); if (!((inv.invoiceNumber || "").toLowerCase().includes(n) || cName(inv.customerId).toLowerCase().includes(n))) return false; }
+    return true;
+  });
+  const invStatuses = [...new Set(invoices.map(i => i.status).filter(Boolean))];
   const uninvoicedDispatches = dispatches.filter(d => !invoices.some(inv => inv.dispatchId === d.id));
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center"><div className="text-sm text-slate-400">{invoices.length} invoice{invoices.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New invoice</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleInvoices.length} of {invoices.length} invoice{invoices.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New invoice</button></div>
+      {invoices.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <input value={invQuery} onChange={e => setInvQuery(e.target.value)} placeholder="Search invoice# or customer…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
+          <select value={invStatus} onChange={e => setInvStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{invStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
+          {(invQuery || invStatus !== "all") && <button onClick={() => { setInvQuery(""); setInvStatus("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
+        </div>
+      )}
       {err && <div className="text-xs text-red-400">{err}</div>}
       {uninvoicedDispatches.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
@@ -8289,6 +8720,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {invoices.length === 0 && uninvoicedDispatches.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices yet.</div> : invoices.length > 0 && (
             <div className="overflow-x-auto">
+              {visibleInvoices.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices match your search/filter.</div> : (
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
                   <tr>
@@ -8303,7 +8735,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {invoices.map(inv => {
+                  {visibleInvoices.map(inv => {
                     const t = distComputeTotals(inv.lines, taxRates, inv.vatMode, inv.discountPercent, inv.discountType);
                     const amount = t.grandTotal + (Number(inv.shippingCharge) || 0);
                     const paid = paidMap.get(inv.id) || 0;
@@ -8334,6 +8766,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
                   })}
                 </tbody>
               </table>
+              )}
             </div>
           )}
         </div>
@@ -8588,6 +9021,224 @@ function DistGlobalSearch({ onClose }) {
         </div>
         {results.length > 0 && <div className="px-4 py-2 text-[10px] text-slate-600 border-t border-slate-800">{results.length} result{results.length !== 1 ? "s" : ""}{results.length === 40 ? " (showing first 40)" : ""}</div>}
       </div>
+    </div>
+  );
+}
+
+// ─── SettingsLanding ──────────────────────────────────────────────────────────
+// Reusable Zoho-style grouped settings landing. Renders a searchable grid of
+// icon-headed section cards (each listing its items); selecting an item swaps
+// the grid out for that item's panel with a "back to grid" button.
+//
+// Props:
+//   title       — page heading (e.g. "Setup")
+//   description — one line under the heading
+//   sections    — [{ key, label, icon, desc, accent, items: [{ key, label, icon, desc }] }]
+//                 items already gate-filtered by the caller; empty sections are hidden.
+//   active      — currently-selected item key ("" / null = show the grid)
+//   onSelect    — (itemKey) => void   (called with "" to return to the grid)
+//   renderPanel — (itemKey) => ReactNode   the panel for the selected item
+// The same pattern can later replace the COGS and Distribution tab rows.
+// ─── SubNav ───────────────────────────────────────────────────────────────────
+// Reusable collapsible left-rail sub-navigation. Replaces overflowing horizontal
+// tab rows. Accessible (role=tablist, arrow-key nav, aria-selected, aria-label on
+// collapsed icons), badge-aware, never overflows. Collapsed by default; the
+// expand/collapse choice persists in localStorage. On narrow screens it renders
+// as a dropdown so content stays full-width.
+//
+// Props:
+//   items    — [{ key, label, icon?, badge? }]  (already gate-filtered by caller)
+//   active   — current item key
+//   onSelect — (key) => void
+//   ariaLabel— accessible name for the nav (e.g. "Operations")
+//   children — the panel content for the active item (renders to the right)
+//   storageKey — localStorage key for the collapsed preference (default shared)
+function SubNav({ items = [], active, onSelect, ariaLabel = "Section", children, storageKey = "subnav.collapsed" }) {
+  const readPref = () => {
+    try { const v = window.localStorage.getItem(storageKey); return v == null ? true : v === "1"; }
+    catch { return true; }
+  };
+  const [collapsed, setCollapsed] = useState(readPref);
+  const [isNarrow, setIsNarrow] = useState(() => { try { return window.innerWidth < 768; } catch { return false; } });
+  const navRef = useRef(null);
+
+  useEffect(() => {
+    const onResize = () => { try { setIsNarrow(window.innerWidth < 768); } catch { /* noop */ } };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const toggle = () => {
+    setCollapsed(c => {
+      const next = !c;
+      try { window.localStorage.setItem(storageKey, next ? "1" : "0"); } catch { /* noop */ }
+      return next;
+    });
+  };
+
+  // Keyboard: up/down (or left/right) move between tabs; Home/End jump to ends.
+  const onKeyDown = (e) => {
+    const keys = items.map(i => i.key);
+    const idx = keys.indexOf(active);
+    let next = null;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") next = keys[(idx + 1) % keys.length];
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = keys[(idx - 1 + keys.length) % keys.length];
+    else if (e.key === "Home") next = keys[0];
+    else if (e.key === "End") next = keys[keys.length - 1];
+    if (next != null) { e.preventDefault(); onSelect(next); }
+  };
+
+  // Single item: no nav chrome needed.
+  if (items.length <= 1) {
+    return <div>{children}</div>;
+  }
+
+  // Mobile / narrow: dropdown selector above the content.
+  if (isNarrow) {
+    return (
+      <div className="space-y-3">
+        <select aria-label={ariaLabel} value={active} onChange={e => onSelect(e.target.value)}
+          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white">
+          {items.map(it => (
+            <option key={it.key} value={it.key}>{it.label}{it.badge ? ` (${it.badge})` : ""}</option>
+          ))}
+        </select>
+        <div>{children}</div>
+      </div>
+    );
+  }
+
+  // Desktop: collapsible left rail.
+  return (
+    <div className="flex gap-3">
+      <nav ref={navRef} role="tablist" aria-label={ariaLabel} aria-orientation="vertical"
+        onKeyDown={onKeyDown}
+        className={`flex-shrink-0 flex flex-col gap-0.5 ${collapsed ? "w-12 items-center" : "w-44"}`}>
+        <button onClick={toggle} aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+          className={`text-slate-500 hover:text-slate-300 p-1.5 mb-1 ${collapsed ? "" : "self-end"}`}>
+          {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
+        </button>
+        {items.map(it => {
+          const Icon = it.icon || ChevronRight;
+          const isActive = it.key === active;
+          if (collapsed) {
+            return (
+              <button key={it.key} role="tab" aria-selected={isActive} tabIndex={isActive ? 0 : -1}
+                onClick={() => onSelect(it.key)}
+                aria-label={it.badge ? `${it.label}, ${it.badge} pending` : it.label}
+                title={it.label}
+                className={`relative w-9 h-9 rounded-lg flex items-center justify-center ${isActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>
+                <Icon size={17} />
+                {it.badge ? <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" aria-hidden="true" /> : null}
+              </button>
+            );
+          }
+          return (
+            <button key={it.key} role="tab" aria-selected={isActive} tabIndex={isActive ? 0 : -1}
+              onClick={() => onSelect(it.key)}
+              className={`text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between gap-2 ${isActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>
+              <span className="flex items-center gap-2.5 min-w-0"><Icon size={16} className="flex-shrink-0" /><span className="truncate">{it.label}</span></span>
+              {it.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold flex-shrink-0">{it.badge}</span> : null}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
+const SETTINGS_ACCENTS = {
+  blue:   { box: "bg-blue-500/15 text-blue-300",     ring: "border-blue-500/20" },
+  teal:   { box: "bg-teal-500/15 text-teal-300",     ring: "border-teal-500/20" },
+  amber:  { box: "bg-amber-500/15 text-amber-300",   ring: "border-amber-500/20" },
+  indigo: { box: "bg-indigo-500/15 text-indigo-300", ring: "border-indigo-500/20" },
+  rose:   { box: "bg-rose-500/15 text-rose-300",     ring: "border-rose-500/20" },
+  green:  { box: "bg-green-500/15 text-green-300",    ring: "border-green-500/20" },
+  slate:  { box: "bg-slate-500/15 text-slate-300",   ring: "border-slate-500/20" },
+};
+function SettingsLanding({ title, description, sections, active, onSelect, renderPanel }) {
+  const [q, setQ] = useState("");
+  const visibleSections = (sections || []).filter(s => (s.items || []).length > 0);
+
+  // Find the active item (and its section) across all sections.
+  let activeItem = null, activeSection = null;
+  if (active) {
+    for (const s of visibleSections) {
+      const it = (s.items || []).find(i => i.key === active);
+      if (it) { activeItem = it; activeSection = s; break; }
+    }
+  }
+
+  // Sub-view: a single item selected.
+  if (activeItem) {
+    const AItemIcon = activeItem.icon || activeSection.icon;
+    const acc = SETTINGS_ACCENTS[activeSection.accent] || SETTINGS_ACCENTS.slate;
+    return (
+      <div>
+        <button onClick={() => onSelect("")}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-white mb-4">
+          <ChevronLeft size={15} /> {title}
+        </button>
+        <div className="flex items-center gap-2.5 mb-1">
+          <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg ${acc.box}`}>
+            {AItemIcon && <AItemIcon size={17} />}
+          </span>
+          <span className="text-lg font-bold text-white">{activeItem.label}</span>
+        </div>
+        {activeItem.desc && <p className="text-xs text-slate-500 mb-4 ml-[42px]">{activeItem.desc}</p>}
+        <div className="mt-2">{renderPanel(activeItem.key)}</div>
+      </div>
+    );
+  }
+
+  // Landing grid.
+  const term = q.trim().toLowerCase();
+  const filtered = term
+    ? visibleSections
+        .map(s => ({ ...s, items: s.items.filter(i => i.label.toLowerCase().includes(term) || (i.desc || "").toLowerCase().includes(term)) }))
+        .filter(s => s.items.length > 0)
+    : visibleSections;
+
+  return (
+    <div>
+      <div className="mb-1"><span className="text-lg font-bold text-white">{title}</span></div>
+      {description && <p className="text-sm text-slate-400 mb-4">{description}</p>}
+      <div className="relative mb-5 max-w-xs">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search settings"
+          className="w-full bg-slate-900/60 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none" />
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-sm text-slate-500 py-8 text-center">No settings match "{q}".</div>
+      ) : (
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))" }}>
+          {filtered.map(s => {
+            const acc = SETTINGS_ACCENTS[s.accent] || SETTINGS_ACCENTS.slate;
+            const SIcon = s.icon;
+            return (
+              <div key={s.key} className={`bg-slate-900/40 border ${acc.ring} rounded-xl p-4`}>
+                <div className="flex items-center gap-2.5 mb-1">
+                  <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg ${acc.box}`}>
+                    {SIcon && <SIcon size={16} />}
+                  </span>
+                  <span className="text-sm font-semibold text-white">{s.label}</span>
+                </div>
+                {s.desc && <p className="text-xs text-slate-500 mb-3 leading-snug">{s.desc}</p>}
+                <div className="flex flex-col">
+                  {s.items.map(it => (
+                    <button key={it.key} onClick={() => onSelect(it.key)}
+                      className="text-left text-sm text-indigo-300 hover:text-indigo-200 py-1.5">
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -9788,8 +10439,8 @@ function DistItemsView({ currentUser }) {
   );
 }
 
-function CogsView({ stores = [], canFeature = () => true }) {
-  const [tab, setTab] = useState("inventory");
+function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub, hideTabs }) {
+  const [tab, setTab] = useState(initialTab || "inventory");
   const ALL_TABS = [
     { key: "inventory", label: "Inventory" },
     { key: "preps",     label: "Preps" },
@@ -9809,16 +10460,20 @@ function CogsView({ stores = [], canFeature = () => true }) {
   const effectiveTab = allowedKeys.includes(tab) ? tab : (allowedKeys[0] || null);
   return (
     <div className="space-y-4">
+      {!hideTabs && (
       <div>
         <h2 className="text-lg font-bold text-white flex items-center gap-2"><ClipboardList size={18}/> COGS / Recipes</h2>
         <p className="text-xs text-slate-500 mt-0.5">Build inventory, preps, modifiers, and products. Costs roll up from your inventory prices.</p>
       </div>
+      )}
+      {!hideTabs && (
       <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
         {TABS.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effectiveTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
         ))}
       </div>
+      )}
       {!effectiveTab && <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">You don't have access to any COGS tabs. Ask an admin to grant them in Access &amp; Roles.</div>}
       {effectiveTab === "inventory" && <InventoryBuilder/>}
       {effectiveTab === "preps"     && <RecipeBuilder mode="preps"/>}
@@ -9829,7 +10484,7 @@ function CogsView({ stores = [], canFeature = () => true }) {
       {effectiveTab === "reconcile" && <CogsReconciliation stores={stores}/>}
       {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
       {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
-      {effectiveTab === "actualcogs" && <ActualCogs stores={stores}/>}
+      {effectiveTab === "actualcogs" && <ActualCogs stores={stores} initialSub={initialSub} hideTabs={hideTabs}/>}
     </div>
   );
 }
@@ -11023,10 +11678,10 @@ function OrderInspector({ stores = [] }) {
   );
 }
 
-function ActualCogs({ stores = [] }) {
+function ActualCogs({ stores = [], initialSub, hideTabs }) {
   const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
-  const [sub, setSub] = useState("counts"); // counts | purchases | variance
+  const [sub, setSub] = useState(initialSub || "counts"); // counts | purchases | variance | settings | pricechanges
   const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
   return (
@@ -11036,11 +11691,13 @@ function ActualCogs({ stores = [] }) {
           <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
             {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
           </select></div>
+        {!hideTabs && (
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
           {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].map(([k,l])=>(
             <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
+        )}
       </div>
       <p className="text-xs text-slate-500">Actual COGS = opening stock value + purchases − closing stock value. Weekly full counts: each count is both that week's closing and next week's opening. Variance compares actual against the theoretical (recipe × sales) engine — the gap is waste, over-portioning, or loss.</p>
       {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money}/>}
@@ -20453,9 +21110,9 @@ function AdminPanelView({
   onAddStore, onUpdateStore, onDeleteStore,
   onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
   onUpdateKPITargets, onBulkImport,
-  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole
+  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, initialTab, hideTabs
 }) {
-  const [tab, setTab] = useState("locations");
+  const [tab, setTab] = useState(initialTab || "locations");
   const [locModal, setLocModal] = useState(null);
   const [userModal, setUserModal] = useState(null);
   const [deleteModal, setDeleteModal] = useState(null);
@@ -20474,9 +21131,11 @@ function AdminPanelView({
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
+        {!hideTabs && (
         <div className="flex gap-2 bg-slate-900 border border-slate-700 rounded-2xl p-1.5">
           {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>)}
         </div>
+        )}
         <button onClick={()=>setShowImport(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors">
           <FileSpreadsheet size={14}/> Bulk Import
         </button>
@@ -23331,34 +23990,273 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
 // "Full guide (PDF)" link in the editor. Leave "" to hide the link.
 const TRAINING_GUIDE_PDF_URL = "";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BLOCK EDITOR (author side) — visual, add/edit/reorder blocks. No markdown
+// typing, no external libraries. Produces the block JSON stored in `content`.
+// ═══════════════════════════════════════════════════════════════════════════
+const BLOCK_TYPES = [
+  { type: "heading", label: "Heading", icon: Hash, make: () => ({ id: newBlockId(), type: "heading", level: 2, text: "" }) },
+  { type: "text",    label: "Text",    icon: Type, make: () => ({ id: newBlockId(), type: "text", text: "" }) },
+  { type: "image",   label: "Image",   icon: Image, make: () => ({ id: newBlockId(), type: "image", url: "", caption: "" }) },
+  { type: "video",   label: "Video",   icon: Video, make: () => ({ id: newBlockId(), type: "video", url: "" }) },
+  { type: "callout", label: "Callout", icon: Info, make: () => ({ id: newBlockId(), type: "callout", kind: "info", text: "" }) },
+  { type: "quote",   label: "Quote",   icon: Quote, make: () => ({ id: newBlockId(), type: "quote", text: "" }) },
+  { type: "table",   label: "Table",   icon: TableIcon, make: () => ({ id: newBlockId(), type: "table", hasHeader: true, rows: [["Column A", "Column B"], ["", ""]] }) },
+  { type: "quiz",    label: "Quiz",    icon: GraduationCap, make: () => ({ id: newBlockId(), type: "quiz", title: "Quick check", passMark: 80, questions: [{ id: newBlockId(), prompt: "", options: ["", ""], correct: [], multi: false }] }) },
+  { type: "step",    label: "Step break", icon: Minimize2, make: () => ({ id: newBlockId(), type: "step" }) },
+];
+
+function BlockEditor({ value, onChange, onInsertImage, uploadingImg }) {
+  const blocks = value;
+  const [addOpen, setAddOpen] = useState(false);
+  const inCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  const update = (id, patch) => onChange(blocks.map(b => b.id === id ? { ...b, ...patch } : b));
+  const remove = (id) => onChange(blocks.filter(b => b.id !== id));
+  const move = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= blocks.length) return;
+    const next = [...blocks];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    onChange(next);
+  };
+  const addBlock = (make) => { onChange([...blocks, make()]); setAddOpen(false); };
+
+  return (
+    <div className="space-y-2">
+      {blocks.length === 0 && (
+        <div className="text-center py-8 text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl">
+          No content yet. Click <span className="text-indigo-400 font-semibold">+ Add block</span> below to start building.
+        </div>
+      )}
+
+      {blocks.map((b, idx) => {
+        const meta = BLOCK_TYPES.find(t => t.type === b.type) || { label: b.type, icon: Type };
+        const Icon = meta.icon;
+        return (
+          <div key={b.id} className="rounded-xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-900/80 border-b border-slate-800">
+              <Icon size={13} className="text-slate-400" />
+              <span className="text-[11px] uppercase tracking-wide font-semibold text-slate-500">{meta.label}</span>
+              <div className="ml-auto flex items-center gap-0.5">
+                <button type="button" onClick={() => move(idx, -1)} disabled={idx === 0} title="Move up" className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-slate-200 disabled:opacity-30"><ChevronUp size={14} /></button>
+                <button type="button" onClick={() => move(idx, 1)} disabled={idx === blocks.length - 1} title="Move down" className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-slate-200 disabled:opacity-30"><ChevronDown size={14} /></button>
+                <button type="button" onClick={() => remove(b.id)} title="Delete" className="p-1 rounded hover:bg-rose-950 text-slate-500 hover:text-rose-300"><Trash2 size={14} /></button>
+              </div>
+            </div>
+            <div className="p-2.5">
+              <BlockFields block={b} update={(patch) => update(b.id, patch)} inCls={inCls} onInsertImage={onInsertImage} uploadingImg={uploadingImg} />
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Add block */}
+      <div className="relative">
+        <button type="button" onClick={() => setAddOpen(o => !o)}
+          className="w-full py-2 rounded-xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-indigo-500 text-sm font-semibold flex items-center justify-center gap-1.5">
+          <Plus size={15} /> Add block
+        </button>
+        {addOpen && (
+          <div className="absolute z-20 left-0 right-0 mt-1 bg-slate-900 border border-slate-700 rounded-xl shadow-xl p-2 grid grid-cols-3 gap-1.5">
+            {BLOCK_TYPES.map(t => {
+              const I = t.icon;
+              return (
+                <button key={t.type} type="button" onClick={() => addBlock(t.make)}
+                  className="flex flex-col items-center gap-1 py-2.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white text-[11px] font-semibold">
+                  <I size={16} /> {t.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Per-block field editors
+function BlockFields({ block, update, inCls, onInsertImage, uploadingImg }) {
+  switch (block.type) {
+    case "heading":
+      return (
+        <div className="flex gap-2">
+          <select value={block.level} onChange={e => update({ level: Number(e.target.value) })} className="px-2 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-300">
+            <option value={1}>H1</option><option value={2}>H2</option><option value={3}>H3</option>
+          </select>
+          <input value={block.text} onChange={e => update({ text: e.target.value })} placeholder="Heading text" className={inCls} />
+        </div>
+      );
+    case "text":
+      return <textarea value={block.text} onChange={e => update({ text: e.target.value })} rows={3} placeholder="Write text here. **bold**, *italic*, - bullets and [links](url) work." className={`${inCls} resize-y`} />;
+    case "quote":
+      return <textarea value={block.text} onChange={e => update({ text: e.target.value })} rows={2} placeholder="A key takeaway to highlight…" className={`${inCls} resize-y`} />;
+    case "callout":
+      return (
+        <div className="space-y-2">
+          <div className="flex gap-1.5">
+            {["info", "warning", "tip", "success"].map(k => (
+              <button key={k} type="button" onClick={() => update({ kind: k })}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize border ${block.kind === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{k}</button>
+            ))}
+          </div>
+          <textarea value={block.text} onChange={e => update({ text: e.target.value })} rows={2} placeholder="Callout message…" className={`${inCls} resize-y`} />
+        </div>
+      );
+    case "image":
+      return (
+        <div className="space-y-2">
+          {block.url ? <img src={block.url} alt="" className="w-full max-h-48 object-contain rounded-lg border border-slate-800" /> : (
+            <label className={`flex items-center justify-center gap-2 py-6 rounded-lg border border-dashed border-slate-700 cursor-pointer text-sm ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
+              <Image size={16} /> {uploadingImg ? "Uploading…" : "Upload image"}
+              <input type="file" accept=".jpg,.jpeg,.png,.webp" disabled={uploadingImg} className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; onInsertImage(f, (url) => update({ url })); }} />
+            </label>
+          )}
+          {block.url && <button type="button" onClick={() => update({ url: "" })} className="text-[11px] text-rose-400 hover:text-rose-300">Remove image</button>}
+          <input value={block.caption || ""} onChange={e => update({ caption: e.target.value })} placeholder="Caption (optional)" className={inCls} />
+        </div>
+      );
+    case "video":
+      return (
+        <div className="space-y-1">
+          <input value={block.url} onChange={e => update({ url: e.target.value })} placeholder="Paste a YouTube or Vimeo link" className={inCls} />
+          <div className="text-[10px] text-slate-600">e.g. https://youtu.be/abc123 — it becomes an inline player for trainees.</div>
+        </div>
+      );
+    case "table":
+      return <TableBlockEditor block={block} update={update} inCls={inCls} />;
+    case "quiz":
+      return <QuizBlockEditor block={block} update={update} inCls={inCls} />;
+    case "step":
+      return <div className="text-[11px] text-slate-500 italic text-center py-1">— Everything after this becomes a new step card (with progress bar) —</div>;
+    default:
+      return null;
+  }
+}
+
+function TableBlockEditor({ block, update, inCls }) {
+  const rows = block.rows || [];
+  const setCell = (r, c, v) => { const next = rows.map(row => [...row]); next[r][c] = v; update({ rows: next }); };
+  const addRow = () => update({ rows: [...rows, rows[0]?.map(() => "") || ["", ""]] });
+  const addCol = () => update({ rows: rows.map(r => [...r, ""]) });
+  const delRow = (r) => update({ rows: rows.filter((_, i) => i !== r) });
+  const delCol = (c) => update({ rows: rows.map(r => r.filter((_, i) => i !== c)) });
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-[11px] text-slate-400">
+        <input type="checkbox" checked={!!block.hasHeader} onChange={e => update({ hasHeader: e.target.checked })} /> First row is a header
+      </label>
+      <div className="overflow-x-auto">
+        <table className="border-collapse">
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, c) => (
+                  <td key={c} className="p-0.5">
+                    <input value={cell} onChange={e => setCell(r, c, e.target.value)}
+                      className={`px-2 py-1 bg-slate-950 border border-slate-800 rounded text-xs text-slate-200 w-28 ${r === 0 && block.hasHeader ? "font-semibold" : ""}`} />
+                  </td>
+                ))}
+                <td className="p-0.5"><button type="button" onClick={() => delRow(r)} className="p-1 text-slate-600 hover:text-rose-400"><Trash2 size={12} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={addRow} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">+ Row</button>
+        <button type="button" onClick={addCol} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">+ Column</button>
+        {rows[0]?.length > 1 && <button type="button" onClick={() => delCol(rows[0].length - 1)} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-400 hover:bg-slate-700">− Column</button>}
+      </div>
+    </div>
+  );
+}
+
+function QuizBlockEditor({ block, update, inCls }) {
+  const questions = block.questions || [];
+  const setQ = (qid, patch) => update({ questions: questions.map(q => q.id === qid ? { ...q, ...patch } : q) });
+  const addQ = () => update({ questions: [...questions, { id: newBlockId(), prompt: "", options: ["", ""], correct: [], multi: false }] });
+  const delQ = (qid) => update({ questions: questions.filter(q => q.id !== qid) });
+  const setOpt = (q, oi, v) => setQ(q.id, { options: q.options.map((o, i) => i === oi ? v : o) });
+  const addOpt = (q) => setQ(q.id, { options: [...q.options, ""] });
+  const delOpt = (q, oi) => setQ(q.id, { options: q.options.filter((_, i) => i !== oi), correct: (q.correct || []).filter(i => i !== oi).map(i => i > oi ? i - 1 : i) });
+  const toggleCorrect = (q, oi) => {
+    const cur = new Set(q.correct || []);
+    if (q.multi) { cur.has(oi) ? cur.delete(oi) : cur.add(oi); }
+    else { cur.clear(); cur.add(oi); }
+    setQ(q.id, { correct: [...cur] });
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2 items-center">
+        <input value={block.title || ""} onChange={e => update({ title: e.target.value })} placeholder="Quiz title" className={inCls} />
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <span className="text-[11px] text-slate-500">Pass</span>
+          <input type="number" min={0} max={100} value={block.passMark} onChange={e => update({ passMark: Number(e.target.value) })} className="w-16 px-2 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200" />
+          <span className="text-[11px] text-slate-500">%</span>
+        </div>
+      </div>
+      {questions.map((q, qi) => (
+        <div key={q.id} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2.5 space-y-2">
+          <div className="flex gap-2 items-start">
+            <span className="text-xs text-slate-500 font-bold mt-2">{qi + 1}.</span>
+            <input value={q.prompt} onChange={e => setQ(q.id, { prompt: e.target.value })} placeholder="Question" className={inCls} />
+            <button type="button" onClick={() => delQ(q.id)} className="p-2 text-slate-600 hover:text-rose-400"><Trash2 size={13} /></button>
+          </div>
+          <label className="flex items-center gap-2 text-[11px] text-slate-400 ml-5">
+            <input type="checkbox" checked={!!q.multi} onChange={e => setQ(q.id, { multi: e.target.checked, correct: [] })} /> Allow multiple correct answers
+          </label>
+          <div className="space-y-1 ml-5">
+            {q.options.map((opt, oi) => {
+              const isCorrect = (q.correct || []).includes(oi);
+              return (
+                <div key={oi} className="flex items-center gap-2">
+                  <button type="button" onClick={() => toggleCorrect(q, oi)} title="Mark correct"
+                    className={`w-5 h-5 rounded-${q.multi ? "" : "full"} border flex items-center justify-center flex-shrink-0 ${isCorrect ? "bg-emerald-600 border-emerald-600 text-white" : "border-slate-600 text-transparent"}`}>
+                    <CheckCircle size={12} />
+                  </button>
+                  <input value={opt} onChange={e => setOpt(q, oi, e.target.value)} placeholder={`Option ${oi + 1}`} className={`${inCls} text-xs`} />
+                  {q.options.length > 2 && <button type="button" onClick={() => delOpt(q, oi)} className="p-1 text-slate-600 hover:text-rose-400"><X size={12} /></button>}
+                </div>
+              );
+            })}
+            <button type="button" onClick={() => addOpt(q)} className="text-[11px] text-indigo-400 hover:text-indigo-300 ml-7">+ Add option</button>
+          </div>
+          <div className="text-[10px] text-slate-600 ml-5">Tick the circle/box next to the correct answer{q.multi ? "s" : ""}.</div>
+        </div>
+      ))}
+      <button type="button" onClick={addQ} className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 font-semibold">+ Add question</button>
+    </div>
+  );
+}
+
 function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
   const [title, setTitle]             = useState(module?.title || "");
   const [description, setDescription] = useState(module?.description || "");
   const [category, setCategory]       = useState(module?.category || "");
-  const [content, setContent]         = useState(module?.content || "");
+  // Parse existing content into blocks. Legacy markdown modules become a single
+  // editable "text" block so they can be opened and gradually re-built.
+  const initial = useMemo(() => {
+    const parsed = parseModuleContent(module?.content || "");
+    if (parsed.format === "blocks") return parsed.blocks;
+    return [{ id: newBlockId(), type: "text", text: module?.content || "" }];
+  }, [module]);
+  const [blocks, setBlocks]           = useState(initial);
   const [required, setRequired]       = useState(module?.required ?? true);
   const [type, setType]               = useState(module?.type || "onboarding");
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
   const [uploadingImg, setUploadingImg] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  const contentRef = useRef(null);
+  const [preview, setPreview]         = useState(false);
 
-  // Upload an image and insert a Markdown image tag at the cursor (or append).
-  const handleInsertImage = async (file) => {
+  // Upload an image, then hand the URL back to the calling block.
+  const handleBlockImage = async (file, setUrl) => {
     if (!file) return;
-    setUploadingImg(true);
-    setError("");
+    setUploadingImg(true); setError("");
     try {
       const { url } = await uploadEmployeeDocument(file);
-      const tag = `\n![${file.name.replace(/\.[^.]+$/, "")}](${url})\n`;
-      const el = contentRef.current;
-      if (el && typeof el.selectionStart === "number") {
-        const start = el.selectionStart, end = el.selectionEnd;
-        setContent(c => c.slice(0, start) + tag + c.slice(end));
-      } else {
-        setContent(c => c + tag);
-      }
+      setUrl(url);
     } catch (err) {
       console.error("Image upload failed:", err);
       setError(err?.message || "Image upload failed.");
@@ -23371,7 +24269,16 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
     if (!title.trim()) { setError("Title is required."); return; }
     setSaving(true); setError("");
     try {
-      await onSave({ title, description, category, content, required, type });
+      // Strip empty trailing blocks; serialize to JSON for storage.
+      const clean = blocks.filter(b => {
+        if (b.type === "step" || b.type === "divider") return true;
+        if (b.type === "image") return !!b.url;
+        if (b.type === "video") return !!b.url;
+        if (b.type === "quiz") return (b.questions || []).length > 0;
+        if (b.type === "table") return (b.rows || []).length > 0;
+        return (b.text || "").trim().length > 0;
+      });
+      await onSave({ title, description, category, content: serializeBlocks(clean), required, type });
     } catch (err) {
       console.error("Save module failed:", err);
       setError(err?.message || "Save failed.");
@@ -23381,6 +24288,9 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
 
   const labelCls = "block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1";
   const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  // Quiz state for the preview (so preview behaves like the trainee view).
+  const previewContent = useMemo(() => serializeBlocks(blocks), [blocks]);
 
   return (
     <Modal onClose={onCancel} title={`${module ? "Edit" : "New"} ${isTemplate ? "template" : "module"}`}>
@@ -23404,76 +24314,33 @@ function TrainingModuleEditor({ module, isTemplate, onSave, onCancel }) {
           <label className={labelCls}>Short description</label>
           <input value={description} onChange={e => setDescription(e.target.value)} className={inputCls} placeholder="One line shown in the module list"/>
         </div>
+
         <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className={labelCls + " mb-0"}>Content (Markdown)</label>
-            <div className="flex items-center gap-3">
-              <button type="button" onClick={() => setShowHelp(h => !h)} className="text-[11px] font-semibold text-slate-400 hover:text-slate-200">
-                {showHelp ? "Hide help" : "Formatting help"}
-              </button>
-              <label className={`text-[11px] font-semibold cursor-pointer ${uploadingImg ? "text-slate-600" : "text-indigo-400 hover:text-indigo-300"}`}>
-                {uploadingImg ? "Uploading…" : "+ Insert image"}
-                <input
-                  type="file"
-                  accept=".jpg,.jpeg,.png,.webp"
-                  disabled={uploadingImg}
-                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; handleInsertImage(f); }}
-                  className="hidden"
-                />
-              </label>
-            </div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className={labelCls + " mb-0"}>Module content</label>
+            <button type="button" onClick={() => setPreview(p => !p)} className={`text-[11px] font-semibold ${preview ? "text-indigo-300" : "text-slate-400 hover:text-slate-200"}`}>
+              {preview ? "✎ Back to editing" : "👁 Preview as trainee"}
+            </button>
           </div>
-          {showHelp && (
-            <div className="mb-2 bg-slate-950 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 space-y-2">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                <div><code className="text-slate-300"># Heading</code> · big section title</div>
-                <div><code className="text-slate-300">## Sub-heading</code> · smaller</div>
-                <div><code className="text-slate-300">**bold**</code> · <b className="text-slate-200">bold</b></div>
-                <div><code className="text-slate-300">*italic*</code> · <i className="text-slate-200">italic</i></div>
-                <div><code className="text-slate-300">- item</code> · bullet list</div>
-                <div><code className="text-slate-300">1. item</code> · numbered list</div>
-                <div><code className="text-slate-300">[text](url)</code> · link</div>
-                <div>“+ Insert image” · upload a picture</div>
-              </div>
-              <div className="pt-2 border-t border-slate-800">
-                <div className="text-slate-300 font-semibold mb-1">Image beside text</div>
-                <pre className="bg-slate-900 border border-slate-800 rounded p-2 text-[10px] text-slate-300 whitespace-pre-wrap font-mono">{`:::row
-(click + Insert image here)
-Text that sits beside the image.
-:::`}</pre>
-                <div className="mt-1.5 text-slate-500">Markers <code className="text-slate-400">:::row</code> and <code className="text-slate-400">:::</code> each on their own line. Use <code className="text-slate-400">:::row-right</code> to put the image on the right. <b className="text-amber-400">Don't</b> type <code className="text-slate-400">![alt](</code> yourself before inserting — let the button add the whole image.</div>
-              </div>
-              <div className="pt-2 border-t border-slate-800 text-slate-500">
-                Not supported: tables, quote blocks, nested lists.
-                {TRAINING_GUIDE_PDF_URL && <> · <a href={TRAINING_GUIDE_PDF_URL} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 font-semibold">Full guide (PDF) ↗</a></>}
-              </div>
+          {preview ? (
+            <div className="px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl min-h-[200px]">
+              {blocks.length ? <SteppedModuleContent content={previewContent}/> : <div className="text-xs text-slate-600">Nothing to preview yet — add some blocks.</div>}
             </div>
+          ) : (
+            <BlockEditor value={blocks} onChange={setBlocks} onInsertImage={handleBlockImage} uploadingImg={uploadingImg}/>
           )}
-          <textarea
-            ref={contentRef}
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            rows={10}
-            className={`${inputCls} font-mono text-xs leading-relaxed`}
-            placeholder={"# Welcome\n\nWrite the training material here.\n\n- Use bullet points\n- **Bold** for emphasis\n- [Links](https://example.com)"}
-          />
-          <div className="text-[10px] text-slate-600 mt-1">Supports Markdown — click "Formatting help" for the full list. The trainee sees this formatted in their portal. <span className="text-indigo-400/80">Tip: put <code className="text-indigo-300">---</code> on its own line to split the module into guided step-by-step cards with a progress bar.</span></div>
+          <div className="text-[10px] text-slate-600 mt-1.5">Build the module from blocks — text, images, video, callouts, tables and quizzes. Add a <b className="text-slate-400">Quiz</b> block to test understanding; trainees must pass it to complete the module.</div>
         </div>
+
         <div>
           <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-1">Type</label>
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setType("onboarding")}
-              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "onboarding" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
-            >
+            <button type="button" onClick={() => setType("onboarding")}
+              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "onboarding" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}>
               🎓 Onboarding<div className="text-[10px] font-normal opacity-80 mt-0.5">New starters only</div>
             </button>
-            <button
-              type="button"
-              onClick={() => setType("training")}
-              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "training" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}
-            >
+            <button type="button" onClick={() => setType("training")}
+              className={`flex-1 px-3 py-2 rounded-xl text-xs font-semibold border ${type === "training" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600"}`}>
               📚 Training<div className="text-[10px] font-normal opacity-80 mt-0.5">All staff (reference library)</div>
             </button>
           </div>
@@ -23494,6 +24361,7 @@ Text that sits beside the image.
     </Modal>
   );
 }
+
 
 // ─── Hiring View ──────────────────────────────────────────────────────────────
 // Slice 1 of the staff onboarding pipeline. Lets managers + HQ + owner:
@@ -33195,9 +34063,9 @@ function OpsSettingsView({
   onCopyStoreStructure,
   onOpenEmployeeProfile,         // slice 6 — open profile drill-down from team row
   appSettings = {}, onSaveOtRules,
-  currentUser
+  currentUser, initialTab, hideTabs
 }) {
-  const [tab, setTab] = useState("structure");
+  const [tab, setTab] = useState(initialTab || "structure");
   const [clModal, setClModal] = useState(null);
   const [tuModal, setTuModal] = useState(null);
   const [ctModal, setCtModal] = useState(null);
@@ -33216,9 +34084,11 @@ function OpsSettingsView({
 
   return (
     <div className="space-y-6">
+      {!hideTabs && (
       <div className="flex gap-2 bg-slate-900 border border-slate-700 rounded-2xl p-1.5 w-fit flex-wrap">
         {tabs.map(t => <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{t.label}</button>)}
       </div>
+      )}
 
       {tab === "structure" && (
         <StructureSection
@@ -35727,9 +36597,11 @@ function CommunicationView({
   schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
   punchRecords, onUpdatePunchRecord, onAddPunchComment,
   onUpdateBrand,
-  isEmployee,
+  isEmployee, initialTab, hideTabs,
 }) {
-  const [tab, setTab] = useState(isEmployee ? "chat" : "helpdesk");
+  const [tab, setTab] = useState(initialTab || (isEmployee ? "chat" : "helpdesk"));
+  // Keep tab in sync when the sidebar deep-links to a different sub-item.
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
 
   const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
@@ -35795,13 +36667,13 @@ function CommunicationView({
             );
           })}
         </div>
-      ) : (
-        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 flex-wrap">
+      ) : hideTabs ? null : (
+        <div role="tablist" aria-label="Communication" className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 overflow-x-auto">
           {TABS.map(t => {
             const TIcon = t.icon;
             return (
-              <button key={t.key} onClick={() => setTab(t.key)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
+              <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all whitespace-nowrap ${
                   tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
                 }`}>
                 <TIcon size={13}/>
@@ -41882,7 +42754,8 @@ function ApplyField({ label, hint, children }) {
 
 // ── Sidebar Component ─────────────────────────────────────────────────────────
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed,
-                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null }) {
+                    actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null,
+                    onSelectSub = null, subActiveTab = {} }) {
   // Only an actual owner gets the view-as picker. Impersonated views never show it
   // (avoid the "view as X → view as Y" rabbit hole).
   const canImpersonate = actualUser?.role === "owner" && onImpersonate;
@@ -41928,6 +42801,31 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     const count = parseInt(it.badge, 10) || 0;
     return count > (badgeSeen[it.key] ?? 0) ? it.badge : null;
   };
+
+  // ── Sub-item routing ────────────────────────────────────────────────────────
+  // A child with a `tab` field is a tab WITHIN a parent view (Operations/Team/
+  // Dashboard) — selecting it sets both the view and the tab via onSelectSub.
+  // A child without `tab` is its own view (e.g. Distribution) — plain navigation.
+  const selectChild = (c) => {
+    if (c.tab && c.view && onSelectSub) onSelectSub(c.view, c.tab);
+    else setActiveView(c.key);
+  };
+  const childIsActive = (c) => {
+    if (c.tab && c.view) return activeView === c.view && (subActiveTab[c.view] === c.tab);
+    return activeView === c.key;
+  };
+  const parentIsActive = (n) => {
+    if (!n.children) return activeView === n.key;
+    // A child matches if it's the active view directly (view-style child) or its
+    // parent view is active (tab-style child). Covers groups with mixed children.
+    return activeView === n.key || n.children.some(c =>
+      (c.view ? activeView === c.view : activeView === c.key)
+    );
+  };
+
+  // Flyout when collapsed: which parent's children are showing, and whether pinned.
+  const [flyoutKey, setFlyoutKey] = useState(null);
+  const [flyoutPinned, setFlyoutPinned] = useState(false);
   const impersonationTargets = canImpersonate
     ? users.filter(u => u.id !== actualUser.id).sort((a, b) => {
         const order = { hq_staff: 0, manager: 1, staff: 2, owner: 3 };
@@ -41964,29 +42862,55 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
             {g.items.map(n => {
               const NIcon = n.icon;
               const active = activeView === n.key;
-              // Collapsible parent: has children (sub-views). Expanded when the
-              // parent or any child is the active view.
+              // Collapsible parent: has children (sub-views or sub-tabs).
               if (n.children && n.children.length) {
-                const childActive = n.children.some(c => c.key === activeView);
-                const expanded = active || childActive;
+                const isParentActive = parentIsActive(n);
+                const expanded = isParentActive;
+                const openParent = () => selectChild(n.children[0]);
+                const flyoutOpen = collapsed && flyoutKey === n.key;
                 return (
-                  <div key={n.key}>
-                    <button onClick={() => setActiveView(n.children[0].key)}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${childActive ? "text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
+                  <div key={n.key} className="relative"
+                    onMouseEnter={() => { if (collapsed && !flyoutPinned) setFlyoutKey(n.key); }}
+                    onMouseLeave={() => { if (collapsed && !flyoutPinned) setFlyoutKey(k => k === n.key ? null : k); }}>
+                    <button onClick={() => { if (collapsed) { setFlyoutPinned(p => !(flyoutKey === n.key && p)); setFlyoutKey(n.key); } else { openParent(); } }}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${isParentActive ? "text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
                       <NIcon size={15} className="flex-shrink-0"/>
                       {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
+                      {!collapsed && displayBadge(n) && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{displayBadge(n)}</span>}
                       {!collapsed && <ChevronDownIcon size={13} className={`flex-shrink-0 transition-transform ${expanded ? "" : "-rotate-90"}`}/>}
                     </button>
+                    {/* Expanded sidebar: inline accordion */}
                     {!collapsed && expanded && (
                       <div className="ml-3 pl-2 border-l border-slate-800 space-y-0.5 mt-0.5">
                         {n.children.map(c => {
                           const CIcon = c.icon;
-                          const cActive = activeView === c.key;
+                          const cActive = childIsActive(c);
                           return (
-                            <button key={c.key} onClick={() => setActiveView(c.key)}
-                              className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
-                              {CIcon && <CIcon size={13} className="flex-shrink-0"/>}
-                              <span className="flex-1 text-left truncate">{c.label}</span>
+                            <button key={c.key} onClick={() => selectChild(c)}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
+                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={13} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
+                              {c.badge && <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold flex-shrink-0">{c.badge}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Collapsed sidebar: flyout popout (hover to peek, click to pin) */}
+                    {flyoutOpen && (
+                      <div className="absolute left-full top-0 ml-1 z-50 min-w-[180px] bg-slate-900 border border-slate-700 rounded-xl shadow-xl p-1.5"
+                        onMouseLeave={() => { if (!flyoutPinned) setFlyoutKey(null); }}>
+                        <div className="text-xs font-bold text-slate-500 px-2 py-1 flex items-center justify-between">
+                          {n.label}
+                          {flyoutPinned && <button onClick={() => { setFlyoutPinned(false); setFlyoutKey(null); }} className="text-slate-600 hover:text-slate-300"><X size={12}/></button>}
+                        </div>
+                        {n.children.map(c => {
+                          const CIcon = c.icon;
+                          const cActive = childIsActive(c);
+                          return (
+                            <button key={c.key} onClick={() => { selectChild(c); setFlyoutPinned(false); setFlyoutKey(null); }}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
+                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={14} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
+                              {c.badge && <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold flex-shrink-0">{c.badge}</span>}
                             </button>
                           );
                         })}
@@ -42900,13 +43824,19 @@ export default function App() {
   // Team is a single tabbed page: Team, Time & Attendance, Hiring, Onboarding
   // Board, Training, Contracts. Old per-item keys still work via redirect.
   const [teamTab, setTeamTab] = useState("team");
+  const [commsTab, setCommsTab] = useState("helpdesk");
   const TEAM_TAB_KEYS = ["team", "time-attend", "hiring", "onboarding-board", "training", "contracts"];
   useEffect(() => {
     if (TEAM_TAB_KEYS.includes(activeView)) setTeamTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
   // Setup is a single tabbed page: Ops Setup, Admin, Access Control,
   // COGS/Inventory, Notifications, Payslip Inbox. Legacy keys redirect.
-  const [setupTab, setSetupTab] = useState("ops-settings");
+  const [setupTab, setSetupTab] = useState(""); // "" = landing grid; else "panel" or "panel:subtab"
+  // setupTab carries an optional deep-link sub-tab as "panel:subtab".
+  const _setupParts = setupTab.split(":");
+  const setupPanel = _setupParts[0] || "";
+  const setupSubtab = _setupParts[1];      // panel's sub-tab (e.g. "actualcogs")
+  const setupSubsub = _setupParts[2];      // deeper sub-tab (e.g. "counts" inside Actual COGS)
   const SETUP_TAB_KEYS = ["ops-settings", "admin", "access-control", "cogs", "notifications", "payslip-inbox"];
   useEffect(() => {
     if (SETUP_TAB_KEYS.includes(activeView)) setSetupTab(activeView);
@@ -44079,15 +45009,20 @@ export default function App() {
   // Manager / Owner
   const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
-  const inboxUnread = messages.filter(m => {
-    if (m.fromId===currentUser.id) return false;
-    if (m.toScope==="all_locations") return true;
-    if (m.toScope==="location" && currentUser.brandIds.includes(m.toBrandId)) return true;
-    if (m.toScope==="individual" && m.toPersonId===currentUser.id) return true;
-    return false;
-  }).filter(m => !m.readBy?.includes(currentUser.id)).length;
+  const commsUnread = (() => {
+    const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+    return messages.filter(m => {
+      if (m.fromId === myId || m.fromId === myOpsId) return false;
+      if (m.toScope === "all_locations") return true;
+      if (m.toScope === "location" && (currentUser.brandIds || []).includes(m.toBrandId)) return true;
+      if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
+      return false;
+    }).filter(m => !m.readBy?.includes(myId)).length;
+  })();
   const pendingAvail = availability.filter(a => visibleBrands.some(b=>b.id===a.brandId) && a.status==="pending").length;
-  const commsBadge = inboxUnread + pendingAvail;
+  // Parent badge = unread chat ONLY. Pending availability is a separate concern
+  // and shows on the Availability child, not rolled into "unread".
+  const commsBadge = commsUnread;
 
   // Hiring badge: count applications in active (non-terminal) states that
   // are relevant to the current user's scope. For managers, only their stores;
@@ -44123,14 +45058,25 @@ export default function App() {
   // render an orphan header. Recomputed every render — cheap, no hook needed.
   const NAV_GROUPS_RAW = [
     { group: "OVERVIEW", items: [
-      { key: "dashboard",   label: "Dashboard",     icon: BarChart2 },
+      { key: "dashboard",   label: "Dashboard",     icon: BarChart2, children: [
+        { key: "dashboard:overview", view: "dashboard", tab: "overview", label: "Dashboard", icon: LayoutDashboard },
+        { key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe, gateRole: ["owner","hq_staff"] },
+        { key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2, gateView: "store-analytics" },
+        { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
+      ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
-      { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
     ]},
     { group: "OPERATIONS", items: [
-      { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
-      { key: "dist-order",     label: "Order from Distribution", icon: ShoppingCart, hideForCK: true },
+      { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
+        { key: "operations:ops-network",    view: "operations", tab: "ops-network",    label: "Ops Overview",  icon: LayoutDashboard },
+        { key: "operations:ops-tasks",      view: "operations", tab: "ops-tasks",      label: "Tasks", icon: ListChecks },
+        { key: "operations:ops-temps",      view: "operations", tab: "ops-temps",      label: "Temperatures",  icon: Thermometer },
+        { key: "operations:ops-deliveries", view: "operations", tab: "ops-deliveries", label: "Deliveries",    icon: Truck },
+        { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
+        { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
+      ]},
+      { key: "dist-order",     label: "Order", icon: ShoppingCart, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "WAREHOUSE", items: [
@@ -44155,10 +45101,24 @@ export default function App() {
       { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
-      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true },
+      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, children: [
+        { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
+        { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
+        { key: "team:hiring",          view: "team", tab: "hiring",          label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, gateView: "hiring" },
+        { key: "team:onboarding-board",view: "team", tab: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gateView: "onboarding-board" },
+        { key: "team:training",        view: "team", tab: "training",        label: "Training",          icon: GraduationCap },
+        { key: "team:contracts",       view: "team", tab: "contracts",       label: "Contracts",         icon: FileText },
+      ]},
+      { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null, children: [
+        { key: "comms:helpdesk",     view: "comms", tab: "helpdesk",     label: "Help Desk",    icon: LifeBuoy },
+        { key: "comms:chat",         view: "comms", tab: "chat",         label: "Chat",         icon: MessageSquare },
+        { key: "comms:availability", view: "comms", tab: "availability", label: "Availability", icon: Calendar, badge: pendingAvail > 0 ? pendingAvail.toString() : null },
+        { key: "comms:schedule",     view: "comms", tab: "schedule",     label: "Schedule",     icon: CalendarDays },
+        { key: "announcements", label: "Announcements", icon: Megaphone, gateRole: ["owner","hq_staff"] },
+      ]},
+    ]},
+    { group: "REPORTS", items: [
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
-      { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
-      { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
     ]},
     { group: "SETUP", items: [
       { key: "setup", label: "Setup", icon: Settings, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
@@ -44168,6 +45128,15 @@ export default function App() {
   // When the user's visible sites are all Central Kitchen (a production facility,
   // no end-of-day cash/sales), hide EOD-type features.
   const ckOnly = visibleStores.length > 0 && visibleStores.every(s => s.siteType === "central_kitchen");
+  // True if the current user is permitted to see a given view key, using the
+  // SAME rule as the sidebar (canRoleSeeSection). Defined before NAV_GROUPS
+  // because the child-gating map below calls it. References NAV_GROUPS_RAW only.
+  const canSeeView = (viewKey) => {
+    if (["owner","hq_staff"].includes(currentUser?.role)) return true;
+    const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
+    if (!item) return false;
+    return canRoleSeeSection(currentUserRole.matrixRole, item);
+  };
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
       canRoleSeeSection(currentUserRole.matrixRole, item) &&
@@ -44175,18 +45144,13 @@ export default function App() {
       // Entity-scoped items (e.g. Central Kitchen) only appear when that entity
       // is the one currently entered. selectedEntityBrand holds the brand/entity id.
       (!item.requiresEntity || selectedEntityBrand === item.requiresEntity)
-    ) }))
+    ).map(item => item.children ? { ...item, children: item.children.filter(c =>
+      // Tab-style children may declare gateRole (allowed roles) or gateView
+      // (defer to canSeeView). Children with neither are always shown.
+      (!c.gateRole || c.gateRole.includes(currentUser?.role)) &&
+      (!c.gateView || canSeeView(c.gateView))
+    ) } : item) }))
     .filter(g => g.items.length > 0);
-
-  // True if the current user is permitted to see a given view key, using the
-  // SAME rule as the sidebar (canRoleSeeSection). This keeps page content in
-  // step with nav visibility for custom roles — owner/HQ always allowed.
-  const canSeeView = (viewKey) => {
-    if (["owner","hq_staff"].includes(currentUser?.role)) return true;
-    const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
-    if (!item) return false;
-    return canRoleSeeSection(currentUserRole.matrixRole, item);
-  };
 
   // Finance entity — a focused accounts-only workspace. When the user has
   // stepped into the Finance tile, the sidebar shows just the accounts hub.
@@ -44268,6 +45232,12 @@ export default function App() {
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
+          onSelectSub={(view, tab) => {
+            const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab, comms: setCommsTab };
+            if (setters[view]) setters[view](tab);
+            setActiveView(view);
+          }}
+          subActiveTab={{ operations: opsTab, team: teamTab, dashboard: dashTab, comms: commsTab }}
           onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
@@ -44316,10 +45286,10 @@ export default function App() {
                 ) : null;
               })()}
               <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
-              {inboxUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{inboxUnread} unread</div>}
+              {commsUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{commsUnread} unread</div>}
               <button onClick={() => setActiveView("comms")} title="Chat & Helpdesk" className="relative text-slate-400 hover:text-indigo-300 transition-colors">
                 <MessageSquare size={18}/>
-                {inboxUnread > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-slate-950"/>}
+                {commsUnread > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-slate-950"/>}
               </button>
             </div>
           </div>
@@ -44335,25 +45305,10 @@ export default function App() {
             {distSearchOpen && <DistGlobalSearch onClose={() => setDistSearchOpen(false)}/>}
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
-              // Build the dashboard tabs available to this user. Same gates as the
-              // old top-level views: Chain = owner/HQ; Store Analytics = canSeeView.
-              const dashTabs = [
-                { key: "overview", label: "Dashboard" },
-                ...(isHqOrOwner && !ckOnly ? [{ key: "chain", label: "Chain Performance" }] : []),
-                ...(canSeeView("store-analytics") && !ckOnly ? [{ key: "store-analytics", label: "Store Analytics" }] : []),
-              ];
-              const dashKeys = dashTabs.map(t => t.key);
+              const dashKeys = ["overview", ...(isHqOrOwner && !ckOnly ? ["chain"] : []), ...(canSeeView("store-analytics") && !ckOnly ? ["store-analytics"] : [])];
               const effDashTab = dashKeys.includes(dashTab) ? dashTab : "overview";
               return (
-                <div className="space-y-4">
-                  {dashTabs.length > 1 && (
-                    <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap">
-                      {dashTabs.map(t => (
-                        <button key={t.key} onClick={() => setDashTab(t.key)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effDashTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
-                      ))}
-                    </div>
-                  )}
+                <div>
                   {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
                   {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
                   {effDashTab === "chain" && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
@@ -44366,52 +45321,21 @@ export default function App() {
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})} busyPeriods={busyPeriods||[]}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "operations" && (() => {
-              const opsTabs = [
-                { key: "ops-network",    label: "Ops Overview" },
-                { key: "ops-tasks",      label: "Today's Tasks" },
-                { key: "ops-temps",      label: "Temperatures" },
-                { key: "ops-deliveries", label: "Deliveries" },
-                { key: "issues",         label: "Issues", badge: openIssueCount > 0 ? openIssueCount : null },
-                { key: "ops-assigns",    label: "Assignments" },
-              ];
               const effOpsTab = OPS_TAB_KEYS.includes(opsTab) ? opsTab : "ops-network";
               return (
-                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
-                  {opsTabs.map(t => (
-                    <button key={t.key} onClick={() => setOpsTab(t.key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${effOpsTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
-                      {t.label}{t.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span> : null}
-                    </button>
-                  ))}
+                <div>
+                  {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+                  {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
+                  {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
+                  {effOpsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+                  {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+                  {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
                 </div>
               );
             })()}
-            {effectiveActiveView === "operations" && opsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
-            {effectiveActiveView === "operations" && opsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-            {effectiveActiveView === "team" && teamTab === "hiring" && <HiringView
-              brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
-              applications={applications} opsTeam={opsTeam} currentUser={currentUser}
-              onAdd={addApplication} onUpdate={updateApplicationRow}
-              onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
-              onAddOpsTeam={addOpsTeam}
-              onOpenEmployeeProfile={openEmployeeProfile}
-              advertisedRoles={advertisedRoles}
-              onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
-            />}
-            {effectiveActiveView === "team" && teamTab === "training" && <TrainingAdminView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
-              opsTeam={opsTeam} currentUser={currentUser}
-            />}
-            {effectiveActiveView === "team" && teamTab === "contracts" && <ContractsAdminView
-              stores={stores} opsTeam={opsTeam} currentUser={currentUser}
-            />}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
               employeeId={selectedEmployeeId}
               brands={visibleBrands} stores={stores}
@@ -44421,59 +45345,151 @@ export default function App() {
               onClose={closeEmployeeProfile}
             />}
             {effectiveActiveView === "team" && (() => {
-              const teamTabs = [
-                { key: "team",            label: "Team", badge: pendingSetupCount > 0 ? pendingSetupCount : null },
-                { key: "time-attend",     label: "Time & Attendance" },
-                { key: "hiring",          label: "Hiring", badge: hiringBadge > 0 ? hiringBadge : null, gate: () => canSeeView("hiring") },
-                { key: "onboarding-board",label: "Onboarding Board", gate: () => canSeeView("onboarding-board") },
-                { key: "training",        label: "Training" },
-                { key: "contracts",       label: "Contracts" },
-              ].filter(t => !t.gate || t.gate());
-              const teamKeys = teamTabs.map(t => t.key);
-              const effTeamTab = teamKeys.includes(teamTab) ? teamTab : "team";
+              const teamGate = { hiring: () => canSeeView("hiring"), "onboarding-board": () => canSeeView("onboarding-board") };
+              const allowed = (k) => !teamGate[k] || teamGate[k]();
+              const effTeamTab = allowed(teamTab) ? teamTab : "team";
               return (
-                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
-                  {teamTabs.map(t => (
-                    <button key={t.key} onClick={() => setTeamTab(t.key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${effTeamTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
-                      {t.label}{t.badge ? <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span> : null}
-                    </button>
-                  ))}
+                <div>
+                  {effTeamTab === "team" && <OpsTeamView
+                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+                    storeDepartments={storeDepartments} storeRoles={storeRoles}
+                    opsTeam={opsTeam} users={users}
+                    customRoles={customRoles}
+                    onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+                    onOpenEmployeeProfile={openEmployeeProfile}
+                    currentUser={currentUser}
+                  />}
+                  {effTeamTab === "hiring" && <HiringView
+                    brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
+                    applications={applications} opsTeam={opsTeam} currentUser={currentUser}
+                    onAdd={addApplication} onUpdate={updateApplicationRow}
+                    onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
+                    onAddOpsTeam={addOpsTeam}
+                    onOpenEmployeeProfile={openEmployeeProfile}
+                    advertisedRoles={advertisedRoles}
+                    onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
+                  />}
+                  {effTeamTab === "training" && <TrainingAdminView
+                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+                    opsTeam={opsTeam} currentUser={currentUser}
+                  />}
+                  {effTeamTab === "contracts" && <ContractsAdminView
+                    stores={stores} opsTeam={opsTeam} currentUser={currentUser}
+                  />}
+                  {effTeamTab === "time-attend" && <TimeAttendanceView
+                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
+                    punchRecords={punchRecords} currentUser={currentUser}
+                    onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
+                    onAddComment={handleAddPunchComment}
+                    payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
+                  />}
+                  {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
                 </div>
               );
             })()}
-            {effectiveActiveView === "team" && !["time-attend","hiring","onboarding-board","training","contracts"].includes(teamTab) && <OpsTeamView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
-              storeDepartments={storeDepartments} storeRoles={storeRoles}
-              opsTeam={opsTeam} users={users}
-              customRoles={customRoles}
-              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
-              onOpenEmployeeProfile={openEmployeeProfile}
-              currentUser={currentUser}
-            />}
             {effectiveActiveView === "setup" && (() => {
               const isOwner = currentUser.role === "owner";
               const isHqOrOwner = isOwner || currentUser.role === "hq_staff";
-              const setupTabs = [
-                { key: "ops-settings",  label: "Ops Setup" },
-                { key: "cogs",          label: "COGS / Inventory", gate: () => canSeeView("cogs") },
-                { key: "payslip-inbox", label: "Payslip Inbox", gate: () => isHqOrOwner },
-                { key: "notifications", label: "Notifications" },
-                { key: "admin",         label: "Admin", gate: () => isOwner },
-                { key: "access-control",label: "Access Control", gate: () => isOwner },
-              ].filter(t => !t.gate || t.gate());
-              const setupKeys = setupTabs.map(t => t.key);
-              const effSetupTab = setupKeys.includes(setupTab) ? setupTab : "ops-settings";
+              const gOps = () => true;                  // Ops Setup leaves: no extra gate
+              const gCogs = () => canSeeView("cogs");   // COGS leaves
+              const gOwner = () => isOwner;             // Admin + Access Control
+              const gHq = () => isHqOrOwner;            // Payslip
+              // Themed grouping of LEAF items across panels. Each item key is
+              // "panel:subtab" so selecting it deep-links straight to that sub-tab.
+              // Gates travel with each item; SettingsLanding hides empty sections.
+              const setupSections = [
+                {
+                  key: "locations-brands", label: "Locations & Brands", icon: Building2, accent: "blue",
+                  desc: "Your chains and physical stores.",
+                  items: [
+                    { key: "admin:brands", label: "Brands", desc: "Chains like Chocoberry and Tove.", gate: gOwner },
+                    { key: "admin:stores", label: "Stores", desc: "Individual physical locations and Flipdish links.", gate: gOwner },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "team-structure", label: "Team & Structure", icon: Users, accent: "teal",
+                  desc: "Departments, roles, access, and shifts.",
+                  items: [
+                    { key: "ops-settings:structure", label: "Structure", desc: "Departments and roles per store.", gate: gOps },
+                    { key: "admin:managers", label: "Managers & Access", desc: "Assign managers and their access.", gate: gOwner },
+                    { key: "admin:roles", label: "Roles", desc: "Custom roles and base permissions.", gate: gOwner },
+                    { key: "ops-settings:presets", label: "Shift Presets", desc: "Reusable shift templates.", gate: gOps },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "compliance-tasks", label: "Compliance & Tasks", icon: CheckCircle, accent: "indigo",
+                  desc: "Checklists, temperatures, and cleaning.",
+                  items: [
+                    { key: "ops-settings:checklists", label: "Checklists", desc: "Opening, closing, and routine checks.", gate: gOps },
+                    { key: "ops-settings:tempunits", label: "Temp Units", desc: "Fridge and freezer temperature limits.", gate: gOps },
+                    { key: "ops-settings:cleaning", label: "Cleaning Tasks", desc: "Scheduled cleaning duties.", gate: gOps },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "pay-hours", label: "Pay & Hours", icon: PoundSterling, accent: "amber",
+                  desc: "Overtime, wages, payroll, and targets.",
+                  items: [
+                    { key: "ops-settings:overtime", label: "Overtime", desc: "Overtime rules and thresholds.", gate: gOps },
+                    { key: "admin:minwage", label: "Minimum Wage", desc: "Minimum wage bands by age.", gate: gOwner },
+                    { key: "admin:payroll", label: "Payroll", desc: "Payroll settings and exports.", gate: gOwner },
+                    { key: "admin:kpis", label: "KPI Targets", desc: "Per-store performance targets.", gate: gOwner },
+                    { key: "payslip-inbox", label: "Payslip Inbox", desc: "Review and distribute payslips.", gate: gHq },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "menu-costing", label: "Menu & Costing", icon: BarChart2, accent: "rose",
+                  desc: "Recipes, products, and POS mapping.",
+                  items: [
+                    { key: "cogs:inventory", label: "Inventory", desc: "Raw ingredients and costs.", gate: gCogs },
+                    { key: "cogs:preps", label: "Preps", desc: "Prepared components and sub-recipes.", gate: gCogs },
+                    { key: "cogs:products", label: "Products", desc: "Menu items and their recipes.", gate: gCogs },
+                    { key: "cogs:modifiers", label: "Modifiers", desc: "Add-ons and option costing.", gate: gCogs },
+                    { key: "cogs:mapping", label: "Mapping", desc: "Map POS items to recipes.", gate: gCogs },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "stock-actual", label: "Stock & Actual COGS", icon: ClipboardList, accent: "green",
+                  desc: "Counts, purchases, and variance.",
+                  items: [
+                    { key: "cogs:actualcogs:counts", label: "Stock Counts", desc: "Weekly stock counts per store.", gate: gCogs },
+                    { key: "cogs:actualcogs:purchases", label: "Purchases", desc: "Purchase records feeding actual COGS.", gate: gCogs },
+                    { key: "cogs:actualcogs:variance", label: "Variance vs Theoretical", desc: "Actual vs recipe-based COGS gap.", gate: gCogs },
+                    { key: "cogs:actualcogs:settings", label: "Store Inventory Settings", desc: "Per-store inventory configuration.", gate: gCogs },
+                    { key: "cogs:actualcogs:pricechanges", label: "Price Changes", desc: "Ingredient price change history.", gate: gCogs },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "costing-tools", label: "Costing Tools", icon: Settings, accent: "slate",
+                  desc: "Diagnostics and reconciliation.",
+                  items: [
+                    { key: "cogs:discover", label: "Discover Modifiers", desc: "Find unmapped modifiers.", gate: gCogs },
+                    { key: "cogs:reconcile", label: "COGS Reconcile", desc: "Reconcile theoretical vs actual.", gate: gCogs },
+                    { key: "cogs:tillaudit", label: "Till Audit", desc: "Audit till items against recipes.", gate: gCogs },
+                    { key: "cogs:modmapper", label: "Modifier Mapper", desc: "Bulk-map modifiers to costs.", gate: gCogs },
+                  ].filter(i => i.gate()),
+                },
+                {
+                  key: "system", label: "System", icon: ShieldCheck, accent: "amber",
+                  desc: "Notifications and access control.",
+                  items: [
+                    { key: "notifications", label: "Notifications", desc: "In-app and push notifications.", gate: gOps },
+                    { key: "access-control", label: "Access Control", desc: "Roles, permissions, and entity access.", gate: gOwner },
+                  ].filter(i => i.gate()),
+                },
+              ];
               return (
-                <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1 w-fit flex-wrap mb-4">
-                  {setupTabs.map(t => (
-                    <button key={t.key} onClick={() => setSetupTab(t.key)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${effSetupTab===t.key?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{t.label}</button>
-                  ))}
-                </div>
+                <SettingsLanding
+                  title="Setup"
+                  description="Configure operations, people, pay, and ownership controls."
+                  sections={setupSections}
+                  active={setupTab}
+                  onSelect={setSetupTab}
+                  renderPanel={() => null}
+                />
               );
             })()}
-            {effectiveActiveView === "setup" && !["admin","access-control","cogs","notifications","payslip-inbox"].includes(setupTab) && <OpsSettingsView
+            {effectiveActiveView === "setup" && setupPanel === "ops-settings" && <OpsSettingsView
+              initialTab={setupSubtab} hideTabs={true}
               brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
               storeDepartments={storeDepartments} storeRoles={storeRoles}
               checklists={checklists} tempUnits={tempUnits}
@@ -44492,14 +45508,8 @@ export default function App() {
               appSettings={appSettings} onSaveOtRules={saveOtRules}
               currentUser={currentUser}
             />}
-            {effectiveActiveView === "team" && teamTab === "time-attend" && <TimeAttendanceView
-              brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
-              punchRecords={punchRecords} currentUser={currentUser}
-              onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
-              onAddComment={handleAddPunchComment}
-              payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
-            />}
-            {effectiveActiveView === "setup" && setupTab === "admin" && currentUser.role === "owner" && <AdminPanelView
+            {effectiveActiveView === "setup" && setupPanel === "admin" && currentUser.role === "owner" && <AdminPanelView
+              initialTab={setupSubtab} hideTabs={true}
               brands={brands} users={users} entries={entries}
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
@@ -44511,11 +45521,10 @@ export default function App() {
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
-            {effectiveActiveView === "setup" && setupTab === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "setup" && setupTab === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
-            {effectiveActiveView === "team" && teamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "setup" && setupTab === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature}/>}
+            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
@@ -44533,7 +45542,7 @@ export default function App() {
             {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
-            {effectiveActiveView === "setup" && setupTab === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "setup" && setupPanel === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
@@ -44549,6 +45558,7 @@ export default function App() {
               punchRecords={punchRecords} onUpdatePunchRecord={handleAmendPunch}
               onUpdateBrand={updateBrand}
               isEmployee={false}
+              initialTab={commsTab} hideTabs={true}
             />}
             {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
             </DistDocLinkProvider>
