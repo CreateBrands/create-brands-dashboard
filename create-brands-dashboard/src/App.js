@@ -36597,9 +36597,11 @@ function CommunicationView({
   schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
   punchRecords, onUpdatePunchRecord, onAddPunchComment,
   onUpdateBrand,
-  isEmployee,
+  isEmployee, initialTab, hideTabs,
 }) {
-  const [tab, setTab] = useState(isEmployee ? "chat" : "helpdesk");
+  const [tab, setTab] = useState(initialTab || (isEmployee ? "chat" : "helpdesk"));
+  // Keep tab in sync when the sidebar deep-links to a different sub-item.
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
 
   const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
@@ -36665,7 +36667,7 @@ function CommunicationView({
             );
           })}
         </div>
-      ) : (
+      ) : hideTabs ? null : (
         <div role="tablist" aria-label="Communication" className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-2xl p-1 mb-4 overflow-x-auto">
           {TABS.map(t => {
             const TIcon = t.icon;
@@ -42814,8 +42816,11 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
   };
   const parentIsActive = (n) => {
     if (!n.children) return activeView === n.key;
-    if (n.children[0]?.view) return activeView === n.children[0].view; // tab-style children
-    return activeView === n.key || n.children.some(c => c.key === activeView);
+    // A child matches if it's the active view directly (view-style child) or its
+    // parent view is active (tab-style child). Covers groups with mixed children.
+    return activeView === n.key || n.children.some(c =>
+      (c.view ? activeView === c.view : activeView === c.key)
+    );
   };
 
   // Flyout when collapsed: which parent's children are showing, and whether pinned.
@@ -43819,6 +43824,7 @@ export default function App() {
   // Team is a single tabbed page: Team, Time & Attendance, Hiring, Onboarding
   // Board, Training, Contracts. Old per-item keys still work via redirect.
   const [teamTab, setTeamTab] = useState("team");
+  const [commsTab, setCommsTab] = useState("helpdesk");
   const TEAM_TAB_KEYS = ["team", "time-attend", "hiring", "onboarding-board", "training", "contracts"];
   useEffect(() => {
     if (TEAM_TAB_KEYS.includes(activeView)) setTeamTab(activeView);
@@ -45051,10 +45057,10 @@ export default function App() {
         { key: "dashboard:overview", view: "dashboard", tab: "overview", label: "Dashboard", icon: LayoutDashboard },
         { key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe, gateRole: ["owner","hq_staff"] },
         { key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2, gateView: "store-analytics" },
+        { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
-      { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
     ]},
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
@@ -45065,7 +45071,7 @@ export default function App() {
         { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
         { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
       ]},
-      { key: "dist-order",     label: "Order from Distribution", icon: ShoppingCart, hideForCK: true },
+      { key: "dist-order",     label: "Order", icon: ShoppingCart, hideForCK: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "WAREHOUSE", items: [
@@ -45098,9 +45104,16 @@ export default function App() {
         { key: "team:training",        view: "team", tab: "training",        label: "Training",          icon: GraduationCap },
         { key: "team:contracts",       view: "team", tab: "contracts",       label: "Contracts",         icon: FileText },
       ]},
+      { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null, children: [
+        { key: "comms:helpdesk",     view: "comms", tab: "helpdesk",     label: "Help Desk",    icon: LifeBuoy },
+        { key: "comms:chat",         view: "comms", tab: "chat",         label: "Chat",         icon: MessageSquare },
+        { key: "comms:availability", view: "comms", tab: "availability", label: "Availability", icon: Calendar },
+        { key: "comms:schedule",     view: "comms", tab: "schedule",     label: "Schedule",     icon: CalendarDays },
+        { key: "announcements", label: "Announcements", icon: Megaphone, gateRole: ["owner","hq_staff"] },
+      ]},
+    ]},
+    { group: "REPORTS", items: [
       { key: "reports",      label: "Reports",           icon: FileText, roles: ["owner", "hq_staff", "manager"] },
-      { key: "comms",        label: "Communication",     icon: MessageSquare, badge: commsBadge > 0 ? commsBadge.toString() : null },
-      { key: "announcements", label: "Announcements",     icon: Megaphone, roles: ["owner", "hq_staff"] },
     ]},
     { group: "SETUP", items: [
       { key: "setup", label: "Setup", icon: Settings, badge: pendingSetupCount > 0 ? pendingSetupCount.toString() : null },
@@ -45215,11 +45228,11 @@ export default function App() {
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
           onSelectSub={(view, tab) => {
-            const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab };
+            const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab, comms: setCommsTab };
             if (setters[view]) setters[view](tab);
             setActiveView(view);
           }}
-          subActiveTab={{ operations: opsTab, team: teamTab, dashboard: dashTab }}
+          subActiveTab={{ operations: opsTab, team: teamTab, dashboard: dashTab, comms: commsTab }}
           onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
@@ -45540,6 +45553,7 @@ export default function App() {
               punchRecords={punchRecords} onUpdatePunchRecord={handleAmendPunch}
               onUpdateBrand={updateBrand}
               isEmployee={false}
+              initialTab={commsTab} hideTabs={true}
             />}
             {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
             </DistDocLinkProvider>
