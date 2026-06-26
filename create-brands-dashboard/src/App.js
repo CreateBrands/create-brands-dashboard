@@ -45049,8 +45049,8 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2, children: [
         { key: "dashboard:overview", view: "dashboard", tab: "overview", label: "Dashboard", icon: LayoutDashboard },
-        ...((currentUser.role === "owner" || currentUser.role === "hq_staff") ? [{ key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe }] : []),
-        ...(canSeeView("store-analytics") ? [{ key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2 }] : []),
+        { key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe, gateRole: ["owner","hq_staff"] },
+        { key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2, gateView: "store-analytics" },
       ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
@@ -45093,8 +45093,8 @@ export default function App() {
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, children: [
         { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
         { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
-        ...(canSeeView("hiring") ? [{ key: "team:hiring", view: "team", tab: "hiring", label: "Hiring", icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null }] : []),
-        ...(canSeeView("onboarding-board") ? [{ key: "team:onboarding-board", view: "team", tab: "onboarding-board", label: "Onboarding Board", icon: ClipboardList }] : []),
+        { key: "team:hiring",          view: "team", tab: "hiring",          label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, gateView: "hiring" },
+        { key: "team:onboarding-board",view: "team", tab: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gateView: "onboarding-board" },
         { key: "team:training",        view: "team", tab: "training",        label: "Training",          icon: GraduationCap },
         { key: "team:contracts",       view: "team", tab: "contracts",       label: "Contracts",         icon: FileText },
       ]},
@@ -45110,6 +45110,15 @@ export default function App() {
   // When the user's visible sites are all Central Kitchen (a production facility,
   // no end-of-day cash/sales), hide EOD-type features.
   const ckOnly = visibleStores.length > 0 && visibleStores.every(s => s.siteType === "central_kitchen");
+  // True if the current user is permitted to see a given view key, using the
+  // SAME rule as the sidebar (canRoleSeeSection). Defined before NAV_GROUPS
+  // because the child-gating map below calls it. References NAV_GROUPS_RAW only.
+  const canSeeView = (viewKey) => {
+    if (["owner","hq_staff"].includes(currentUser?.role)) return true;
+    const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
+    if (!item) return false;
+    return canRoleSeeSection(currentUserRole.matrixRole, item);
+  };
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
       canRoleSeeSection(currentUserRole.matrixRole, item) &&
@@ -45117,18 +45126,13 @@ export default function App() {
       // Entity-scoped items (e.g. Central Kitchen) only appear when that entity
       // is the one currently entered. selectedEntityBrand holds the brand/entity id.
       (!item.requiresEntity || selectedEntityBrand === item.requiresEntity)
-    ) }))
+    ).map(item => item.children ? { ...item, children: item.children.filter(c =>
+      // Tab-style children may declare gateRole (allowed roles) or gateView
+      // (defer to canSeeView). Children with neither are always shown.
+      (!c.gateRole || c.gateRole.includes(currentUser?.role)) &&
+      (!c.gateView || canSeeView(c.gateView))
+    ) } : item) }))
     .filter(g => g.items.length > 0);
-
-  // True if the current user is permitted to see a given view key, using the
-  // SAME rule as the sidebar (canRoleSeeSection). This keeps page content in
-  // step with nav visibility for custom roles — owner/HQ always allowed.
-  const canSeeView = (viewKey) => {
-    if (["owner","hq_staff"].includes(currentUser?.role)) return true;
-    const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
-    if (!item) return false;
-    return canRoleSeeSection(currentUserRole.matrixRole, item);
-  };
 
   // Finance entity — a focused accounts-only workspace. When the user has
   // stepped into the Finance tile, the sidebar shows just the accounts hub.
