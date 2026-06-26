@@ -2633,7 +2633,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
       } catch { /* ignore */ }
     })();
     load();
-    const t = setInterval(load, 25000);
+    const t = setInterval(load, 60000);
     return () => clearInterval(t);
   }, [load, recipientType, recipientId]);
 
@@ -40520,9 +40520,12 @@ function KioskShell() {
         if (eventType === "INSERT") setPunchRecords(ps => ps.some(x => x.id === p.id) ? ps : [p, ...ps]);
         if (eventType === "UPDATE") setPunchRecords(ps => ps.map(x => x.id === p.id ? p : x));
       }).subscribe();
+    // Safety-net fallback only — realtime (above) is the primary update path.
+    // Was 15s, which ran on every always-on kiosk tablet all day; 5min slashes
+    // steady-state DB load without losing reliability.
     const interval = setInterval(() => {
       fetchPunchRecords().then(setPunchRecords).catch(()=>{});
-    }, 15000);
+    }, 300000);
     return () => {
       clearInterval(interval);
       supabase.removeChannel(ch);
@@ -43048,12 +43051,17 @@ export default function App() {
           setMessages(ms => ms.some(x => x.id === m.id) ? ms : [m, ...ms]);
         }
       }).subscribe();
+    // Safety-net poll as a fallback for any realtime events that get missed.
+    // Realtime channels (above) are the PRIMARY update path for these tables, so
+    // this only needs to run occasionally — every 5 minutes, not every 30s. This
+    // cut steady-state DB query volume ~10× per connected device (the 30s version
+    // was redundant with realtime and a major source of Disk I/O load on busy days).
     const interval = setInterval(() => {
       fetchHelpdeskTickets().then(setHdTickets).catch(()=>{});
       fetchAvailability().then(setAvailability).catch(()=>{});
       fetchBusyPeriods().then(setBusyPeriods).catch(()=>{});
-      fetchPunchRecords().then(setPunchRecords).catch(()=>{});  // belt + braces: catch any missed realtime updates
-    }, 30000);
+      fetchPunchRecords().then(setPunchRecords).catch(()=>{});
+    }, 300000);
     return () => {
       clearInterval(interval);
       supabase.removeChannel(punchChannel); supabase.removeChannel(schedChannel);
