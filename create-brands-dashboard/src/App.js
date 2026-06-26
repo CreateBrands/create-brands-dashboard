@@ -13194,11 +13194,28 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       if (to === "role") return myRoleNames.has((a.role || "").toLowerCase());
       return true;
     };
+    // Mirror TodaysTasks exactly so the badge can't disagree with the list:
+    // on-shift gate (managers exempt; fallback if nobody at the store is on shift)
+    // and exclude tasks already done today. Count PENDING tasks that are due, not
+    // just overdue ones — windows are now optional, so "overdue" alone undercounts.
+    const myOnShift = (punchRecords || []).some(p => p.status === "open" && p.employeeId === (currentUser?.opsTeamMemberId || currentUser?.id));
+    const storesOnShift = new Set((punchRecords || []).filter(p => p.status === "open" && p.storeId).map(p => p.storeId));
+    const onShiftGate = (a) => {
+      if (isMgr || myOnShift) return true;
+      if (a.storeId && storesOnShift.has(a.storeId)) return false;
+      return true;
+    };
+    const doneToday = (a) => {
+      const clState = (checklistStates || {})[`asg::${a.id}||${getTodayStr()}`] || {};
+      if (clState.__signedOff === true) return true;
+      const nm = a.checklistName || a.taskName || "";
+      return (auditTrail || []).some(t => t.brandId === a.brandId && t.date === getTodayStr() && (t.detail === `${nm} completed` || t.detail === nm));
+    };
     return (assignments || []).filter(a =>
       (a.storeId ? visibleSet.has(a.storeId) : currentUser.brandIds.includes(a.brandId))
-      && isActiveToday(a) && isOverdue(a) && targetedAtMe(a)
+      && isActiveToday(a) && targetedAtMe(a) && onShiftGate(a) && !doneToday(a)
     ).length;
-  }, [assignments, myVisibleStoreIds, myOpsMember, storeRoles, currentUser.role, currentUser.brandIds]);
+  }, [assignments, myVisibleStoreIds, myOpsMember, storeRoles, currentUser.role, currentUser.brandIds, currentUser.opsTeamMemberId, currentUser.id, punchRecords, checklistStates, auditTrail]);
 
   // EMP_BOTTOMNAV_V1: unread chat count (used by header Chat icon)
   const chatUnread = (() => {
@@ -21151,7 +21168,14 @@ function UserChip({ user, onLogout, compact }) {
 // ─── Ops constants ────────────────────────────────────────────────────────────
 const TEMP_ICON = { fridge: "🧊", freezer: "❄️", hot: "🔥" };
 
-function getTodayStr() { return new Date().toISOString().split("T")[0]; }
+function getTodayStr() {
+  // LOCAL date (not UTC). Using toISOString() here was a bug: it returns UTC, so
+  // between local midnight and 01:00 (when the UK is on BST) it reported the
+  // PREVIOUS day — making one-off tasks not show and sign-offs land on the wrong
+  // date. isActiveToday() uses local getDay(), so this must be local too.
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`;
+}
 function nowTimeStr() { const n = new Date(); return n.getHours().toString().padStart(2,"0") + ":" + n.getMinutes().toString().padStart(2,"0"); }
 
 // ─── PROFILE COMPLETENESS ─────────────────────────────────────────────────────
@@ -21560,10 +21584,12 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
           // state doesn't collide across stores sharing a brand.
           const stateKey = `asg::${a.id}||${getTodayStr()}`;
           const clState = checklistStates[stateKey] || {};
-          // Done if signed off (state marker) or, for legacy rows, an audit entry
-          // mentions the task today.
+          // Done if signed off (the reliable per-assignment marker) or, for
+          // legacy rows, an audit entry for THIS exact task today. The audit detail
+          // is written as "<taskName> completed"; match that exact phrase rather
+          // than a loose substring, so "Closing Task" can't mark "Closing Task 2".
           const doneToday = clState.__signedOff === true
-            || auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && t.detail?.includes(taskName));
+            || auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && (t.detail === `${taskName} completed` || t.detail === taskName));
           const totalItems = cl?.items?.length || 0;
           // Count only real item toggles — exclude metadata keys (__signedOff etc).
           const doneItems = totalItems ? Object.entries(clState).filter(([k,v]) => !k.startsWith("__") && v === true).length : 0;
@@ -38180,15 +38206,11 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         if (d?.name) myDeptNames.add(String(d.name).toLowerCase());
       }
     });
-    const dow = new Date().getDay(); // 0=Sun
-    const todayISO = toLocalDate();
-    const dueToday = (a) => {
-      if (a.freq === "daily" || !a.freq) return true;
-      if (a.freq === "once") return a.date === todayISO;
-      if (a.freq === "weekly") return Number(a.weekday) === dow;
-      if (a.freq === "custom") return (a.customDays || []).map(Number).includes(dow);
-      return true;
-    };
+    // Use the shared isActiveToday so the kiosk matches the rest of the app.
+    // (The previous inline version compared Number(weekday) against a day index,
+    //  but weekday/customDays are day-NAME strings — so weekly & custom tasks
+    //  never appeared on the kiosk, and weekdays/weekends weren't handled.)
+    const dueToday = (a) => isActiveToday(a);
     return (assignments || []).filter(a => {
       // Scope to this kiosk's store (or brand-legacy)
       const storeOk = a.storeId ? a.storeId === currentStore?.id : true;
@@ -43621,7 +43643,7 @@ export default function App() {
   const handleSignOff = useCallback(async(assignment)=>{
     try {
       const now=new Date().toISOString();
-      const d=now.split("T")[0];
+      const d=getTodayStr();   // LOCAL date — MUST match the card's stateKey (which uses getTodayStr). Using UTC here caused sign-offs to land on a different key near midnight, so tasks stayed "not done" after sign-off.
       // Completion is keyed PER ASSIGNMENT so repeated tasks (e.g. 5× toilet
       // checks, same task) are tracked independently. Key MUST match the card.
       const stateKey=`asg::${assignment.id}||${d}`;
