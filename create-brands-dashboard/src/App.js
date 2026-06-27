@@ -15249,11 +15249,17 @@ function StaffLeaderboard({ stores = [], storeId = null }) {
     setAnalysing(true); setErr(null);
     try {
       let guard = 0;
-      // process up to ~10 batches per click (300 reviews each) to avoid runaway.
-      while (guard < 30) {
-        const res = await triggerReviewInsights({ limit: 300 });
+      // Each call processes a SMALL batch (60 reviews) so it finishes well inside
+      // Supabase's 150s request limit. The loop keeps calling until done; the
+      // coverage counter refreshes each pass so progress is visible. Guard caps
+      // total work per click so a stuck state can't loop forever.
+      while (guard < 200) {
+        const res = await triggerReviewInsights({ limit: 60 });
         guard++;
+        // refresh the coverage line so the user sees it advancing
+        try { setCoverage(await fetchInsightsCoverage()); } catch { /* noop */ }
         if (!res?.moreToProcess) break;
+        if ((res?.processed ?? 0) === 0) break;  // nothing moved — stop rather than spin
       }
       await load();
     } catch (e) { setErr(e?.message || String(e)); }
