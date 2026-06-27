@@ -16226,10 +16226,10 @@ function ChainCommandCenter({ stores = [], currentUser }) {
   const INK = { grid: "#1e293b", axis: "#64748b" };
 
   const insightStyle = {
-    alert: { dot: "bg-rose-500", text: "text-rose-200", bg: "bg-rose-950/20 border-rose-800/40", label: "Alert" },
-    opp: { dot: "bg-sky-500", text: "text-sky-200", bg: "bg-sky-950/20 border-sky-800/40", label: "Opportunity" },
-    outlier: { dot: "bg-amber-500", text: "text-amber-200", bg: "bg-amber-950/20 border-amber-800/40", label: "Outlier" },
-    win: { dot: "bg-emerald-500", text: "text-emerald-200", bg: "bg-emerald-950/20 border-emerald-800/40", label: "Win" },
+    alert:   { dot: "bg-rose-500",    text: "text-rose-300",    bar: "border-l-rose-500",    bg: "bg-slate-900", label: "Alert" },
+    opp:     { dot: "bg-sky-500",     text: "text-sky-300",     bar: "border-l-sky-500",     bg: "bg-slate-900", label: "Opportunity" },
+    outlier: { dot: "bg-amber-500",   text: "text-amber-300",   bar: "border-l-amber-500",   bg: "bg-slate-900", label: "Outlier" },
+    win:     { dot: "bg-emerald-500", text: "text-emerald-300", bar: "border-l-emerald-500", bg: "bg-slate-900", label: "Win" },
   };
 
   return (
@@ -16258,11 +16258,14 @@ function ChainCommandCenter({ stores = [], currentUser }) {
                 {data.insights.map((ins, i) => {
                   const st = insightStyle[ins.kind] || insightStyle.opp;
                   return (
-                    <div key={i} className={`flex items-start gap-2.5 rounded-xl p-3 border ${st.bg}`}>
+                    <div key={i} className={`flex items-start gap-2.5 rounded-xl p-3 border border-slate-800 border-l-4 ${st.bar} ${st.bg}`}>
                       <span className={`w-2 h-2 rounded-full ${st.dot} mt-1.5 flex-shrink-0`} />
                       <div className="min-w-0">
-                        <div className="text-xs font-semibold text-white">{ins.store}</div>
-                        <div className={`text-[11px] ${st.text}`}>{ins.text}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-white">{ins.store}</span>
+                          <span className={`text-[9px] font-bold uppercase tracking-wide ${st.text}`}>{st.label}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-300 mt-0.5">{ins.text}</div>
                       </div>
                     </div>
                   );
