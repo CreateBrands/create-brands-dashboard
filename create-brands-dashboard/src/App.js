@@ -36939,8 +36939,10 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
   return (
     <div className="flex flex-col h-full">
       {/* Thread header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-slate-900 flex-shrink-0">
-        <div className="flex-1 min-w-0">
+      <div className="relative flex items-center gap-3 px-4 py-3 border-b border-slate-800/60 bg-gradient-to-r from-slate-900 to-slate-900/60 flex-shrink-0">
+        {/* Priority accent stripe */}
+        <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: ticket.priority === "Urgent" ? "#f43f5e" : ticket.priority === "High" ? "#f97316" : ticket.priority === "Normal" ? "#C9854F" : "#64748b" }}/>
+        <div className="flex-1 min-w-0 pl-1.5">
           <div className="text-sm font-bold text-white truncate">{ticket.title}</div>
           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
             <Badge label={ticket.status} color={HD_STATUS_COLOR[ticket.status] || "slate"}/>
@@ -36951,7 +36953,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
         </div>
         {isManager && (
           <button onClick={() => setShowInfo(s => !s)}
-            className={`p-2 rounded-xl transition-all ${showInfo ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
+            className={`p-2 rounded-xl transition-all ${showInfo ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
             title="Ticket details">
             <Info size={15}/>
           </button>
@@ -36973,7 +36975,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
             )}
             {ticket.assignedTo?.length > 0 && (
               <div className="flex justify-center mb-2">
-                <span className="bg-indigo-950/10 border border-indigo-500/20 text-indigo-300 text-xs px-3 py-1 rounded-full">
+                <span className="bg-amber-950/15 border border-amber-500/20 text-amber-300 text-xs px-3 py-1 rounded-full">
                   Assigned to {ticket.assignedTo.join(", ")}
                 </span>
               </div>
@@ -37013,7 +37015,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                     )}
                     <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
                       isMe
-                        ? "bg-indigo-600 text-white rounded-br-md"
+                        ? "bg-gradient-to-br from-amber-600 to-amber-800 text-white rounded-br-md shadow-sm shadow-amber-900/30"
                         : isStaff
                           ? "bg-slate-700 text-slate-100 border border-slate-600/60 rounded-bl-md"
                           : "bg-slate-800 text-slate-100 border border-slate-700 rounded-bl-md"
@@ -37030,7 +37032,7 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                             );
                             return (
                               <a key={ai} href={a.url} target="_blank" rel="noreferrer"
-                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg ${isMe ? "bg-indigo-700/60 hover:bg-indigo-700" : "bg-slate-700/60 hover:bg-slate-700"}`}>
+                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg ${isMe ? "bg-amber-800/50 hover:bg-amber-800" : "bg-slate-700/60 hover:bg-slate-700"}`}>
                                 <Paperclip size={14} className="flex-shrink-0"/>
                                 <span className="truncate text-xs">{a.name}</span>
                               </a>
@@ -37082,9 +37084,9 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                 <textarea value={body} onChange={e => setBody(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                   placeholder="Type a message…" rows={1}
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-28 transition-colors"/>
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-amber-500 focus:outline-none resize-none max-h-28 transition-colors"/>
                 <button onClick={handleSend} disabled={!body.trim() && pendingFiles.length === 0}
-                  className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
+                  className="w-10 h-10 rounded-full bg-amber-700 hover:bg-amber-600 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
                   <Send size={15} className="text-white ml-0.5"/>
                 </button>
               </div>
@@ -37120,9 +37122,9 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                   const assigned = assignedId === p.id || assignedId === p.name;
                   return (
                     <button key={p.id} onClick={() => canAssign && assignHandler(ticket, p.id, p.name)} disabled={!canAssign}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-950"} ${!canAssign ? "opacity-60 cursor-not-allowed" : ""}`}>
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-all ${assigned ? "bg-amber-700 text-white" : "text-slate-500 hover:bg-slate-950"} ${!canAssign ? "opacity-60 cursor-not-allowed" : ""}`}>
                       <span className="truncate">{p.name}{p.role ? <span className="text-slate-600 ml-1">({p.role})</span> : ""}</span>
-                      {assigned && <Check size={11} className="text-indigo-400 flex-shrink-0"/>}
+                      {assigned && <Check size={11} className="text-amber-400 flex-shrink-0"/>}
                     </button>
                   );
                 })}
@@ -37243,7 +37245,7 @@ function NewTicketForm({ brands, stores = [], currentUser, onSubmit, onCancel })
       </div>
       <div className="flex-shrink-0 p-4 border-t border-slate-800/60">
         <button onClick={handleSubmit} disabled={!form.title.trim()}
-          className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
+          className="w-full py-3 rounded-2xl bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2">
           <Send size={14}/> Submit Ticket
         </button>
       </div>
@@ -37411,7 +37413,7 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
     acc[s] = scopeTickets.filter(t => t.status === s).length;
     return acc;
   }, {});
-  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
+  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-orange-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
 
   if (allVisibleStores.length === 0) {
     return (
@@ -37428,7 +37430,12 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
       <div className={`flex flex-col border-r border-slate-800/60 bg-slate-900 flex-shrink-0 w-full lg:w-80 xl:w-96 ${mobileShowChat ? "hidden lg:flex" : "flex"}`}>
         <div className="px-4 py-3.5 border-b border-slate-800/60 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-bold text-white">Help Desk</div>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-500 to-amber-800 flex items-center justify-center shadow-sm shadow-amber-900/40">
+                <LifeBuoy size={15} className="text-white"/>
+              </div>
+              <div className="text-sm font-bold text-white">Help Desk</div>
+            </div>
             <div className="flex items-center gap-1">
               {HELPDESK_STATUSES.map(s => (
                 <button key={s} onClick={() => setFilterStatus(filterStatus === s ? "all" : s)} title={s}
@@ -37436,6 +37443,27 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
               ))}
             </div>
           </div>
+          {/* KPI stat row */}
+          {(() => {
+            const openN = scopeTickets.filter(t => t.status === "Open").length;
+            const urgentN = scopeTickets.filter(t => (t.priority === "Urgent" || t.priority === "High") && t.status !== "Closed" && t.status !== "Resolved").length;
+            const breachedN = scopeTickets.filter(t => { const s = ticketSla(t); return s && s.state === "breached"; }).length;
+            const cards = [
+              { label: "Open", value: openN, tone: "text-amber-300" },
+              { label: "Urgent", value: urgentN, tone: "text-orange-300" },
+              { label: "Overdue", value: breachedN, tone: breachedN > 0 ? "text-rose-300" : "text-slate-400" },
+            ];
+            return (
+              <div className="grid grid-cols-3 gap-1.5">
+                {cards.map(c => (
+                  <div key={c.label} className="rounded-xl bg-gradient-to-b from-slate-800/60 to-slate-900/40 border border-slate-700/40 px-2 py-2 text-center">
+                    <div className={`text-lg font-bold leading-none ${c.tone}`}>{c.value}</div>
+                    <div className="text-[9px] uppercase tracking-wide text-slate-500 mt-1">{c.label}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {/* Bucket selector — the main navigation */}
           <div className="flex gap-1 bg-slate-950 rounded-xl p-1">
             {[
@@ -37446,12 +37474,12 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
               <button key={b.key} onClick={() => setBucket(b.key)}
                 className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${bucket === b.key ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
                 {b.label}
-                <span className={`px-1.5 rounded-full text-[10px] ${bucket === b.key ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-500"}`}>{b.count}</span>
+                <span className={`px-1.5 rounded-full text-[10px] ${bucket === b.key ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-500"}`}>{b.count}</span>
               </button>
             ))}
           </div>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tickets…"
-            className="w-full bg-slate-950 border border-slate-700/50 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
+            className="w-full bg-slate-950 border border-slate-700/50 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none transition-colors"/>
           <div className="flex gap-2 flex-wrap">
             <StoreScopeDropdown stores={visibleScopedStores} brands={brands} value={selStore} onChange={setSelStore} className="flex-1 min-w-[140px]"/>
             <SelectDropdown value={filterPriority} onChange={setFilterPriority} className="flex-1 min-w-[100px]">
@@ -37487,7 +37515,7 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
             const assignedPerson = allPeople.find(p => p.id === (ticket.assignedTo || [])[0]);
             return (
               <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setMobileShowChat(true); }}
-                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-amber-600/15" : "hover:bg-slate-800/40"}`}>
                 <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${statusDot(ticket.status)}`}/>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -37499,7 +37527,7 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
                     {brand && <span className="text-xs text-slate-500 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}{store ? ` · ${store.shortName || store.name}` : ""}</span>}
                     {(ticket.assignedTo || []).length === 0
                       ? <Badge label="Unassigned" color="amber"/>
-                      : assignedPerson && <span className="text-xs text-indigo-300">→ {assignedPerson.name}</span>}
+                      : assignedPerson && <span className="text-xs text-amber-300">→ {assignedPerson.name}</span>}
                     {(() => {
                       const sla = ticketSla(ticket);
                       if (!sla) return null;
@@ -37592,7 +37620,7 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
     notifyHelpdeskReply(updated, myId, currentUser?.name);
   };
 
-  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
+  const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-orange-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
 
   return (
     <div className="flex h-[calc(100vh-120px)] min-h-[500px] rounded-2xl overflow-hidden border border-slate-800/60 bg-slate-950">
@@ -37604,7 +37632,7 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
             {myTickets.length > 0 && <div className="text-xs text-slate-500">{myTickets.length} open</div>}
           </div>
           <button onClick={() => { setShowNewForm(true); setActiveTicket(null); setMobileShowChat(true); }}
-            className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-all shadow-md" title="New ticket">
+            className="w-9 h-9 rounded-full bg-amber-700 hover:bg-amber-600 flex items-center justify-center transition-all shadow-md" title="New ticket">
             <Plus size={17} className="text-white"/>
           </button>
         </div>
@@ -37613,12 +37641,12 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
           <button onClick={() => { setBucket("mine"); setActiveTicket(null); }}
             className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${bucket === "mine" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
             Raised by me
-            <span className={`px-1.5 rounded-full text-[10px] ${bucket === "mine" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-500"}`}>{raisedByMe.length}</span>
+            <span className={`px-1.5 rounded-full text-[10px] ${bucket === "mine" ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-500"}`}>{raisedByMe.length}</span>
           </button>
           <button onClick={() => { setBucket("assigned"); setActiveTicket(null); }}
             className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${bucket === "assigned" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}>
             Assigned to me
-            <span className={`px-1.5 rounded-full text-[10px] ${bucket === "assigned" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-500"}`}>{assignedToMe.length}</span>
+            <span className={`px-1.5 rounded-full text-[10px] ${bucket === "assigned" ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-500"}`}>{assignedToMe.length}</span>
           </button>
         </div>
         <div className="flex-1 overflow-y-auto mt-3">
@@ -37635,7 +37663,7 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
             const hasManagerReply = ticket.comments?.some(c => c.authorRole === "manager" || c.authorRole === "owner");
             return (
               <button key={ticket.id} onClick={() => { setActiveTicket(ticket); setShowNewForm(false); setMobileShowChat(true); }}
-                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                className={`w-full flex items-start gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-amber-600/15" : "hover:bg-slate-800/40"}`}>
                 <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${statusDot(ticket.status)}`}/>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -37648,7 +37676,7 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
                   <div className="text-xs text-slate-500 truncate">
                     {lastComment ? `${lastComment.author === currentUser.name ? "You" : lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
                   </div>
-                  {hasManagerReply && <div className="text-xs text-indigo-400 mt-1 flex items-center gap-1"><MessageSquare size={10}/> Manager replied</div>}
+                  {hasManagerReply && <div className="text-xs text-amber-400 mt-1 flex items-center gap-1"><MessageSquare size={10}/> Manager replied</div>}
                 </div>
               </button>
             );
@@ -37936,11 +37964,11 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-2">
         {threadMsgs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center px-6">
-            <div className="w-16 h-16 rounded-2xl bg-indigo-600/15 flex items-center justify-center mb-4">
-              <MessageSquare size={28} className="text-indigo-400"/>
+            <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-500/20 to-amber-800/20 border border-amber-700/30 flex items-center justify-center mb-4 shadow-lg shadow-amber-900/20">
+              <MessageSquare size={32} className="text-amber-400"/>
             </div>
-            <div className="text-base font-bold text-slate-200">No messages yet</div>
-            <div className="text-sm text-slate-500 mt-1">Say hello — your first message starts the thread.</div>
+            <div className="text-base font-bold text-slate-100">Start the conversation</div>
+            <div className="text-sm text-slate-500 mt-1 max-w-xs">Send the first message — your team gets notified right away.</div>
           </div>
         )}
         {grouped.map((item, idx) => {
@@ -37978,9 +38006,9 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
                     <textarea value={editText} onChange={e => setEditText(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(); } if (e.key === "Escape") { setEditingId(null); } }}
                       rows={2} autoFocus
-                      className="bg-slate-800 border border-indigo-500 rounded-xl px-3 py-2 text-sm text-white focus:outline-none resize-none"/>
+                      className="bg-slate-800 border border-amber-500 rounded-xl px-3 py-2 text-sm text-white focus:outline-none resize-none"/>
                     <div className="flex items-center gap-2 text-xs">
-                      <button onClick={saveEdit} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold">Save</button>
+                      <button onClick={saveEdit} className="px-2.5 py-1 rounded-lg bg-amber-700 text-white font-semibold">Save</button>
                       <button onClick={() => { setEditingId(null); setEditText(""); }} className="px-2.5 py-1 rounded-lg bg-slate-700 text-slate-300">Cancel</button>
                     </div>
                   </div>
@@ -37988,7 +38016,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
                   <div className="group relative">
                     <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
                       isMe
-                        ? "bg-indigo-600 text-white rounded-br-md"
+                        ? "bg-gradient-to-br from-amber-600 to-amber-800 text-white rounded-br-md shadow-sm shadow-amber-900/30"
                         : "bg-slate-800 text-slate-100 rounded-bl-md"
                     }`}>
                       {m.body}
@@ -38003,7 +38031,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
                             );
                             return (
                               <a key={ai} href={a.url} target="_blank" rel="noreferrer"
-                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg ${isMe ? "bg-indigo-700/60 hover:bg-indigo-700" : "bg-slate-700/60 hover:bg-slate-700"}`}>
+                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg ${isMe ? "bg-amber-800/50 hover:bg-amber-800" : "bg-slate-700/60 hover:bg-slate-700"}`}>
                                 <Paperclip size={14} className="flex-shrink-0"/>
                                 <span className="truncate text-xs">{a.name}</span>
                               </a>
@@ -38043,7 +38071,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
                       const mine = (ids || []).includes(myId);
                       return (
                         <button key={emo} onClick={() => onReact?.(m.id, emo, myId)}
-                          className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border ${mine ? "bg-indigo-600/30 border-indigo-500/60" : "bg-slate-800 border-slate-700"}`}>
+                          className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border ${mine ? "bg-amber-600/30 border-amber-500/60" : "bg-slate-800 border-slate-700"}`}>
                           <span>{emo}</span><span className="text-slate-400">{(ids || []).length}</span>
                         </button>
                       );
@@ -38121,14 +38149,14 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             placeholder="Type a message…"
             rows={1}
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-3xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 focus:outline-none resize-none max-h-32 transition-all"
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-3xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/40 focus:outline-none resize-none max-h-32 transition-all"
             style={{ lineHeight: "1.5" }}
           />
           <button
             onClick={handleSend}
             disabled={!body.trim() && pendingFiles.length === 0}
             aria-label="Send message"
-            className="w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0 shadow-lg shadow-indigo-600/20"
+            className="w-12 h-12 rounded-full bg-amber-700 hover:bg-amber-600 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0 shadow-lg shadow-amber-700/20"
           >
             <Send size={18} className="text-white ml-0.5"/>
           </button>
@@ -38249,10 +38277,10 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/60">
           <div>
             <div className="text-sm font-bold text-white">Messages</div>
-            {totalUnread > 0 && <div className="text-xs text-indigo-400">{totalUnread} unread</div>}
+            {totalUnread > 0 && <div className="text-xs text-amber-400">{totalUnread} unread</div>}
           </div>
           <button onClick={() => setNewChat(true)}
-            className="w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-all shadow-md"
+            className="w-9 h-9 rounded-full bg-amber-700 hover:bg-amber-600 flex items-center justify-center transition-all shadow-md"
             title="New chat">
             <Plus size={18} className="text-white"/>
           </button>
@@ -38263,7 +38291,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
           <div className="relative">
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search conversations…"
-              className="w-full bg-slate-950 border border-slate-700/50 rounded-xl pl-3 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none transition-colors"/>
+              className="w-full bg-slate-950 border border-slate-700/50 rounded-xl pl-3 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none transition-colors"/>
           </div>
         </div>
 
@@ -38284,7 +38312,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
             const icon = thread.type === "location" ? "📍" : thread.type === "broadcast" ? "📢" : null;
             return (
               <button key={thread.key} onClick={() => handleThreadClick(thread)}
-                className={`w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-indigo-600/15" : "hover:bg-slate-800/40"}`}>
+                className={`w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-800/60 transition-all text-left ${isActive ? "bg-amber-600/15" : "hover:bg-slate-800/40"}`}>
                 {/* Avatar */}
                 <div className="relative flex-shrink-0">
                   <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold"
@@ -38292,7 +38320,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
                     {icon || av.initials}
                   </div>
                   {unread > 0 && (
-                    <div className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-indigo-500 border-2 border-slate-900 flex items-center justify-center">
+                    <div className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-amber-600 border-2 border-slate-900 flex items-center justify-center">
                       <span className="text-white text-xs font-bold leading-none">{unread > 9 ? "9+" : unread}</span>
                     </div>
                   )}
@@ -38441,7 +38469,7 @@ function CommunicationView({
         // EMP_COMMS_SLIDER_V1: segmented slider (Chat / Help Desk)
         <div className="emp-slider relative flex bg-slate-800 rounded-2xl p-1 mb-4 select-none">
           <div
-            className="absolute top-1 bottom-1 rounded-xl bg-indigo-600 shadow-sm transition-transform duration-200 ease-out"
+            className="absolute top-1 bottom-1 rounded-xl bg-gradient-to-br from-amber-600 to-amber-800 shadow-md shadow-amber-900/30 transition-transform duration-200 ease-out"
             style={{ width: `calc(50% - 0.25rem)`, transform: TABS.findIndex(t => t.key === tab) === 1 ? "translateX(calc(100% + 0.5rem))" : "translateX(0)" }}
           />
           {TABS.map(t => {
@@ -38467,7 +38495,7 @@ function CommunicationView({
             return (
               <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all whitespace-nowrap ${
-                  tab === t.key ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                  tab === t.key ? "bg-amber-700 text-white shadow-sm" : "text-slate-400 hover:text-white"
                 }`}>
                 <TIcon size={13}/>
                 {t.label}
