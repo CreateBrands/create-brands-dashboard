@@ -42,6 +42,7 @@ import {
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
+  subscribeTyping, uploadChatAttachment,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -50,7 +51,7 @@ import {
   insertStoreRole, updateStoreRole, archiveStoreRole, unarchiveStoreRole,
   copyStoreStructure,
   fetchHelpdeskTickets, insertHelpdeskTicket, upsertHelpdeskTicket, removeHelpdeskTicket,
-  fetchInboxMessages, insertInboxMessage, markMessageRead,
+  fetchInboxMessages, insertInboxMessage, markMessageRead, updateInboxMessageFields,
   // Hiring / Onboarding (slice 1)
   fetchApplications, insertApplication, updateApplication, deleteApplication,
   changeApplicationStatus, fetchApplicationStatusHistory,
@@ -177,13 +178,13 @@ import {
   Cloud, Sun, CloudRain, ArrowRight,
   QrCode,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle,
-  Plus, Trash2, Edit, Eye, EyeOff, Download, Upload, RotateCcw,
+  Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
-  LifeBuoy, Inbox, Send, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
+  LifeBuoy, Inbox, Send, Paperclip, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
   Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type
 } from "lucide-react";
@@ -35723,6 +35724,29 @@ function OpsSettingsView({
 
 const HELPDESK_CATEGORIES = ["General","Equipment","IT / Tech","Cleaning","HR","Health & Safety","Stock","Training","Other"];
 const HELPDESK_PRIORITIES  = ["Urgent","High","Normal","Low"];
+
+// SLA targets (hours to first response / resolution expectation) per priority.
+// Used only for a visual badge — surfaces stale open tickets so urgent ones
+// don't rot in the queue. Closed/Resolved tickets never breach.
+const HELPDESK_SLA_HOURS = { Urgent: 2, High: 8, Normal: 24, Low: 72 };
+function ticketSla(ticket) {
+  if (!ticket || ticket.status === "Closed" || ticket.status === "Resolved") return null;
+  const target = HELPDESK_SLA_HOURS[ticket.priority] ?? 24;
+  // "Responded" = at least one non-system comment exists after creation.
+  const hasReply = (ticket.comments || []).some(c => !c.isSystem);
+  const startMs = new Date(ticket.createdAt || Date.now()).getTime();
+  const ageH = (Date.now() - startMs) / 3.6e6;
+  const remaining = target - ageH;
+  if (hasReply) return { state: "responded", ageH };
+  if (remaining <= 0) return { state: "breached", overdueH: Math.abs(remaining), target };
+  if (remaining <= target * 0.25) return { state: "due", remainingH: remaining, target };
+  return { state: "ok", remainingH: remaining, target };
+}
+function fmtDurH(h) {
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))}m`;
+  if (h < 24) return `${Math.round(h)}h`;
+  return `${Math.round(h / 24)}d`;
+}
 const HELPDESK_STATUSES    = ["Open","In Progress","Pending","Resolved","Closed"];
 const HD_STATUS_COLOR = { Open:"red", "In Progress":"amber", Pending:"indigo", Resolved:"emerald", Closed:"slate" };
 const HD_PRIORITY_COLOR = { Urgent:"red", High:"amber", Normal:"indigo", Low:"slate" };
@@ -36857,6 +36881,9 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
   const assignHandler = onAssign || onAssignToggle;
   const [body, setBody]         = useState("");
   const [showInfo, setShowInfo] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef            = useRef(null);
   const bottomRef               = useRef(null);
   const brand = brands.find(b => b.id === ticket.brandId);
   const ticketStore = ticket.storeId ? stores.find(s => s.id === ticket.storeId) : null;
@@ -36868,15 +36895,34 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
 
   const handleSend = () => {
     const text = body.trim();
-    if (!text) return;
+    if (!text && pendingFiles.length === 0) return;
     onSendComment(ticket, {
       id: `cmt-${Date.now()}`,
       author: currentUser.name,
       authorRole: currentUser.role,
       text,
+      attachments: pendingFiles.length ? pendingFiles : null,
       createdAt: new Date().toISOString(),
     });
     setBody("");
+    setPendingFiles([]);
+  };
+
+  const handlePickFiles = async (e) => {
+    const files = [...(e.target.files || [])];
+    if (files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded = [];
+      for (const f of files) {
+        try { uploaded.push(await uploadChatAttachment(f)); }
+        catch (err) { alert(err.message || "Upload failed"); }
+      }
+      setPendingFiles(prev => [...prev, ...uploaded]);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   // Group comments by date
@@ -36971,7 +37017,28 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
                         : isStaff
                           ? "bg-slate-700 text-slate-100 border border-slate-600/60 rounded-bl-md"
                           : "bg-slate-800 text-slate-100 border border-slate-700 rounded-bl-md"
-                    }`}>{c.text}</div>
+                    }`}>
+                      {c.text}
+                      {Array.isArray(c.attachments) && c.attachments.length > 0 && (
+                        <div className={`flex flex-col gap-1.5 ${c.text ? "mt-2" : ""}`}>
+                          {c.attachments.map((a, ai) => {
+                            const isImg = (a.type || "").startsWith("image/");
+                            if (isImg) return (
+                              <a key={ai} href={a.url} target="_blank" rel="noreferrer" className="block">
+                                <img src={a.url} alt={a.name} className="rounded-lg max-w-full max-h-52 object-cover"/>
+                              </a>
+                            );
+                            return (
+                              <a key={ai} href={a.url} target="_blank" rel="noreferrer"
+                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg ${isMe ? "bg-indigo-700/60 hover:bg-indigo-700" : "bg-slate-700/60 hover:bg-slate-700"}`}>
+                                <Paperclip size={14} className="flex-shrink-0"/>
+                                <span className="truncate text-xs">{a.name}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                     <div className={`text-xs text-slate-600 mt-0.5 px-1 ${isMe ? "text-right" : "text-left"}`}>
                       {new Date(c.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
                     </div>
@@ -36990,12 +37057,33 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
             </div>
           ) : (
             <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900/40">
+              {pendingFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2 px-1">
+                  {pendingFiles.map((f, i) => {
+                    const isImg = (f.type || "").startsWith("image/");
+                    return (
+                      <div key={i} className="relative">
+                        {isImg
+                          ? <img src={f.url} alt={f.name} className="w-12 h-12 rounded-lg object-cover border border-slate-700"/>
+                          : <div className="w-12 h-12 rounded-lg bg-slate-800 border border-slate-700 flex flex-col items-center justify-center px-1"><Paperclip size={12} className="text-slate-400"/><span className="text-[7px] text-slate-500 truncate w-full text-center">{f.name}</span></div>}
+                        <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                          className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] leading-none">×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div className="flex items-end gap-2">
+                <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handlePickFiles}/>
+                <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                  className="w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 flex items-center justify-center transition-all flex-shrink-0">
+                  {uploading ? <span className="w-3.5 h-3.5 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"/> : <Paperclip size={15} className="text-slate-300"/>}
+                </button>
                 <textarea value={body} onChange={e => setBody(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                   placeholder="Type a message…" rows={1}
                   className="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none resize-none max-h-28 transition-colors"/>
-                <button onClick={handleSend} disabled={!body.trim()}
+                <button onClick={handleSend} disabled={!body.trim() && pendingFiles.length === 0}
                   className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 flex items-center justify-center transition-all active:scale-95 flex-shrink-0">
                   <Send size={15} className="text-white ml-0.5"/>
                 </button>
@@ -37412,6 +37500,13 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
                     {(ticket.assignedTo || []).length === 0
                       ? <Badge label="Unassigned" color="amber"/>
                       : assignedPerson && <span className="text-xs text-indigo-300">→ {assignedPerson.name}</span>}
+                    {(() => {
+                      const sla = ticketSla(ticket);
+                      if (!sla) return null;
+                      if (sla.state === "breached") return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">SLA breached · {fmtDurH(sla.overdueH)} over</span>;
+                      if (sla.state === "due") return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Due in {fmtDurH(sla.remainingH)}</span>;
+                      return null;
+                    })()}
                   </div>
                   <div className="text-xs text-slate-500 truncate">
                     {lastComment ? `${lastComment.author}: ${lastComment.text}` : ticket.description||"No messages yet"}
@@ -37719,11 +37814,41 @@ function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose })
 }
 
 // ── Chat Thread (the right panel) ─────────────────────────────────────────────
-function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead }) {
+function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead, onReact, onEdit, onDelete }) {
   const [body, setBody] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [reactionFor, setReactionFor] = useState(null); // msgId showing emoji picker
+  const [typingNames, setTypingNames] = useState([]);
+  const [pendingFiles, setPendingFiles] = useState([]); // [{url,name,type,size}]
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
+  const typingCtl = useRef(null);
+  const lastTypingSent = useRef(0);
   const myId    = currentUser.id;
   const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
+
+  // Typing presence — ephemeral broadcast channel per thread (no DB writes).
+  useEffect(() => {
+    setTypingNames([]);
+    const ctl = subscribeTyping(thread.key, {
+      selfId: myId,
+      selfName: currentUser.name,
+      onTypingChange: (names) => setTypingNames(names),
+    });
+    typingCtl.current = ctl;
+    return () => { ctl.unsubscribe(); typingCtl.current = null; };
+  }, [thread.key]);
+
+  // Throttle typing pings to at most one per 1.2s while the user is typing.
+  const pingTyping = () => {
+    const now = Date.now();
+    if (now - lastTypingSent.current > 1200) {
+      lastTypingSent.current = now;
+      typingCtl.current?.sendTyping();
+    }
+  };
 
   // Filter messages for this thread
   const threadMsgs = messages
@@ -37752,7 +37877,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
 
   const handleSend = () => {
     const text = body.trim();
-    if (!text) return;
+    if (!text && pendingFiles.length === 0) return;
     const msg = {
       id:        `msg-${Date.now()}`,
       brandId:   thread.type === "location" ? thread.brandId : null,
@@ -37762,11 +37887,38 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
       toPersonId:   thread.type === "dm" ? thread.personId   : null,
       toPersonName: thread.type === "dm" ? thread.personName : null,
       subject: thread.name, body: text,
+      attachments: pendingFiles.length ? pendingFiles : null,
       readBy:  [myId],
       createdAt: new Date().toISOString(),
     };
     onSend(msg);
     setBody("");
+    setPendingFiles([]);
+  };
+
+  const handlePickFiles = async (e) => {
+    const files = [...(e.target.files || [])];
+    if (files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded = [];
+      for (const f of files) {
+        try { uploaded.push(await uploadChatAttachment(f)); }
+        catch (err) { alert(err.message || "Upload failed"); }
+      }
+      setPendingFiles(prev => [...prev, ...uploaded]);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const REACTION_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀", "🙏"];
+  const startEdit = (m) => { setEditingId(m.id); setEditText(m.body || ""); };
+  const saveEdit = () => {
+    const t = editText.trim();
+    if (t && editingId) onEdit?.(editingId, t);
+    setEditingId(null); setEditText("");
   };
 
   // Group messages by date
@@ -37817,17 +37969,92 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
                   <div className="text-xs font-semibold mb-0.5 px-1" style={{ color: av.bg }}>{m.fromName}</div>
                 )}
                 {/* Bubble */}
-                <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
-                  isMe
-                    ? "bg-indigo-600 text-white rounded-br-md"
-                    : "bg-slate-800 text-slate-100 rounded-bl-md"
-                }`}>
-                  {m.body}
-                </div>
+                {m.deleted ? (
+                  <div className={`px-4 py-2.5 rounded-2xl text-sm italic ${isMe ? "bg-slate-800/60 text-slate-500 rounded-br-md" : "bg-slate-800/40 text-slate-500 rounded-bl-md"}`}>
+                    Message deleted
+                  </div>
+                ) : editingId === m.id ? (
+                  <div className="flex flex-col gap-1.5 w-full">
+                    <textarea value={editText} onChange={e => setEditText(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(); } if (e.key === "Escape") { setEditingId(null); } }}
+                      rows={2} autoFocus
+                      className="bg-slate-800 border border-indigo-500 rounded-xl px-3 py-2 text-sm text-white focus:outline-none resize-none"/>
+                    <div className="flex items-center gap-2 text-xs">
+                      <button onClick={saveEdit} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold">Save</button>
+                      <button onClick={() => { setEditingId(null); setEditText(""); }} className="px-2.5 py-1 rounded-lg bg-slate-700 text-slate-300">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="group relative">
+                    <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
+                      isMe
+                        ? "bg-indigo-600 text-white rounded-br-md"
+                        : "bg-slate-800 text-slate-100 rounded-bl-md"
+                    }`}>
+                      {m.body}
+                      {Array.isArray(m.attachments) && m.attachments.length > 0 && (
+                        <div className={`flex flex-col gap-1.5 ${m.body ? "mt-2" : ""}`}>
+                          {m.attachments.map((a, ai) => {
+                            const isImg = (a.type || "").startsWith("image/");
+                            if (isImg) return (
+                              <a key={ai} href={a.url} target="_blank" rel="noreferrer" className="block">
+                                <img src={a.url} alt={a.name} className="rounded-lg max-w-full max-h-52 object-cover"/>
+                              </a>
+                            );
+                            return (
+                              <a key={ai} href={a.url} target="_blank" rel="noreferrer"
+                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg ${isMe ? "bg-indigo-700/60 hover:bg-indigo-700" : "bg-slate-700/60 hover:bg-slate-700"}`}>
+                                <Paperclip size={14} className="flex-shrink-0"/>
+                                <span className="truncate text-xs">{a.name}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    {/* Hover actions */}
+                    <div className={`absolute top-0 ${isMe ? "left-0 -translate-x-full pl-1" : "right-0 translate-x-full pr-1"} hidden group-hover:flex items-center gap-0.5 h-full`}>
+                      <button onClick={() => setReactionFor(reactionFor === m.id ? null : m.id)} title="React"
+                        className="w-6 h-6 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-xs">😊</button>
+                      {isMe && (
+                        <>
+                          <button onClick={() => startEdit(m)} title="Edit"
+                            className="w-6 h-6 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center"><Pencil size={11} className="text-slate-300"/></button>
+                          <button onClick={() => { if (window.confirm("Delete this message?")) onDelete?.(m.id); }} title="Delete"
+                            className="w-6 h-6 rounded-full bg-slate-800 hover:bg-rose-700 flex items-center justify-center"><Trash2 size={11} className="text-slate-300"/></button>
+                        </>
+                      )}
+                    </div>
+                    {/* Emoji picker */}
+                    {reactionFor === m.id && (
+                      <div className={`absolute z-10 mt-1 ${isMe ? "right-0" : "left-0"} flex gap-1 bg-slate-800 border border-slate-700 rounded-full px-2 py-1 shadow-xl`}>
+                        {REACTION_EMOJIS.map(emo => (
+                          <button key={emo} onClick={() => { onReact?.(m.id, emo, myId); setReactionFor(null); }}
+                            className="text-base hover:scale-125 transition-transform">{emo}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Reactions row */}
+                {m.reactions && Object.keys(m.reactions).length > 0 && (
+                  <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? "justify-end" : "justify-start"}`}>
+                    {Object.entries(m.reactions).map(([emo, ids]) => {
+                      const mine = (ids || []).includes(myId);
+                      return (
+                        <button key={emo} onClick={() => onReact?.(m.id, emo, myId)}
+                          className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border ${mine ? "bg-indigo-600/30 border-indigo-500/60" : "bg-slate-800 border-slate-700"}`}>
+                          <span>{emo}</span><span className="text-slate-400">{(ids || []).length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {/* Timestamp + read receipt */}
                 <div className={`flex items-center gap-1 mt-0.5 px-1 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
                   <span className="text-xs text-slate-600">{fmtChatFull(m.createdAt)}</span>
-                  {isMe && (
+                  {m.editedAt && !m.deleted && <span className="text-xs text-slate-600 italic">· edited</span>}
+                  {isMe && !m.deleted && (
                     <span className="text-xs text-slate-600">
                       {(m.readBy?.length || 0) > 1 ? "✓✓" : "✓"}
                     </span>
@@ -37842,12 +38069,55 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
         <div ref={bottomRef}/>
       </div>
 
+      {/* Typing indicator */}
+      {typingNames.length > 0 && (
+        <div className="flex-shrink-0 px-5 pb-1 -mt-1">
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+            <span className="flex gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: "0ms" }}/>
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: "150ms" }}/>
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: "300ms" }}/>
+            </span>
+            <span>
+              {typingNames.length === 1 ? `${typingNames[0]} is typing…`
+                : typingNames.length === 2 ? `${typingNames[0]} and ${typingNames[1]} are typing…`
+                : `${typingNames.length} people are typing…`}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Input bar */}
       <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900">
+        {/* Pending attachments preview */}
+        {pendingFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2 px-1">
+            {pendingFiles.map((f, i) => {
+              const isImg = (f.type || "").startsWith("image/");
+              return (
+                <div key={i} className="relative group">
+                  {isImg
+                    ? <img src={f.url} alt={f.name} className="w-14 h-14 rounded-lg object-cover border border-slate-700"/>
+                    : <div className="w-14 h-14 rounded-lg bg-slate-800 border border-slate-700 flex flex-col items-center justify-center px-1"><Paperclip size={14} className="text-slate-400"/><span className="text-[8px] text-slate-500 truncate w-full text-center mt-0.5">{f.name}</span></div>}
+                  <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] leading-none">×</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div className="flex items-end gap-2">
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handlePickFiles}/>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            aria-label="Attach file"
+            className="w-12 h-12 rounded-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 flex items-center justify-center transition-all flex-shrink-0">
+            {uploading ? <span className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"/> : <Paperclip size={18} className="text-slate-300"/>}
+          </button>
           <textarea
             value={body}
-            onChange={e => setBody(e.target.value)}
+            onChange={e => { setBody(e.target.value); pingTyping(); }}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             placeholder="Type a message…"
             rows={1}
@@ -37856,7 +38126,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
           />
           <button
             onClick={handleSend}
-            disabled={!body.trim()}
+            disabled={!body.trim() && pendingFiles.length === 0}
             aria-label="Send message"
             className="w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-all active:scale-95 flex-shrink-0 shadow-lg shadow-indigo-600/20"
           >
@@ -37870,7 +38140,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead 
 }
 
 // ── Main InboxView ─────────────────────────────────────────────────────────────
-function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead }) {
+function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead, onReactMessage, onEditMessage, onDeleteMessage }) {
   const [activeThread, setActiveThread] = useState(null);
   const [newChat, setNewChat]           = useState(false);
   const [search, setSearch]             = useState("");
@@ -38088,6 +38358,9 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
               brands={brands}
               onSend={msg => { onSend(msg); }}
               onMarkRead={onMarkRead}
+              onReact={onReactMessage}
+              onEdit={onEditMessage}
+              onDelete={onDeleteMessage}
             />
           </>
         )}
@@ -38111,6 +38384,7 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
 function CommunicationView({
   currentUser, brands, stores = [], opsTeam, users,
   messages, onSend, onMarkRead,
+  onReactMessage, onEditMessage, onDeleteMessage,
   tickets, onAddTicket, onUpdateTicket, onDeleteTicket,
   availability, onAddAvailability, onUpdateAvailability,
   schedules, shiftPresets, onAddSchedule, onDeleteSchedule, onPublishWeek,
@@ -38216,7 +38490,7 @@ function CommunicationView({
             : <HelpdeskManagerView  brands={brands} stores={stores} visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
         )}
         {tab === "chat" && (
-          <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead}/>
+          <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead} onReactMessage={onReactMessage} onEditMessage={onEditMessage} onDeleteMessage={onDeleteMessage}/>
         )}
         {tab === "availability" && (
           isEmployee
@@ -45733,8 +46007,19 @@ export default function App() {
         if (eventType === "INSERT") {
           const m = { id: r.id, brandId: r.brand_id, fromId: r.from_id, fromName: r.from_name,
             toScope: r.to_scope, toBrandId: r.to_brand_id, toPersonId: r.to_person_id,
-            body: r.body, readBy: r.read_by || [], createdAt: r.created_at };
+            body: r.body, readBy: r.read_by || [], attachments: r.attachments || null, createdAt: r.created_at };
           setMessages(ms => ms.some(x => x.id === m.id) ? ms : [m, ...ms]);
+        } else if (eventType === "UPDATE") {
+          // Reactions, edits, soft-deletes, and read receipts arrive as UPDATEs.
+          setMessages(ms => ms.map(x => x.id === r.id ? {
+            ...x,
+            body: r.body,
+            readBy: r.read_by || x.readBy,
+            attachments: r.attachments ?? x.attachments,
+            reactions: r.reactions ?? null,
+            editedAt: r.edited_at ?? null,
+            deleted: r.deleted ?? false,
+          } : x));
         }
       }).subscribe();
     // Safety-net poll as a fallback for any realtime events that get missed.
@@ -46426,6 +46711,31 @@ export default function App() {
   const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
   const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);notifyMessageRecipients(s);}, []);
   const handleMarkRead = useCallback(async(msgId,userId)=>{await markMessageRead(msgId,userId);setMessages(ms=>ms.map(m=>m.id===msgId?{...m,readBy:[...new Set([...(m.readBy||[]),userId])]}:m));}, []);
+  // Reactions: toggle an emoji for the current user on a message.
+  const handleReactMessage = useCallback(async (msgId, emoji, userId) => {
+    let nextReactions = null;
+    setMessages(ms => ms.map(m => {
+      if (m.id !== msgId) return m;
+      const r = { ...(m.reactions || {}) };
+      const users = new Set(r[emoji] || []);
+      if (users.has(userId)) users.delete(userId); else users.add(userId);
+      if (users.size === 0) delete r[emoji]; else r[emoji] = [...users];
+      nextReactions = r;
+      return { ...m, reactions: r };
+    }));
+    try { await updateInboxMessageFields(msgId, { reactions: nextReactions || {} }); } catch (e) { console.error(e); }
+  }, []);
+  // Edit: replace body + stamp editedAt.
+  const handleEditMessage = useCallback(async (msgId, newBody) => {
+    const editedAt = new Date().toISOString();
+    setMessages(ms => ms.map(m => m.id === msgId ? { ...m, body: newBody, editedAt } : m));
+    try { await updateInboxMessageFields(msgId, { body: newBody, editedAt }); } catch (e) { console.error(e); }
+  }, []);
+  // Delete: soft-delete (keeps the bubble as "message deleted").
+  const handleDeleteMessage = useCallback(async (msgId) => {
+    setMessages(ms => ms.map(m => m.id === msgId ? { ...m, deleted: true } : m));
+    try { await updateInboxMessageFields(msgId, { deleted: true }); } catch (e) { console.error(e); }
+  }, []);
 
   // Kiosk guard — all hooks ran above
   if (IS_APPLY) return <ApplyShell />;
@@ -47060,6 +47370,7 @@ export default function App() {
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
+              onReactMessage={handleReactMessage} onEditMessage={handleEditMessage} onDeleteMessage={handleDeleteMessage}
               tickets={hdTickets} onAddTicket={addHdTicket} onUpdateTicket={updateHdTicket} onDeleteTicket={deleteHdTicket}
               availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
               schedules={schedules} shiftPresets={shiftPresets} onAddSchedule={addSchedule} onDeleteSchedule={deleteSchedule} onPublishWeek={handlePublishWeek}

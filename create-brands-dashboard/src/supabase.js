@@ -780,6 +780,23 @@ export async function insertInboxMessage(msg) {
   return dbMsgToApp(data);
 }
 
+// Patch a message's editable fields — used for reactions, edit, and soft-delete.
+// Accepts camelCase keys; maps to snake_case columns. Returns the updated row.
+// NOTE: requires columns reactions (jsonb), edited_at (timestamptz),
+// deleted (boolean) on inbox_messages — see the migration shipped alongside.
+export async function updateInboxMessageFields(id, patch) {
+  if (!id || !patch) return null;
+  const row = {};
+  if (patch.body        !== undefined) row.body       = patch.body;
+  if (patch.reactions   !== undefined) row.reactions  = patch.reactions;
+  if (patch.editedAt    !== undefined) row.edited_at  = patch.editedAt;
+  if (patch.deleted     !== undefined) row.deleted    = patch.deleted;
+  const { data, error } = await supabase
+    .from("inbox_messages").update(row).eq("id", id).select().single();
+  if (error) throw error;
+  return dbMsgToApp(data);
+}
+
 export async function markMessageRead(id, readerId) {
   // UNREAD_FIX_V1: previously this threw when read_by was NULL (NULL.includes),
   // so the read never persisted and the unread badge kept climbing. Now we
@@ -805,6 +822,7 @@ function appMsgToDb(m) {
     to_scope: m.toScope || "location", to_brand_id: m.toBrandId || null,
     to_person_id: m.toPersonId || null, to_person_name: m.toPersonName || null,
     subject: m.subject || "", body: m.body || "", read_by: m.readBy || [],
+    attachments: m.attachments || null,
   };
 }
 function dbMsgToApp(m) {
@@ -814,6 +832,10 @@ function dbMsgToApp(m) {
     toScope: m.to_scope, toBrandId: m.to_brand_id,
     toPersonId: m.to_person_id, toPersonName: m.to_person_name,
     subject: m.subject, body: m.body, readBy: m.read_by || [],
+    attachments: m.attachments || null,
+    reactions: m.reactions || null,
+    editedAt: m.edited_at || null,
+    deleted: m.deleted || false,
     createdAt: m.created_at,
   };
 }
@@ -2017,6 +2039,69 @@ export async function notifyHelpdeskReply(ticket, replierId, replierName) {
       { recipientType: "user", recipientId: id, ...payload },
     ])));
   } catch (e) { console.error("notifyHelpdeskReply failed:", e); }
+}
+
+// ── Typing indicators (chat) ──────────────────────────────────────────────────
+// Ephemeral presence over a Realtime broadcast channel — NO database writes.
+// One channel per thread key. subscribeTyping returns a controller with
+// `sendTyping()` (call on keypress) and `unsubscribe()` (call on cleanup).
+export function subscribeTyping(threadKey, { selfId, selfName, onTypingChange }) {
+  if (!threadKey) return { sendTyping() {}, unsubscribe() {} };
+  const channel = supabase.channel(`typing:${threadKey}`, { config: { broadcast: { self: false } } });
+  const typers = new Map();  // id -> { name, expires }
+  let sweepTimer = null;
+
+  const recompute = () => {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, info] of typers) {
+      if (info.expires <= now) { typers.delete(id); changed = true; }
+    }
+    if (changed || typers.size > 0) {
+      onTypingChange?.([...typers.values()].map(v => v.name));
+    }
+  };
+
+  channel
+    .on("broadcast", { event: "typing" }, ({ payload }) => {
+      if (!payload || payload.id === selfId) return;
+      // each ping keeps the typer "alive" for 3.5s
+      typers.set(payload.id, { name: payload.name || "Someone", expires: Date.now() + 3500 });
+      onTypingChange?.([...typers.values()].map(v => v.name));
+    })
+    .subscribe();
+
+  sweepTimer = setInterval(recompute, 1200);
+
+  return {
+    sendTyping() {
+      channel.send({ type: "broadcast", event: "typing", payload: { id: selfId, name: selfName } });
+    },
+    unsubscribe() {
+      if (sweepTimer) clearInterval(sweepTimer);
+      try { supabase.removeChannel(channel); } catch { /* noop */ }
+    },
+  };
+}
+
+// ── Chat / Helpdesk attachments ───────────────────────────────────────────────
+// Uploads any file type to the public `chat-attachments` bucket and returns
+// { url, name, type, size } for embedding in a message or ticket comment.
+// NOTE: requires a public Storage bucket named `chat-attachments` (create once
+// in the Supabase dashboard; 25 MB file-size limit recommended).
+export async function uploadChatAttachment(file) {
+  if (!file) throw new Error("No file provided");
+  if (!(file instanceof File || file instanceof Blob)) throw new Error("Invalid file");
+  const MAX_BYTES = 25 * 1024 * 1024;  // 25 MB
+  if (file.size > MAX_BYTES) {
+    throw new Error(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 25 MB.`);
+  }
+  const safe = (file.name || "file").replace(/[^a-zA-Z0-9._-]+/g, "_");
+  const path = `${new Date().toISOString().slice(0, 7)}/${Date.now()}_${safe}`;
+  const { error: upErr } = await supabase.storage.from("chat-attachments").upload(path, file, { upsert: false, contentType: file.type || "application/octet-stream" });
+  if (upErr) throw upErr;
+  const { data } = supabase.storage.from("chat-attachments").getPublicUrl(path);
+  return { url: data.publicUrl, name: file.name || safe, type: file.type || "", size: file.size || 0 };
 }
 
 // Trigger a manual flipdish sync from the UI
