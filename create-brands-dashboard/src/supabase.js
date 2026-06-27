@@ -5598,6 +5598,70 @@ export async function fetchListingsAudit({ storeId = null } = {}) {
   }));
 }
 // ===== end GBP_AUDIT_V1 =====
+
+// ===== GBP_COMMAND_V1: advanced command center data =====
+export async function triggerChainSnapshot(body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-chain-snapshot", { body, headers });
+  if (error) throw error;
+  return data;
+}
+
+// Chain-level snapshot history (store_id null rows) for trend charts.
+export async function fetchChainSnapshotHistory({ days = 90 } = {}) {
+  const since = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const { data, error } = await supabase.from("gbp_chain_snapshot")
+    .select("snapshot_date, rating, reviews, impressions_30d, actions_30d, scans_30d, positive_pct, listing_issues, removed_reviews")
+    .is("store_id", null)
+    .gte("snapshot_date", since)
+    .order("snapshot_date", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(r => ({
+    date: r.snapshot_date, rating: r.rating, reviews: r.reviews,
+    impressions: r.impressions_30d, actions: r.actions_30d, scans: r.scans_30d,
+    positivePct: r.positive_pct, issues: r.listing_issues, removed: r.removed_reviews,
+  }));
+}
+
+// Real daily impressions/actions trend (from gbp_performance_daily, has history).
+export async function fetchPerformanceTrend({ days = 60, storeId = null } = {}) {
+  const since = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  let q = supabase.from("gbp_performance_daily")
+    .select("metric_date, impr_maps_desktop, impr_maps_mobile, impr_search_desktop, impr_search_mobile, calls, directions, website_clicks, conversations, bookings, food_orders, menu_clicks")
+    .gte("metric_date", since).limit(20000);
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  const byDate = {};
+  (data || []).forEach(r => {
+    const impr = (r.impr_maps_desktop||0)+(r.impr_maps_mobile||0)+(r.impr_search_desktop||0)+(r.impr_search_mobile||0);
+    const act = (r.calls||0)+(r.directions||0)+(r.website_clicks||0)+(r.conversations||0)+(r.bookings||0)+(r.food_orders||0)+(r.menu_clicks||0);
+    byDate[r.metric_date] = byDate[r.metric_date] || { date: r.metric_date, impressions: 0, actions: 0, foodOrders: 0 };
+    byDate[r.metric_date].impressions += impr;
+    byDate[r.metric_date].actions += act;
+    byDate[r.metric_date].foodOrders += (r.food_orders||0);
+  });
+  return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Daily review-count history for the chain (sum across locations per snapshot).
+export async function fetchReviewCountTrend({ days = 90 } = {}) {
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const { data, error } = await supabase.from("google_review_count_history")
+    .select("total_count, snapshot_at").gte("snapshot_at", since)
+    .order("snapshot_at", { ascending: true }).limit(5000);
+  if (error) throw error;
+  // group by day, sum counts across locations
+  const byDay = {};
+  (data || []).forEach(r => {
+    const d = (r.snapshot_at || "").slice(0, 10);
+    if (!d) return;
+    byDay[d] = (byDay[d] || 0) + (r.total_count || 0);
+  });
+  return Object.entries(byDay).map(([date, total]) => ({ date, total })).sort((a, b) => a.date.localeCompare(b.date));
+}
+// ===== end GBP_COMMAND_V1 =====
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================

@@ -108,6 +108,7 @@ import {
   fetchPerformanceMetrics, triggerPerformanceSync,
   createLocalPosts, fetchPostLog,
   triggerListingsAudit, fetchListingsAudit,
+  triggerChainSnapshot, fetchChainSnapshotHistory, fetchPerformanceTrend, fetchReviewCountTrend,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -16083,98 +16084,131 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
   );
 }
 
-// Chain command-center — full cross-store KPI grid. Its own top-level view.
-// One row per store: rating, reviews, 30d impressions, actions, sentiment,
-// listing issues, removed reviews. Sortable. Plus chain-summary header cards.
+// Chain command-center — advanced multi-section analytics. Sections:
+//  1. Auto-surfaced insights (alerts / outliers / opportunities)
+//  2. Chain KPI summary cards
+//  3. Trend charts (real history where it exists; snapshot-fed otherwise)
+//  4. Conversion analysis (impressions->actions, scans context)
+//  5. Enhanced sortable per-store grid
 function ChainCommandCenter({ stores = [], currentUser }) {
   const [data, setData] = useState(null);
+  const [trends, setTrends] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [snapping, setSnapping] = useState(false);
   const [sortKey, setSortKey] = useState("impressions");
   const [sortDir, setSortDir] = useState("desc");
   const [err, setErr] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setErr(null);
-      try {
-        const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-        const safe = (p) => p.then(v => v).catch(() => null);
-        const [stats, perf, sentiment, deletions, audit, staff, cov, scans] = await Promise.all([
-          safe(fetchReviewStats()),
-          safe(fetchPerformanceMetrics({ from: from30 })),
-          safe(fetchReviewSentiment({ from: from30 })),
-          safe(fetchDeletionSignals({})),
-          safe(fetchListingsAudit({})),
-          safe(fetchStaffLeaderboard({ from: from30 })),
-          safe(fetchInsightsCoverage()),
-          safe(fetchReviewScanStats({ since: new Date(Date.now() - 30 * 864e5).toISOString() })),
-        ]);
-        if (cancelled) return;
+  const loadAll = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+      const safe = (p) => p.then(v => v).catch(() => null);
+      const [stats, perf, sentiment, deletions, audit, staff, cov, scans,
+             perfTrend, snapHist, reviewTrend] = await Promise.all([
+        safe(fetchReviewStats()),
+        safe(fetchPerformanceMetrics({ from: from30 })),
+        safe(fetchReviewSentiment({ from: from30 })),
+        safe(fetchDeletionSignals({})),
+        safe(fetchListingsAudit({})),
+        safe(fetchStaffLeaderboard({ from: from30 })),
+        safe(fetchInsightsCoverage()),
+        safe(fetchReviewScanStats({ since: new Date(Date.now() - 30 * 864e5).toISOString() })),
+        safe(fetchPerformanceTrend({ days: 60 })),
+        safe(fetchChainSnapshotHistory({ days: 90 })),
+        safe(fetchReviewCountTrend({ days: 90 })),
+      ]);
 
-        // index helpers by store
-        const perfByStore = {};
-        (perf?.perStore || []).forEach(s => { perfByStore[s.storeId] = s; });
-        const delByStore = {};
-        (deletions?.signals || []).forEach(s => { delByStore[s.storeId] = s.missing || 0; });
-        const auditByStore = {};
-        (audit || []).forEach(a => { auditByStore[a.storeId] = a.issueCount || 0; });
-        const scansByStore = {};
-        (Array.isArray(scans) ? scans : []).forEach(s => { if (s.storeId) scansByStore[s.storeId] = (scansByStore[s.storeId] || 0) + 1; });
+      const perfByStore = {}; (perf?.perStore || []).forEach(s => { perfByStore[s.storeId] = s; });
+      const delByStore = {}; (deletions?.signals || []).forEach(s => { delByStore[s.storeId] = s.missing || 0; });
+      const auditByStore = {}; (audit || []).forEach(a => { auditByStore[a.storeId] = a.issueCount || 0; });
+      const scansByStore = {}; (Array.isArray(scans) ? scans : []).forEach(s => { if (s.storeId) scansByStore[s.storeId] = (scansByStore[s.storeId] || 0) + 1; });
 
-        // per-store rows from review stats (the spine — every store with reviews)
-        const rows = (stats || []).map(s => {
-          const p = perfByStore[s.storeId] || {};
-          return {
-            storeId: s.storeId,
-            name: stores.find(st => st.id === s.storeId)?.name || s.storeId,
-            rating: s.avg || 0,
-            reviews: s.n || 0,
-            impressions: p.impressions || 0,
-            actions: p.actions || 0,
-            directions: p.directions || 0,
-            foodOrders: p.foodOrders || 0,
-            issues: auditByStore[s.storeId] || 0,
-            removed: delByStore[s.storeId] || 0,
-            scans: scansByStore[s.storeId] || 0,
-          };
-        });
+      const rows = (stats || []).map(s => {
+        const p = perfByStore[s.storeId] || {};
+        const impr = p.impressions || 0, act = p.actions || 0;
+        return {
+          storeId: s.storeId,
+          name: stores.find(st => st.id === s.storeId)?.name || s.storeId,
+          rating: s.avg || 0, reviews: s.n || 0,
+          impressions: impr, actions: act,
+          directions: p.directions || 0, foodOrders: p.foodOrders || 0,
+          convRate: impr > 0 ? act / impr : 0,
+          issues: auditByStore[s.storeId] || 0,
+          removed: delByStore[s.storeId] || 0,
+          scans: scansByStore[s.storeId] || 0,
+        };
+      });
 
-        // chain summary
-        let totN = 0, totW = 0;
-        rows.forEach(r => { totN += r.reviews; totW += r.rating * r.reviews; });
-        const sent = sentiment?.sentiment || {};
-        const sentTotal = (sent.positive || 0) + (sent.neutral || 0) + (sent.negative || 0) + (sent.mixed || 0);
+      let totN = 0, totW = 0; rows.forEach(r => { totN += r.reviews; totW += r.rating * r.reviews; });
+      const chainRating = totN ? totW / totN : null;
+      const sent = sentiment?.sentiment || {};
+      const sentTotal = (sent.positive || 0) + (sent.neutral || 0) + (sent.negative || 0) + (sent.mixed || 0);
+      const totalImpr = perf?.overall?.impressions || 0;
+      const totalAct = perf?.overall?.actions || 0;
 
-        setData({
-          rows,
-          chainRating: totN ? totW / totN : null,
-          totalReviews: totN,
-          totalImpressions: perf?.overall?.impressions || 0,
-          totalActions: perf?.overall?.actions || 0,
-          posPct: sentTotal ? Math.round((sent.positive || 0) / sentTotal * 100) : null,
-          totalIssues: rows.reduce((a, r) => a + r.issues, 0),
-          totalRemoved: rows.reduce((a, r) => a + r.removed, 0),
-          totalScans: rows.reduce((a, r) => a + r.scans, 0),
-          topStaff: (staff || []).slice(0, 5),
-          coverage: cov,
-        });
-      } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
-      finally { if (!cancelled) setLoading(false); }
-    })();
-    return () => { cancelled = true; };
-  }, [stores]);
+      // ── Auto-insights ─────────────────────────────────────────────
+      const insights = [];
+      // Alerts (problems)
+      rows.forEach(r => {
+        if (r.removed >= 3) insights.push({ kind: "alert", store: r.name, text: `${r.removed} reviews removed by Google — check & appeal` });
+        if (r.issues >= 2) insights.push({ kind: "alert", store: r.name, text: `${r.issues} listing issues unresolved` });
+        if (r.rating > 0 && r.rating < 4.0 && r.reviews >= 20) insights.push({ kind: "alert", store: r.name, text: `Rating ${r.rating.toFixed(2)}★ below 4.0 — needs attention` });
+      });
+      // Opportunities (high traffic, low conversion or low collection)
+      const avgConv = rows.filter(r => r.impressions > 50).reduce((a, r, _, arr) => a + r.convRate / arr.length, 0);
+      rows.forEach(r => {
+        if (r.impressions > 200 && r.convRate < avgConv * 0.6 && avgConv > 0)
+          insights.push({ kind: "opp", store: r.name, text: `High visibility but low action rate (${(r.convRate * 100).toFixed(1)}%) — listing may need a stronger CTA` });
+        if (r.impressions > 200 && r.scans === 0)
+          insights.push({ kind: "opp", store: r.name, text: `${r.impressions.toLocaleString()} impressions but 0 review scans — not asking customers` });
+      });
+      // Outliers (best/worst vs chain)
+      if (rows.length >= 3 && chainRating) {
+        const sortedR = [...rows].filter(r => r.reviews >= 10).sort((a, b) => a.rating - b.rating);
+        if (sortedR[0] && sortedR[0].rating < chainRating - 0.3)
+          insights.push({ kind: "outlier", store: sortedR[0].name, text: `Lowest-rated store (${sortedR[0].rating.toFixed(2)}★ vs ${chainRating.toFixed(2)}★ chain avg)` });
+        const sortedI = [...rows].sort((a, b) => b.impressions - a.impressions);
+        if (sortedI[0]) insights.push({ kind: "win", store: sortedI[0].name, text: `Most-discovered store: ${sortedI[0].impressions.toLocaleString()} impressions` });
+      }
 
-  const sortRows = (rows) => {
-    const r = [...rows].sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
-      if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-      return sortDir === "asc" ? av - bv : bv - av;
-    });
-    return r;
+      setData({
+        rows, chainRating, totalReviews: totN,
+        totalImpressions: totalImpr, totalActions: totalAct,
+        chainConv: totalImpr > 0 ? totalAct / totalImpr : 0,
+        posPct: sentTotal ? Math.round((sent.positive || 0) / sentTotal * 100) : null,
+        totalIssues: rows.reduce((a, r) => a + r.issues, 0),
+        totalRemoved: rows.reduce((a, r) => a + r.removed, 0),
+        totalScans: rows.reduce((a, r) => a + r.scans, 0),
+        topStaff: (staff || []).slice(0, 5),
+        problemThemes: (sentiment?.themes || []).filter(t => t.total >= 5 && t.negativeRate >= 0.25),
+        coverage: cov,
+        insights: insights.slice(0, 8),
+      });
+      setTrends({
+        perf: Array.isArray(perfTrend) ? perfTrend : [],
+        snap: Array.isArray(snapHist) ? snapHist : [],
+        reviews: Array.isArray(reviewTrend) ? reviewTrend : [],
+      });
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
   };
+  useEffect(() => { loadAll(); /* eslint-disable-next-line */ }, [stores]);
+
+  const runSnapshot = async () => {
+    setSnapping(true);
+    try { await triggerChainSnapshot(); await loadAll(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setSnapping(false); }
+  };
+
   const setSort = (k) => { if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir("desc"); } };
-  const fmt = (n) => (n || 0).toLocaleString();
+  const sortRows = (rows) => [...rows].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortDir === "asc" ? av - bv : bv - av;
+  });
+  const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString());
 
   const COLS = [
     { k: "name", l: "Store", align: "left" },
@@ -16182,26 +16216,63 @@ function ChainCommandCenter({ stores = [], currentUser }) {
     { k: "reviews", l: "Reviews", align: "right" },
     { k: "impressions", l: "Impr (30d)", align: "right" },
     { k: "actions", l: "Actions", align: "right" },
-    { k: "foodOrders", l: "Food orders", align: "right" },
+    { k: "convRate", l: "Conv %", align: "right" },
     { k: "scans", l: "Scans", align: "right" },
     { k: "issues", l: "Issues", align: "right" },
     { k: "removed", l: "Removed", align: "right" },
   ];
 
+  const fmtDay = (d) => (d || "").slice(5);  // MM-DD
+  const INK = { grid: "#1e293b", axis: "#64748b" };
+
+  const insightStyle = {
+    alert: { dot: "bg-rose-500", text: "text-rose-200", bg: "bg-rose-950/20 border-rose-800/40", label: "Alert" },
+    opp: { dot: "bg-sky-500", text: "text-sky-200", bg: "bg-sky-950/20 border-sky-800/40", label: "Opportunity" },
+    outlier: { dot: "bg-amber-500", text: "text-amber-200", bg: "bg-amber-950/20 border-amber-800/40", label: "Outlier" },
+    win: { dot: "bg-emerald-500", text: "text-emerald-200", bg: "bg-emerald-950/20 border-emerald-800/40", label: "Win" },
+  };
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Globe className="w-5 h-5 text-indigo-400" />
-        <h1 className="text-lg font-bold text-white">Google Command Center</h1>
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Globe className="w-5 h-5 text-indigo-400" />
+          <h1 className="text-lg font-bold text-white">Google Command Center</h1>
+        </div>
+        <button onClick={runSnapshot} disabled={snapping}
+          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+          {snapping ? "Capturing…" : "Capture snapshot"}
+        </button>
       </div>
 
       {err && <div className="text-xs text-rose-400">{err}</div>}
-      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">Loading chain data…</div>}
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">Loading chain analytics…</div>}
 
       {!loading && data && (
         <>
-          {/* chain summary cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {/* ── SECTION 1: Insights ─────────────────────────── */}
+          {data.insights.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">What needs your attention</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {data.insights.map((ins, i) => {
+                  const st = insightStyle[ins.kind] || insightStyle.opp;
+                  return (
+                    <div key={i} className={`flex items-start gap-2.5 rounded-xl p-3 border ${st.bg}`}>
+                      <span className={`w-2 h-2 rounded-full ${st.dot} mt-1.5 flex-shrink-0`} />
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white">{ins.store}</div>
+                        <div className={`text-[11px] ${st.text}`}>{ins.text}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── SECTION 2: KPI summary ──────────────────────── */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-2xl font-bold text-amber-300">{data.chainRating != null ? `${data.chainRating.toFixed(2)}★` : "—"}</div>
               <div className="text-xs text-slate-400">Chain rating</div>
@@ -16210,7 +16281,12 @@ function ChainCommandCenter({ stores = [], currentUser }) {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-2xl font-bold text-white">{fmt(data.totalImpressions)}</div>
               <div className="text-xs text-slate-400">Impressions (30d)</div>
-              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalActions)} actions · {fmt(data.totalScans)} scans</div>
+              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalScans)} scans</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-2xl font-bold text-indigo-300">{(data.chainConv * 100).toFixed(1)}%</div>
+              <div className="text-xs text-slate-400">Conversion</div>
+              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalActions)} actions</div>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-2xl font-bold text-emerald-300">{data.posPct != null ? `${data.posPct}%` : "—"}</div>
@@ -16218,12 +16294,82 @@ function ChainCommandCenter({ stores = [], currentUser }) {
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-2xl font-bold text-white">{fmt(data.totalIssues)}<span className="text-sm text-slate-500"> / {fmt(data.totalRemoved)}</span></div>
-              <div className="text-xs text-slate-400">Listing issues / removed</div>
+              <div className="text-xs text-slate-400">Issues / removed</div>
             </div>
           </div>
 
-          {/* per-store table */}
+          {/* ── SECTION 3: Trends ───────────────────────────── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs font-semibold text-slate-300 mb-3">Daily impressions & actions (60d)</div>
+              {trends?.perf?.length > 1 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <ComposedChart data={trends.perf}>
+                    <CartesianGrid stroke={INK.grid} strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tickFormatter={fmtDay} tick={{ fill: INK.axis, fontSize: 10 }} minTickGap={24} />
+                    <YAxis tick={{ fill: INK.axis, fontSize: 10 }} width={36} />
+                    <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} />
+                    <Bar dataKey="impressions" fill="#6366f1" radius={[2, 2, 0, 0]} />
+                    <Line dataKey="actions" stroke="#34d399" strokeWidth={2} dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <div className="text-[11px] text-slate-600 py-8 text-center">Not enough history yet.</div>}
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs font-semibold text-slate-300 mb-3">Total reviews over time</div>
+              {trends?.reviews?.length > 1 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <ComposedChart data={trends.reviews}>
+                    <CartesianGrid stroke={INK.grid} strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tickFormatter={fmtDay} tick={{ fill: INK.axis, fontSize: 10 }} minTickGap={24} />
+                    <YAxis tick={{ fill: INK.axis, fontSize: 10 }} width={44} domain={["auto", "auto"]} />
+                    <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} />
+                    <Line dataKey="total" stroke="#fbbf24" strokeWidth={2} dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <div className="text-[11px] text-slate-600 py-8 text-center">Review-count history builds from your sync snapshots.</div>}
+            </div>
+          </div>
+
+          {/* rating/sentiment trend from daily snapshot (sparse until it accrues) */}
+          {trends?.snap?.length > 1 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs font-semibold text-slate-300 mb-3">Chain rating & positive sentiment trend</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <ComposedChart data={trends.snap}>
+                  <CartesianGrid stroke={INK.grid} strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tickFormatter={fmtDay} tick={{ fill: INK.axis, fontSize: 10 }} minTickGap={24} />
+                  <YAxis yAxisId="r" domain={[3.5, 5]} tick={{ fill: INK.axis, fontSize: 10 }} width={32} />
+                  <YAxis yAxisId="p" orientation="right" domain={[0, 100]} tick={{ fill: INK.axis, fontSize: 10 }} width={32} />
+                  <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} />
+                  <Line yAxisId="r" dataKey="rating" stroke="#fbbf24" strokeWidth={2} dot={false} name="rating" />
+                  <Line yAxisId="p" dataKey="positivePct" stroke="#34d399" strokeWidth={2} dot={false} name="positive %" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* ── SECTION 4: Conversion scatter (impressions vs actions) ── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <div className="text-xs font-semibold text-slate-300 mb-1">Discovery → action by store</div>
+            <div className="text-[10px] text-slate-600 mb-3">Stores far right with low bars = highly found but converting poorly.</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={sortRows(data.rows).filter(r => r.impressions > 0).slice(0, 24)}>
+                <CartesianGrid stroke={INK.grid} strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fill: INK.axis, fontSize: 9 }} angle={-35} textAnchor="end" height={70} interval={0} />
+                <YAxis yAxisId="i" tick={{ fill: INK.axis, fontSize: 10 }} width={40} />
+                <YAxis yAxisId="c" orientation="right" tick={{ fill: INK.axis, fontSize: 10 }} width={34} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+                <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} />
+                <Bar yAxisId="i" dataKey="impressions" fill="#334155" radius={[2, 2, 0, 0]} />
+                <Line yAxisId="c" dataKey="convRate" stroke="#6366f1" strokeWidth={2} dot={{ r: 2 }} name="conv rate" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* ── SECTION 5: Enhanced store grid ──────────────── */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-slate-800 text-xs font-semibold text-slate-300">All stores</div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -16240,11 +16386,11 @@ function ChainCommandCenter({ stores = [], currentUser }) {
                   {sortRows(data.rows).map(r => (
                     <tr key={r.storeId} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                       <td className="px-3 py-2 text-white font-medium whitespace-nowrap">{r.name}</td>
-                      <td className="px-3 py-2 text-right text-amber-300">{r.rating ? r.rating.toFixed(2) : "—"}</td>
+                      <td className={`px-3 py-2 text-right ${r.rating > 0 && r.rating < 4 ? "text-rose-400" : "text-amber-300"}`}>{r.rating ? r.rating.toFixed(2) : "—"}</td>
                       <td className="px-3 py-2 text-right text-slate-300">{fmt(r.reviews)}</td>
                       <td className="px-3 py-2 text-right text-slate-300">{fmt(r.impressions)}</td>
                       <td className="px-3 py-2 text-right text-slate-300">{fmt(r.actions)}</td>
-                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.foodOrders)}</td>
+                      <td className="px-3 py-2 text-right text-indigo-300">{r.impressions > 0 ? `${(r.convRate * 100).toFixed(1)}%` : "—"}</td>
                       <td className="px-3 py-2 text-right text-sky-300">{r.scans || "—"}</td>
                       <td className={`px-3 py-2 text-right ${r.issues > 0 ? "text-amber-400" : "text-slate-600"}`}>{r.issues || "—"}</td>
                       <td className={`px-3 py-2 text-right ${r.removed > 0 ? "text-rose-400" : "text-slate-600"}`}>{r.removed || "—"}</td>
@@ -16255,20 +16401,34 @@ function ChainCommandCenter({ stores = [], currentUser }) {
             </div>
           </div>
 
-          {/* top staff chain-wide */}
-          {data.topStaff.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-              <div className="text-xs font-semibold text-slate-300 mb-2">Most-praised staff chain-wide (30d)</div>
-              <div className="flex gap-3 flex-wrap">
-                {data.topStaff.map((s, i) => (
-                  <span key={s.name} className="text-xs">
-                    <span className="font-bold text-white">{i + 1}. {s.name}</span>
-                    <span className="text-slate-500"> · {s.mentions}</span>
-                  </span>
-                ))}
+          {/* top staff + problem themes */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {data.topStaff.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <div className="text-xs font-semibold text-slate-300 mb-2">Most-praised staff (30d)</div>
+                <div className="space-y-1.5">
+                  {data.topStaff.map((s, i) => (
+                    <div key={s.name} className="flex items-center justify-between text-xs">
+                      <span className="text-white font-medium">{i + 1}. {s.name}</span>
+                      <span className="text-slate-500">{s.mentions} mentions</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+            {data.problemThemes.length > 0 && (
+              <div className="bg-rose-950/20 border border-rose-800/40 rounded-2xl p-4">
+                <div className="text-xs font-semibold text-rose-200 mb-2">Themes needing attention</div>
+                <div className="flex gap-2 flex-wrap">
+                  {data.problemThemes.map(t => (
+                    <span key={t.theme} className="text-[11px] bg-slate-900 text-rose-300 px-2 py-1 rounded-md">
+                      {t.theme.replace(/_/g, " ")} · {Math.round(t.negativeRate * 100)}% neg
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
           {data.coverage && data.coverage.remaining > 0 && (
             <div className="text-[11px] text-amber-300/70">
