@@ -5408,6 +5408,50 @@ export async function fetchInsightsCoverage() {
     .select("review_id", { count: "exact", head: true });
   return { total: total || 0, done: done || 0, remaining: Math.max(0, (total || 0) - (done || 0)) };
 }
+// Sentiment + theme analysis: aggregates google_review_insights into a sentiment
+// split and a per-theme breakdown (with each theme's sentiment mix, so problem
+// areas surface). Scoped by store and/or date window.
+export async function fetchReviewSentiment({ storeId = null, from = null, to = null } = {}) {
+  let q = supabase.from("google_review_insights")
+    .select("store_id, sentiment, themes, star_rating, create_time")
+    .limit(20000);
+  if (storeId) q = q.eq("store_id", storeId);
+  if (from)    q = q.gte("create_time", from);
+  if (to)      q = q.lte("create_time", to + "T23:59:59");
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const rows = data || [];
+  const sentimentCounts = { positive: 0, neutral: 0, negative: 0, mixed: 0 };
+  // theme -> { theme, total, positive, negative, neutral, mixed }
+  const themeMap = {};
+  let starSum = 0, starN = 0;
+
+  rows.forEach((r) => {
+    const s = r.sentiment;
+    if (s && sentimentCounts[s] != null) sentimentCounts[s] += 1;
+    if (typeof r.star_rating === "number") { starSum += r.star_rating; starN += 1; }
+    (r.themes || []).forEach((theme) => {
+      if (!themeMap[theme]) themeMap[theme] = { theme, total: 0, positive: 0, negative: 0, neutral: 0, mixed: 0 };
+      themeMap[theme].total += 1;
+      if (s && themeMap[theme][s] != null) themeMap[theme][s] += 1;
+    });
+  });
+
+  const themes = Object.values(themeMap)
+    .map((t) => ({
+      ...t,
+      negativeRate: t.total ? (t.negative + t.mixed) / t.total : 0,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  return {
+    total: rows.length,
+    avgStars: starN ? starSum / starN : null,
+    sentiment: sentimentCounts,
+    themes,
+  };
+}
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================

@@ -103,7 +103,7 @@ import {
   deleteInvoice,
   listStoresLite,
   fetchGoogleReviews,
-  fetchStaffLeaderboard, triggerReviewInsights, fetchInsightsCoverage,
+  fetchStaffLeaderboard, triggerReviewInsights, fetchInsightsCoverage, fetchReviewSentiment,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -15340,6 +15340,128 @@ function StaffLeaderboard({ stores = [], storeId = null }) {
   );
 }
 
+// Sentiment & theme analysis — what customers praise vs complain about, per
+// store. Reads pre-extracted google_review_insights. Surfaces problem themes
+// (those skewing negative) so they're actionable, not just descriptive.
+function SentimentAnalysis({ stores = [], storeId = null }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState("90");
+  const [scope, setScope] = useState(storeId || "all");
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const from = period === "all" ? null
+        : new Date(Date.now() - Number(period) * 864e5).toISOString().slice(0, 10);
+      setData(await fetchReviewSentiment({ storeId: scope === "all" ? null : scope, from }));
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [period, scope]);
+
+  const shopStores = (stores || []).filter(s => !s.archivedAt);
+  const THEME_LABEL = {
+    service: "Service", food_quality: "Food quality", wait_time: "Wait time",
+    cleanliness: "Cleanliness", value: "Value", ambience: "Ambience",
+    staff_friendliness: "Staff friendliness", order_accuracy: "Order accuracy",
+    drinks: "Drinks", other: "Other",
+  };
+  const SENT_COLOR = { positive: "bg-emerald-500", neutral: "bg-slate-500", mixed: "bg-amber-500", negative: "bg-rose-500" };
+  const SENT_TEXT  = { positive: "text-emerald-400", neutral: "text-slate-400", mixed: "text-amber-400", negative: "text-rose-400" };
+
+  const s = data?.sentiment || { positive: 0, neutral: 0, negative: 0, mixed: 0 };
+  const sentTotal = s.positive + s.neutral + s.negative + s.mixed;
+  const pct = (n) => sentTotal ? Math.round((n / sentTotal) * 100) : 0;
+  const maxThemeTotal = data?.themes?.length ? data.themes[0].total : 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        {!storeId && (
+          <select value={scope} onChange={e => setScope(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+            <option value="all">All stores</option>
+            {shopStores.map(st => <option key={st.id} value={st.id}>{st.shortName || st.name}</option>)}
+          </select>
+        )}
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5">
+          {[["30", "30 days"], ["90", "90 days"], ["all", "All time"]].map(([k, l]) => (
+            <button key={k} onClick={() => setPeriod(k)}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold ${period === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Loading…</div>}
+
+      {!loading && data && sentTotal === 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">
+          No analysed reviews for this period yet — run “Analyse” on the Staff Leaderboard tab first.
+        </div>
+      )}
+
+      {!loading && data && sentTotal > 0 && (
+        <>
+          {/* Sentiment split */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300">Sentiment ({sentTotal.toLocaleString()} reviews)</span>
+              {data.avgStars != null && <span className="text-xs text-amber-400">{data.avgStars.toFixed(2)}★ avg</span>}
+            </div>
+            <div className="flex h-3 rounded-full overflow-hidden">
+              {["positive", "neutral", "mixed", "negative"].map(k => (
+                s[k] > 0 ? <div key={k} className={SENT_COLOR[k]} style={{ width: `${pct(s[k])}%` }} title={`${k}: ${s[k]}`} /> : null
+              ))}
+            </div>
+            <div className="flex gap-4 flex-wrap text-[11px]">
+              {["positive", "neutral", "mixed", "negative"].map(k => (
+                <span key={k} className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${SENT_COLOR[k]}`} />
+                  <span className={SENT_TEXT[k]}>{k} {pct(s[k])}%</span>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Themes — what's mentioned, and what skews negative */}
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-slate-400 px-1">What customers mention</div>
+            {data.themes.map(t => {
+              const negPct = Math.round(t.negativeRate * 100);
+              const isProblem = t.total >= 5 && t.negativeRate >= 0.25;
+              return (
+                <div key={t.theme} className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-sm font-medium text-white flex items-center gap-2">
+                      {THEME_LABEL[t.theme] || t.theme}
+                      {isProblem && <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded-full font-bold">NEEDS ATTENTION</span>}
+                    </span>
+                    <span className="text-xs text-slate-500">{t.total} mention{t.total === 1 ? "" : "s"}</span>
+                  </div>
+                  {/* sentiment-split bar for this theme */}
+                  <div className="flex h-2 rounded-full overflow-hidden bg-slate-800">
+                    {["positive", "neutral", "mixed", "negative"].map(k => (
+                      t[k] > 0 ? <div key={k} className={SENT_COLOR[k]} style={{ width: `${(t[k] / t.total) * 100}%` }} /> : null
+                    ))}
+                  </div>
+                  {negPct > 0 && (
+                    <div className={`text-[10px] mt-1 ${isProblem ? "text-rose-400" : "text-slate-600"}`}>
+                      {negPct}% negative/mixed
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [view, setView] = useState("reviews");   // reviews | leaderboard
   const [reviews, setReviews] = useState([]);
@@ -15397,7 +15519,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"]].map(([k, l]) => (
+            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"]].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -15424,7 +15546,8 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
       </div>
 
       {view === "leaderboard" && <StaffLeaderboard stores={stores} storeId={storeId} />}
-      {view === "leaderboard" ? null : (<>
+      {view === "sentiment" && <SentimentAnalysis stores={stores} storeId={storeId} />}
+      {view !== "reviews" ? null : (<>
 
       {state?.last_run_at && (
         <div className="text-[11px] text-slate-600">
