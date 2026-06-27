@@ -16304,51 +16304,119 @@ function ChainCommandCenter({ stores = [], currentUser }) {
             </div>
           </div>
 
+          {/* ── SECTION: Best & worst performers ───────────── */}
+          {data.rows.length >= 3 && (() => {
+            const sName = (id) => stores.find(st => st.id === id)?.name || id;
+            const byRating = [...data.rows].filter(r => r.reviews >= 10).sort((a, b) => b.rating - a.rating);
+            const byImpr = [...data.rows].sort((a, b) => b.impressions - a.impressions);
+            const byConv = [...data.rows].filter(r => r.impressions > 50).sort((a, b) => b.convRate - a.convRate);
+            const Leader = ({ title, top, bottom, fmt }) => (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                <div className="text-[11px] font-semibold text-slate-400 mb-2">{title}</div>
+                {top && (
+                  <div className="flex items-center justify-between text-[11px] mb-1">
+                    <span className="text-emerald-300 truncate">▲ {sName(top.storeId)}</span>
+                    <span className="text-white font-semibold flex-shrink-0 ml-2">{fmt(top)}</span>
+                  </div>
+                )}
+                {bottom && bottom.storeId !== top?.storeId && (
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-rose-300 truncate">▼ {sName(bottom.storeId)}</span>
+                    <span className="text-slate-400 flex-shrink-0 ml-2">{fmt(bottom)}</span>
+                  </div>
+                )}
+              </div>
+            );
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <Leader title="Rating (10+ reviews)" top={byRating[0]} bottom={byRating[byRating.length - 1]} fmt={(r) => `${r.rating.toFixed(2)}★`} />
+                <Leader title="Discovery (impressions)" top={byImpr[0]} bottom={byImpr[byImpr.length - 1]} fmt={(r) => r.impressions.toLocaleString()} />
+                <Leader title="Conversion rate" top={byConv[0]} bottom={byConv[byConv.length - 1]} fmt={(r) => `${(r.convRate * 100).toFixed(1)}%`} />
+              </div>
+            );
+          })()}
+
           {/* ── SECTION: SEO Health Score ───────────────────── */}
-          {data.seo?.rows?.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-xs font-semibold text-slate-300">SEO Health Score by store</div>
-                <div className="text-[10px] text-slate-600">
-                  avg {Math.round(data.seo.rows.reduce((a, r) => a + r.score, 0) / data.seo.rows.length)}/100
+          {data.seo?.rows?.length > 0 && (() => {
+            const rows = data.seo.rows;
+            const avg = Math.round(rows.reduce((a, r) => a + r.score, 0) / rows.length);
+            const strong = rows.filter(r => r.score >= 70).length;
+            const moderate = rows.filter(r => r.score >= 45 && r.score < 70).length;
+            const weak = rows.filter(r => r.score < 45).length;
+            // weakest store + its lowest-scoring component, for an actionable nudge
+            const worst = [...rows].sort((a, b) => a.score - b.score)[0];
+            const compName = (c) => {
+              const parts = [
+                ["profile", c.completenessKnown ? c.completeness / 25 : 1],
+                ["review velocity", c.velocity / 20],
+                ["review collection", c.collection / 15],
+                ["engagement", c.engagement / 15],
+              ];
+              return parts.sort((a, b) => a[1] - b[1])[0][0];
+            };
+            const sName = (id) => stores.find(st => st.id === id)?.name || id;
+            return (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-300">SEO Health Score</div>
+                    <div className="text-[10px] text-slate-600">Local-ranking readiness per store</div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-2xl font-bold ${avg >= 70 ? "text-emerald-300" : avg >= 45 ? "text-amber-300" : "text-rose-300"}`}>{avg}</div>
+                    <div className="text-[10px] text-slate-600">chain avg</div>
+                  </div>
                 </div>
-              </div>
-              <div className="text-[10px] text-slate-600 mb-3">
-                Completeness · review prominence · velocity · scan activity · engagement. Higher = better-optimised for local ranking.
-              </div>
-              <div className="space-y-1.5">
-                {data.seo.rows.map(r => {
-                  const sc = r.score;
-                  const tone = sc >= 70 ? "from-emerald-500 to-emerald-400" : sc >= 45 ? "from-amber-500 to-amber-400" : "from-rose-500 to-rose-400";
-                  const txt = sc >= 70 ? "text-emerald-300" : sc >= 45 ? "text-amber-300" : "text-rose-300";
-                  const c = r.components;
-                  return (
-                    <div key={r.storeId} className="bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2.5">
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <span className="text-sm font-medium text-white truncate">{stores.find(st => st.id === r.storeId)?.name || r.storeId}</span>
-                        <span className={`text-lg font-bold ${txt} flex-shrink-0`}>{sc}</span>
-                      </div>
-                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-1.5">
-                        <div className={`h-full bg-gradient-to-r ${tone} rounded-full`} style={{ width: `${sc}%` }} />
-                      </div>
-                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-slate-500">
-                        <span>Profile {c.completenessKnown ? `${c.completeness}/25` : "—"}</span>
-                        <span>Reviews {c.prominence}/25</span>
-                        <span>Velocity {c.velocity}/20 ({c.reviews30}/mo)</span>
-                        <span>Scans {c.collection}/15 ({c.scans30}/mo)</span>
-                        <span>Engage {c.engagement}/15 ({c.convPct}%)</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {data.seo.unmeasured?.length > 0 && (
-                <div className="text-[10px] text-slate-600 mt-3 pt-2 border-t border-slate-800">
-                  Not yet scored (needs extra data): {data.seo.unmeasured.join(" · ")}.
+
+                {/* distribution band */}
+                <div className="flex h-2 rounded-full overflow-hidden mb-1">
+                  {strong > 0 && <div className="bg-emerald-500" style={{ width: `${strong / rows.length * 100}%` }} />}
+                  {moderate > 0 && <div className="bg-amber-500" style={{ width: `${moderate / rows.length * 100}%` }} />}
+                  {weak > 0 && <div className="bg-rose-500" style={{ width: `${weak / rows.length * 100}%` }} />}
                 </div>
-              )}
-            </div>
-          )}
+                <div className="flex gap-3 text-[10px] mb-3">
+                  <span className="text-emerald-400">{strong} strong</span>
+                  <span className="text-amber-400">{moderate} moderate</span>
+                  <span className="text-rose-400">{weak} weak</span>
+                </div>
+
+                {/* top-fix nudge */}
+                {worst && (
+                  <div className="bg-rose-950/20 border-l-2 border-l-rose-500 border border-slate-800 rounded-lg px-3 py-2 mb-3 text-[11px]">
+                    <span className="text-slate-400">Biggest opportunity: </span>
+                    <span className="text-white font-medium">{sName(worst.storeId)}</span>
+                    <span className="text-rose-300"> ({worst.score}) — weakest on {compName(worst.components)}</span>
+                  </div>
+                )}
+
+                {/* compact 2-col store grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                  {rows.map(r => {
+                    const sc = r.score;
+                    const tone = sc >= 70 ? "from-emerald-500 to-emerald-400" : sc >= 45 ? "from-amber-500 to-amber-400" : "from-rose-500 to-rose-400";
+                    const txt = sc >= 70 ? "text-emerald-300" : sc >= 45 ? "text-amber-300" : "text-rose-300";
+                    return (
+                      <div key={r.storeId} className="flex items-center gap-2.5 bg-slate-950/40 border border-slate-800 rounded-lg px-2.5 py-2">
+                        <span className={`text-base font-bold ${txt} w-7 text-right flex-shrink-0`}>{sc}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] font-medium text-white truncate">{sName(r.storeId)}</div>
+                          <div className="h-1 bg-slate-800 rounded-full overflow-hidden mt-1">
+                            <div className={`h-full bg-gradient-to-r ${tone} rounded-full`} style={{ width: `${sc}%` }} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {data.seo.unmeasured?.length > 0 && (
+                  <div className="text-[10px] text-slate-600 mt-3 pt-2 border-t border-slate-800">
+                    Not yet scored: {data.seo.unmeasured.join(" · ")}.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ── SECTION 3: Trends ───────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
