@@ -24953,17 +24953,18 @@ function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, clean
   // now have store_id — filter to the picked store (with fallback for legacy
   // brand-only rows).
   const taskOptions = () => {
-    if (form.type === "checklist") return checklists.map(c => ({ id: c.id, label: `${c.name} (${c.shift})` }));
+    // Filter task options to the selected store (with brand fallback for legacy
+    // rows that only have brandId). Mirrors the department/role/employee scoping
+    // above so the form only offers tasks that belong to the chosen store.
+    const matchesStore = (x) => {
+      if (x.storeId) return x.storeId === form.storeId;
+      return !x.brandId || x.brandId === selectedStore?.brandId; // legacy fallback
+    };
+    if (form.type === "checklist") return checklists.filter(matchesStore).map(c => ({ id: c.id, label: `${c.name} (${c.shift})` }));
     if (form.type === "temp") {
-      return tempUnits
-        .filter(t => {
-          if (t.storeId) return t.storeId === form.storeId;
-          // Legacy temp unit (no storeId yet): fall back to brand match
-          return !t.brandId || t.brandId === selectedStore?.brandId;
-        })
-        .map(t => ({ id: t.id, label: t.name }));
+      return tempUnits.filter(matchesStore).map(t => ({ id: t.id, label: t.name }));
     }
-    if (form.type === "cleaning") return cleaningTasks.map(t => ({ id: t.id, label: `${t.name} — ${t.area}` }));
+    if (form.type === "cleaning") return cleaningTasks.filter(matchesStore).map(t => ({ id: t.id, label: `${t.name} — ${t.area}` }));
     return [{ id: "delivery", label: "Delivery check" }];
   };
 
