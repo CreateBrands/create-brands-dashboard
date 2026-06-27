@@ -19166,6 +19166,104 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
         />
       </div>
 
+      {/* ── Rich visuals: channel mix · top stores · day×hour heatmap ────── */}
+      {totals.revenue > 0 && (() => {
+        const CH = [
+          { key: "revPos",   label: "POS / Till",  color: "#6366f1" },
+          { key: "revUber",  label: "UberEats",    color: "#10b981" },
+          { key: "revDeli",  label: "Deliveroo",   color: "#06b6d4" },
+          { key: "revJe",    label: "Just Eat",    color: "#f59e0b" },
+          { key: "revFda",   label: "Web/App",     color: "#ec4899" },
+          { key: "revKiosk", label: "Kiosk",       color: "#8b5cf6" },
+        ];
+        const channelData = CH.map(c => ({ name: c.label, value: Math.round(totals[c.key] || 0), color: c.color }))
+          .filter(d => d.value > 0);
+        const topStores = [...leaderboard]
+          .filter(r => r.totalRevenue > 0)
+          .sort((a, b) => b.totalRevenue - a.totalRevenue)
+          .slice(0, 8)
+          .map(r => ({ name: (r.store?.name || "").replace(/^Chocoberry /, ""), revenue: Math.round(r.totalRevenue), delta: r.deltaPct }));
+        const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        const heatOrder = [1, 2, 3, 4, 5, 6, 0]; // render Mon-first
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {/* Channel mix donut */}
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
+              <h3 className="text-sm font-bold text-white mb-1">Revenue by channel</h3>
+              <div className="text-[11px] text-slate-500 mb-2">{periodLabel} · all stores</div>
+              <div className="flex items-center gap-3">
+                <ResponsiveContainer width="50%" height={170}>
+                  <PieChart>
+                    <Pie data={channelData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={42} outerRadius={70} paddingAngle={2}>
+                      {channelData.map((d, i) => <Cell key={i} fill={d.color} stroke="none" />)}
+                    </Pie>
+                    <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }}
+                      formatter={(v) => fmtMoney(v)} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="flex-1 space-y-1">
+                  {channelData.sort((a, b) => b.value - a.value).map(d => {
+                    const pct = Math.round(d.value / totals.revenue * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 text-[11px]">
+                        <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: d.color }} />
+                        <span className="text-slate-300 flex-1 truncate">{d.name}</span>
+                        <span className="text-white font-semibold">{pct}%</span>
+                        <span className="text-slate-500 w-16 text-right">{fmtMoney(d.value)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Top stores bar */}
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
+              <h3 className="text-sm font-bold text-white mb-1">Top stores by revenue</h3>
+              <div className="text-[11px] text-slate-500 mb-2">{periodLabel}</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <ComposedChart data={topStores} layout="vertical" margin={{ left: 0, right: 12 }}>
+                  <XAxis type="number" tick={{ fill: "#64748b", fontSize: 9 }} tickFormatter={(v) => `£${(v / 1000).toFixed(0)}k`} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: "#94a3b8", fontSize: 10 }} width={70} />
+                  <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }}
+                    formatter={(v) => fmtMoney(v)} cursor={{ fill: "#1e293b55" }} />
+                  <Bar dataKey="revenue" radius={[0, 3, 3, 0]}>
+                    {topStores.map((s, i) => <Cell key={i} fill={s.delta >= 0 ? "#10b981" : "#f59e0b"} />)}
+                  </Bar>
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Day × hour heatmap (full width) */}
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4 lg:col-span-2">
+              <h3 className="text-sm font-bold text-white mb-1">When orders happen</h3>
+              <div className="text-[11px] text-slate-500 mb-3">Order volume by day & hour · {periodLabel}</div>
+              <div className="overflow-x-auto">
+                <div className="inline-block min-w-full">
+                  <div className="flex gap-0.5 mb-1 pl-9">
+                    {Array.from({ length: 24 }, (_, h) => (
+                      <div key={h} className="w-3.5 text-center text-[7px] text-slate-600">{h % 3 === 0 ? h : ""}</div>
+                    ))}
+                  </div>
+                  {heatOrder.map(dow => (
+                    <div key={dow} className="flex items-center gap-0.5 mb-0.5">
+                      <div className="w-8 text-[9px] text-slate-500 text-right pr-1">{DOW[heatOrder.indexOf(dow)]}</div>
+                      {Array.from({ length: 24 }, (_, h) => {
+                        const v = hourHeatmap[dow]?.[h] || 0;
+                        const intensity = v / maxHourCount;
+                        const bg = v === 0 ? "#1e293b" :
+                          `rgba(99, 102, 241, ${0.15 + intensity * 0.85})`;
+                        return <div key={h} className="w-3.5 h-3.5 rounded-sm" style={{ background: bg }} title={`${DOW[heatOrder.indexOf(dow)]} ${h}:00 — ${v} orders`} />;
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Reconciliation banner: Flipdish vs EOD ───────────────────────── */}
       {reconciliation.eodCount > 0 && (
         <div className={`rounded-2xl border p-3 flex items-center gap-3 flex-wrap ${
