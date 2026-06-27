@@ -374,6 +374,32 @@ const useAccess = () => useContext(AccessContext);
 const StoreScopeContext = createContext({ defaultScope: "all", liveStores: [], resolveInitial: () => "all" });
 const useStoreScope = () => useContext(StoreScopeContext);
 
+// Apply the role's default store scope to a list of already-visible stores,
+// so every module shows the SAME consistent set. When the default is "all"
+// (or "assigned" with no specific stores), returns the list unchanged.
+function useScopedStores(visibleStores) {
+  const { defaultScope } = useStoreScope();
+  return useMemo(() => {
+    const list = visibleStores || [];
+    if (!defaultScope || defaultScope === "all" || defaultScope === "assigned") return list;
+    const ids = new Set(Array.isArray(defaultScope) ? defaultScope : [defaultScope]);
+    // Expand brand: tokens to their stores; keep plain store ids.
+    const expanded = new Set();
+    ids.forEach(tok => {
+      if (typeof tok !== "string") return;
+      if (tok.startsWith("brand:")) {
+        const bid = tok.slice(6);
+        list.forEach(s => { if (s.brandId === bid) expanded.add(s.id); });
+      } else if (!tok.startsWith("entity:")) {
+        expanded.add(tok);
+      }
+    });
+    if (expanded.size === 0) return list;
+    const filtered = list.filter(s => expanded.has(s.id));
+    return filtered.length ? filtered : list; // never blank a module out
+  }, [visibleStores, defaultScope]);
+}
+
 // Per-view store filter hook. Seeds the initial value from the owner-configured
 // default scope, exposes the current value + setter, and a membership test that
 // works for "all" | id | id[]. Drop into any view to make it respect the role
@@ -1517,11 +1543,12 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
   const { user } = useAuth();
 
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -20701,11 +20728,12 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
   const { user } = useAuth();
 
   // Standard store-scope pattern. Owner/HQ default to Owned ownership.
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleScopedStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -21444,11 +21472,12 @@ function EODView({ brands, stores, visibleStoreIds, entries, currentUser, onAddE
 function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const { user } = useAuth();
 
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -24152,11 +24181,12 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   const { user } = useAuth();
 
   // Same store-scope pattern as ComplianceView. Owner/HQ default to "owned".
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -24302,14 +24332,15 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   // visibleStores = the stores this user can see (already filtered upstream
   // via visibleStoreIds passed from App). For owner/HQ this is every active
   // store; for managers it's just their assigned stores.
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
 
-  // Ownership filter — applied on top of allVisibleStores. Default to "owned"
-  // for owner/HQ (the day-to-day operational subset). No-op for managers.
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  // Ownership filter — applied on top of allVisibleStores. Defaults to "all"
+  // so every module shows the same store set; the role default scope governs.
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -24528,11 +24559,12 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, onLog, assignments = [], onSignOff }) {
   const { user } = useAuth();
 
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -24778,11 +24810,12 @@ function CkOrderView({ stores = [], visibleStoreIds = [], currentUser }) {
 function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
   const { user } = useAuth();
 
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -30980,11 +31013,12 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
 function ComplianceView({ brands, stores, visibleStoreIds, assignments, auditTrail }) {
   const { user } = useAuth();
 
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -31082,11 +31116,12 @@ function AuditTrailView({ brands, stores, visibleStoreIds, auditTrail, onClear }
 
   // Standard store-scope pattern (same as every other refactored view).
   // visibleStoreIds is HQ/owner = all, manager = their assigned stores.
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -37682,11 +37717,12 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
   // Store scope (same pattern as other views). Used for: which tickets the
   // user CAN see + which people can be assigned + which stores show in the
   // ticket location chip.
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleScopedStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -39581,11 +39617,12 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   // schedule view — scheduling is inherently per-site, you don't run one
   // rota across multiple stores. Owner/HQ can also use the ownership filter
   // to narrow which stores appear in the picker.
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
@@ -42018,11 +42055,12 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   // Store-first scoping. Owner/HQ get the ownership filter (defaults to
   // Owned). Managers/staff see only their assigned stores; no ownership
   // filter applies because their scope is already correct.
-  const allVisibleStores = useMemo(
+  const allVisibleStoresRaw = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
-  const [ownership, setOwnership] = useState(isHqOrAbove(user.role) ? "owned" : "all");
+  const allVisibleStores = useScopedStores(allVisibleStoresRaw);
+  const [ownership, setOwnership] = useState("all");
   const visibleStores = useMemo(
     () => applyOwnershipFilter(allVisibleStores, ownership, user.role),
     [allVisibleStores, ownership, user.role]
