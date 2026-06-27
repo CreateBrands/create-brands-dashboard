@@ -20380,37 +20380,6 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <AnalysisBlock title="Google Rating">
-          <div className="flex items-center gap-4">
-            <div className="flex flex-col items-center justify-center px-2">
-              <div className="text-3xl font-bold text-amber-400">{ratingAvg != null ? ratingAvg.toFixed(2) : "—"}</div>
-              <div className="text-amber-400 text-sm">{"★".repeat(Math.round(ratingAvg||0))}{"☆".repeat(5-Math.round(ratingAvg||0))}</div>
-              <div className="text-[10px] text-slate-600 mt-1">{totalReviews} reviews · all-time</div>
-            </div>
-            <div className="flex-1 space-y-1">
-              {[5,4,3,2,1].map(star => (
-                <button key={star} onClick={() => openStarDrill(star)}
-                  className="w-full flex items-center gap-2 group" title={`View ${star}★ reviews`}>
-                  <span className="text-[11px] text-slate-500 w-6 text-right">{star}★</span>
-                  <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full ${star>=4?"bg-emerald-500":star===3?"bg-amber-500":"bg-red-500"} group-hover:opacity-80`}
-                      style={{ width: `${(starDist[star]/distMax)*100}%` }}/>
-                  </div>
-                  <span className="text-[11px] text-slate-400 w-8 group-hover:text-white">{starDist[star]}</span>
-                </button>
-              ))}
-              <div className="text-[10px] text-slate-600 pt-1">{period.label} · click a bar for reviews</div>
-              {fiveStarTarget && (
-                <div className="text-[11px] text-emerald-400 pt-1">
-                  +{fiveStarTarget.need} five-star reviews → {fiveStarTarget.target.toFixed(1)}★
-                </div>
-              )}
-            </div>
-          </div>
-        </AnalysisBlock>
-      </div>
-
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2">
           {chart.length === 0 ? (
@@ -20432,24 +20401,54 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
           </ResponsiveContainer>
           )}
         </AnalysisBlock>
-        <AnalysisBlock title="Revenue Split by Brand">
-          <ResponsiveContainer width="100%" height={180}>
-            <PieChart>
-              <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3}>
-                {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
-              </Pie>
-              <Tooltip content={<ChartTooltip/>} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="flex flex-col gap-1.5 mt-2">
-            {pieData.map((d, i) => (
-              <div key={i} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ background: d.color }} /><span className="text-slate-600">{d.name}</span></div>
-                <span className="text-slate-700 font-semibold">{fmtCurrency(d.value)}</span>
+        <div className="flex flex-col gap-6">
+          <AnalysisBlock title="Revenue Split by Brand">
+            <ResponsiveContainer width="100%" height={150}>
+              <PieChart>
+                <Pie data={pieData} cx="50%" cy="50%" innerRadius={42} outerRadius={68} dataKey="value" paddingAngle={3}>
+                  {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip content={<ChartTooltip/>} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="flex flex-col gap-1.5 mt-2">
+              {pieData.map((d, i) => (
+                <div key={i} className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ background: d.color }} /><span className="text-slate-600">{d.name}</span></div>
+                  <span className="text-slate-700 font-semibold">{fmtCurrency(d.value)}</span>
+                </div>
+              ))}
+            </div>
+          </AnalysisBlock>
+          <AnalysisBlock title="Google Rating">
+            <div className="flex items-center gap-4 mb-3">
+              <div className="flex flex-col items-center justify-center px-1">
+                <div className="text-4xl font-bold text-amber-500 leading-none">{ratingAvg != null ? ratingAvg.toFixed(2) : "—"}</div>
+                <div className="text-amber-500 text-base mt-1">{"★".repeat(Math.round(ratingAvg||0))}{"☆".repeat(5-Math.round(ratingAvg||0))}</div>
+                <div className="text-[10px] text-slate-600 mt-1 whitespace-nowrap">{totalReviews} reviews</div>
               </div>
-            ))}
-          </div>
-        </AnalysisBlock>
+              <div className="flex-1 space-y-1.5">
+                {[5,4,3,2,1].map(star => (
+                  <button key={star} onClick={() => openStarDrill(star)}
+                    className="w-full flex items-center gap-2 group" title={`View ${star}★ reviews`}>
+                    <span className="text-[11px] text-slate-500 w-5 text-right">{star}★</span>
+                    <div className="flex-1 h-2.5 bg-slate-700 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${star>=4?"bg-emerald-500":star===3?"bg-amber-500":"bg-rose-500"} group-hover:opacity-80 transition-all`}
+                        style={{ width: `${distMax ? (starDist[star]/distMax)*100 : 0}%` }}/>
+                    </div>
+                    <span className="text-[11px] text-slate-500 w-6 group-hover:text-amber-600 font-medium">{starDist[star]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-600 pt-2 border-t border-slate-700/40">
+              <span>{period.label} · click a bar for reviews</span>
+              {fiveStarTarget && (
+                <span className="text-emerald-600 font-medium">+{fiveStarTarget.need} 5★ → {fiveStarTarget.target.toFixed(1)}★</span>
+              )}
+            </div>
+          </AnalysisBlock>
+        </div>
       </div>
 
       {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).length > 0 && (
