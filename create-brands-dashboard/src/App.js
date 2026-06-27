@@ -15966,7 +15966,8 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
       const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
       // Fire everything in parallel; tolerate individual failures.
       const safe = (p) => p.then(v => v).catch(() => null);
-      const [stats, perf, staff, sentiment, deletions, audit, cov] = await Promise.all([
+      const sinceIso = new Date(Date.now() - 30 * 864e5).toISOString();
+      const [stats, perf, staff, sentiment, deletions, audit, cov, scans] = await Promise.all([
         safe(fetchReviewStats()),
         safe(fetchPerformanceMetrics({ storeId: sid, from: from30 })),
         safe(fetchStaffLeaderboard({ storeId: sid, from: from30 })),
@@ -15974,6 +15975,7 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
         safe(fetchDeletionSignals({ storeId: sid })),
         safe(fetchListingsAudit({ storeId: sid })),
         safe(fetchInsightsCoverage()),
+        safe(fetchReviewScanStats({ since: sinceIso, storeId: sid })),
       ]);
       if (cancelled) return;
 
@@ -15989,6 +15991,7 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
       const missingReviews = (deletions?.signals || []).reduce((s, x) => s + (x.missing || 0), 0);
       const listingIssues = (audit || []).reduce((s, x) => s + (x.issueCount || 0), 0);
       const problemThemes = (sentiment?.themes || []).filter(t => t.total >= 5 && t.negativeRate >= 0.25);
+      const scanCount = Array.isArray(scans) ? scans.length : null;
 
       setD({
         chainAvg, totalReviews: totN,
@@ -15999,6 +16002,7 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
         posPct, sentTotal,
         missingReviews, listingIssues,
         problemThemes,
+        scanCount,
         coverage: cov,
       });
       setLoading(false);
@@ -16039,6 +16043,8 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
         <Card title="Top staff (30d)" value={d.topStaff[0]?.name || "—"}
           sub={d.topStaff[0] ? `${d.topStaff[0].mentions} mentions` : "run Analyse first"}
           onClick={() => onJump?.("leaderboard")} />
+        <Card title="Review scans (30d)" value={fmt(d.scanCount)}
+          sub={d.scanCount ? "QR prompts by staff" : "no scans yet"} accent="text-sky-300" />
       </div>
 
       {d.topStaff.length > 0 && (
@@ -16094,7 +16100,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
       try {
         const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
         const safe = (p) => p.then(v => v).catch(() => null);
-        const [stats, perf, sentiment, deletions, audit, staff, cov] = await Promise.all([
+        const [stats, perf, sentiment, deletions, audit, staff, cov, scans] = await Promise.all([
           safe(fetchReviewStats()),
           safe(fetchPerformanceMetrics({ from: from30 })),
           safe(fetchReviewSentiment({ from: from30 })),
@@ -16102,6 +16108,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
           safe(fetchListingsAudit({})),
           safe(fetchStaffLeaderboard({ from: from30 })),
           safe(fetchInsightsCoverage()),
+          safe(fetchReviewScanStats({ since: new Date(Date.now() - 30 * 864e5).toISOString() })),
         ]);
         if (cancelled) return;
 
@@ -16112,6 +16119,8 @@ function ChainCommandCenter({ stores = [], currentUser }) {
         (deletions?.signals || []).forEach(s => { delByStore[s.storeId] = s.missing || 0; });
         const auditByStore = {};
         (audit || []).forEach(a => { auditByStore[a.storeId] = a.issueCount || 0; });
+        const scansByStore = {};
+        (Array.isArray(scans) ? scans : []).forEach(s => { if (s.storeId) scansByStore[s.storeId] = (scansByStore[s.storeId] || 0) + 1; });
 
         // per-store rows from review stats (the spine — every store with reviews)
         const rows = (stats || []).map(s => {
@@ -16127,6 +16136,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
             foodOrders: p.foodOrders || 0,
             issues: auditByStore[s.storeId] || 0,
             removed: delByStore[s.storeId] || 0,
+            scans: scansByStore[s.storeId] || 0,
           };
         });
 
@@ -16145,6 +16155,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
           posPct: sentTotal ? Math.round((sent.positive || 0) / sentTotal * 100) : null,
           totalIssues: rows.reduce((a, r) => a + r.issues, 0),
           totalRemoved: rows.reduce((a, r) => a + r.removed, 0),
+          totalScans: rows.reduce((a, r) => a + r.scans, 0),
           topStaff: (staff || []).slice(0, 5),
           coverage: cov,
         });
@@ -16172,6 +16183,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
     { k: "impressions", l: "Impr (30d)", align: "right" },
     { k: "actions", l: "Actions", align: "right" },
     { k: "foodOrders", l: "Food orders", align: "right" },
+    { k: "scans", l: "Scans", align: "right" },
     { k: "issues", l: "Issues", align: "right" },
     { k: "removed", l: "Removed", align: "right" },
   ];
@@ -16198,7 +16210,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-2xl font-bold text-white">{fmt(data.totalImpressions)}</div>
               <div className="text-xs text-slate-400">Impressions (30d)</div>
-              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalActions)} actions</div>
+              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalActions)} actions · {fmt(data.totalScans)} scans</div>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-2xl font-bold text-emerald-300">{data.posPct != null ? `${data.posPct}%` : "—"}</div>
@@ -16233,6 +16245,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
                       <td className="px-3 py-2 text-right text-slate-300">{fmt(r.impressions)}</td>
                       <td className="px-3 py-2 text-right text-slate-300">{fmt(r.actions)}</td>
                       <td className="px-3 py-2 text-right text-slate-300">{fmt(r.foodOrders)}</td>
+                      <td className="px-3 py-2 text-right text-sky-300">{r.scans || "—"}</td>
                       <td className={`px-3 py-2 text-right ${r.issues > 0 ? "text-amber-400" : "text-slate-600"}`}>{r.issues || "—"}</td>
                       <td className={`px-3 py-2 text-right ${r.removed > 0 ? "text-rose-400" : "text-slate-600"}`}>{r.removed || "—"}</td>
                     </tr>
