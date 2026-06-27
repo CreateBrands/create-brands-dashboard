@@ -19864,7 +19864,7 @@ function MultiStorePicker({ stores = [], value, onChange, allowAll = true, class
         <ChevronDown size={15} className={`text-slate-500 transition-transform flex-shrink-0 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute z-30 mt-1 right-0 w-64 max-h-80 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
+        <div className="absolute z-30 mt-1 left-0 w-full min-w-[14rem] max-w-[18rem] max-h-80 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
           {allowAll && (
             <button onClick={() => { onChange("all"); }}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-800 ${isAll ? "text-amber-400 font-semibold" : "text-slate-300"}`}>
@@ -45292,7 +45292,9 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   const isHQ = isHqOrAbove(currentUser?.role);
   const myStores = useMemo(
     () => (stores || [])
-      .filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s) && (isHQ || (visibleStoreIds || []).includes(s.id)))
+      // Include facility entities (Central Kitchen, Distribution) too — staff
+      // clock in there as well, so they belong in the Who's Working filter.
+      .filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && (isHQ || (visibleStoreIds || []).includes(s.id)))
       .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
     [stores, isHQ, visibleStoreIds]
   );
