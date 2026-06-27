@@ -22747,39 +22747,59 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
 
             {/* Default store view — shown for ALL roles incl. owner */}
             <div className="rounded-2xl border border-amber-700/30 bg-amber-950/10 px-4 py-3 mb-3">
-              <div className="text-[11px] font-bold text-amber-300 uppercase tracking-widest mb-1">Default store view</div>
-              <div className="text-[11px] text-slate-500 mb-2">Which stores pages open to for this role. Chain Performance always shows all stores. Users can still switch manually — it just won&#39;t persist.</div>
+              <div className="text-[11px] font-bold text-amber-300 uppercase tracking-widest mb-1">Default store &amp; entity view</div>
+              <div className="text-[11px] text-slate-500 mb-2">Which stores and entities pages open to for this role. Chain Performance always shows all stores. Users can still switch manually — it just won&#39;t persist.</div>
               {(() => {
                 const cur = defaultStoreScope?.[selRole] || "all";
                 const isArr = Array.isArray(cur);
                 const set = (v) => onSaveDefaultScope?.(selRole, v);
-                const liveStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
+                const allLive = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
+                // Trading stores vs facility entities (CK / Distribution / franchise ops).
+                const tradingStores = allLive.filter(isShopSite);
+                const facilityEntities = allLive.filter(s => !isShopSite(s));
+                // Brand + Finance entities (Tove etc. as brand-level scope, Finance as a module).
+                const brandEntities = (brands || []).filter(b => !b.archivedAt).map(b => ({ id: `brand:${b.id}`, name: b.name, kind: "brand" }));
+                const financeEntity = { id: "entity:finance", name: "Finance", kind: "module" };
                 const selSet = new Set(isArr ? cur : []);
-                const toggleStore = (id) => {
+                const toggle = (id) => {
                   const next = new Set(selSet);
                   if (next.has(id)) next.delete(id); else next.add(id);
                   const arr = [...next];
                   set(arr.length === 0 ? "all" : arr);
                 };
+                const chip = (id, label) => {
+                  const on = selSet.has(id);
+                  return (
+                    <button key={id} onClick={()=>toggle(id)}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-medium border ${on ? "bg-amber-700 text-white border-amber-600" : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"}`}>
+                      {label}
+                    </button>
+                  );
+                };
                 return (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <button onClick={()=>set("all")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="all"?"bg-slate-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>All stores</button>
                       <button onClick={()=>set("assigned")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="assigned"?"bg-amber-700 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>Their assigned stores</button>
-                      <span className="text-[11px] text-slate-500">or pick specific stores below:</span>
+                      <span className="text-[11px] text-slate-500">or pick specific below:</span>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {liveStores.map(s => {
-                        const on = selSet.has(s.id);
-                        return (
-                          <button key={s.id} onClick={()=>toggleStore(s.id)}
-                            className={`px-2 py-1 rounded-lg text-[11px] font-medium border ${on ? "bg-amber-700 text-white border-amber-600" : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"}`}>
-                            {s.shortName||s.name}
-                          </button>
-                        );
-                      })}
+                    <div>
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Trading stores</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {tradingStores.map(s => chip(s.id, s.shortName || s.name))}
+                      </div>
                     </div>
-                    {isArr && cur.length > 0 && <div className="text-[10px] text-amber-300">{cur.length} store{cur.length>1?"s":""} selected as the default view.</div>}
+                    {(facilityEntities.length > 0 || brandEntities.length > 0) && (
+                      <div>
+                        <div className="text-[10px] font-bold text-amber-400/70 uppercase tracking-widest mb-1.5">Other entities</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {facilityEntities.map(s => chip(s.id, s.shortName || s.name))}
+                          {brandEntities.map(b => chip(b.id, b.name))}
+                          {chip(financeEntity.id, financeEntity.name)}
+                        </div>
+                      </div>
+                    )}
+                    {isArr && cur.length > 0 && <div className="text-[10px] text-amber-300">{cur.length} item{cur.length>1?"s":""} selected as the default view.</div>}
                   </div>
                 );
               })()}
@@ -46536,9 +46556,12 @@ export default function App() {
     };
   }, [currentUser, opsTeam, customRoleById]);
 
-  // Resolve the configured default store scope for the current user, from the
-  // role scope the owner set in Access Control. Returns "all", a storeId, or an
-  // array of storeIds. "assigned" → the user's assigned stores (all of them).
+  // Resolve the configured default scope for the current user into store ids.
+  // The config can include store ids, facility stores, brand entities
+  // ("brand:<id>") and module entities ("entity:finance"). Brand selections
+  // expand to that brand's stores; module entities don't map to stores so are
+  // ignored for the store-scope filter (they govern which modules a role lands
+  // on, handled separately by access permissions).
   const resolveDefaultStoreId = useCallback(() => {
     const role = currentUserRole.matrixRole || currentUserRole.builtIn;
     const cfg = defaultStoreScope?.[role] ?? defaultStoreScope?.[currentUserRole.baseRole];
@@ -46547,8 +46570,22 @@ export default function App() {
       const ids = currentUser?.storeIds || [];
       return ids.length ? (ids.length === 1 ? ids[0] : ids) : "all";
     }
-    return cfg; // a specific storeId or an array of ids
-  }, [defaultStoreScope, currentUserRole, currentUser]);
+    const arr = Array.isArray(cfg) ? cfg : [cfg];
+    const storeIds = new Set();
+    arr.forEach(token => {
+      if (typeof token !== "string") return;
+      if (token.startsWith("brand:")) {
+        const bid = token.slice(6);
+        (stores || []).forEach(s => { if (s.brandId === bid && !s.archivedAt) storeIds.add(s.id); });
+      } else if (token.startsWith("entity:")) {
+        // module entity (e.g. finance) — not a store scope, skip for store filter
+      } else {
+        storeIds.add(token); // a store id (trading or facility)
+      }
+    });
+    const list = [...storeIds];
+    return list.length === 0 ? "all" : list.length === 1 ? list[0] : list;
+  }, [defaultStoreScope, currentUserRole, currentUser, stores]);
   // The role app-logic should use everywhere (custom role inherits its base).
   const effectiveRole = currentUserRole.baseRole;
   // Finance-only role: routes to dashboard (base hq_staff) but is scoped to the
