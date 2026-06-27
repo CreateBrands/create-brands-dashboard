@@ -666,13 +666,14 @@ function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = fal
 }
 
 function AnalysisBlock({ title, children, className = "", action }) {
+  const fill = className.includes("flex flex-col");
   return (
     <div className={`rounded-2xl bg-slate-900/80 border border-slate-700/70 overflow-hidden ${className}`}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/70">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/70 flex-shrink-0">
         <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
         {action}
       </div>
-      <div className="p-5">{children}</div>
+      <div className={`p-5 ${fill ? "flex-1 flex flex-col min-h-0" : ""}`}>{children}</div>
     </div>
   );
 }
@@ -20380,14 +20381,15 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+        <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2 flex flex-col">
           {chart.length === 0 ? (
-            <div className="h-[220px] flex items-center justify-center text-xs text-slate-600">
+            <div className="flex-1 min-h-[260px] flex items-center justify-center text-xs text-slate-600">
               {loading ? "Loading…" : isSingleDay ? "No sales recorded for this day yet" : "No data for this period"}
             </div>
           ) : (
-          <ResponsiveContainer width="100%" height={220}>
+          <div className="flex-1 min-h-[260px]">
+          <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
               <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
@@ -20399,6 +20401,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
               {!isSingleDay && <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />}
             </ComposedChart>
           </ResponsiveContainer>
+          </div>
           )}
         </AnalysisBlock>
         <div className="flex flex-col gap-6">
