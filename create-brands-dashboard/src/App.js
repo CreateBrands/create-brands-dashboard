@@ -44701,12 +44701,11 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     const m = memberOf(item.employeeId);
     const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
     const accent = m?.color || "#844429";
-    const initial = (name[0] || "?").toUpperCase();
     return (
       <div
         onClick={clickable ? () => setEditPunch(item) : undefined}
         className={`flex items-center gap-3 px-2 py-2.5 rounded-xl ${clickable ? "hover:bg-slate-800/60 cursor-pointer" : "hover:bg-slate-800/40"}`}>
-        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: accent }}>{initial}</div>
+        <Avatar photoUrl={m?.photoUrl} name={name} color={accent} size={40} rounded="full" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-white truncate">{name}</div>
         </div>
@@ -44731,10 +44730,9 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       // Schedule row, not a punch — show name + scheduled start, not clickable.
       const m = memberOf(item.employeeId);
       const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}` : "—");
-      const initial = (name[0] || "?").toUpperCase();
       return (
         <div key={item.id} className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/40">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: m?.color || "#844429" }}>{initial}</div>
+          <Avatar photoUrl={m?.photoUrl} name={name} color={m?.color || "#844429"} size={40} rounded="full" />
           <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{name}</div></div>
           <div className="text-right flex-shrink-0 text-xs tabular-nums text-slate-400">scheduled {item.startTime}</div>
         </div>
