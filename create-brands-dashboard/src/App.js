@@ -107,6 +107,7 @@ import {
   fetchDeletionSignals, triggerReviewDeletionCheck,
   fetchPerformanceMetrics, triggerPerformanceSync,
   createLocalPosts, fetchPostLog,
+  triggerListingsAudit, fetchListingsAudit,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -15869,6 +15870,87 @@ function LocalPostsComposer({ stores = [], currentUser, storeId = null }) {
   );
 }
 
+// Listings audit — checks each Google listing for completeness/health issues
+// (missing hours, no website/phone/description, marked closed, no holiday hours).
+// Read-only. Helps catch drift that quietly costs covers.
+function ListingsAudit({ stores = [], storeId = null }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [auditing, setAuditing] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try { setRows(await fetchListingsAudit({ storeId: storeId || null })); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const runAudit = async () => {
+    setAuditing(true); setErr(null);
+    try { await triggerListingsAudit(); await load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setAuditing(false); }
+  };
+
+  const storeName = (id) => stores.find(s => s.id === id)?.name || id;
+  const withIssues = rows.filter(r => r.issueCount > 0);
+  const clean = rows.filter(r => r.issueCount === 0);
+  const totalIssues = rows.reduce((s, r) => s + r.issueCount, 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="text-[11px] text-slate-600">Checks each listing for missing hours, website, phone, description, and upcoming holiday hours.</div>
+        <button onClick={runAudit} disabled={auditing}
+          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+          {auditing ? "Auditing…" : "Run audit"}
+        </button>
+      </div>
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Loading…</div>}
+
+      {!loading && rows.length === 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">
+          No audit yet — hit “Run audit” to check all your Google listings.
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <>
+          <div className={`rounded-2xl p-4 border ${totalIssues > 0 ? "bg-amber-950/20 border-amber-800/50" : "bg-emerald-950/20 border-emerald-800/50"}`}>
+            <div className="text-2xl font-bold text-white">{totalIssues}</div>
+            <div className="text-xs text-slate-400">
+              {totalIssues > 0 ? `issue(s) across ${withIssues.length} listing(s) · ${clean.length} clean` : `All ${rows.length} listings look complete`}
+            </div>
+          </div>
+
+          {withIssues.map(r => (
+            <div key={r.locationId} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sm font-medium text-white truncate">{storeName(r.storeId) || r.title}</span>
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full font-bold flex-shrink-0">{r.issueCount} issue{r.issueCount === 1 ? "" : "s"}</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {r.issues.map((iss, i) => (
+                  <span key={i} className="text-[10px] bg-slate-800 text-rose-300 px-2 py-1 rounded-md">{iss}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {clean.length > 0 && (
+            <div className="text-[11px] text-slate-600 px-1">
+              ✓ Clean: {clean.map(r => storeName(r.storeId)).filter(Boolean).join(", ")}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [view, setView] = useState("reviews");   // reviews | leaderboard
   const [reviews, setReviews] = useState([]);
@@ -15926,7 +16008,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"]] : [])].map(([k, l]) => (
+            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"], ["listings", "Listings"]] : [])].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -15957,6 +16039,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
       {view === "deletions" && <DeletionMonitor stores={stores} storeId={storeId} />}
       {view === "discovery" && <PerformancePanel stores={stores} storeId={storeId} />}
       {view === "posts" && (currentUser?.role === "owner" || currentUser?.role === "hq_staff") && <LocalPostsComposer stores={stores} currentUser={currentUser} storeId={storeId} />}
+      {view === "listings" && (currentUser?.role === "owner" || currentUser?.role === "hq_staff") && <ListingsAudit stores={stores} storeId={storeId} />}
       {view !== "reviews" ? null : (<>
 
       {state?.last_run_at && (

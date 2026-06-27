@@ -5574,6 +5574,30 @@ export async function fetchPostLog({ limit = 50 } = {}) {
   return data || [];
 }
 // ===== end GBP_POSTS_V1 =====
+
+// ===== GBP_AUDIT_V1: listings completeness audit =====
+export async function triggerListingsAudit(body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-listings-audit", { body, headers });
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchListingsAudit({ storeId = null } = {}) {
+  let q = supabase.from("gbp_listing_audit").select("*").order("issue_count", { ascending: false });
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    locationId: r.location_id, storeId: r.store_id, title: r.title,
+    hasHours: r.has_hours, hasWebsite: r.has_website, hasPhone: r.has_phone,
+    hasDescription: r.has_description, hasSpecialHours: r.has_special_hours, isOpen: r.is_open,
+    website: r.website, phone: r.phone, issues: r.issues || [], issueCount: r.issue_count,
+    auditedAt: r.audited_at,
+  }));
+}
+// ===== end GBP_AUDIT_V1 =====
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================
