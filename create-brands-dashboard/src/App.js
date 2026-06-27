@@ -32716,9 +32716,11 @@ function OpsTeamView({
   // only see members assigned to a store they can see; HQ/owner see everyone.
   const base = useMemo(() => {
     const all = [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)];
-    if (isHq) return all;
+    // Everyone — including HQ/owner — is scoped to the visible stores so the
+    // grouped list matches the rest of the dashboard. visibleStoreIds already
+    // reflects the role's default store scope.
     const visible = new Set(visibleStoreIds || []);
-    if (visible.size === 0) return [];
+    if (visible.size === 0) return isHq ? all : [];
     return all.filter(m => (m.storeIds || []).some(sid => visible.has(sid)));
   }, [opsTeam, users, isHq, visibleStoreIds]);
 
@@ -32757,12 +32759,13 @@ function OpsTeamView({
       if (!sid) { unassigned.push(m); return; }
       (byStore[sid] = byStore[sid] || []).push(m);
     });
-    const ordered = stores
+    const scopedForGroups = stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt);
+    const ordered = scopedForGroups
       .filter(s => byStore[s.id])
       .map(s => ({ id: s.id, label: `${s.shortName || s.name}`, members: byStore[s.id] }));
     if (unassigned.length) ordered.push({ id: "__none__", label: "No store assigned", members: unassigned });
     return ordered;
-  }, [filtered, stores]);
+  }, [filtered, stores, visibleStoreIds]);
 
   // Filter option lists.
   const storeOpts = useMemo(() => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt), [stores, visibleStoreIds]);
