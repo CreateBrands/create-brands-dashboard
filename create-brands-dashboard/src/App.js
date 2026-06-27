@@ -712,25 +712,14 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
 }
 
 function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false }) {
-  const accents = {
-    brand:   "from-amber-700/20 to-amber-700/5 border-amber-600/30",
-    indigo:  "from-amber-700/20 to-amber-700/5 border-amber-600/30",
-    emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-500/30",
-    amber:   "from-amber-500/20 to-amber-500/5 border-amber-400/30",
-    red:     "from-rose-600/20 to-rose-600/5 border-rose-500/30",
-    sky:     "from-orange-600/20 to-orange-600/5 border-orange-500/30",
-    slate:   "from-slate-700/40 to-slate-700/10 border-slate-700",
-  };
-  const iconColors = { brand: "text-amber-400", indigo: "text-amber-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-rose-400", sky: "text-orange-400", slate: "text-slate-500" };
-  const eff = alert ? "red" : accent;
   return (
-    <div className={`rounded-2xl bg-gradient-to-br ${accents[eff] || accents.brand} border p-5 flex flex-col gap-2`}>
+    <div className="rounded-2xl border border-[#E8DCC6] bg-[#FBF6EC] p-4 flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
-        {Icon && <Icon size={16} className={iconColors[eff] || iconColors.brand} />}
+        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.08em]">{label}</span>
+        {Icon && <Icon size={14} className={alert ? "text-[#B0485A]" : "text-[#B89B7C]"} />}
       </div>
-      <div className="text-2xl font-bold text-white tabular-nums">{value}</div>
-      {sub && <div className="text-xs text-slate-500">{sub}</div>}
+      <div className={`text-[26px] leading-none font-bold tracking-tight tabular-nums mt-0.5 ${alert ? "text-[#B0485A]" : "text-[#3A2E26]"}`}>{value}</div>
+      {sub && <div className="text-xs text-[#9A8770] mt-0.5">{sub}</div>}
     </div>
   );
 }
@@ -769,15 +758,6 @@ function Sparkline({ data, color = "#C9854F", height = 28 }) {
 }
 
 function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null }) {
-  const ACCENTS = {
-    brand:  { icon: "text-amber-400", val: "text-amber-200", ring: "border-amber-600/30 bg-amber-950/15", bar: "#a8743e" },
-    indigo: { icon: "text-amber-400", val: "text-amber-200", ring: "border-amber-600/30 bg-amber-950/15", bar: "#a8743e" },
-    emerald:{ icon: "text-emerald-400", val: "text-emerald-300", ring: "border-emerald-500/30 bg-emerald-950/20", bar: "#10b981" },
-    sky:    { icon: "text-orange-400", val: "text-orange-200", ring: "border-orange-500/30 bg-orange-950/20", bar: "#f97316" },
-    amber:  { icon: "text-amber-400", val: "text-amber-200", ring: "border-amber-500/30 bg-amber-950/20", bar: "#f59e0b" },
-    red:    { icon: "text-rose-400", val: "text-rose-300", ring: "border-rose-500/30 bg-rose-950/20", bar: "#f43f5e" },
-  };
-  const ac = accent && ACCENTS[accent] ? ACCENTS[accent] : ACCENTS.brand;
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
   let deltaEl = null;
@@ -786,31 +766,32 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     const isPositive = invertDelta ? delta < 0 : delta > 0;
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"}`}>
-        {isPositive ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {sign}{delta.toFixed(1)}% vs {prevLabel}
+      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${isPositive ? "text-[#5B7A52]" : "text-[#B0485A]"}`}>
+        {isPositive ? <TrendingUp size={12}/> : <TrendingDown size={12}/>}{sign}{delta.toFixed(1)}%
+        <span className="font-normal text-[#A8957F]">vs {prevLabel}</span>
       </span>
     );
   }
-  const barColor = alert ? "#f43f5e" : ac.bar;
+  // Quiet, uniform card. The accent is a single thin top-edge tint, not a loud
+  // stripe; values are warm ink; only the delta carries colour.
+  const accentBar = alert ? "#B0485A" : "#C9854F";
   return (
-    <div onClick={onClick} className={`relative rounded-2xl border p-4 pl-5 flex flex-col gap-2 overflow-hidden ${onClick ? "cursor-pointer hover:border-amber-500/60 transition-colors" : ""} ${alert ? "bg-rose-950/20 border-rose-500/30" : ac.ring}`}>
-      <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: barColor }} />
+    <div onClick={onClick}
+      className={`relative rounded-2xl border border-[#E8DCC6] bg-[#FBF6EC] p-4 flex flex-col gap-1.5 transition-all ${onClick ? "cursor-pointer hover:border-[#C9854F] hover:shadow-sm" : ""}`}>
       <div className="flex items-center gap-2">
-        {Icon && <Icon size={13} className={alert ? "text-rose-400" : ac.icon} />}
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
-        {onClick && <span className="ml-auto text-[10px] text-slate-500">view ›</span>}
+        {Icon && <Icon size={14} className="text-[#B89B7C]" />}
+        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.08em]">{label}</span>
+        {onClick && <ChevronRight size={13} className="ml-auto text-[#C5B299]" />}
       </div>
-      <div className="flex items-end justify-between gap-2">
-        <div className={`text-xl font-bold ${alert ? "text-rose-400" : ac.val}`}>{currentVal}</div>
+      <div className="flex items-end justify-between gap-2 mt-0.5">
+        <div className="text-[26px] leading-none font-bold text-[#3A2E26] tracking-tight">{currentVal}</div>
         {spark && spark.length >= 2 && <Sparkline data={spark} />}
       </div>
-      {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
-      {deltaEl}
-      {previousVal && (
-        <div className="border-t border-slate-700/60 pt-2 mt-1 text-xs text-slate-500">
-          {prevLabel}: <span className="text-slate-400 font-medium">{previousVal}</span>
-        </div>
-      )}
+      {subCurrent && <div className="text-xs text-[#9A8770] mt-0.5">{subCurrent}</div>}
+      <div className="flex items-center justify-between gap-2 mt-1">
+        {deltaEl || <span />}
+        {previousVal && <span className="text-[11px] text-[#A8957F]">{prevLabel}: <span className="font-medium text-[#8A7866]">{previousVal}</span></span>}
+      </div>
     </div>
   );
 }
@@ -20462,15 +20443,26 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
 
 
   return (
-    <div className="space-y-6">
-      {isHqOrAbove(user.role) && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
-          <button onClick={()=>setAskOpen(o=>!o)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors">
-            <span className="flex items-center gap-2 text-sm font-semibold text-white"><MessageSquare size={16} className="text-amber-400"/> Ask the Data</span>
-            <ChevronDown size={16} className={`text-slate-500 transition-transform ${askOpen?"rotate-180":""}`}/>
+    <div className="space-y-4">
+      {/* Compact top bar: filters + Ask the Data on one row */}
+      <div className="flex flex-wrap items-center gap-2.5">
+        <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
+        <MultiStorePicker stores={allStores} value={storeId} onChange={setStoreId} allowAll={isHQ} className="w-44" />
+        {inProgress && prevPeriod && !loading && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-[#9A8770] bg-[#F3E9D6] border border-[#E8DCC6] rounded-lg px-2.5 py-1.5">
+            <Clock size={11} className="text-[#C9854F]"/>
+            Partial {period.label.toLowerCase()} · vs {prevPeriod.label.toLowerCase()} to {String(Math.floor(nowCutoffMin/60)).padStart(2,"0")}:{String(nowCutoffMin%60).padStart(2,"0")}
+          </span>
+        )}
+        {isHqOrAbove(user.role) && (
+          <button onClick={()=>setAskOpen(o=>!o)} className="ml-auto inline-flex items-center gap-2 text-sm font-semibold text-[#844429] bg-[#FBF6EC] border border-[#E8DCC6] rounded-xl px-3 py-2 hover:border-[#C9854F] transition-colors">
+            <MessageSquare size={15} className="text-[#C9854F]"/> Ask the Data
+            <ChevronDown size={15} className={`text-[#C5B299] transition-transform ${askOpen?"rotate-180":""}`}/>
           </button>
-          {askOpen && <div className="border-t border-slate-800 p-4"><AskDataView/></div>}
-        </div>
+        )}
+      </div>
+      {isHqOrAbove(user.role) && askOpen && (
+        <div className="rounded-2xl border border-[#E8DCC6] bg-[#FBF6EC] p-4"><AskDataView/></div>
       )}
       {drill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
@@ -20498,24 +20490,12 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
           </div>
         </div>
       )}
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 items-center justify-between">
-        <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
-        <MultiStorePicker stores={allStores} value={storeId} onChange={setStoreId} allowAll={isHQ} className="w-52" />
-      </div>
 
-      {err && <div className="text-xs text-rose-400">Couldn't load actuals: {err}</div>}
-      {loading && <div className="text-xs text-slate-500">Loading {period.label.toLowerCase()} actuals…</div>}
-
-      {inProgress && prevPeriod && !loading && (
-        <div className="text-[11px] text-slate-400 bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5 w-fit">
-          <Clock size={11} className="text-amber-400"/>
-          Partial {period.label.toLowerCase()} — comparing running total vs {prevPeriod.label.toLowerCase()} up to {String(Math.floor(nowCutoffMin/60)).padStart(2,"0")}:{String(nowCutoffMin%60).padStart(2,"0")}.
-        </div>
-      )}
+      {err && <div className="text-xs text-rose-500">Couldn't load actuals: {err}</div>}
+      {loading && <div className="text-xs text-[#9A8770]">Loading {period.label.toLowerCase()} actuals…</div>}
 
       {USE_COGS_V2 && dashCogsCoverage != null && dashCogsCoverage < 0.9 && (
-        <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-900/50 rounded-lg px-3 py-1.5 w-fit">
+        <div className="text-[11px] text-[#9A6B2E] bg-[#FBF0DA] border border-[#EAD9B5] rounded-lg px-3 py-1.5 w-fit">
           Prime Cost &amp; Net Margin use recipe-based COGS. Only {(dashCogsCoverage*100).toFixed(0)}% of sales are costed — figures understated until recipes are completed.
         </div>
       )}
@@ -20544,14 +20524,14 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} spark={revSpark} />
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
         <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
@@ -20932,7 +20912,7 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
           COGS, Prime Cost and Net Margin use recipe-based theoretical cost. Only {(cogsCoverage*100).toFixed(0)}% of sales are mapped to costed recipes, so these figures are understated — cost the remaining items in COGS / Recipes to make them accurate.
         </div>
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <ComparisonKPICard label="Net Revenue" current={cur?.netSales} previous={prev?.netSales} format="currency" icon={DollarSign} prevLabel={prevPeriod?.label} />
         <ComparisonKPICard label="Target Progress" current={periodTargets ? (targetProgress || null) : null} previous={null} format="percent" icon={Target} alert={periodTargets && targetProgress>0 && targetProgress<80} />
         <ComparisonKPICard label="Prime Cost %" current={curEffective?.primeCost} previous={prev?.primeCost} format="percent" icon={Activity} invertDelta alert={curEffective && ratios && curEffective.primeCost > ratios.primeCostMax} prevLabel={prevPeriod?.label} />
@@ -24272,7 +24252,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Stores" value={scopedStores.length} sub="In view" icon={MapPin} accent="indigo"/>
         <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub="All stores" icon={ClipboardList} accent="indigo"/>
         <StatCard label="Overdue" value={aggregates.totalOverdue} sub={aggregates.totalOverdue ? "Action needed" : "All on time"} icon={Clock} accent={aggregates.totalOverdue ? "red" : "emerald"} alert={aggregates.totalOverdue > 0}/>
