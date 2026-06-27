@@ -106,6 +106,7 @@ import {
   fetchStaffLeaderboard, triggerReviewInsights, fetchInsightsCoverage, fetchReviewSentiment,
   fetchDeletionSignals, triggerReviewDeletionCheck,
   fetchPerformanceMetrics, triggerPerformanceSync,
+  createLocalPosts, fetchPostLog,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -15678,6 +15679,196 @@ function PerformancePanel({ stores = [], storeId = null }) {
   );
 }
 
+// Local Posts composer — publishes an Update/Offer/Event to one or more Google
+// listings. WRITE-TO-PRODUCTION, so guardrails: no stores pre-selected, a
+// preview, a two-step confirm, and per-store result reporting. A "test on one
+// store" path lets you verify before any bulk publish.
+function LocalPostsComposer({ stores = [], currentUser, storeId = null }) {
+  const [summary, setSummary] = useState("");
+  const [topicType, setTopicType] = useState("STANDARD");
+  const [ctaType, setCtaType] = useState("");
+  const [ctaUrl, setCtaUrl] = useState("");
+  const [mediaUrl, setMediaUrl] = useState("");
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventStart, setEventStart] = useState("");
+  const [eventEnd, setEventEnd] = useState("");
+  const [selected, setSelected] = useState(storeId ? [storeId] : []);   // NONE pre-selected
+  const [confirming, setConfirming] = useState(false);
+  const [posting, setPosting] = useState(false);
+  const [results, setResults] = useState(null);
+  const [log, setLog] = useState([]);
+  const [err, setErr] = useState(null);
+
+  const shopStores = (stores || []).filter(s => !s.archivedAt && s.id);
+  const storeName = (id) => stores.find(s => s.id === id)?.name || id;
+
+  const loadLog = async () => { try { setLog(await fetchPostLog({ limit: 20 })); } catch { /* noop */ } };
+  useEffect(() => { loadLog(); /* eslint-disable-next-line */ }, []);
+
+  const toggle = (id) => setSelected(sel => sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]);
+  const selectAll = () => setSelected(shopStores.map(s => s.id));
+  const clearAll = () => setSelected([]);
+
+  const validationError = () => {
+    if (!summary.trim()) return "Write the post text first.";
+    if (summary.length > 1500) return "Post text is over 1500 characters.";
+    if (selected.length === 0) return "Select at least one store.";
+    if (ctaType && ctaType !== "CALL" && !ctaUrl.trim()) return "Add a URL for the call-to-action button.";
+    if (topicType === "EVENT" && (!eventTitle.trim() || !eventStart)) return "Event posts need a title and start date.";
+    return null;
+  };
+
+  const buildBody = (dryRun) => ({
+    storeIds: selected,
+    summary: summary.trim(),
+    topicType,
+    ...(ctaType ? { cta: { actionType: ctaType, ...(ctaUrl.trim() ? { url: ctaUrl.trim() } : {}) } } : {}),
+    ...(mediaUrl.trim() ? { mediaUrl: mediaUrl.trim() } : {}),
+    ...(topicType === "EVENT" ? { event: { title: eventTitle.trim(), startDate: eventStart, ...(eventEnd ? { endDate: eventEnd } : {}) } } : {}),
+    userId: currentUser?.id || null,
+    dryRun,
+  });
+
+  const publish = async (dryRun) => {
+    const v = validationError();
+    if (v) { setErr(v); return; }
+    setErr(null); setPosting(true); setResults(null); setConfirming(false);
+    try {
+      const res = await createLocalPosts(buildBody(dryRun));
+      setResults(res);
+      await loadLog();
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setPosting(false); }
+  };
+
+  const vErr = validationError();
+  const CTA_OPTIONS = [["", "No button"], ["LEARN_MORE", "Learn more"], ["ORDER", "Order"], ["BOOK", "Book"], ["SHOP", "Shop"], ["SIGN_UP", "Sign up"], ["CALL", "Call"]];
+
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-amber-300/80 bg-amber-950/20 border border-amber-800/40 rounded-xl p-2.5">
+        ⚠️ Posts here publish to your <span className="font-semibold">live Google listings</span> and are visible to customers. Use “Test on one store” first.
+      </div>
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+
+      {/* Composer */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex gap-1.5">
+          {[["STANDARD", "Update"], ["OFFER", "Offer"], ["EVENT", "Event"]].map(([k, l]) => (
+            <button key={k} onClick={() => setTopicType(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${topicType === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
+          ))}
+        </div>
+
+        {topicType === "EVENT" && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input value={eventTitle} onChange={e => setEventTitle(e.target.value)} placeholder="Event title"
+              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white md:col-span-3" />
+            <label className="text-[11px] text-slate-500">Start<input type="date" value={eventStart} onChange={e => setEventStart(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white mt-0.5" /></label>
+            <label className="text-[11px] text-slate-500">End (optional)<input type="date" value={eventEnd} onChange={e => setEventEnd(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white mt-0.5" /></label>
+          </div>
+        )}
+
+        <textarea value={summary} onChange={e => setSummary(e.target.value)} rows={4}
+          placeholder="What do you want to tell customers? (e.g. New summer menu now available across all our cafés!)"
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white resize-y" />
+        <div className="text-[10px] text-slate-600 text-right">{summary.length}/1500</div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <select value={ctaType} onChange={e => setCtaType(e.target.value)}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            {CTA_OPTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          {ctaType && ctaType !== "CALL" && (
+            <input value={ctaUrl} onChange={e => setCtaUrl(e.target.value)} placeholder="Button URL (https://…)"
+              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
+          )}
+        </div>
+        <input value={mediaUrl} onChange={e => setMediaUrl(e.target.value)} placeholder="Image URL (optional, https://…jpg)"
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
+      </div>
+
+      {/* Store selection — nothing pre-selected */}
+      {!storeId && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-300">Post to ({selected.length} selected)</span>
+            <div className="flex gap-2">
+              <button onClick={selectAll} className="text-[11px] text-indigo-400 hover:text-indigo-300">Select all</button>
+              <button onClick={clearAll} className="text-[11px] text-slate-500 hover:text-slate-300">Clear</button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5 max-h-48 overflow-auto">
+            {shopStores.map(s => (
+              <button key={s.id} onClick={() => toggle(s.id)}
+                className={`text-left px-2.5 py-1.5 rounded-lg text-xs border ${selected.includes(s.id) ? "bg-indigo-600/20 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"}`}>
+                {selected.includes(s.id) ? "✓ " : ""}{s.shortName || s.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={() => publish(true)} disabled={posting || !!vErr}
+          className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+          {posting ? "Working…" : "Validate (dry run)"}
+        </button>
+        {!confirming ? (
+          <button onClick={() => { setErr(null); const v = validationError(); if (v) { setErr(v); return; } setConfirming(true); }} disabled={posting || !!vErr}
+            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40">
+            Publish to {selected.length} store{selected.length === 1 ? "" : "s"}…
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 bg-rose-950/30 border border-rose-800/50 rounded-lg px-3 py-1.5">
+            <span className="text-xs text-rose-200">Publish to {selected.length} live listing{selected.length === 1 ? "" : "s"}?</span>
+            <button onClick={() => publish(false)} disabled={posting}
+              className="px-3 py-1 rounded-md bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold">Yes, publish</button>
+            <button onClick={() => setConfirming(false)} className="px-2 py-1 text-xs text-slate-400 hover:text-white">Cancel</button>
+          </div>
+        )}
+        {vErr && <span className="text-[11px] text-slate-600">{vErr}</span>}
+      </div>
+
+      {/* Results */}
+      {results && (
+        <div className={`rounded-2xl p-4 border ${results.failed > 0 ? "bg-rose-950/20 border-rose-800/50" : "bg-emerald-950/20 border-emerald-800/50"}`}>
+          <div className="text-sm font-semibold text-white mb-2">
+            {results.dryRun ? "Dry run — nothing published" : `${results.posted} posted${results.failed ? `, ${results.failed} failed` : ""}`}
+          </div>
+          <div className="space-y-1 max-h-48 overflow-auto">
+            {(results.results || []).map((r, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-300">{storeName(r.storeId)}</span>
+                <span className={r.status === "posted" ? "text-emerald-400" : r.status === "dryrun" ? "text-slate-500" : "text-rose-400"}>
+                  {r.status === "posted" ? "✓ posted" : r.status === "dryrun" ? "would post" : `✗ ${(r.error || "failed").slice(0, 60)}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent post history */}
+      {log.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-semibold text-slate-400 px-1">Recent posts</div>
+          {log.slice(0, 8).map(l => (
+            <div key={l.id} className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-xs text-slate-300 truncate">{l.summary}</div>
+                <div className="text-[10px] text-slate-600">{storeName(l.store_id)} · {l.topic_type} · {new Date(l.created_at).toLocaleDateString("en-GB")}</div>
+              </div>
+              <span className={`text-[10px] flex-shrink-0 ${l.status === "posted" ? "text-emerald-400" : l.status === "dryrun" ? "text-slate-500" : "text-rose-400"}`}>{l.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [view, setView] = useState("reviews");   // reviews | leaderboard
   const [reviews, setReviews] = useState([]);
@@ -15735,7 +15926,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"]].map(([k, l]) => (
+            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"]] : [])].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -15765,6 +15956,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
       {view === "sentiment" && <SentimentAnalysis stores={stores} storeId={storeId} />}
       {view === "deletions" && <DeletionMonitor stores={stores} storeId={storeId} />}
       {view === "discovery" && <PerformancePanel stores={stores} storeId={storeId} />}
+      {view === "posts" && (currentUser?.role === "owner" || currentUser?.role === "hq_staff") && <LocalPostsComposer stores={stores} currentUser={currentUser} storeId={storeId} />}
       {view !== "reviews" ? null : (<>
 
       {state?.last_run_at && (

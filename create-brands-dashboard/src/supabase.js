@@ -5557,6 +5557,23 @@ export async function fetchPerformanceMetrics({ storeId = null, from = null, to 
   };
 }
 // ===== end GBP_PERFORMANCE_V1 =====
+
+// ===== GBP_POSTS_V1: bulk Local Posts to Google listings =====
+export async function createLocalPosts(body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-create-posts", { body, headers });
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchPostLog({ limit = 50 } = {}) {
+  const { data, error } = await supabase.from("gbp_post_log")
+    .select("*").order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+// ===== end GBP_POSTS_V1 =====
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================
