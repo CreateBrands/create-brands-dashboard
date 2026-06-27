@@ -16493,8 +16493,62 @@ function ChainCommandCenter({ stores = [], currentUser }) {
   );
 }
 
+// Collapsible section wrapper — lazy-renders children only once expanded, so
+// stacking many data-fetching panels doesn't fire every request on load.
+function CollapsibleSection({ title, subtitle, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-slate-800/30">
+        <div className="text-left">
+          <div className="text-sm font-semibold text-white">{title}</div>
+          {subtitle && <div className="text-[11px] text-slate-500">{subtitle}</div>}
+        </div>
+        <span className={`text-slate-500 transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
+      </button>
+      {open && <div className="px-4 pb-4 pt-1">{children}</div>}
+    </div>
+  );
+}
+
+// Merged analytics tab: slim overview band at top, then every analytics panel as
+// a collapsible section. Replaces the old Overview/Leaderboard/Sentiment/
+// Deletions/Discovery/Listings tabs. Reuses the existing components unchanged.
+function InsightsTab({ stores, currentUser, storeId, onJump }) {
+  const isOwnerHQ = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+  return (
+    <div className="space-y-3">
+      {/* slim overview summary band */}
+      <ReviewsOverview stores={stores} storeId={storeId} onJump={onJump} />
+
+      <CollapsibleSection title="Staff Leaderboard" subtitle="Most-praised staff from reviews" defaultOpen>
+        <StaffLeaderboard stores={stores} storeId={storeId} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Sentiment & Themes" subtitle="What customers praise vs complain about">
+        <SentimentAnalysis stores={stores} storeId={storeId} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Discovery Metrics" subtitle="Search & Maps impressions, calls, directions, food orders">
+        <PerformancePanel stores={stores} storeId={storeId} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Deleted-Review Monitoring" subtitle="Reviews Google has removed">
+        <DeletionMonitor stores={stores} storeId={storeId} />
+      </CollapsibleSection>
+
+      {isOwnerHQ && (
+        <CollapsibleSection title="Listings Audit" subtitle="Profile completeness & health across stores">
+          <ListingsAudit stores={stores} storeId={storeId} />
+        </CollapsibleSection>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
-  const [view, setView] = useState("overview");   // overview | reviews | leaderboard | sentiment | deletions | discovery | posts | listings
+  const [view, setView] = useState("insights");   // insights | reviews | posts
   const [reviews, setReviews] = useState([]);
   const [filter, setFilter] = useState(compact ? "low" : "all");   // all | low (<=2)
   const [loading, setLoading] = useState(true);
@@ -16550,7 +16604,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["overview", "Overview"], ["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"], ["listings", "Listings"]] : [])].map(([k, l]) => (
+            {[["insights", "Insights"], ["reviews", "Reviews"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"]] : [])].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -16576,13 +16630,8 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
         )}
       </div>
 
-      {view === "overview" && <ReviewsOverview stores={stores} storeId={storeId} onJump={(v) => setView(v)} />}
-      {view === "leaderboard" && <StaffLeaderboard stores={stores} storeId={storeId} />}
-      {view === "sentiment" && <SentimentAnalysis stores={stores} storeId={storeId} />}
-      {view === "deletions" && <DeletionMonitor stores={stores} storeId={storeId} />}
-      {view === "discovery" && <PerformancePanel stores={stores} storeId={storeId} />}
+      {view === "insights" && <InsightsTab stores={stores} currentUser={currentUser} storeId={storeId} onJump={(v) => { if (v === "reviews") setView("reviews"); }} />}
       {view === "posts" && (currentUser?.role === "owner" || currentUser?.role === "hq_staff") && <LocalPostsComposer stores={stores} currentUser={currentUser} storeId={storeId} />}
-      {view === "listings" && (currentUser?.role === "owner" || currentUser?.role === "hq_staff") && <ListingsAudit stores={stores} storeId={storeId} />}
       {view !== "reviews" ? null : (<>
 
       {state?.last_run_at && (
