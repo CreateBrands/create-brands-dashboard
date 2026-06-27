@@ -19786,6 +19786,65 @@ function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], pu
   );
 }
 
+// Multi-select store picker: "All stores", or any subset via checkboxes.
+// value is "all" | string[] (ids). onChange returns the same shape.
+function MultiStorePicker({ stores = [], value, onChange, allowAll = true, className = "" }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+  const isAll = value === "all";
+  const sel = Array.isArray(value) ? value : (isAll ? [] : value ? [value] : []);
+  const selSet = new Set(sel);
+  const label = isAll ? `All stores (${stores.length})`
+    : sel.length === 0 ? "Select stores…"
+    : sel.length === 1 ? (stores.find(s => s.id === sel[0])?.shortName || stores.find(s => s.id === sel[0])?.name || "1 store")
+    : `${sel.length} stores`;
+  const toggle = (id) => {
+    const next = new Set(selSet);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    const arr = [...next];
+    onChange(arr.length === 0 ? (allowAll ? "all" : []) : arr.length === stores.length && allowAll ? "all" : arr);
+  };
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white hover:border-slate-600">
+        <span className="truncate">{label}</span>
+        <ChevronDown size={15} className={`text-slate-500 transition-transform flex-shrink-0 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 right-0 w-64 max-h-80 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
+          {allowAll && (
+            <button onClick={() => { onChange("all"); }}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-800 ${isAll ? "text-amber-400 font-semibold" : "text-slate-300"}`}>
+              <span className={`w-4 h-4 rounded border flex items-center justify-center ${isAll ? "bg-amber-600 border-amber-600" : "border-slate-600"}`}>{isAll && <Check size={11} className="text-white"/>}</span>
+              All stores
+            </button>
+          )}
+          {sel.length > 0 && !isAll && (
+            <button onClick={() => onChange(allowAll ? "all" : [])} className="w-full text-left px-3 py-1.5 text-[11px] text-slate-500 hover:text-white">Clear selection</button>
+          )}
+          <div className="border-t border-slate-800 my-1" />
+          {stores.map(s => {
+            const on = selSet.has(s.id);
+            return (
+              <button key={s.id} onClick={() => toggle(s.id)}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-800 ${on ? "text-white" : "text-slate-300"}`}>
+                <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? "bg-amber-600 border-amber-600" : "border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</span>
+                <span className="truncate">{s.shortName || s.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser, defaultStoreId = "all" }) {
   const { user } = useAuth();
   const isHQ = isHqOrAbove(user.role);
@@ -19806,31 +19865,34 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   // Initial store scope follows the role default configured in Access Control
-  // (resolveDefaultStoreId, passed as defaultStoreId). Managers with no config
-  // still fall back to their first assigned store. "all" is allowed but is only
-  // the default when the owner set the role to "all stores".
+  // (resolveDefaultStoreId, passed as defaultStoreId). Can be "all", a single
+  // id, or an array of ids. Managers with no config fall back to assigned stores.
   const initialStore = (() => {
+    if (Array.isArray(defaultStoreId) && defaultStoreId.length) return defaultStoreId;
     if (defaultStoreId && defaultStoreId !== "all") return defaultStoreId;
     if (!isHQ) return allStores[0]?.id || "all";
     return "all";
   })();
   const [storeId, setStoreId] = useState(initialStore);
-  // Apply the configured default once it resolves (it loads async, so the first
-  // render may predate it). Only steers the INITIAL view — once the user changes
-  // the filter we leave their in-session pick alone.
+  // Apply the configured default once it resolves (loads async).
   const appliedDefaultRef = useRef(false);
   useEffect(() => {
     if (appliedDefaultRef.current) return;
-    if (defaultStoreId && defaultStoreId !== "all" && allStores.some(s => s.id === defaultStoreId)) {
+    if (Array.isArray(defaultStoreId) && defaultStoreId.length) {
+      const valid = defaultStoreId.filter(id => allStores.some(s => s.id === id));
+      if (valid.length) { setStoreId(valid); appliedDefaultRef.current = true; }
+    } else if (defaultStoreId && defaultStoreId !== "all" && allStores.some(s => s.id === defaultStoreId)) {
       setStoreId(defaultStoreId);
       appliedDefaultRef.current = true;
     } else if (defaultStoreId === "all" && isHQ) {
-      appliedDefaultRef.current = true; // explicit "all" default — leave as-is
+      appliedDefaultRef.current = true;
     }
   }, [defaultStoreId, allStores, isHQ]);
   useEffect(() => {
-    if (!isHQ && (storeId === "all" || !allStores.some(s => s.id === storeId)) && allStores.length) {
-      setStoreId(allStores[0].id);
+    if (!isHQ && allStores.length) {
+      const ids = Array.isArray(storeId) ? storeId : (storeId === "all" ? [] : [storeId]);
+      const valid = ids.filter(id => allStores.some(s => s.id === id));
+      if (valid.length === 0) setStoreId(allStores[0].id);
     }
   }, [isHQ, allStores, storeId]);
   const [drill, setDrill] = useState(null);  // {title, columns, rows, footer} | null
@@ -19839,9 +19901,14 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const period = useMemo(() => resolvePeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
   const prevPeriod = useMemo(() => resolvePrevPeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
 
+  // storeId can be "all", a single store id, or an array of ids (multi-select).
+  const selectedIds = useMemo(() => Array.isArray(storeId) ? storeId : (storeId === "all" ? null : [storeId]), [storeId]);
+  // Some features (COGS, Prime Cost, Net Margin) only work for ONE store. This
+  // is the single selected id, or null when "all"/multiple are selected.
+  const singleStoreId = useMemo(() => (selectedIds && selectedIds.length === 1) ? selectedIds[0] : null, [selectedIds]);
   const scopedStores = useMemo(
-    () => storeId === "all" ? allStores : allStores.filter(s => s.id === storeId),
-    [allStores, storeId]
+    () => selectedIds === null ? allStores : allStores.filter(s => selectedIds.includes(s.id)),
+    [allStores, selectedIds]
   );
   const scopedStoreIds = useMemo(() => new Set(scopedStores.map(s => s.id)), [scopedStores]);
   const brandOfStore = useMemo(() => { const m={}; allStores.forEach(s=>{m[s.id]=s.brandId;}); return m; }, [allStores]);
@@ -19947,7 +20014,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   }, [scopedStats, totalReviews]);
   // Single store selected -> how many 5* reviews to reach the next 0.1 tier.
   const fiveStarTarget = useMemo(() => {
-    if (storeId === "all" || scopedStats.length !== 1) return null;
+    if (!singleStoreId || scopedStats.length !== 1) return null;
     const st = scopedStats[0];
     if (!st.n || st.avg >= 4.95) return null;
     // Next tier = next 0.1 ABOVE the displayed (rounded-to-1dp) rating.
@@ -20090,15 +20157,15 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const [dashCogs, setDashCogs] = useState(null);
   useEffect(() => {
     let cancelled = false;
-    if (!USE_COGS_V2 || storeId === "all" || !storeId) { setDashCogs(null); return; }
-    computeStoreCogsV2({ storeId, from: period.from, to: period.to })
+    if (!USE_COGS_V2 || !singleStoreId) { setDashCogs(null); return; }
+    computeStoreCogsV2({ storeId: singleStoreId, from: period.from, to: period.to })
       .then(r => { if (!cancelled) setDashCogs(r); })
       .catch(() => { if (!cancelled) setDashCogs(null); });
     return () => { cancelled = true; };
-  }, [storeId, period.from, period.to, dashTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [singleStoreId, period.from, period.to, dashTick]); // eslint-disable-line react-hooks/exhaustive-deps
   // Only trust the ratio when actuals loaded cleanly for a single store and the
   // COGS is sane relative to revenue (COGS > revenue ⇒ scope/period mismatch, hide it).
-  const cogsTrustworthy = USE_COGS_V2 && dashCogs && !err && !loading && storeId !== "all"
+  const cogsTrustworthy = USE_COGS_V2 && dashCogs && !err && !loading && !!singleStoreId
     && cur.revenue > 0 && dashCogs.cogs <= cur.revenue * 1.5;
   const primeCostPct = cogsTrustworthy ? ((cur.labourCost + dashCogs.cogs) / cur.revenue) * 100 : null;
   const netMarginPct = cogsTrustworthy ? ((cur.revenue - cur.labourCost - dashCogs.cogs) / cur.revenue) * 100 : null;
@@ -20361,10 +20428,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
-        <SelectDropdown value={storeId} onChange={setStoreId} className="w-52">
-          {isHQ && <option value="all">All stores ({allStores.length})</option>}
-          {allStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-        </SelectDropdown>
+        <MultiStorePicker stores={allStores} value={storeId} onChange={setStoreId} allowAll={isHQ} className="w-52" />
       </div>
 
       {err && <div className="text-xs text-rose-400">Couldn't load actuals: {err}</div>}
@@ -20410,13 +20474,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} spark={revSpark} />
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
-        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (storeId==="all" ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
+        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
-        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={netMarginPct != null ? `after COGS + labour` : (storeId==="all" ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
+        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
@@ -22634,34 +22698,50 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
               )}
             </div>
 
+            {/* Default store view — shown for ALL roles incl. owner */}
+            <div className="rounded-2xl border border-amber-700/30 bg-amber-950/10 px-4 py-3 mb-3">
+              <div className="text-[11px] font-bold text-amber-300 uppercase tracking-widest mb-1">Default store view</div>
+              <div className="text-[11px] text-slate-500 mb-2">Which stores pages open to for this role. Chain Performance always shows all stores. Users can still switch manually — it just won&#39;t persist.</div>
+              {(() => {
+                const cur = defaultStoreScope?.[selRole] || "all";
+                const isArr = Array.isArray(cur);
+                const set = (v) => onSaveDefaultScope?.(selRole, v);
+                const liveStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
+                const selSet = new Set(isArr ? cur : []);
+                const toggleStore = (id) => {
+                  const next = new Set(selSet);
+                  if (next.has(id)) next.delete(id); else next.add(id);
+                  const arr = [...next];
+                  set(arr.length === 0 ? "all" : arr);
+                };
+                return (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button onClick={()=>set("all")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="all"?"bg-slate-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>All stores</button>
+                      <button onClick={()=>set("assigned")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="assigned"?"bg-amber-700 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>Their assigned stores</button>
+                      <span className="text-[11px] text-slate-500">or pick specific stores below:</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {liveStores.map(s => {
+                        const on = selSet.has(s.id);
+                        return (
+                          <button key={s.id} onClick={()=>toggleStore(s.id)}
+                            className={`px-2 py-1 rounded-lg text-[11px] font-medium border ${on ? "bg-amber-700 text-white border-amber-600" : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"}`}>
+                            {s.shortName||s.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {isArr && cur.length > 0 && <div className="text-[10px] text-amber-300">{cur.length} store{cur.length>1?"s":""} selected as the default view.</div>}
+                  </div>
+                );
+              })()}
+            </div>
+
             {isOwnerSel ? (
-              <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">Owner always has full access and can't be restricted.</div>
+              <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">Owner always has full access and can't be restricted. The default store view above still applies.</div>
             ) : (
               <>
-                {/* Default store view for this role */}
-                <div className="rounded-2xl border border-amber-700/30 bg-amber-950/10 px-4 py-3 mb-3">
-                  <div className="text-[11px] font-bold text-amber-300 uppercase tracking-widest mb-1">Default store view</div>
-                  <div className="text-[11px] text-slate-500 mb-2">Which stores pages open to for this role. Chain Performance always shows all stores. Users can still switch manually — it just won&#39;t persist.</div>
-                  {(() => {
-                    const cur = defaultStoreScope?.[selRole] || "all";
-                    const set = (v) => onSaveDefaultScope?.(selRole, v);
-                    const liveStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
-                    return (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button onClick={()=>set("all")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="all"?"bg-slate-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>All stores</button>
-                        <button onClick={()=>set("assigned")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="assigned"?"bg-amber-700 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>Their assigned stores</button>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-slate-500">or a specific store:</span>
-                          <select value={(cur!=="all"&&cur!=="assigned")?cur:""} onChange={e=>e.target.value && set(e.target.value)}
-                            className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-white max-w-[160px]">
-                            <option value="">— pick —</option>
-                            {liveStores.map(s => <option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
-                          </select>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
                 <div className="rounded-2xl border border-slate-800 overflow-hidden">
                   <div className="px-4 py-2 bg-slate-900 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Entities — what this role can open</div>
                   <div className="divide-y divide-slate-800/60">
@@ -46428,19 +46508,18 @@ export default function App() {
     };
   }, [currentUser, opsTeam, customRoleById]);
 
-  // Resolve the configured default store for the current user, from the role
-  // scope the owner set in Access Control. Returns a storeId, or "all" when the
-  // role is set to all stores / has no rule. "assigned" → the user's first
-  // assigned store (falls back to "all" if they have none).
+  // Resolve the configured default store scope for the current user, from the
+  // role scope the owner set in Access Control. Returns "all", a storeId, or an
+  // array of storeIds. "assigned" → the user's assigned stores (all of them).
   const resolveDefaultStoreId = useCallback(() => {
     const role = currentUserRole.matrixRole || currentUserRole.builtIn;
     const cfg = defaultStoreScope?.[role] ?? defaultStoreScope?.[currentUserRole.baseRole];
     if (!cfg || cfg === "all") return "all";
     if (cfg === "assigned") {
       const ids = currentUser?.storeIds || [];
-      return ids.length ? ids[0] : "all";
+      return ids.length ? (ids.length === 1 ? ids[0] : ids) : "all";
     }
-    return cfg; // a specific storeId
+    return cfg; // a specific storeId or an array of ids
   }, [defaultStoreScope, currentUserRole, currentUser]);
   // The role app-logic should use everywhere (custom role inherits its base).
   const effectiveRole = currentUserRole.baseRole;
