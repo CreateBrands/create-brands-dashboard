@@ -1950,6 +1950,75 @@ export async function notifyMessageRecipients(msg) {
   } catch (e) { console.error("notifyMessageRecipients failed:", e); }
 }
 
+// ── Helpdesk notifications ────────────────────────────────────────────────────
+// Mirrors the chat notification pattern. All fire-and-forget (never block the
+// ticket write). linkView "helpdesk" routes the tap to the helpdesk view.
+const HD_PRIO_TAG = (p) => (p === "Urgent" || p === "High") ? `[${p}] ` : "";
+
+// New ticket raised → ping the managers/HQ in scope who can pick it up (and any
+// already-assigned person), excluding the raiser.
+export async function notifyNewHelpdeskTicket(ticket) {
+  try {
+    if (!ticket) return;
+    const title = `${HD_PRIO_TAG(ticket.priority)}New ticket: ${ticket.title || "Untitled"}`;
+    const body = `${ticket.category || "General"} · raised by ${ticket.createdByName || "a colleague"}`.slice(0, 120);
+    const payload = { kind: "helpdesk", title, body, linkView: "helpdesk" };
+    await notifyManagers({
+      brandId: ticket.brandId || null,
+      storeId: ticket.storeId || null,
+      excludeUserId: ticket.createdById || null,
+      ...payload,
+    });
+    // If it was created already-assigned, make sure the assignee hears too.
+    const assignees = (ticket.assignedTo || []).filter(id => id && id !== ticket.createdById);
+    if (assignees.length) {
+      await insertNotifications(assignees.flatMap(id => ([
+        { recipientType: "ops",  recipientId: id, ...payload },
+        { recipientType: "user", recipientId: id, ...payload },
+      ])));
+    }
+  } catch (e) { console.error("notifyNewHelpdeskTicket failed:", e); }
+}
+
+// Ticket assigned to someone → ping that assignee. `assigneeIds` is the set of
+// people now assigned (we notify those who weren't assigned before).
+export async function notifyHelpdeskAssignment(ticket, assigneeIds, byName) {
+  try {
+    if (!ticket) return;
+    const ids = [...new Set((assigneeIds || []).filter(Boolean))];
+    if (ids.length === 0) return;
+    const title = `${HD_PRIO_TAG(ticket.priority)}Ticket assigned to you`;
+    const body = `${ticket.title || "Ticket"}${byName ? ` · by ${byName}` : ""}`.slice(0, 120);
+    const payload = { kind: "helpdesk", title, body, linkView: "helpdesk" };
+    // assignee may be a user OR an ops member — notify both id spaces (harmless if one misses).
+    await insertNotifications(ids.flatMap(id => ([
+      { recipientType: "ops",  recipientId: id, ...payload },
+      { recipientType: "user", recipientId: id, ...payload },
+    ])));
+  } catch (e) { console.error("notifyHelpdeskAssignment failed:", e); }
+}
+
+// New reply/comment on a ticket → ping the ticket creator + the assignee(s),
+// excluding whoever wrote the reply.
+export async function notifyHelpdeskReply(ticket, replierId, replierName) {
+  try {
+    if (!ticket) return;
+    const targets = new Set();
+    if (ticket.createdById) targets.add(ticket.createdById);
+    (ticket.assignedTo || []).forEach(id => id && targets.add(id));
+    targets.delete(replierId);  // don't notify the person who just replied
+    const ids = [...targets].filter(Boolean);
+    if (ids.length === 0) return;
+    const title = `New reply: ${ticket.title || "your ticket"}`;
+    const body = `${replierName || "Someone"} replied to the ticket.`.slice(0, 120);
+    const payload = { kind: "helpdesk", title, body, linkView: "helpdesk" };
+    await insertNotifications(ids.flatMap(id => ([
+      { recipientType: "ops",  recipientId: id, ...payload },
+      { recipientType: "user", recipientId: id, ...payload },
+    ])));
+  } catch (e) { console.error("notifyHelpdeskReply failed:", e); }
+}
+
 // Trigger a manual flipdish sync from the UI
 export async function runFlipdishSync(body = {}) {
   // Calls the LIVE RMS sales sync (flipdish-rms-sync). The old "flipdish-sync"

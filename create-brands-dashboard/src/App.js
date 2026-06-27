@@ -41,6 +41,7 @@ import {
   fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
+  notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
   fetchStoreDepartments, fetchStoreRoles,
   fetchAdvertisedRoles, createAdvertisedRole, updateAdvertisedRole, archiveAdvertisedRole,
@@ -37275,6 +37276,7 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
   const handleSendComment = (ticket, comment) => {
     const updated = { ...ticket, comments: [...(ticket.comments||[]), comment], updatedAt: new Date().toISOString() };
     onUpdate(updated); setActiveTicket(updated);
+    notifyHelpdeskReply(updated, myId, currentUser?.name);
   };
   const handleStatusChange = (ticket, status) => {
     const updated = { ...ticket, status, updatedAt: new Date().toISOString() };
@@ -37313,9 +37315,9 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
     };
     onUpdate(updated);
     setActiveTicket(updated);
+    // Ping the newly-assigned person (skip if this was an unassign).
+    if (newAssignment.length) notifyHelpdeskAssignment(updated, newAssignment, currentUser?.name);
   };
-
-  // ── UI ────────────────────────────────────────────────────────────────────
 
   const counts = HELPDESK_STATUSES.reduce((acc, s) => {
     acc[s] = scopeTickets.filter(t => t.status === s).length;
@@ -37492,6 +37494,7 @@ function EmployeeHelpdeskView({ brands, stores = [], tickets, currentUser, onAdd
   const handleSendComment = (ticket, comment) => {
     const updated = { ...ticket, comments: [...(ticket.comments||[]), comment], updatedAt: new Date().toISOString() };
     onUpdate(updated); setActiveTicket(updated);
+    notifyHelpdeskReply(updated, myId, currentUser?.name);
   };
 
   const statusDot = s => ({ Open:"bg-red-400","In Progress":"bg-amber-400",Pending:"bg-indigo-400",Resolved:"bg-emerald-400",Closed:"bg-slate-600" }[s]||"bg-slate-600");
@@ -46418,7 +46421,7 @@ export default function App() {
     } catch (err) { showToast("Couldn't post comment: " + err.message, "error"); }
   }, [showToast]);
   const removeSchedulePunchRecord = useCallback(async(id)=>{try{const rec=punchRecords.find(p=>p.id===id);if(rec&&isPunchLocked(rec)){showToast("This punch is in an approved (locked) pay period. Re-open the period to delete it.","error");return;}const{error}=await supabase.from("punch_records").delete().eq("id",id);if(error)throw error;setPunchRecords(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, punchRecords, isPunchLocked]);
-  const addHdTicket    = useCallback(async t=>{const s=await insertHelpdeskTicket(t);setHdTickets(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[s,...ts]);}, []);
+  const addHdTicket    = useCallback(async t=>{const s=await insertHelpdeskTicket(t);setHdTickets(ts=>ts.some(x=>x.id===s.id)?ts.map(x=>x.id===s.id?s:x):[s,...ts]);notifyNewHelpdeskTicket(s);}, []);
   const updateHdTicket = useCallback(async t=>{const s=await upsertHelpdeskTicket(t);setHdTickets(ts=>ts.map(x=>x.id===s.id?s:x));}, []);
   const deleteHdTicket = useCallback(async id=>{await removeHelpdeskTicket(id);setHdTickets(ts=>ts.filter(x=>x.id!==id));}, []);
   const sendMessage    = useCallback(async m=>{const s=await insertInboxMessage(m);setMessages(ms=>ms.some(x=>x.id===s.id)?ms:[s,...ms]);notifyMessageRecipients(s);}, []);
