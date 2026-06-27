@@ -22757,8 +22757,19 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
                 // Trading stores vs facility entities (CK / Distribution / franchise ops).
                 const tradingStores = allLive.filter(isShopSite);
                 const facilityEntities = allLive.filter(s => !isShopSite(s));
-                // Brand + Finance entities (Tove etc. as brand-level scope, Finance as a module).
-                const brandEntities = (brands || []).filter(b => !b.archivedAt).map(b => ({ id: `brand:${b.id}`, name: b.name, kind: "brand" }));
+                // Brand ids already represented as facility stores, so we don't list
+                // them twice (CK / Distribution exist as both a brand and a store).
+                const facilityBrandIds = new Set(facilityEntities.map(s => s.brandId));
+                // Brand ids that own trading stores (these are "store brands" like
+                // Chocoberry/Tove — their stores are already in the trading list, so
+                // the brand itself isn't a separate pickable entity here).
+                const tradingBrandIds = new Set(tradingStores.map(s => s.brandId));
+                // Brand entities worth listing separately: brands with NO trading
+                // stores and NOT already shown as a facility store. (In practice this
+                // is usually empty — Tove/Chocoberry have stores; CK/Dist are facilities.)
+                const brandEntities = (brands || [])
+                  .filter(b => !b.archivedAt && !facilityBrandIds.has(b.id) && !tradingBrandIds.has(b.id))
+                  .map(b => ({ id: `brand:${b.id}`, name: b.name, kind: "brand" }));
                 const financeEntity = { id: "entity:finance", name: "Finance", kind: "module" };
                 const selSet = new Set(isArr ? cur : []);
                 const toggle = (id) => {
