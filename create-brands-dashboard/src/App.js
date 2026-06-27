@@ -641,34 +641,35 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
   );
 }
 
-function StatCard({ label, value, sub, icon: Icon, accent = "indigo", alert = false }) {
+function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false }) {
   const accents = {
-    indigo: "from-indigo-600/20 to-indigo-600/5 border-indigo-500/30",
+    brand:   "from-amber-700/20 to-amber-700/5 border-amber-600/30",
+    indigo:  "from-amber-700/20 to-amber-700/5 border-amber-600/30",
     emerald: "from-emerald-600/20 to-emerald-600/5 border-emerald-500/30",
-    amber: "from-amber-600/20 to-amber-600/5 border-amber-500/30",
-    red: "from-red-600/20 to-red-600/5 border-red-500/30",
-    sky: "from-sky-600/20 to-sky-600/5 border-sky-500/30",
-    slate: "from-slate-700/40 to-slate-700/10 border-slate-700",
+    amber:   "from-amber-500/20 to-amber-500/5 border-amber-400/30",
+    red:     "from-rose-600/20 to-rose-600/5 border-rose-500/30",
+    sky:     "from-orange-600/20 to-orange-600/5 border-orange-500/30",
+    slate:   "from-stone-700/40 to-stone-700/10 border-stone-700",
   };
-  const iconColors = { indigo: "text-indigo-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-red-400", sky: "text-sky-400", slate: "text-slate-600" };
+  const iconColors = { brand: "text-amber-400", indigo: "text-amber-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-rose-400", sky: "text-orange-400", slate: "text-stone-500" };
   const eff = alert ? "red" : accent;
   return (
-    <div className={`rounded-2xl bg-gradient-to-br ${accents[eff]} border p-5 flex flex-col gap-2`}>
+    <div className={`rounded-2xl bg-gradient-to-br ${accents[eff] || accents.brand} border p-5 flex flex-col gap-2`}>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{label}</span>
-        {Icon && <Icon size={16} className={iconColors[eff]} />}
+        <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">{label}</span>
+        {Icon && <Icon size={16} className={iconColors[eff] || iconColors.brand} />}
       </div>
       <div className="text-2xl font-bold text-white tabular-nums">{value}</div>
-      {sub && <div className="text-xs text-slate-600">{sub}</div>}
+      {sub && <div className="text-xs text-stone-500">{sub}</div>}
     </div>
   );
 }
 
 function AnalysisBlock({ title, children, className = "", action }) {
   return (
-    <div className={`rounded-2xl bg-slate-900 border border-slate-700 overflow-hidden ${className}`}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-        <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
+    <div className={`rounded-2xl bg-stone-900/80 border border-stone-700/70 overflow-hidden ${className}`}>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-stone-700/70">
+        <h3 className="text-sm font-semibold text-stone-200">{title}</h3>
         {action}
       </div>
       <div className="p-5">{children}</div>
@@ -676,15 +677,36 @@ function AnalysisBlock({ title, children, className = "", action }) {
   );
 }
 
-function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null }) {
+function Sparkline({ data, color = "#C9854F", height = 28 }) {
+  if (!data || data.length < 2) return null;
+  const w = 90, h = height, pad = 2;
+  const max = Math.max(...data), min = Math.min(...data);
+  const range = max - min || 1;
+  const pts = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+    const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = data[data.length - 1], first = data[0];
+  const up = last >= first;
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+      <polyline points={pts.join(" ")} fill="none" stroke={up ? "#10b981" : "#f59e0b"} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={pts[pts.length-1].split(",")[0]} cy={pts[pts.length-1].split(",")[1]} r="2" fill={up ? "#10b981" : "#f59e0b"} />
+    </svg>
+  );
+}
+
+function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null }) {
   const ACCENTS = {
-    indigo: { icon: "text-indigo-400", val: "text-indigo-300", ring: "border-indigo-500/30 bg-indigo-950/20" },
-    emerald:{ icon: "text-emerald-400", val: "text-emerald-300", ring: "border-emerald-500/30 bg-emerald-950/20" },
-    sky:    { icon: "text-sky-400", val: "text-sky-300", ring: "border-sky-500/30 bg-sky-950/20" },
-    amber:  { icon: "text-amber-400", val: "text-amber-300", ring: "border-amber-500/30 bg-amber-950/20" },
-    red:    { icon: "text-red-400", val: "text-red-300", ring: "border-red-500/30 bg-red-950/20" },
+    brand:  { icon: "text-amber-400", val: "text-amber-200", ring: "border-amber-600/30 bg-amber-950/15", bar: "#a8743e" },
+    indigo: { icon: "text-amber-400", val: "text-amber-200", ring: "border-amber-600/30 bg-amber-950/15", bar: "#a8743e" },
+    emerald:{ icon: "text-emerald-400", val: "text-emerald-300", ring: "border-emerald-500/30 bg-emerald-950/20", bar: "#10b981" },
+    sky:    { icon: "text-orange-400", val: "text-orange-200", ring: "border-orange-500/30 bg-orange-950/20", bar: "#f97316" },
+    amber:  { icon: "text-amber-400", val: "text-amber-200", ring: "border-amber-500/30 bg-amber-950/20", bar: "#f59e0b" },
+    red:    { icon: "text-rose-400", val: "text-rose-300", ring: "border-rose-500/30 bg-rose-950/20", bar: "#f43f5e" },
   };
-  const ac = accent && ACCENTS[accent] ? ACCENTS[accent] : null;
+  const ac = accent && ACCENTS[accent] ? ACCENTS[accent] : ACCENTS.brand;
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
   let deltaEl = null;
@@ -693,24 +715,29 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
     const isPositive = invertDelta ? delta < 0 : delta > 0;
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-600 text-white" : "bg-red-600 text-white"}`}>
+      <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-semibold ${isPositive ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"}`}>
         {isPositive ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {sign}{delta.toFixed(1)}% vs {prevLabel}
       </span>
     );
   }
+  const barColor = alert ? "#f43f5e" : ac.bar;
   return (
-    <div onClick={onClick} className={`rounded-2xl border p-4 flex flex-col gap-2 ${onClick ? "cursor-pointer hover:border-indigo-500/60 transition-colors" : ""} ${alert ? "bg-red-950/20 border-red-500/30" : ac ? ac.ring : "bg-slate-900 border-slate-700"}`}>
+    <div onClick={onClick} className={`relative rounded-2xl border p-4 pl-5 flex flex-col gap-2 overflow-hidden ${onClick ? "cursor-pointer hover:border-amber-500/60 transition-colors" : ""} ${alert ? "bg-rose-950/20 border-rose-500/30" : ac.ring}`}>
+      <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: barColor }} />
       <div className="flex items-center gap-2">
-        {Icon && <Icon size={13} className={alert ? "text-red-400" : ac ? ac.icon : "text-slate-600"} />}
-        <span className="text-xs font-semibold text-slate-600 uppercase tracking-widest">{label}</span>
-        {onClick && <span className="ml-auto text-[10px] text-slate-600">view ›</span>}
+        {Icon && <Icon size={13} className={alert ? "text-rose-400" : ac.icon} />}
+        <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">{label}</span>
+        {onClick && <span className="ml-auto text-[10px] text-stone-500">view ›</span>}
       </div>
-      <div className={`text-xl font-bold ${alert ? "text-red-400" : ac ? ac.val : "text-white"}`}>{currentVal}</div>
-      {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
+      <div className="flex items-end justify-between gap-2">
+        <div className={`text-xl font-bold ${alert ? "text-rose-400" : ac.val}`}>{currentVal}</div>
+        {spark && spark.length >= 2 && <Sparkline data={spark} />}
+      </div>
+      {subCurrent && <div className="text-xs text-stone-500">{subCurrent}</div>}
       {deltaEl}
       {previousVal && (
-        <div className="border-t border-slate-700 pt-2 mt-1 text-xs text-slate-500">
-          Prior: <span className="text-slate-600 font-medium">{previousVal}</span>
+        <div className="border-t border-stone-700/60 pt-2 mt-1 text-xs text-stone-500">
+          {prevLabel}: <span className="text-stone-400 font-medium">{previousVal}</span>
         </div>
       )}
     </div>
@@ -20122,7 +20149,58 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
   const prevLabel = (prevPeriod?.label || "Prior") + (inProgress ? " (to now)" : "");
 
+  // ── Auto-insights: surface what needs attention from the live KPIs ─────────
+  const insights = useMemo(() => {
+    const out = [];
+    const pct = (c, p) => (p && p !== 0) ? ((c - p) / Math.abs(p)) * 100 : null;
+    // Revenue vs prior
+    const revD = prevPeriod ? pct(cur.revenue, prev.revenue) : null;
+    if (revD != null && revD <= -15) out.push({ kind: "alert", text: `Revenue down ${Math.abs(revD).toFixed(0)}% vs ${prevLabel.replace(" (to now)", "")}.` });
+    else if (revD != null && revD >= 15) out.push({ kind: "win", text: `Revenue up ${revD.toFixed(0)}% vs ${prevLabel.replace(" (to now)", "")}.` });
+    // Revenue vs target
+    if (target && cur.revenue != null && target.revenue > 0) {
+      const tg = (cur.revenue / target.revenue) * 100;
+      if (!inProgress && tg < 85) out.push({ kind: "alert", text: `Revenue at ${tg.toFixed(0)}% of the ${fmtCurrency(target.revenue)} target.` });
+    }
+    // Wage %
+    if (cur.wagePct != null && cur.wagePct > 35) out.push({ kind: "alert", text: `Wage cost ${cur.wagePct.toFixed(1)}% — above the 35% ceiling.` });
+    else if (cur.wagePct != null && cur.wagePct > 30) out.push({ kind: "watch", text: `Wage cost ${cur.wagePct.toFixed(1)}% — over the 30% guide.` });
+    // Labour hours vs target
+    if (target && cur.hours != null && target.hours > 0 && cur.hours > target.hours * 1.1) {
+      out.push({ kind: "watch", text: `Labour hours ${cur.hours.toFixed(0)} — over the ${target.hours.toFixed(0)}h plan.` });
+    }
+    // SPLH drop
+    const splhD = prevPeriod ? pct(cur.splh, prev.splh) : null;
+    if (splhD != null && splhD <= -25 && cur.splh != null) out.push({ kind: "watch", text: `Sales per labour hour down ${Math.abs(splhD).toFixed(0)}% — staffing vs demand.` });
+    // Issues
+    if (criticalIssues > 0) out.push({ kind: "alert", text: `${criticalIssues} critical issue${criticalIssues > 1 ? "s" : ""} open — needs attention.` });
+    // Positive close-out
+    if (out.length === 0 && cur.revenue > 0) out.push({ kind: "win", text: "Everything tracking within range — no flags right now." });
+    return out.slice(0, 4);
+  }, [cur, prev, target, prevPeriod, inProgress, prevLabel, criticalIssues]);
+
   const nameOfStore = (id) => allStores.find(s => s.id === id)?.shortName || allStores.find(s => s.id === id)?.name || id;
+
+  // Daily revenue series for the Revenue card sparkline (scoped to selection).
+  // For single-day periods, fall back to the hourly cumulative shape.
+  const revSpark = useMemo(() => {
+    if (isSingleDay && hourlyRows.length) {
+      const byHour = {};
+      hourlyRows.forEach(r => {
+        if (scopedStoreIds.size && !scopedStoreIds.has(r.storeId)) return;
+        const h = r.hour != null ? r.hour : (r.label || "");
+        byHour[h] = (byHour[h] || 0) + (Number(r.revenue) || 0);
+      });
+      const hours = Object.keys(byHour).sort((a, b) => Number(a) - Number(b));
+      let run = 0; return hours.map(h => (run += byHour[h]));
+    }
+    const byDay = {};
+    (data.curSales || []).forEach(r => {
+      if (scopedStoreIds.size && !scopedStoreIds.has(r.storeId)) return;
+      byDay[r.businessDate] = (byDay[r.businessDate] || 0) + (Number(r.revenue) || 0);
+    });
+    return Object.keys(byDay).sort().map(d => byDay[d]);
+  }, [data.curSales, hourlyRows, isSingleDay, scopedStoreIds]);
 
   // ── Drill-down builders ───────────────────────────────────────────────────
   const openRevenueDrill = () => {
@@ -20202,7 +20280,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       {isHqOrAbove(user.role) && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
           <button onClick={()=>setAskOpen(o=>!o)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors">
-            <span className="flex items-center gap-2 text-sm font-semibold text-white"><MessageSquare size={16} className="text-indigo-400"/> Ask the Data</span>
+            <span className="flex items-center gap-2 text-sm font-semibold text-white"><MessageSquare size={16} className="text-amber-400"/> Ask the Data</span>
             <ChevronDown size={16} className={`text-slate-500 transition-transform ${askOpen?"rotate-180":""}`}/>
           </button>
           {askOpen && <div className="border-t border-slate-800 p-4"><AskDataView/></div>}
@@ -20258,8 +20336,31 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
           Prime Cost &amp; Net Margin use recipe-based COGS. Only {(dashCogsCoverage*100).toFixed(0)}% of sales are costed — figures understated until recipes are completed.
         </div>
       )}
+      {/* ── Auto-insights: what needs attention ──────────────────────────── */}
+      {insights.length > 0 && (
+        <div className="rounded-2xl border border-stone-700/50 bg-gradient-to-br from-stone-900/60 to-stone-950/40 p-4">
+          <div className="flex items-center gap-2 mb-2.5">
+            <Zap size={14} className="text-amber-400" />
+            <span className="text-xs font-bold text-stone-300 uppercase tracking-widest">What needs attention</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {insights.map((ins, i) => {
+              const tone = ins.kind === "alert" ? { bar: "border-l-rose-500", dot: "bg-rose-500", txt: "text-rose-200" }
+                : ins.kind === "watch" ? { bar: "border-l-amber-500", dot: "bg-amber-500", txt: "text-amber-100" }
+                : { bar: "border-l-emerald-500", dot: "bg-emerald-500", txt: "text-emerald-100" };
+              return (
+                <div key={i} className={`flex items-start gap-2 rounded-xl bg-stone-900/60 border border-stone-800 border-l-4 ${tone.bar} px-3 py-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${tone.dot} mt-1.5 flex-shrink-0`} />
+                  <span className={`text-xs ${tone.txt} leading-snug`}>{ins.text}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} />
+        <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} spark={revSpark} />
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (storeId==="all" ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (storeId==="all" ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
