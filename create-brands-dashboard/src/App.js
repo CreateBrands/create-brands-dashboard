@@ -19197,13 +19197,13 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
                         <span className="text-xs font-medium text-white truncate">{name}</span>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           <span className="text-xs font-semibold text-white tabular-nums">{fmtMoney(rev)}</span>
-                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${up ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
+                          <span className={`text-[11px] font-bold tabular-nums ${up ? "text-emerald-400" : "text-amber-500"}`}>
                             {up ? "▲" : "▼"} {Math.abs(r.deltaPct || 0).toFixed(0)}%
                           </span>
                         </div>
                       </div>
-                      <div className="relative h-2 bg-slate-800/70 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full bg-gradient-to-r ${up ? "from-emerald-600 to-emerald-400" : "from-amber-600 to-amber-400"}`}
+                      <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div className={`h-full ${up ? "bg-emerald-500" : "bg-amber-500"}`}
                           style={{ width: `${Math.max(2, barW)}%` }} />
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-600">
