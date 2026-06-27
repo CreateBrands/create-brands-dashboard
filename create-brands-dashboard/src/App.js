@@ -15951,8 +15951,134 @@ function ListingsAudit({ stores = [], storeId = null }) {
   );
 }
 
+// At-a-glance summary of all GBP signals — the headline from each area in one
+// view. Pulls in parallel from the existing fetchers; each card deep-links to
+// its full tab via the onJump callback.
+function ReviewsOverview({ stores = [], storeId = null, onJump }) {
+  const [d, setD] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const sid = storeId || null;
+      const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+      // Fire everything in parallel; tolerate individual failures.
+      const safe = (p) => p.then(v => v).catch(() => null);
+      const [stats, perf, staff, sentiment, deletions, audit, cov] = await Promise.all([
+        safe(fetchReviewStats()),
+        safe(fetchPerformanceMetrics({ storeId: sid, from: from30 })),
+        safe(fetchStaffLeaderboard({ storeId: sid, from: from30 })),
+        safe(fetchReviewSentiment({ storeId: sid, from: from30 })),
+        safe(fetchDeletionSignals({ storeId: sid })),
+        safe(fetchListingsAudit({ storeId: sid })),
+        safe(fetchInsightsCoverage()),
+      ]);
+      if (cancelled) return;
+
+      // chain rating: weighted average across stores from stats
+      let totN = 0, totW = 0;
+      (stats || []).forEach(s => { totN += s.n || 0; totW += (s.avg || 0) * (s.n || 0); });
+      const chainAvg = totN ? totW / totN : null;
+
+      const sent = sentiment?.sentiment || {};
+      const sentTotal = (sent.positive || 0) + (sent.neutral || 0) + (sent.negative || 0) + (sent.mixed || 0);
+      const posPct = sentTotal ? Math.round((sent.positive || 0) / sentTotal * 100) : null;
+
+      const missingReviews = (deletions?.signals || []).reduce((s, x) => s + (x.missing || 0), 0);
+      const listingIssues = (audit || []).reduce((s, x) => s + (x.issueCount || 0), 0);
+      const problemThemes = (sentiment?.themes || []).filter(t => t.total >= 5 && t.negativeRate >= 0.25);
+
+      setD({
+        chainAvg, totalReviews: totN,
+        impressions: perf?.overall?.impressions ?? null,
+        directions: perf?.overall?.directions ?? null,
+        foodOrders: perf?.overall?.foodOrders ?? null,
+        topStaff: (staff || []).slice(0, 3),
+        posPct, sentTotal,
+        missingReviews, listingIssues,
+        problemThemes,
+        coverage: cov,
+      });
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [storeId]);
+
+  const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString());
+  const Card = ({ title, value, sub, accent = "text-white", onClick, tone = "bg-slate-900 border-slate-800" }) => (
+    <button onClick={onClick} disabled={!onClick}
+      className={`text-left rounded-2xl p-4 border ${tone} ${onClick ? "hover:border-indigo-500 transition-colors" : "cursor-default"}`}>
+      <div className={`text-2xl font-bold ${accent}`}>{value}</div>
+      <div className="text-xs text-slate-400 mt-0.5">{title}</div>
+      {sub && <div className="text-[10px] text-slate-600 mt-1">{sub}</div>}
+    </button>
+  );
+
+  if (loading) return <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">Loading overview…</div>;
+  if (!d) return <div className="text-xs text-rose-400">Couldn’t load overview.</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+        <Card title="Chain rating" value={d.chainAvg != null ? `${d.chainAvg.toFixed(2)}★` : "—"}
+          sub={`${fmt(d.totalReviews)} reviews`} accent="text-amber-300" onClick={() => onJump?.("reviews")} />
+        <Card title="Impressions (30d)" value={fmt(d.impressions)}
+          sub={d.directions != null ? `${fmt(d.directions)} directions · ${fmt(d.foodOrders)} food orders` : "Google Search & Maps"}
+          onClick={() => onJump?.("discovery")} />
+        <Card title="Positive sentiment" value={d.posPct != null ? `${d.posPct}%` : "—"}
+          sub={d.sentTotal ? `of ${fmt(d.sentTotal)} analysed` : "run Analyse first"} accent="text-emerald-300"
+          onClick={() => onJump?.("sentiment")} />
+        <Card title="Removed reviews" value={fmt(d.missingReviews)}
+          sub={d.missingReviews > 0 ? "may be appealable" : "none detected"}
+          accent={d.missingReviews > 0 ? "text-rose-300" : "text-white"} onClick={() => onJump?.("deletions")} />
+        <Card title="Listing issues" value={fmt(d.listingIssues)}
+          sub={d.listingIssues > 0 ? "across your listings" : "all complete"}
+          accent={d.listingIssues > 0 ? "text-amber-300" : "text-white"} onClick={() => onJump?.("listings")} />
+        <Card title="Top staff (30d)" value={d.topStaff[0]?.name || "—"}
+          sub={d.topStaff[0] ? `${d.topStaff[0].mentions} mentions` : "run Analyse first"}
+          onClick={() => onJump?.("leaderboard")} />
+      </div>
+
+      {d.topStaff.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-xs font-semibold text-slate-300 mb-2">Most-praised staff (last 30 days)</div>
+          <div className="flex gap-3 flex-wrap">
+            {d.topStaff.map((s, i) => (
+              <span key={s.name} className="text-xs text-slate-300">
+                <span className="font-bold text-white">{i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} {s.name}</span>
+                <span className="text-slate-500"> · {s.mentions}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {d.problemThemes.length > 0 && (
+        <div className="bg-rose-950/20 border border-rose-800/40 rounded-2xl p-4">
+          <div className="text-xs font-semibold text-rose-200 mb-2">Themes needing attention</div>
+          <div className="flex gap-2 flex-wrap">
+            {d.problemThemes.map(t => (
+              <span key={t.theme} className="text-[11px] bg-slate-900 text-rose-300 px-2 py-1 rounded-md">
+                {t.theme.replace(/_/g, " ")} · {Math.round(t.negativeRate * 100)}% neg
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {d.coverage && d.coverage.remaining > 0 && (
+        <div className="text-[11px] text-amber-300/70">
+          {d.coverage.remaining.toLocaleString()} reviews not yet analysed — staff & sentiment data is partial until you run Analyse.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
-  const [view, setView] = useState("reviews");   // reviews | leaderboard
+  const [view, setView] = useState("overview");   // overview | reviews | leaderboard | sentiment | deletions | discovery | posts | listings
   const [reviews, setReviews] = useState([]);
   const [filter, setFilter] = useState(compact ? "low" : "all");   // all | low (<=2)
   const [loading, setLoading] = useState(true);
@@ -16008,7 +16134,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"], ["listings", "Listings"]] : [])].map(([k, l]) => (
+            {[["overview", "Overview"], ["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"], ...((currentUser?.role === "owner" || currentUser?.role === "hq_staff") ? [["posts", "Posts"], ["listings", "Listings"]] : [])].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -16034,6 +16160,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
         )}
       </div>
 
+      {view === "overview" && <ReviewsOverview stores={stores} storeId={storeId} onJump={(v) => setView(v)} />}
       {view === "leaderboard" && <StaffLeaderboard stores={stores} storeId={storeId} />}
       {view === "sentiment" && <SentimentAnalysis stores={stores} storeId={storeId} />}
       {view === "deletions" && <DeletionMonitor stores={stores} storeId={storeId} />}
