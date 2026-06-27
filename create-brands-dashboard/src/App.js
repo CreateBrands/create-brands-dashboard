@@ -714,20 +714,47 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
 // Shared KPI colour system — a fresh, brighter jewel-toned palette that still
 // harmonises with the warm cream page. Each family: tint (accent), bg (card
 // wash), bd (border), chip (icon background).
+// Brand-derived KPI palette — Chocoberry browns/caramels/golds only, no pink.
+// Tile colour = category IDENTITY (calm). Status (good/warn/bad) is signalled
+// separately by STATUS_COLORS below, so colour stays meaningful not decorative.
 const KPI_PALETTE = {
-  brand:   { tint: "#C2410C", bg: "#FDEEE3", bd: "#F4D6BE", chip: "#F8E1CD" }, // pumpkin
-  indigo:  { tint: "#5B53C9", bg: "#ECEBFB", bd: "#D2CFF3", chip: "#DFDDF7" }, // iris
-  emerald: { tint: "#0F8A6A", bg: "#E2F5EE", bd: "#BEE7D8", chip: "#CFEEE2" }, // jade
-  sky:     { tint: "#0E7FAE", bg: "#E2F2F9", bd: "#BDDFF0", chip: "#CFE9F4" }, // cerulean
-  amber:   { tint: "#D08700", bg: "#FCF1D6", bd: "#F1DCA6", chip: "#F7E7BE" }, // marigold
-  violet:  { tint: "#A638A0", bg: "#FBEAF8", bd: "#F0CAEA", chip: "#F5D9F1" }, // orchid
-  rose:    { tint: "#C2185B", bg: "#FCE8F0", bd: "#F4C6D8", chip: "#F8D6E3" }, // raspberry
-  red:     { tint: "#D32F2F", bg: "#FDE9E7", bd: "#F6C8C3", chip: "#FAD7D2" }, // vermilion
-  slate:   { tint: "#7A6E5D", bg: "#F4EFE6", bd: "#E2D7C5", chip: "#EBE2D2" }, // stone (warm)
+  brand:    { tint: "#9C5A2E", bg: "#F8EFE4", bd: "#E9D6C2", chip: "#F1E2D0" }, // mid-brown
+  brown:    { tint: "#844429", bg: "#F4E9DD", bd: "#E2CFBC", chip: "#EBDCCB" }, // deep brown
+  indigo:   { tint: "#844429", bg: "#F4E9DD", bd: "#E2CFBC", chip: "#EBDCCB" }, // (alias→brown)
+  rosewood: { tint: "#A0573F", bg: "#F7ECE5", bd: "#E8D2C5", chip: "#F0E0D5" }, // rosewood-brown
+  emerald:  { tint: "#A0573F", bg: "#F7ECE5", bd: "#E8D2C5", chip: "#F0E0D5" }, // (alias→rosewood)
+  caramel:  { tint: "#C9854F", bg: "#FBF3E4", bd: "#EFE0C4", chip: "#F5E9CF" }, // caramel
+  sky:      { tint: "#C9854F", bg: "#FBF3E4", bd: "#EFE0C4", chip: "#F5E9CF" }, // (alias→caramel)
+  gold:     { tint: "#B8860B", bg: "#FBF6DD", bd: "#EFE3AE", chip: "#F5ECC2" }, // gold
+  amber:    { tint: "#B8860B", bg: "#FBF6DD", bd: "#EFE3AE", chip: "#F5ECC2" }, // (alias→gold)
+  violet:   { tint: "#A0573F", bg: "#F7ECE5", bd: "#E8D2C5", chip: "#F0E0D5" }, // (alias→rosewood)
+  slate:    { tint: "#8A7B66", bg: "#F4EFE6", bd: "#E2D7C5", chip: "#EBE2D2" }, // warm stone
+  red:      { tint: "#A8482E", bg: "#F6E0D8", bd: "#EAC8BC", chip: "#F0D3C7" }, // brick (alert tile)
 };
 
-function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false }) {
+// Traffic-light status — warm-toned so it harmonises with cream (brick not pink,
+// ochre amber, olive green). Used for the delta pill + status dot.
+const STATUS_COLORS = {
+  good: { pillBg: "#E4EFDD", pillFg: "#4A7A3A", dot: "#5C9442" },
+  warn: { pillBg: "#FBEFD4", pillFg: "#9A6B14", dot: "#C99A2E" },
+  bad:  { pillBg: "#F6E0D8", pillFg: "#A8482E", dot: "#C2522E" },
+  neut: { pillBg: "#EFE7DA", pillFg: "#8A7866", dot: "#B7A688" },
+};
+
+// Resolve a status from a delta + whether "up is good". Returns good|warn|bad.
+function deltaStatus(delta, { upIsGood = true, warnAt = 10, badAt = 25 } = {}) {
+  if (delta == null) return "neut";
+  const favourable = upIsGood ? delta >= 0 : delta <= 0;
+  const mag = Math.abs(delta);
+  if (favourable) return "good";
+  if (mag >= badAt) return "bad";
+  if (mag >= warnAt) return "warn";
+  return "warn";
+}
+
+function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false, status = "neut", note = null }) {
   const p = alert ? KPI_PALETTE.red : (KPI_PALETTE[accent] || KPI_PALETTE.brand);
+  const st = STATUS_COLORS[status] || STATUS_COLORS.neut;
   return (
     <div className="group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)]"
       style={{ background: p.bg, borderColor: p.bd }}>
@@ -735,8 +762,12 @@ function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = fal
         {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: p.chip }}><Icon size={14} style={{ color: p.tint }} /></div>}
         <span className="text-[11px] font-semibold uppercase tracking-[0.06em] leading-tight" style={{ color: p.tint }}>{label}</span>
       </div>
-      <div className={`text-[28px] leading-none font-bold tracking-tight tabular-nums ${alert ? "text-[#B0485A]" : "text-[#33271F]"}`}>{value}</div>
+      <div className="flex items-center gap-2">
+        <div className={`text-[28px] leading-none font-bold tracking-tight tabular-nums ${alert ? "text-[#A8482E]" : "text-[#33271F]"}`}>{value}</div>
+        {status !== "neut" && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: st.dot }} />}
+      </div>
       {sub && <div className="text-xs text-[#8B7A66] -mt-0.5">{sub}</div>}
+      {note && <div className="mt-auto pt-1.5"><span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold" style={{ background: st.pillBg, color: st.pillFg }}>{note}</span></div>}
     </div>
   );
 }
@@ -744,9 +775,9 @@ function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = fal
 function AnalysisBlock({ title, children, className = "", action }) {
   const fill = className.includes("flex flex-col");
   return (
-    <div className={`rounded-2xl bg-slate-900/80 border border-slate-700/70 overflow-hidden ${className}`}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/70 flex-shrink-0">
-        <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
+    <div className={`rounded-2xl bg-[#FBF6EC] border border-[#E8DCC6] overflow-hidden ${className}`}>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-[#EADFCB] flex-shrink-0">
+        <h3 className="text-sm font-bold text-[#3A2E26]">{title}</h3>
         {action}
       </div>
       <div className={`p-5 ${fill ? "flex-1 flex flex-col min-h-0" : ""}`}>{children}</div>
@@ -774,102 +805,108 @@ function Sparkline({ data, color = "#C9854F", height = 28 }) {
   );
 }
 
-// Hero revenue card — the dashboard's north star. Dark brand-brown gradient,
-// large number, a live hourly revenue bar chart, and quick supporting stats so
-// the tile earns its size instead of sitting half-empty.
+// Hero revenue card — the dashboard's north star. Light caramel→cream gradient
+// (warm, not dark), brown text, a live hourly revenue bar chart, and quick
+// supporting stats so the tile earns its size.
 function HeroRevenueCard({ current, previous, target, prevLabel, chart = [], orders, wagePct, splh, onClick }) {
   const val = formatKPI(current, "currency");
-  let deltaPct = null, isUp = false;
+  let deltaPct = null, status = "neut";
   if (current != null && previous != null && previous !== 0) {
     deltaPct = ((current - previous) / Math.abs(previous)) * 100;
-    isUp = deltaPct > 0;
+    status = deltaStatus(deltaPct, { upIsGood: true, warnAt: 10, badAt: 25 });
   }
+  // Below-target revenue is a concern even if up vs yesterday.
   const pctToTarget = target?.revenue ? Math.min(100, (current / target.revenue) * 100) : null;
+  if (pctToTarget != null && pctToTarget < 80 && status === "good") status = "warn";
+  const st = STATUS_COLORS[status] || STATUS_COLORS.neut;
   const bars = (chart || []).filter(c => c && c.revenue != null);
   const maxBar = bars.length ? Math.max(...bars.map(b => b.revenue), 1) : 1;
   const peak = bars.length ? bars.reduce((a, b) => b.revenue > a.revenue ? b : a, bars[0]) : null;
+  const progColor = pctToTarget == null ? "#C9854F" : pctToTarget >= 90 ? "#5C9442" : pctToTarget >= 70 ? "#C99A2E" : "#C2522E";
   return (
     <div onClick={onClick}
-      className="relative overflow-hidden rounded-3xl p-6 flex flex-col cursor-pointer group h-full min-h-[300px]"
-      style={{ background: "linear-gradient(140deg, #8A4A2C 0%, #6E3520 50%, #46200F 100%)" }}>
-      <div className="absolute -top-20 -right-10 w-72 h-72 rounded-full opacity-25 blur-3xl" style={{ background: "radial-gradient(circle, #E8A766 0%, transparent 70%)" }} />
-      <div className="absolute inset-0 opacity-[0.05]" style={{ backgroundImage: "radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)", backgroundSize: "20px 20px" }} />
+      className="relative overflow-hidden rounded-3xl p-6 flex flex-col cursor-pointer group h-full min-h-[300px] border border-[#EAD9B5]"
+      style={{ background: "linear-gradient(140deg, #D9A877 0%, #E8C9A0 45%, #F5E8D2 100%)" }}>
+      <div className="absolute -top-20 -right-10 w-72 h-72 rounded-full opacity-30 blur-3xl" style={{ background: "radial-gradient(circle, #F0D6B0 0%, transparent 70%)" }} />
 
       {/* Header */}
       <div className="relative flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm"><PoundSterling size={17} className="text-[#FBEAD2]"/></div>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "rgba(132,68,41,0.10)" }}><PoundSterling size={17} className="text-[#844429]"/></div>
           <div>
-            <div className="text-[11px] font-bold text-[#EAD0B5] uppercase tracking-[0.14em]">Revenue · Today</div>
-            <div className="text-[10px] text-[#C99E78]">{orders} orders{peak ? ` · peaks ${peak.label}` : ""}</div>
+            <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-[0.14em]">Revenue · Today</div>
+            <div className="text-[10px] text-[#A8835C]">{orders} orders{peak ? ` · peaks ${peak.label}` : ""}</div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-medium text-[#C9E8B5]">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#7FB069] animate-pulse"/> LIVE
-          <ArrowUpRight size={16} className="text-[#EAD0B5]/50 group-hover:text-[#FBEAD2] transition-colors ml-1" />
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[#5C9442]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#5C9442] animate-pulse"/> LIVE
+          <ArrowUpRight size={16} className="text-[#9C6B3F]/50 group-hover:text-[#844429] transition-colors ml-1" />
         </div>
       </div>
 
-      {/* Big number + delta */}
+      {/* Big number + status delta */}
       <div className="relative flex items-end gap-3 flex-wrap">
-        <div className="text-[52px] leading-[0.9] font-bold text-[#FFF8EE] tracking-tight">{val}</div>
+        <div className="text-[52px] leading-[0.9] font-bold text-[#3A2E26] tracking-tight">{val}</div>
         {deltaPct != null && (
-          <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-1.5 ${isUp ? "bg-[#7FB069]/25 text-[#C9E8B5]" : "bg-[#E8889A]/20 text-[#F4C2CD]"}`}>
-            {isUp ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}{deltaPct >= 0 ? "+" : ""}{deltaPct.toFixed(1)}%
+          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-1.5" style={{ background: st.pillBg, color: st.pillFg }}>
+            {deltaPct >= 0 ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}{deltaPct >= 0 ? "+" : ""}{deltaPct.toFixed(1)}%
           </span>
         )}
       </div>
-      <div className="relative text-xs text-[#E0C3A6] mt-1.5">{prevLabel} to now: {previous != null ? formatKPI(previous, "currency") : "—"}</div>
+      <div className="relative text-xs text-[#8A6A48] mt-1.5">{prevLabel} to now: {previous != null ? formatKPI(previous, "currency") : "—"}</div>
 
       {/* Live hourly bars — fills the space */}
       <div className="relative flex-1 flex items-end gap-[3px] mt-5 min-h-[64px]">
         {bars.length > 0 ? bars.map((b, i) => (
           <div key={i} className="flex-1 rounded-t-sm transition-all duration-500 hover:opacity-100"
-            style={{ height: `${Math.max(4, (b.revenue / maxBar) * 100)}%`, background: b === peak ? "linear-gradient(180deg,#FBEAD2,#E8A766)" : "rgba(240,192,136,0.45)", minHeight: "4px" }}
+            style={{ height: `${Math.max(4, (b.revenue / maxBar) * 100)}%`, background: b === peak ? "linear-gradient(180deg,#8A4A2C,#5C2E1A)" : "rgba(168,106,56,0.40)", minHeight: "4px" }}
             title={`${b.label}: ${fmtCurrency(b.revenue)}`} />
         )) : (
-          <div className="w-full text-center text-[11px] text-[#C99E78] py-4">Hourly revenue will appear as sales come in</div>
+          <div className="w-full text-center text-[11px] text-[#A8835C] py-4">Hourly revenue will appear as sales come in</div>
         )}
       </div>
 
-      {/* Footer: target progress + quick stats */}
-      <div className="relative mt-4 pt-4 border-t border-white/10">
+      {/* Footer: target progress (status-coloured) + quick stats */}
+      <div className="relative mt-4 pt-4 border-t border-[#E0C9A8]">
         <div className="flex items-center justify-between text-xs mb-2">
-          <span className="text-[#E0C3A6]">{pctToTarget != null ? `${pctToTarget.toFixed(0)}% of target` : "No target set"}</span>
-          {target && <span className="font-semibold text-[#FBEAD2]">{fmtCurrency(target.revenue)} target</span>}
+          <span className="text-[#8A6A48]">{pctToTarget != null ? `${pctToTarget.toFixed(0)}% of target` : "No target set"}</span>
+          {target && <span className="font-semibold text-[#844429]">{fmtCurrency(target.revenue)} target</span>}
         </div>
         {pctToTarget != null && (
-          <div className="h-2 rounded-full bg-white/12 overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pctToTarget}%`, background: "linear-gradient(90deg, #E8A766, #FBEAD2)" }} />
+          <div className="h-2 rounded-full bg-[#00000010] overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pctToTarget}%`, background: progColor }} />
           </div>
         )}
-        <div className="flex items-center gap-5 mt-4">
-          {wagePct != null && <div><div className="text-[10px] text-[#C99E78] uppercase tracking-wider">Wage</div><div className="text-sm font-bold text-[#FBEAD2]">{wagePct.toFixed(1)}%</div></div>}
-          {splh != null && <div><div className="text-[10px] text-[#C99E78] uppercase tracking-wider">SPLH</div><div className="text-sm font-bold text-[#FBEAD2]">{fmtCurrency(splh)}</div></div>}
-          {peak && <div><div className="text-[10px] text-[#C99E78] uppercase tracking-wider">Peak hour</div><div className="text-sm font-bold text-[#FBEAD2]">{peak.label}</div></div>}
+        <div className="flex items-center gap-6 mt-4">
+          {wagePct != null && <div><div className="text-[10px] text-[#A8835C] uppercase tracking-wider">Wage</div><div className="text-sm font-bold text-[#844429]">{wagePct.toFixed(1)}%</div></div>}
+          {splh != null && <div><div className="text-[10px] text-[#A8835C] uppercase tracking-wider">SPLH</div><div className="text-sm font-bold text-[#844429]">{fmtCurrency(splh)}</div></div>}
+          {peak && <div><div className="text-[10px] text-[#A8835C] uppercase tracking-wider">Peak hour</div><div className="text-sm font-bold text-[#844429]">{peak.label}</div></div>}
         </div>
       </div>
     </div>
   );
 }
 
-function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null }) {
+function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null, warnAt = 10, badAt = 25 }) {
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
-  // Category colour system (shared, jewel-toned). Each metric family gets a
-  // coordinated tint, soft card wash, and border — varied but cream-harmonised.
+  // Tile colour = brand category identity (no pink). Status is separate.
   const p = alert ? KPI_PALETTE.red : (KPI_PALETTE[accent] || KPI_PALETTE.brand);
-  let deltaEl = null;
+  let deltaEl = null, status = "neut";
   if (current != null && previous != null && previous !== 0) {
     const delta = ((current - previous) / Math.abs(previous)) * 100;
-    const isPositive = invertDelta ? delta < 0 : delta > 0;
+    // invertDelta means "down is good" (e.g. wage %, labour hours, SPLH where
+    // we want efficiency). deltaStatus → traffic-light good|warn|bad.
+    status = alert ? "bad" : deltaStatus(delta, { upIsGood: !invertDelta, warnAt, badAt });
+    const st = STATUS_COLORS[status];
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${isPositive ? "bg-[#E2F0E0] text-[#3E6B45]" : "bg-[#F7DDE2] text-[#A03E50]"}`}>
-        {isPositive ? <TrendingUp size={11}/> : <TrendingDown size={11}/>}{sign}{delta.toFixed(1)}%
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold" style={{ background: st.pillBg, color: st.pillFg }}>
+        {delta >= 0 ? <TrendingUp size={11}/> : <TrendingDown size={11}/>}{sign}{delta.toFixed(1)}%
       </span>
     );
   }
+  const st = STATUS_COLORS[status] || STATUS_COLORS.neut;
   return (
     <div onClick={onClick}
       className={`group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)] transition-all ${onClick ? "cursor-pointer hover:shadow-[0_10px_28px_rgba(80,40,20,0.12)] hover:-translate-y-0.5" : ""}`}
@@ -880,7 +917,10 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
         {onClick && <ArrowUpRight size={14} className="ml-auto transition-colors" style={{ color: p.tint, opacity: 0.5 }} />}
       </div>
       <div className="flex items-end justify-between gap-2">
-        <div className="text-[28px] leading-none font-bold text-[#33271F] tracking-tight">{currentVal}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-[28px] leading-none font-bold text-[#33271F] tracking-tight">{currentVal}</div>
+          {status !== "neut" && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: st.dot }} />}
+        </div>
         {spark && spark.length >= 2 && <Sparkline data={spark} color={p.tint} height={30} />}
       </div>
       {subCurrent && <div className="text-xs text-[#8B7A66] -mt-0.5">{subCurrent}</div>}
@@ -20395,14 +20435,14 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const prevLabel = (prevPeriod?.label || "Prior") + (inProgress ? " (to now)" : "");
 
   // ── Store leaderboard: per-store revenue ranking (cur + prior delta) ───────
-  // Built from data already fetched — no extra query. Only meaningful when the
-  // selection spans more than one store.
+  // Always ranks ALL stores (not the picker selection) so this view stays
+  // consistent regardless of the store filter. Built from data already fetched.
+  const allStoreIdsSet = useMemo(() => new Set(allStores.map(s => s.id)), [allStores]);
   const storeLeaderboard = useMemo(() => {
-    if (scopedStores.length < 2) return [];
     const curByStore = {}, prevByStore = {};
-    (data.curSales || []).forEach(r => { if (scopedStoreIds.has(r.storeId)) curByStore[r.storeId] = (curByStore[r.storeId] || 0) + (Number(r.revenue) || 0); });
-    (data.prevSales || []).forEach(r => { if (scopedStoreIds.has(r.storeId)) prevByStore[r.storeId] = (prevByStore[r.storeId] || 0) + (Number(r.revenue) || 0); });
-    const rows = scopedStores.map(s => {
+    (data.curSales || []).forEach(r => { if (allStoreIdsSet.has(r.storeId)) curByStore[r.storeId] = (curByStore[r.storeId] || 0) + (Number(r.revenue) || 0); });
+    (data.prevSales || []).forEach(r => { if (allStoreIdsSet.has(r.storeId)) prevByStore[r.storeId] = (prevByStore[r.storeId] || 0) + (Number(r.revenue) || 0); });
+    const rows = allStores.map(s => {
       const rev = curByStore[s.id] || 0;
       const prv = prevByStore[s.id] || 0;
       const delta = prv > 0 ? ((rev - prv) / prv) * 100 : null;
@@ -20410,7 +20450,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     }).filter(r => r.rev > 0 || r.prv > 0);
     rows.sort((a, b) => b.rev - a.rev);
     return rows;
-  }, [data.curSales, data.prevSales, scopedStores, scopedStoreIds]);
+  }, [data.curSales, data.prevSales, allStores, allStoreIdsSet]);
   const leaderMax = useMemo(() => Math.max(1, ...storeLeaderboard.map(r => r.rev)), [storeLeaderboard]);
 
   // ── Auto-insights: surface what needs attention from the live KPIs ─────────
@@ -20598,26 +20638,25 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       )}
       {/* ── Auto-insights: what needs attention ──────────────────────────── */}
       {insights.length > 0 && (
-        <div className="rounded-2xl border border-amber-700/30 bg-amber-50/60 p-4">
-          <div className="flex items-center gap-2 mb-2.5">
-            <Zap size={14} className="text-amber-600" />
-            <span className="text-xs font-bold text-amber-800 uppercase tracking-widest">What needs attention</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {insights.map((ins, i) => {
-              const tone = ins.kind === "alert"
-                ? { bar: "border-l-rose-500", dot: "bg-rose-500", bg: "bg-rose-50", txt: "text-rose-900", brd: "border-rose-200" }
-                : ins.kind === "watch"
-                ? { bar: "border-l-amber-500", dot: "bg-amber-500", bg: "bg-amber-50", txt: "text-amber-900", brd: "border-amber-200" }
-                : { bar: "border-l-emerald-500", dot: "bg-emerald-500", bg: "bg-emerald-50", txt: "text-emerald-900", brd: "border-emerald-200" };
-              return (
-                <div key={i} className={`flex items-start gap-2 rounded-xl ${tone.bg} border ${tone.brd} border-l-4 ${tone.bar} px-3 py-2`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${tone.dot} mt-1.5 flex-shrink-0`} />
-                  <span className={`text-xs font-medium ${tone.txt} leading-snug`}>{ins.text}</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {insights.map((ins, i) => {
+            const tone = ins.kind === "alert"
+              ? { edge: "#C2522E", bg: "#F6E0D8", bd: "#EAC8BC", ey: "#A8482E" }
+              : ins.kind === "watch"
+              ? { edge: "#C99A2E", bg: "#FBEFD4", bd: "#EAD9B5", ey: "#9A6B2E" }
+              : { edge: "#5C9442", bg: "#E4EFDD", bd: "#CFE2C2", ey: "#4A7A3A" };
+            const eyebrow = ins.label || (ins.kind === "alert" ? "Attention" : ins.kind === "watch" ? "Watch" : "Good news");
+            return (
+              <div key={i} className="rounded-2xl border p-4 shadow-[0_1px_2px_rgba(80,40,20,0.04)]"
+                style={{ background: tone.bg, borderColor: tone.bd, borderLeft: `3px solid ${tone.edge}` }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Zap size={12} style={{ color: tone.edge }} />
+                  <span className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: tone.ey }}>{eyebrow}</span>
                 </div>
-              );
-            })}
-          </div>
+                <div className="text-[13px] text-[#5C4A3A] leading-snug">{ins.text}</div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -20627,74 +20666,54 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <div className="col-span-2 lg:row-span-2">
           <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} target={target} prevLabel={prevLabel} chart={chart} orders={cur.orders} wagePct={cur.wagePct} splh={cur.splh} onClick={openRevenueDrill} />
         </div>
-        <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
-        <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
-        <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
-        <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
+        <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="rosewood" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
+        <ComparisonKPICard accent="caramel" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
+        <ComparisonKPICard accent="gold" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
+        <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="brown" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-        <StatCard label="COGS %" value={cogsPct != null ? `${cogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={cogsPct != null ? `${fmtCurrency(dashCogs.cogs)} food cost` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent={cogsPct != null ? (cogsPct > 35 ? "red" : "sky") : "slate"} alert={cogsPct != null && cogsPct > 35} />
-        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
-        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "violet") : "slate"} />
-        <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "emerald"} alert={criticalIssues > 0} />
-        <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="amber" />
+        <StatCard label="COGS %" value={cogsPct != null ? `${cogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={cogsPct != null ? `${fmtCurrency(dashCogs.cogs)} food cost` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent="caramel" status={cogsPct == null ? "neut" : cogsPct > 35 ? "bad" : cogsPct > 30 ? "warn" : "good"} note={cogsPct == null ? null : cogsPct > 35 ? "high" : cogsPct > 30 ? "watch" : "on track"} alert={cogsPct != null && cogsPct > 35} />
+        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent="brown" status={primeCostPct == null ? "neut" : primeCostPct > 65 ? "bad" : primeCostPct > 60 ? "warn" : "good"} note={primeCostPct == null ? null : primeCostPct > 65 ? "high" : primeCostPct > 60 ? "watch" : "healthy"} alert={primeCostPct != null && primeCostPct > 65} />
+        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent="rosewood" status={netMarginPct == null ? "neut" : netMarginPct < 0 ? "bad" : netMarginPct < 10 ? "warn" : "good"} note={netMarginPct == null ? null : netMarginPct < 0 ? "loss" : netMarginPct < 10 ? "thin" : "healthy"} />
+        <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent="gold" status={criticalIssues > 0 ? "bad" : openIssues > 0 ? "warn" : "good"} note={criticalIssues > 0 ? `${criticalIssues} critical` : openIssues > 0 ? `${openIssues} open` : "clear"} alert={criticalIssues > 0} />
+        <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="caramel" status={ratingAvg == null ? "neut" : ratingAvg >= 4.3 ? "good" : ratingAvg >= 4.0 ? "warn" : "bad"} note={ratingAvg == null ? null : `${ratingAvg.toFixed(2)}★`} />
       </div>
 
       {/* ── Store leaderboard (only when ranking >1 store) ───────────────────── */}
-      {storeLeaderboard.length >= 2 && (
+      {storeLeaderboard.length >= 1 && (
         <AnalysisBlock
           title={`Store performance · ${period.label}`}
-          action={<span className="text-[11px] text-slate-500">{storeLeaderboard.length} stores · ranked by revenue</span>}
+          action={<span className="text-[11px] text-[#9A8770]">All stores · ranked by revenue</span>}
         >
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-2.5">
-            {/* Top performers (left) */}
-            <div className="space-y-2.5">
-              <div className="text-[11px] font-bold text-emerald-600 uppercase tracking-widest mb-1">Top performers</div>
-              {storeLeaderboard.slice(0, 5).map((s, i) => (
-                <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group" title={`View ${s.name}`}>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-[11px] font-bold text-slate-500 w-4">{i + 1}</span>
-                    <span className="text-sm font-semibold text-slate-700 group-hover:text-amber-700 flex-1 text-left truncate">{s.name}</span>
-                    <span className="text-sm font-bold text-slate-700 tabular-nums">{fmtCurrency(s.rev)}</span>
-                    {s.delta != null && (
-                      <span className={`text-[10px] font-semibold w-12 text-right ${s.delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                        {s.delta >= 0 ? "▲" : "▼"} {Math.abs(s.delta).toFixed(0)}%
+          <div className="space-y-1">
+            {storeLeaderboard.map((s, i) => {
+              const dStatus = s.delta == null ? "neut" : s.delta >= 0 ? "good" : (s.delta <= -10 ? "bad" : "warn");
+              const dColor = STATUS_COLORS[dStatus].dot;
+              return (
+                <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group flex items-center gap-3.5 px-2 py-2 rounded-xl hover:bg-[#F6EEDF]/70 transition-colors" title={`View ${s.name}`}>
+                  <span className="text-[13px] font-bold text-[#C9854F] w-5 text-center flex-shrink-0">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-3 mb-1.5">
+                      <span className="text-[13px] font-semibold text-[#3A2E26] truncate text-left">{s.name}</span>
+                      <span className="flex items-center gap-2.5 flex-shrink-0">
+                        <span className="text-[13px] font-bold text-[#3A2E26] tabular-nums">{fmtCurrency(s.rev)}</span>
+                        {s.delta != null && (
+                          <span className="text-[11px] font-semibold w-10 text-right tabular-nums" style={{ color: dColor }}>
+                            {s.delta >= 0 ? "▲" : "▼"}{Math.abs(s.delta).toFixed(0)}%
+                          </span>
+                        )}
                       </span>
-                    )}
-                  </div>
-                  <div className="h-2 bg-slate-700 rounded-full overflow-hidden ml-6">
-                    <div className="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-800 group-hover:opacity-90" style={{ width: `${(s.rev / leaderMax) * 100}%` }} />
+                    </div>
+                    <div className="h-1.5 bg-[#EADFCB] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${(s.rev / leaderMax) * 100}%`, background: "linear-gradient(90deg, #C9854F, #E8B583)" }} />
+                    </div>
                   </div>
                 </button>
-              ))}
-            </div>
-            {/* Bottom performers (right) */}
-            <div className="space-y-2.5">
-              <div className="text-[11px] font-bold text-rose-600 uppercase tracking-widest mb-1">Needs attention</div>
-              {storeLeaderboard.slice(Math.max(5, storeLeaderboard.length - 5)).reverse().map((s) => {
-                const rank = storeLeaderboard.findIndex(x => x.id === s.id) + 1;
-                return (
-                  <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group" title={`View ${s.name}`}>
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-[11px] font-bold text-slate-500 w-4">{rank}</span>
-                      <span className="text-sm font-semibold text-slate-700 group-hover:text-amber-700 flex-1 text-left truncate">{s.name}</span>
-                      <span className="text-sm font-bold text-slate-700 tabular-nums">{fmtCurrency(s.rev)}</span>
-                      {s.delta != null && (
-                        <span className={`text-[10px] font-semibold w-12 text-right ${s.delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                          {s.delta >= 0 ? "▲" : "▼"} {Math.abs(s.delta).toFixed(0)}%
-                        </span>
-                      )}
-                    </div>
-                    <div className="h-2 bg-slate-700 rounded-full overflow-hidden ml-6">
-                      <div className="h-full rounded-full bg-gradient-to-r from-stone-400 to-stone-500 group-hover:opacity-90" style={{ width: `${(s.rev / leaderMax) * 100}%` }} />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+              );
+            })}
           </div>
-          <div className="text-[10px] text-slate-500 pt-3 mt-1 border-t border-slate-700/40">Tap a store to drill into its figures{prevPeriod ? ` · ▲▼ vs ${prevLabel.replace(" (to now)", "")}` : ""}</div>
+          <div className="text-[10px] text-[#9A8770] pt-3 mt-1 border-t border-[#EADFCB]">Tap a store to drill into its figures{prevPeriod ? ` · ▲▼ vs ${prevLabel.replace(" (to now)", "")}` : ""}</div>
         </AnalysisBlock>
       )}
 
