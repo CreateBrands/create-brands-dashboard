@@ -109,6 +109,7 @@ import {
   createLocalPosts, fetchPostLog,
   triggerListingsAudit, fetchListingsAudit,
   triggerChainSnapshot, fetchChainSnapshotHistory, fetchPerformanceTrend, fetchReviewCountTrend,
+  fetchSeoHealthScores,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -16105,7 +16106,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
       const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
       const safe = (p) => p.then(v => v).catch(() => null);
       const [stats, perf, sentiment, deletions, audit, staff, cov, scans,
-             perfTrend, snapHist, reviewTrend] = await Promise.all([
+             perfTrend, snapHist, reviewTrend, seo] = await Promise.all([
         safe(fetchReviewStats()),
         safe(fetchPerformanceMetrics({ from: from30 })),
         safe(fetchReviewSentiment({ from: from30 })),
@@ -16117,6 +16118,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
         safe(fetchPerformanceTrend({ days: 60 })),
         safe(fetchChainSnapshotHistory({ days: 90 })),
         safe(fetchReviewCountTrend({ days: 90 })),
+        safe(fetchSeoHealthScores()),
       ]);
 
       const perfByStore = {}; (perf?.perStore || []).forEach(s => { perfByStore[s.storeId] = s; });
@@ -16184,6 +16186,7 @@ function ChainCommandCenter({ stores = [], currentUser }) {
         problemThemes: (sentiment?.themes || []).filter(t => t.total >= 5 && t.negativeRate >= 0.25),
         coverage: cov,
         insights: insights.slice(0, 8),
+        seo: seo || null,
       });
       setTrends({
         perf: Array.isArray(perfTrend) ? perfTrend : [],
@@ -16300,6 +16303,52 @@ function ChainCommandCenter({ stores = [], currentUser }) {
               <div className="text-xs text-slate-400">Issues / removed</div>
             </div>
           </div>
+
+          {/* ── SECTION: SEO Health Score ───────────────────── */}
+          {data.seo?.rows?.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-xs font-semibold text-slate-300">SEO Health Score by store</div>
+                <div className="text-[10px] text-slate-600">
+                  avg {Math.round(data.seo.rows.reduce((a, r) => a + r.score, 0) / data.seo.rows.length)}/100
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-600 mb-3">
+                Completeness · review prominence · velocity · scan activity · engagement. Higher = better-optimised for local ranking.
+              </div>
+              <div className="space-y-1.5">
+                {data.seo.rows.map(r => {
+                  const sc = r.score;
+                  const tone = sc >= 70 ? "from-emerald-500 to-emerald-400" : sc >= 45 ? "from-amber-500 to-amber-400" : "from-rose-500 to-rose-400";
+                  const txt = sc >= 70 ? "text-emerald-300" : sc >= 45 ? "text-amber-300" : "text-rose-300";
+                  const c = r.components;
+                  return (
+                    <div key={r.storeId} className="bg-slate-950/40 border border-slate-800 rounded-xl px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="text-sm font-medium text-white truncate">{stores.find(st => st.id === r.storeId)?.name || r.storeId}</span>
+                        <span className={`text-lg font-bold ${txt} flex-shrink-0`}>{sc}</span>
+                      </div>
+                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-1.5">
+                        <div className={`h-full bg-gradient-to-r ${tone} rounded-full`} style={{ width: `${sc}%` }} />
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-slate-500">
+                        <span>Profile {c.completenessKnown ? `${c.completeness}/25` : "—"}</span>
+                        <span>Reviews {c.prominence}/25</span>
+                        <span>Velocity {c.velocity}/20 ({c.reviews30}/mo)</span>
+                        <span>Scans {c.collection}/15 ({c.scans30}/mo)</span>
+                        <span>Engage {c.engagement}/15 ({c.convPct}%)</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {data.seo.unmeasured?.length > 0 && (
+                <div className="text-[10px] text-slate-600 mt-3 pt-2 border-t border-slate-800">
+                  Not yet scored (needs extra data): {data.seo.unmeasured.join(" · ")}.
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── SECTION 3: Trends ───────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

@@ -5662,6 +5662,116 @@ export async function fetchReviewCountTrend({ days = 90 } = {}) {
   return Object.entries(byDay).map(([date, total]) => ({ date, total })).sort((a, b) => a.date.localeCompare(b.date));
 }
 // ===== end GBP_COMMAND_V1 =====
+
+// ===== GBP_SEO_V1: per-store SEO health score =====
+// Review velocity per store — counts reviews in the last 30 and 90 days.
+// Recency/velocity is a top-weighted 2026 ranking signal.
+export async function fetchReviewVelocity({ storeId = null } = {}) {
+  const d90 = new Date(Date.now() - 90 * 864e5).toISOString();
+  let q = supabase.from("google_reviews").select("store_id, create_time").gte("create_time", d90).limit(50000);
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  const d30ms = Date.now() - 30 * 864e5;
+  const byStore = {};
+  (data || []).forEach(r => {
+    if (!r.store_id) return;
+    byStore[r.store_id] = byStore[r.store_id] || { last30: 0, last90: 0 };
+    byStore[r.store_id].last90 += 1;
+    if (new Date(r.create_time).getTime() >= d30ms) byStore[r.store_id].last30 += 1;
+  });
+  return byStore; // { storeId: { last30, last90 } }
+}
+
+// Composite SEO health score per store (0-100), built ONLY from measurable data.
+// Five weighted components mapped to Google's relevance/prominence pillars:
+//   - Profile completeness (25): hours, website, phone, description, special hours
+//   - Review prominence    (25): rating (vs 4.5 target) + volume
+//   - Review velocity       (20): reviews in last 30d (recency signal)
+//   - Collection activity   (15): scans (leading indicator of future reviews)
+//   - Engagement            (15): impressions->actions conversion rate
+// Returns per-store score + component breakdown + the gaps it can't measure.
+export async function fetchSeoHealthScores() {
+  const safe = (p) => p.then(v => v).catch(() => null);
+  const [stats, audit, perf, scans, velocity] = await Promise.all([
+    safe(fetchReviewStats()),
+    safe(fetchListingsAudit({})),
+    safe(fetchPerformanceMetrics({ from: new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10) })),
+    safe(fetchReviewScanStats({ since: new Date(Date.now() - 30 * 864e5).toISOString() })),
+    safe(fetchReviewVelocity({})),
+  ]);
+
+  const auditByStore = {}; (audit || []).forEach(a => { auditByStore[a.storeId] = a; });
+  const perfByStore = {}; (perf?.perStore || []).forEach(p => { perfByStore[p.storeId] = p; });
+  const scanByStore = {};
+  (Array.isArray(scans) ? scans : []).forEach(s => { if (s.storeId) scanByStore[s.storeId] = (scanByStore[s.storeId] || 0) + 1; });
+  const vel = velocity || {};
+
+  const clamp = (n, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
+
+  const rows = (stats || []).map(s => {
+    const a = auditByStore[s.storeId];
+    const p = perfByStore[s.storeId] || {};
+    const scanN = scanByStore[s.storeId] || 0;
+    const v = vel[s.storeId] || { last30: 0, last90: 0 };
+
+    // 1. Completeness (25): 5 fields x 5 pts
+    let completeness = 0;
+    if (a) {
+      completeness =
+        (a.hasHours ? 5 : 0) + (a.hasWebsite ? 5 : 0) + (a.hasPhone ? 5 : 0) +
+        (a.hasDescription ? 5 : 0) + (a.hasSpecialHours ? 5 : 0);
+    }
+    const completenessKnown = !!a;
+
+    // 2. Prominence (25): rating vs 4.5 target (up to 15) + volume (up to 10)
+    const ratingScore = s.avg ? clamp((s.avg / 4.7) * 15, 0, 15) : 0;
+    const volScore = clamp(Math.log10((s.n || 0) + 1) / Math.log10(1000) * 10, 0, 10); // 1000+ reviews = full
+    const prominence = ratingScore + volScore;
+
+    // 3. Velocity (20): reviews last 30d. 15+/mo = full marks.
+    const velocityScore = clamp((v.last30 / 15) * 20, 0, 20);
+
+    // 4. Collection (15): scans last 30d. 20+/mo = full.
+    const collectionScore = clamp((scanN / 20) * 15, 0, 15);
+
+    // 5. Engagement (15): conversion rate vs 20% target.
+    const conv = p.impressions > 0 ? p.actions / p.impressions : 0;
+    const engagementScore = clamp((conv / 0.20) * 15, 0, 15);
+
+    // total — if completeness unknown (no audit row), scale the rest to 100.
+    let total, basis;
+    if (completenessKnown) {
+      total = completeness + prominence + velocityScore + collectionScore + engagementScore;
+      basis = "full";
+    } else {
+      const partial = prominence + velocityScore + collectionScore + engagementScore; // out of 75
+      total = (partial / 75) * 100;
+      basis = "no_audit";
+    }
+
+    return {
+      storeId: s.storeId,
+      score: Math.round(total),
+      basis,
+      components: {
+        completeness: Math.round(completeness), completenessMax: 25, completenessKnown,
+        prominence: Math.round(prominence), prominenceMax: 25,
+        velocity: Math.round(velocityScore), velocityMax: 20, reviews30: v.last30,
+        collection: Math.round(collectionScore), collectionMax: 15, scans30: scanN,
+        engagement: Math.round(engagementScore), engagementMax: 15, convPct: Math.round(conv * 1000) / 10,
+      },
+      rating: s.avg || 0, reviews: s.n || 0,
+    };
+  }).sort((a, b) => b.score - a.score);
+
+  return {
+    rows,
+    // gaps we transparently can't score yet:
+    unmeasured: ["Photo count & recency", "Post frequency per store", "Primary category accuracy", "NAP consistency across web"],
+  };
+}
+// ===== end GBP_SEO_V1 =====
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================
