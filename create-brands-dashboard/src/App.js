@@ -368,6 +368,50 @@ const FEATURES_BY_SECTION = FEATURE_REGISTRY.reduce((m,f)=>{ (m[f.section]=m[f.s
 const AccessContext = createContext({ canFeature: () => true });
 const useAccess = () => useContext(AccessContext);
 
+// Provides the owner-configured default store scope + live store list to any
+// view, so every page can open to the configured default and offer a consistent
+// multi-store picker. defaultScope is "all" | storeId | storeId[].
+const StoreScopeContext = createContext({ defaultScope: "all", liveStores: [], resolveInitial: () => "all" });
+const useStoreScope = () => useContext(StoreScopeContext);
+
+// Per-view store filter hook. Seeds the initial value from the owner-configured
+// default scope, exposes the current value + setter, and a membership test that
+// works for "all" | id | id[]. Drop into any view to make it respect the role
+// default and support multi-store selection consistently.
+function useStoreFilter(availableStores, { allowAll = true } = {}) {
+  const { defaultScope } = useStoreScope();
+  const initial = useMemo(() => resolveInitialScope(defaultScope, availableStores, { allowAll }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [defaultScope, (availableStores || []).length, allowAll]);
+  const [value, setValue] = useState(initial);
+  const appliedRef = useRef(false);
+  // Apply the resolved default once stores/config have loaded.
+  useEffect(() => {
+    if (appliedRef.current) return;
+    if ((availableStores || []).length) { setValue(resolveInitialScope(defaultScope, availableStores, { allowAll })); appliedRef.current = true; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultScope, (availableStores || []).length]);
+  const ids = useMemo(() => Array.isArray(value) ? value : (value === "all" ? null : value ? [value] : []), [value]);
+  const inScope = useCallback((storeId) => ids === null ? true : ids.includes(storeId), [ids]);
+  return { value, setValue, ids, inScope, isAll: value === "all" };
+}
+// Given the context's defaultScope and a list of stores the view can show,
+// return a sane initial filter value ("all" | id | id[]). Falls back to "all"
+// or the first available store for managers.
+function resolveInitialScope(defaultScope, availableStores, { allowAll = true } = {}) {
+  const ids = (availableStores || []).map(s => s.id);
+  const has = (id) => ids.includes(id);
+  if (Array.isArray(defaultScope)) {
+    const valid = defaultScope.filter(has);
+    if (valid.length) return valid.length === 1 ? valid[0] : valid;
+  } else if (defaultScope && defaultScope !== "all" && has(defaultScope)) {
+    return defaultScope;
+  }
+  if (defaultScope === "all" && allowAll) return "all";
+  // no usable config → all (if allowed) else first store
+  return allowAll ? "all" : (ids[0] || "all");
+}
+
 // ─── Icon Map ─────────────────────────────────────────────────────────────────
 const ICON_MAP = { Utensils, Moon, Coffee, Building2 };
 
@@ -17047,7 +17091,10 @@ function OnboardingBoard({ stores, opsTeam }) {
   const [policyAcks, setPolicyAcks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { defaultScope: obDefaultScope } = useStoreScope();
   const [storeSel, setStoreSel] = useState("all");
+  const obAppliedRef = useRef(false);
+  const obInScope = (sid) => { const ids = Array.isArray(storeSel) ? storeSel : (storeSel === "all" ? null : [storeSel]); return ids === null ? true : ids.includes(sid); };
   const [scopeSel, setScopeSel] = useState("onboarding"); // onboarding | all
 
   useEffect(() => {
@@ -17084,7 +17131,7 @@ function OnboardingBoard({ stores, opsTeam }) {
 
     return (opsTeam || [])
       .filter(m => !m.archivedAt)
-      .filter(m => storeSel === "all" || (m.storeIds || []).includes(storeSel))
+      .filter(m => storeSel === "all" || (m.storeIds || []).some(id => obInScope(id)))
       .filter(m => scopeSel === "all" || m.isTrainee || (m.profileStatus || "pending") !== "complete")
       .map(m => {
         // Profile
@@ -17135,6 +17182,12 @@ function OnboardingBoard({ stores, opsTeam }) {
 
   const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   const activeStores = (stores || []).filter(s => !s.archivedAt && isShopSite(s));
+  useEffect(() => {
+    if (obAppliedRef.current || !activeStores.length) return;
+    setStoreSel(resolveInitialScope(obDefaultScope, activeStores, { allowAll: true }));
+    obAppliedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [obDefaultScope, activeStores.length]);
 
   return (
     <div className="space-y-4">
@@ -17148,10 +17201,7 @@ function OnboardingBoard({ stores, opsTeam }) {
             <option value="onboarding">Onboarding only</option>
             <option value="all">Everyone (active)</option>
           </select>
-          <select value={storeSel} onChange={e => setStoreSel(e.target.value)} className={inputCls}>
-            <option value="all">All stores</option>
-            {activeStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-          </select>
+          <MultiStorePicker stores={activeStores} value={storeSel} onChange={setStoreSel} allowAll={true} className="w-48" />
         </div>
       </div>
 
@@ -17261,7 +17311,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
   const weekAgoStr = () => { const d = new Date(); d.setDate(d.getDate()-6); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 
   const [reportType, setReportType] = useState("store-summary");
-  const [storeSel, setStoreSel] = useState(isMgr ? (myStores[0]?.id || "all") : "all");
+  const { value: storeSel, setValue: setStoreSel, inScope: tsInScope } = useStoreFilter(myStores, { allowAll: !isMgr });
   const [employeeSel, setEmployeeSel] = useState("");
   const [from, setFrom] = useState(weekAgoStr());
   const [to, setTo] = useState(todayStr());
@@ -17301,7 +17351,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
       .filter(m => !m.archivedAt)
       .filter(m => {
         const sid = m.storeIds?.[0];
-        if (storeSel !== "all") return sid === storeSel;
+        if (storeSel !== "all") return tsInScope(sid);
         if (isMgr) return myStoreIds.includes(sid);
         return true;
       })
@@ -17333,7 +17383,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
   // Store/role scoping applied to every report's source rows.
   const scoped = useMemo(() => {
     const inScope = (sid) => {
-      if (storeSel !== "all") return sid === storeSel;
+      if (storeSel !== "all") return tsInScope(sid);
       if (isMgr) return myStoreIds.includes(sid);
       return true;
     };
@@ -17815,10 +17865,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
       <div className="flex items-end gap-2 flex-wrap bg-slate-900 border border-slate-800 rounded-2xl p-3">
         <div>
           <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Store</label>
-          <select value={storeSel} onChange={e => { setStoreSel(e.target.value); setEmployeeSel(""); setRan(false); }} className={inputCls}>
-            {(!isMgr || myStores.length > 1) && <option value="all">{isMgr ? "All my stores" : "All stores"}</option>}
-            {myStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-          </select>
+          <MultiStorePicker stores={myStores} value={storeSel} onChange={(v) => { setStoreSel(v); setEmployeeSel(""); setRan(false); }} allowAll={!isMgr || myStores.length > 1} className="w-full" />
         </div>
         {reportType === "employee-detail" && (
           <div>
@@ -24097,15 +24144,11 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
     () => [...visibleStores].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
     [visibleStores]
   );
-  const [storeSel, setStoreSel] = useState(isHqOrAbove(user.role) ? "all" : (storeOptions[0]?.id || "all"));
-  useEffect(() => {
-    if (!isHqOrAbove(user.role) && (storeSel === "all" || !storeOptions.some(s => s.id === storeSel)) && storeOptions.length) {
-      setStoreSel(storeOptions[0].id);
-    }
-  }, [user.role, storeOptions, storeSel]);
+  const isHQ_ops = isHqOrAbove(user.role);
+  const { value: storeSel, setValue: setStoreSel, inScope: storeInScope } = useStoreFilter(storeOptions, { allowAll: isHQ_ops });
   const scopedStores = useMemo(
-    () => storeSel === "all" ? sortedStores : sortedStores.filter(s => s.id === storeSel),
-    [sortedStores, storeSel]
+    () => sortedStores.filter(s => storeInScope(s.id)),
+    [sortedStores, storeInScope]
   );
 
   const todayStr = getTodayStr();
@@ -24159,10 +24202,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 flex-wrap">
-        <SelectDropdown value={storeSel} onChange={setStoreSel} className="w-52">
-          {isHqOrAbove(user.role) && <option value="all">All stores ({storeOptions.length})</option>}
-          {storeOptions.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-        </SelectDropdown>
+        <MultiStorePicker stores={storeOptions} value={storeSel} onChange={setStoreSel} allowAll={isHqOrAbove(user.role)} className="w-52" />
         <div className="text-xs text-slate-600">{scopedStores.length} store{scopedStores.length === 1 ? "" : "s"}</div>
       </div>
 
@@ -25015,7 +25055,6 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
   const { user } = useAuth();
   const vb = brands.filter(b => isHqOrAbove(user.role) || user.brandIds.includes(b.id));
   const [filter, setFilter] = useState("all");
-  const [storeFilter, setStoreFilter] = useState("all");
   const [targetFilter, setTargetFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -25031,6 +25070,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
   const scopedStores = (stores || [])
     .filter(s => !s.archivedAt && vb.some(b => b.id === s.brandId))
     .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || ""));
+  const { value: storeFilter, setValue: setStoreFilter, inScope: asgInScope } = useStoreFilter(scopedStores, { allowAll: true });
   const targetOf = (a) => a.assignTo || (a.personId ? "employee" : (a.department ? "department" : "role"));
   const visible = assignments.filter(a => {
     if (!vb.some(b => b.id === a.brandId)) return false;
@@ -25038,7 +25078,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
     if (filter === "overdue") { if (!(isActiveToday(a) && isOverdue(a))) return false; }
     else if (filter !== "all" && a.type !== filter) return false;
     // Store filter
-    if (storeFilter !== "all" && a.storeId !== storeFilter) return false;
+    if (storeFilter !== "all" && !asgInScope(a.storeId)) return false;
     // Target-type filter
     if (targetFilter !== "all" && targetOf(a) !== targetFilter) return false;
     // Search by task name
@@ -25059,13 +25099,7 @@ function AssignmentsView({ brands, stores, assignments, checklists, tempUnits, c
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search task…"
               className="w-48 pl-9 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500"/>
           </div>
-          <SelectDropdown value={storeFilter} onChange={setStoreFilter} className="w-48">
-            <option value="all">All stores</option>
-            {scopedStores.map(s => {
-              const brand = brands.find(b => b.id === s.brandId);
-              return <option key={s.id} value={s.id}>{brand ? `${brand.name} · ` : ""}{s.shortName || s.name}</option>;
-            })}
-          </SelectDropdown>
+          <MultiStorePicker stores={scopedStores} value={storeFilter} onChange={setStoreFilter} allowAll={true} className="w-48" />
           <SelectDropdown value={filter} onChange={setFilter} className="w-40">
             {tabs.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
           </SelectDropdown>
@@ -45231,20 +45265,17 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
     [stores, isHQ, visibleStoreIds]
   );
-  const [storeSel, setStoreSel] = useState(isHQ ? "all" : (myStores[0]?.id || "all"));
+  const { value: storeSel, setValue: setStoreSel, inScope: storeInScope } = useStoreFilter(myStores, { allowAll: isHQ });
   const [tab, setTab] = useState("on");      // on | break | overdue | upcoming | out
   const [dayOffset, setDayOffset] = useState(0);  // 0 = today
   const [, forceTick] = useState(0);
   useEffect(() => { const t = setInterval(() => forceTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
-  useEffect(() => {
-    if (!isHQ && (storeSel === "all" || !myStores.some(s => s.id === storeSel)) && myStores.length) setStoreSel(myStores[0].id);
-  }, [isHQ, myStores, storeSel]);
 
   const dayDate = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() + dayOffset); return d; }, [dayOffset]);
   const dayStr = fmtDateLocal(dayDate);
   const isToday = dayOffset === 0;
 
-  const inStore = (sid) => storeSel === "all" ? (isHQ || (visibleStoreIds||[]).includes(sid)) : sid === storeSel;
+  const inStore = (sid) => storeInScope(sid) && (isHQ || (visibleStoreIds||[]).includes(sid));
   const memberOf = (id) => opsTeam.find(m => m.id === id) || null;
   const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "—";
   const fmtT = (ts) => { try { return new Date(ts).toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" }); } catch { return "—"; } };
@@ -45425,10 +45456,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
             <button onClick={()=>setDayOffset(o=>o+1)} disabled={dayOffset>=0} className="text-slate-500 hover:text-slate-300 disabled:opacity-30"><ChevronRight size={16}/></button>
           </div>
         </div>
-        <SelectDropdown value={storeSel} onChange={setStoreSel} className="w-52">
-          {isHQ && <option value="all">All stores ({myStores.length})</option>}
-          {myStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-        </SelectDropdown>
+        <MultiStorePicker stores={myStores} value={storeSel} onChange={setStoreSel} allowAll={isHQ} className="w-52" />
       </div>
 
       {/* Status tiles — compact, one row, clickable to filter the list below */}
@@ -47477,7 +47505,7 @@ export default function App() {
   return (
     <AuthContext.Provider value={{ user: currentUser_ctx }}>
       <AccessContext.Provider value={{ canFeature }}>
-      <div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
+      <StoreScopeContext.Provider value={{ defaultScope: resolveDefaultStoreId(), liveStores: (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading"), resolveInitial: (avail, opts) => resolveInitialScope(resolveDefaultStoreId(), avail, opts) }}><div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
         <EmpThemeStyle/>
         <GlobalMobileStyle/>
         <AnnouncementGate currentUser={currentUser_ctx} />
@@ -47836,6 +47864,7 @@ export default function App() {
           </div>
         )}
       </div>
+      </StoreScopeContext.Provider>
       </AccessContext.Provider>
     </AuthContext.Provider>
   );
