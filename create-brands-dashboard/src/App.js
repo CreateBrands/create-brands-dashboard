@@ -38,7 +38,7 @@ import {
   fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
@@ -19786,7 +19786,7 @@ function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], pu
   );
 }
 
-function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser }) {
+function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser, defaultStoreId = "all" }) {
   const { user } = useAuth();
   const isHQ = isHqOrAbove(user.role);
   const visibleBrands = brands.filter(b => isHQ || user.brandIds.includes(b.id));
@@ -19805,8 +19805,29 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   useEffect(() => { const t = setInterval(() => setDashTick(x => x + 1), 60000); return () => clearInterval(t); }, []);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  // Owner/HQ default to "all"; managers default to their first store alphabetically.
-  const [storeId, setStoreId] = useState(isHQ ? "all" : (allStores[0]?.id || "all"));
+  // Initial store scope follows the role default configured in Access Control
+  // (resolveDefaultStoreId, passed as defaultStoreId). Managers with no config
+  // still fall back to their first assigned store. "all" is allowed but is only
+  // the default when the owner set the role to "all stores".
+  const initialStore = (() => {
+    if (defaultStoreId && defaultStoreId !== "all") return defaultStoreId;
+    if (!isHQ) return allStores[0]?.id || "all";
+    return "all";
+  })();
+  const [storeId, setStoreId] = useState(initialStore);
+  // Apply the configured default once it resolves (it loads async, so the first
+  // render may predate it). Only steers the INITIAL view — once the user changes
+  // the filter we leave their in-session pick alone.
+  const appliedDefaultRef = useRef(false);
+  useEffect(() => {
+    if (appliedDefaultRef.current) return;
+    if (defaultStoreId && defaultStoreId !== "all" && allStores.some(s => s.id === defaultStoreId)) {
+      setStoreId(defaultStoreId);
+      appliedDefaultRef.current = true;
+    } else if (defaultStoreId === "all" && isHQ) {
+      appliedDefaultRef.current = true; // explicit "all" default — leave as-is
+    }
+  }, [defaultStoreId, allStores, isHQ]);
   useEffect(() => {
     if (!isHQ && (storeId === "all" || !allStores.some(s => s.id === storeId)) && allStores.length) {
       setStoreId(allStores[0].id);
@@ -22466,7 +22487,7 @@ function PersonEntityAccess({ opsTeam = [], entities = [], entityOverrides = {},
   );
 }
 
-function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {}, customRoles = [], onSaveRole, onArchiveRole }) {
+function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands = [], stores = [], opsTeam = [], entityOverrides = {}, customRoles = [], onSaveRole, onArchiveRole, defaultStoreScope = {}, onSaveDefaultScope }) {
   const BUILTIN_ROLES = [
     { key: "owner", label: "Owner" },
     { key: "hq_staff", label: "HQ Staff" },
@@ -22617,6 +22638,30 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
               <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-xl px-4 py-6 text-center">Owner always has full access and can't be restricted.</div>
             ) : (
               <>
+                {/* Default store view for this role */}
+                <div className="rounded-2xl border border-amber-700/30 bg-amber-950/10 px-4 py-3 mb-3">
+                  <div className="text-[11px] font-bold text-amber-300 uppercase tracking-widest mb-1">Default store view</div>
+                  <div className="text-[11px] text-slate-500 mb-2">Which stores pages open to for this role. Chain Performance always shows all stores. Users can still switch manually — it just won&#39;t persist.</div>
+                  {(() => {
+                    const cur = defaultStoreScope?.[selRole] || "all";
+                    const set = (v) => onSaveDefaultScope?.(selRole, v);
+                    const liveStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading");
+                    return (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button onClick={()=>set("all")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="all"?"bg-slate-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>All stores</button>
+                        <button onClick={()=>set("assigned")} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${cur==="assigned"?"bg-amber-700 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>Their assigned stores</button>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] text-slate-500">or a specific store:</span>
+                          <select value={(cur!=="all"&&cur!=="assigned")?cur:""} onChange={e=>e.target.value && set(e.target.value)}
+                            className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-white max-w-[160px]">
+                            <option value="">— pick —</option>
+                            {liveStores.map(s => <option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
                 <div className="rounded-2xl border border-slate-800 overflow-hidden">
                   <div className="px-4 py-2 bg-slate-900 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Entities — what this role can open</div>
                   <div className="divide-y divide-slate-800/60">
@@ -46035,6 +46080,7 @@ export default function App() {
   const [accessPerms, setAccessPerms] = useState({});
   const [entityOverrides, setEntityOverrides] = useState({}); // { memberId: { entityKey: allowed } }
   const [customRoles, setCustomRoles] = useState([]); // [{id,name,baseRole,description}]
+  const [defaultStoreScope, setDefaultStoreScope] = useState({}); // { role: "all"|"assigned"|storeId }
   const customRoleById = useMemo(() => {
     const m = {}; (customRoles || []).forEach(r => { m[r.id] = r; }); return m;
   }, [customRoles]);
@@ -46042,6 +46088,7 @@ export default function App() {
     fetchAccessPermissions().then(setAccessPerms).catch(()=>{});
     fetchEntityOverrides().then(setEntityOverrides).catch(()=>{});
     fetchCustomRoles().then(setCustomRoles).catch(()=>{});
+    fetchDefaultStoreScope().then(setDefaultStoreScope).catch(()=>{});
   }, []);
   useEffect(() => { reloadAccessPerms(); }, [reloadAccessPerms]);
   // Can `role` see `section`? Override wins; otherwise the section's built-in
@@ -46380,6 +46427,21 @@ export default function App() {
       scope: crole ? (crole.scope || null) : null,
     };
   }, [currentUser, opsTeam, customRoleById]);
+
+  // Resolve the configured default store for the current user, from the role
+  // scope the owner set in Access Control. Returns a storeId, or "all" when the
+  // role is set to all stores / has no rule. "assigned" → the user's first
+  // assigned store (falls back to "all" if they have none).
+  const resolveDefaultStoreId = useCallback(() => {
+    const role = currentUserRole.matrixRole || currentUserRole.builtIn;
+    const cfg = defaultStoreScope?.[role] ?? defaultStoreScope?.[currentUserRole.baseRole];
+    if (!cfg || cfg === "all") return "all";
+    if (cfg === "assigned") {
+      const ids = currentUser?.storeIds || [];
+      return ids.length ? ids[0] : "all";
+    }
+    return cfg; // a specific storeId
+  }, [defaultStoreScope, currentUserRole, currentUser]);
   // The role app-logic should use everywhere (custom role inherits its base).
   const effectiveRole = currentUserRole.baseRole;
   // Finance-only role: routes to dashboard (base hq_staff) but is scoped to the
@@ -47421,7 +47483,7 @@ export default function App() {
               return (
                 <div>
                   {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
-                  {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser}/>}
+                  {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser} defaultStoreId={resolveDefaultStoreId()}/>}
                   {effDashTab === "chain" && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
                   {effDashTab === "store-analytics" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
                 </div>
@@ -47634,7 +47696,7 @@ export default function App() {
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole}/>}
+            {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}

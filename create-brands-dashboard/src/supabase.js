@@ -5141,6 +5141,24 @@ export async function upsertAppSetting(key, value) {
   return { key, value: String(value) };
 }
 
+// ── Default store scope per role ─────────────────────────────────────────────
+// Stored as a single JSON blob in app_settings under "default_store_scope".
+// Shape: { "<role>": "all" | "assigned" | "<storeId>" }. No schema change.
+const DEFAULT_STORE_SCOPE_KEY = "default_store_scope";
+export async function fetchDefaultStoreScope() {
+  const { data, error } = await supabase.from("app_settings").select("value").eq("key", DEFAULT_STORE_SCOPE_KEY).maybeSingle();
+  if (error) throw error;
+  try { return data?.value ? JSON.parse(data.value) : {}; } catch { return {}; }
+}
+export async function setDefaultStoreScopeForRole(role, scope) {
+  const current = await fetchDefaultStoreScope();
+  const next = { ...current };
+  if (scope == null) delete next[role]; else next[role] = scope;
+  const { error } = await supabase.from("app_settings").upsert({ key: DEFAULT_STORE_SCOPE_KEY, value: JSON.stringify(next) }, { onConflict: "key" });
+  if (error) throw error;
+  return next;
+}
+
 // ── Announcements ───────────────────────────────────────────────────────────
 function dbAnnouncementToApp(a) {
   return { id: a.id, title: a.title, body: a.body || "", createdBy: a.created_by || "", createdAt: a.created_at, active: a.active !== false };
