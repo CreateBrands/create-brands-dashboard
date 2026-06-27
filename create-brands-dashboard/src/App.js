@@ -20343,20 +20343,22 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       )}
       {/* ── Auto-insights: what needs attention ──────────────────────────── */}
       {insights.length > 0 && (
-        <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900/60 to-slate-950/40 p-4">
+        <div className="rounded-2xl border border-amber-700/30 bg-amber-50/60 p-4">
           <div className="flex items-center gap-2 mb-2.5">
-            <Zap size={14} className="text-amber-400" />
-            <span className="text-xs font-bold text-slate-300 uppercase tracking-widest">What needs attention</span>
+            <Zap size={14} className="text-amber-600" />
+            <span className="text-xs font-bold text-amber-800 uppercase tracking-widest">What needs attention</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {insights.map((ins, i) => {
-              const tone = ins.kind === "alert" ? { bar: "border-l-rose-500", dot: "bg-rose-500", txt: "text-rose-200" }
-                : ins.kind === "watch" ? { bar: "border-l-amber-500", dot: "bg-amber-500", txt: "text-amber-100" }
-                : { bar: "border-l-emerald-500", dot: "bg-emerald-500", txt: "text-emerald-100" };
+              const tone = ins.kind === "alert"
+                ? { bar: "border-l-rose-500", dot: "bg-rose-500", bg: "bg-rose-50", txt: "text-rose-900", brd: "border-rose-200" }
+                : ins.kind === "watch"
+                ? { bar: "border-l-amber-500", dot: "bg-amber-500", bg: "bg-amber-50", txt: "text-amber-900", brd: "border-amber-200" }
+                : { bar: "border-l-emerald-500", dot: "bg-emerald-500", bg: "bg-emerald-50", txt: "text-emerald-900", brd: "border-emerald-200" };
               return (
-                <div key={i} className={`flex items-start gap-2 rounded-xl bg-slate-900/60 border border-slate-800 border-l-4 ${tone.bar} px-3 py-2`}>
+                <div key={i} className={`flex items-start gap-2 rounded-xl ${tone.bg} border ${tone.brd} border-l-4 ${tone.bar} px-3 py-2`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${tone.dot} mt-1.5 flex-shrink-0`} />
-                  <span className={`text-xs ${tone.txt} leading-snug`}>{ins.text}</span>
+                  <span className={`text-xs font-medium ${tone.txt} leading-snug`}>{ins.text}</span>
                 </div>
               );
             })}
