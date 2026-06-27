@@ -712,16 +712,26 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
 }
 
 function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false }) {
-  const TINTS = { brand: "#C9854F", indigo: "#C9854F", emerald: "#5B7A52", amber: "#C9A23F", red: "#B0485A", sky: "#C97F4F", slate: "#A89580" };
-  const tint = alert ? "#B0485A" : (TINTS[accent] || "#C9854F");
+  const PALETTE = {
+    brand:   { tint: "#B5651D", bg: "#FBF1E4", bd: "#EFD9BE", chip: "#F4E2C9" },
+    indigo:  { tint: "#7C6BC4", bg: "#F2EFFA", bd: "#DED7F0", chip: "#E6E0F5" },
+    emerald: { tint: "#4E8B5B", bg: "#EBF4EC", bd: "#CFE6D2", chip: "#DCEEDD" },
+    sky:     { tint: "#3E8E9E", bg: "#E8F3F4", bd: "#C6E2E5", chip: "#D6EBED" },
+    amber:   { tint: "#C79023", bg: "#FBF3DD", bd: "#EFE0B4", chip: "#F5E9C6" },
+    violet:  { tint: "#9B5DA8", bg: "#F6EEF7", bd: "#E6D2EA", chip: "#EEDDF1" },
+    red:     { tint: "#C0445A", bg: "#FBEBEE", bd: "#F0CDD4", chip: "#F6DAE0" },
+    slate:   { tint: "#8A7B66", bg: "#F6F0E6", bd: "#E5D8C3", chip: "#EDE4D3" },
+  };
+  const p = alert ? PALETTE.red : (PALETTE[accent] || PALETTE.brand);
   return (
-    <div className="group relative rounded-2xl border border-[#EADFCB] bg-[#FCF8F0] p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(132,68,41,0.04)]">
+    <div className="group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)]"
+      style={{ background: p.bg, borderColor: p.bd }}>
       <div className="flex items-center gap-2">
-        {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${tint}1A` }}><Icon size={14} style={{ color: tint }} /></div>}
-        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.06em] leading-tight">{label}</span>
+        {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: p.chip }}><Icon size={14} style={{ color: p.tint }} /></div>}
+        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] leading-tight" style={{ color: p.tint }}>{label}</span>
       </div>
-      <div className={`text-[28px] leading-none font-bold tracking-tight tabular-nums ${alert ? "text-[#B0485A]" : "text-[#3A2E26]"}`}>{value}</div>
-      {sub && <div className="text-xs text-[#9A8770] -mt-0.5">{sub}</div>}
+      <div className={`text-[28px] leading-none font-bold tracking-tight tabular-nums ${alert ? "text-[#B0485A]" : "text-[#33271F]"}`}>{value}</div>
+      {sub && <div className="text-xs text-[#8B7A66] -mt-0.5">{sub}</div>}
     </div>
   );
 }
@@ -841,39 +851,45 @@ function HeroRevenueCard({ current, previous, target, prevLabel, chart = [], ord
 function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null }) {
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
-  // Per-metric accent tint for the icon chip (subtle, brand-aligned).
-  const TINTS = {
-    indigo: "#C9854F", brand: "#C9854F", emerald: "#5B7A52",
-    sky: "#C97F4F", amber: "#C9A23F", red: "#B0485A",
+  // Category colour system: each metric family gets a coordinated tint, a soft
+  // card-background wash, and a border — varied but harmonised on cream.
+  const PALETTE = {
+    brand:   { tint: "#B5651D", bg: "#FBF1E4", bd: "#EFD9BE", chip: "#F4E2C9" }, // terracotta
+    indigo:  { tint: "#7C6BC4", bg: "#F2EFFA", bd: "#DED7F0", chip: "#E6E0F5" }, // plum (labour hrs)
+    emerald: { tint: "#4E8B5B", bg: "#EBF4EC", bd: "#CFE6D2", chip: "#DCEEDD" }, // sage (efficiency)
+    sky:     { tint: "#3E8E9E", bg: "#E8F3F4", bd: "#C6E2E5", chip: "#D6EBED" }, // teal (avg spend)
+    amber:   { tint: "#C79023", bg: "#FBF3DD", bd: "#EFE0B4", chip: "#F5E9C6" }, // honey (SPLH)
+    red:     { tint: "#C0445A", bg: "#FBEBEE", bd: "#F0CDD4", chip: "#F6DAE0" }, // rose (alert)
   };
-  const tint = alert ? "#B0485A" : (TINTS[accent] || "#C9854F");
+  const p = alert ? PALETTE.red : (PALETTE[accent] || PALETTE.brand);
   let deltaEl = null;
   if (current != null && previous != null && previous !== 0) {
     const delta = ((current - previous) / Math.abs(previous)) * 100;
     const isPositive = invertDelta ? delta < 0 : delta > 0;
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${isPositive ? "bg-[#EAF1E4] text-[#4E6B45]" : "bg-[#F7E4E8] text-[#A03E50]"}`}>
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${isPositive ? "bg-[#E2F0E0] text-[#3E6B45]" : "bg-[#F7DDE2] text-[#A03E50]"}`}>
         {isPositive ? <TrendingUp size={11}/> : <TrendingDown size={11}/>}{sign}{delta.toFixed(1)}%
       </span>
     );
   }
   return (
     <div onClick={onClick}
-      className={`group relative rounded-2xl border border-[#EADFCB] bg-[#FCF8F0] p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(132,68,41,0.04)] transition-all ${onClick ? "cursor-pointer hover:shadow-[0_8px_24px_rgba(132,68,41,0.10)] hover:-translate-y-0.5 hover:border-[#D9BD9B]" : ""}`}>
+      className={`group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)] transition-all ${onClick ? "cursor-pointer hover:shadow-[0_10px_28px_rgba(80,40,20,0.12)] hover:-translate-y-0.5" : ""}`}
+      style={{ background: p.bg, borderColor: p.bd }}>
       <div className="flex items-center gap-2">
-        {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${tint}1A` }}><Icon size={14} style={{ color: tint }} /></div>}
-        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.06em] leading-tight">{label}</span>
-        {onClick && <ArrowUpRight size={14} className="ml-auto text-[#C5B299] group-hover:text-[#844429] transition-colors" />}
+        {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: p.chip }}><Icon size={14} style={{ color: p.tint }} /></div>}
+        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] leading-tight" style={{ color: p.tint }}>{label}</span>
+        {onClick && <ArrowUpRight size={14} className="ml-auto transition-colors" style={{ color: p.tint, opacity: 0.5 }} />}
       </div>
       <div className="flex items-end justify-between gap-2">
-        <div className="text-[28px] leading-none font-bold text-[#3A2E26] tracking-tight">{currentVal}</div>
-        {spark && spark.length >= 2 && <Sparkline data={spark} color={tint} height={30} />}
+        <div className="text-[28px] leading-none font-bold text-[#33271F] tracking-tight">{currentVal}</div>
+        {spark && spark.length >= 2 && <Sparkline data={spark} color={p.tint} height={30} />}
       </div>
-      {subCurrent && <div className="text-xs text-[#9A8770] -mt-0.5">{subCurrent}</div>}
-      <div className="flex items-center justify-between gap-2 pt-1.5 mt-auto border-t border-[#F0E6D5]">
-        {deltaEl || <span className="text-[11px] text-[#C5B299]">—</span>}
-        {previousVal && <span className="text-[11px] text-[#A8957F]">{prevLabel} {previousVal}</span>}
+      {subCurrent && <div className="text-xs text-[#8B7A66] -mt-0.5">{subCurrent}</div>}
+      <div className="flex items-center justify-between gap-2 pt-1.5 mt-auto border-t" style={{ borderColor: p.bd }}>
+        {deltaEl || <span className="text-[11px] text-[#B7A688]">—</span>}
+        {previousVal && <span className="text-[11px] text-[#9A8770]">{prevLabel} {previousVal}</span>}
       </div>
     </div>
   );
@@ -20621,7 +20637,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
-        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
+        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "violet") : "slate"} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "emerald"} alert={criticalIssues > 0} />
         <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="amber" />
       </div>
