@@ -20672,7 +20672,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="brown" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <StatCard label="COGS %" value={cogsPct != null ? `${cogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={cogsPct != null ? `${fmtCurrency(dashCogs.cogs)} food cost` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent="caramel" status={cogsPct == null ? "neut" : cogsPct > 35 ? "bad" : cogsPct > 30 ? "warn" : "good"} note={cogsPct == null ? null : cogsPct > 35 ? "high" : cogsPct > 30 ? "watch" : "on track"} alert={cogsPct != null && cogsPct > 35} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent="brown" status={primeCostPct == null ? "neut" : primeCostPct > 65 ? "bad" : primeCostPct > 60 ? "warn" : "good"} note={primeCostPct == null ? null : primeCostPct > 65 ? "high" : primeCostPct > 60 ? "watch" : "healthy"} alert={primeCostPct != null && primeCostPct > 65} />
         <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent="brand" status={netMarginPct == null ? "neut" : netMarginPct < 0 ? "bad" : netMarginPct < 10 ? "warn" : "good"} note={netMarginPct == null ? null : netMarginPct < 0 ? "loss" : netMarginPct < 10 ? "thin" : "healthy"} />
@@ -20768,7 +20768,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
           )}
         </AnalysisBlock>
         )}
-        <div className={`flex flex-col gap-6 ${isSingleDay ? "xl:col-span-2 xl:flex-row" : ""}`}>
+        <div className={`flex flex-col gap-6 ${isSingleDay ? "xl:col-span-3 xl:flex-row" : ""}`}>
           <AnalysisBlock title="Revenue Split by Brand" className={isSingleDay ? "xl:flex-1" : ""}>
             <ResponsiveContainer width="100%" height={150}>
               <PieChart>
