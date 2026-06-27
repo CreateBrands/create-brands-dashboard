@@ -17188,7 +17188,7 @@ function OnboardingBoard({ stores, opsTeam }) {
   }, [opsTeam, contracts, rtwDocs, training, policyAcks, storeSel, scopeSel, stores]);
 
   const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
-  const activeStores = (stores || []).filter(s => !s.archivedAt && isShopSite(s));
+  const activeStores = (stores || []).filter(s => !s.archivedAt);
   useEffect(() => {
     if (obAppliedRef.current || !activeStores.length) return;
     setStoreSel(resolveInitialScope(obDefaultScope, activeStores, { allowAll: true }));
@@ -25491,7 +25491,7 @@ function ContractTemplateEditor({ template, onSave, onCancel }) {
 
 function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUser }) {
   const visibleStores = useMemo(
-    () => stores.filter(s => !visibleStoreIds || visibleStoreIds.includes(s.id)),
+    () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
   const [storeId, setStoreId] = useState(visibleStores[0]?.id || "");
@@ -27017,7 +27017,7 @@ function HiringView({
   }, [onUpdate]);
 
   const allowedStores = useMemo(
-    () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt && isShopSite(s)),
+    () => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
   const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
@@ -32615,7 +32615,7 @@ function OpsTeamView({
   }, [filtered, stores]);
 
   // Filter option lists.
-  const storeOpts = useMemo(() => stores.filter(s => (visibleStoreIds.length ? visibleStoreIds.includes(s.id) : true)), [stores, visibleStoreIds]);
+  const storeOpts = useMemo(() => stores.filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt), [stores, visibleStoreIds]);
   const deptOpts = useMemo(() => storeDepartments.filter(d => !d.archivedAt), [storeDepartments]);
   const roleOpts = useMemo(() => storeRoles.filter(r => !r.archivedAt), [storeRoles]);
 
