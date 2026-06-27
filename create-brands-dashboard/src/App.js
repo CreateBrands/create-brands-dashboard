@@ -241,6 +241,61 @@ if (typeof document !== "undefined" && !document.getElementById("cb-global-style
 const AuthContext = createContext(null);
 const useAuth = () => useContext(AuthContext);
 
+// ── Shared Avatar ─────────────────────────────────────────────────────────────
+// Renders an employee's photo if available, else their initials on a brand-color
+// background. Used everywhere a person-circle appears so photos show consistently.
+//   <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName}`} color={m.color} size={36} rounded="full" />
+// `initials` can be passed directly (e.g. "AM") to override name-derived ones.
+function Avatar({ photoUrl, name, initials, color, size = 36, rounded = "full", className = "" }) {
+  const bg = color || "#844429";
+  const radius = rounded === "full" ? "9999px" : rounded === "xl" ? "0.75rem" : "0.5rem";
+  const text = (initials != null && initials !== "")
+    ? initials
+    : (name || "")
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map(w => w[0] || "")
+        .join("")
+        .toUpperCase() || "?";
+  const dim = { width: size, height: size, borderRadius: radius };
+  if (photoUrl) {
+    return (
+      <img
+        src={photoUrl}
+        alt={name || "avatar"}
+        title={name || undefined}
+        loading="lazy"
+        className={`object-cover flex-shrink-0 ${className}`}
+        style={dim}
+        onError={(e) => {
+          // If the image fails, fall back to an initials block in-place.
+          const el = e.currentTarget;
+          const span = document.createElement("span");
+          span.textContent = text;
+          span.title = name || "";
+          Object.assign(span.style, {
+            width: `${size}px`, height: `${size}px`, borderRadius: radius,
+            background: bg, color: "#fff", display: "inline-flex",
+            alignItems: "center", justifyContent: "center",
+            fontSize: `${Math.max(10, size * 0.38)}px`, fontWeight: "700", flexShrink: "0",
+          });
+          el.replaceWith(span);
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      title={name || undefined}
+      className={`inline-flex items-center justify-center font-bold text-white flex-shrink-0 ${className}`}
+      style={{ ...dim, background: bg, fontSize: Math.max(10, size * 0.38) }}
+    >
+      {text}
+    </span>
+  );
+}
+
 // ── Feature registry (Level 2 access) ────────────────────────────────────────
 // Controllable features within sections. Each: key, label, section (parent nav
 // key, for grouping in the matrix), defaultRoles (built-in access until an
@@ -3499,12 +3554,14 @@ function TraineePortal({ currentUser, brands, stores = [], opsTeam, onLogout }) 
       <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
-              style={{ background: currentUser.color || "#844429" }}
-            >
-              {currentUser.avatar || "?"}
-            </div>
+            <Avatar
+              photoUrl={(opsTeam || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id))?.photoUrl}
+              name={currentUser.name}
+              initials={currentUser.avatar}
+              color={currentUser.color}
+              size={36}
+              rounded="xl"
+            />
             <div className="min-w-0">
               <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
               <div className="text-[11px] text-slate-500 truncate">
@@ -27735,10 +27792,9 @@ function EmployeeProfileView({
             />
           ) : (
             <div
-              className="w-16 h-16 rounded-xl flex items-center justify-center text-xl font-bold flex-shrink-0"
-              style={{ background: (employee.color || "#844429") + "30", color: employee.color || "#844429" }}
+              className="flex-shrink-0"
             >
-              {employee.firstName[0]}{employee.lastName?.[0] || ""}
+              <Avatar photoUrl={employee.photoUrl} name={`${employee.firstName} ${employee.lastName || ""}`} color={employee.color} size={64} rounded="xl" />
             </div>
           )}
           <div className="flex-1 min-w-0">
@@ -32186,7 +32242,7 @@ function OpsTeamView({
                   return (
                     <div key={m.id} onClick={() => { if (!m.isManager) onOpenEmployeeProfile?.(m.id); }} title={m.isManager ? "Manager — edit in Managers & Access" : "Click to open profile"}
                       className={`flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 transition-colors ${m.isManager ? "" : "hover:border-slate-600 cursor-pointer"}`}>
-                      <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: (m.color || "#844429") + "30", color: m.color || "#844429" }}>{m.firstName[0]}{m.lastName?.[0] || ""}</div>
+                      <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName || ""}`} color={m.color} size={36} rounded="xl" />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}{!m.photoUrl && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-600 text-white uppercase font-bold align-middle">no photo</span>}</div>
@@ -38348,9 +38404,7 @@ function StaffPickerModal({ roster, alreadyOn, storeId, storeName, stores = [], 
                 <span className={`w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center ${on?"bg-indigo-600 border-indigo-500":"border-slate-600"}`}>
                   {on && <Check size={11} className="text-white"/>}
                 </span>
-                <span className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0" style={{background:(m.color||"#844429")+"30",color:m.color||"#844429"}}>
-                  {m.firstName[0]}{m.lastName?.[0]||""}
-                </span>
+                <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName || ""}`} color={m.color} size={32} rounded="full" />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm text-slate-200 truncate">{m.firstName} {m.lastName}</span>
                   <span className="block text-[11px] text-slate-500 truncate">
@@ -38504,10 +38558,7 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
           </div>
           {selectedMember && (
             <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                style={{background:(selectedMember.color||"#844429")+"30",color:selectedMember.color||"#844429"}}>
-                {selectedMember.firstName[0]}{selectedMember.lastName?.[0]||""}
-              </div>
+              <Avatar photoUrl={selectedMember.photoUrl} name={`${selectedMember.firstName} ${selectedMember.lastName || ""}`} color={selectedMember.color} size={20} rounded="full" />
               <span className="text-sm font-semibold text-slate-200">
                 {selectedMember.nickname||selectedMember.firstName} {!selectedMember.nickname&&selectedMember.lastName}
               </span>
@@ -39473,10 +39524,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             <div className="space-y-1.5">
               {withShifts.map(({member, slots}) => (
                 <div key={member.id} className="flex items-center gap-3 bg-slate-900/60 border border-slate-800/60 rounded-xl px-3 py-2.5">
-                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                    style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
-                    {member.firstName[0]}{member.lastName?.[0]||""}
-                  </div>
+                  <Avatar photoUrl={member.photoUrl} name={`${member.firstName} ${member.lastName || ""}`} color={member.color} size={36} rounded="full" />
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-white truncate">{member.firstName} {member.lastName}</div>
                     <div className="text-xs text-slate-500 truncate">{member.department||member.role}</div>
@@ -39587,10 +39635,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                     <span className="cursor-grab active:cursor-grabbing text-slate-500 hover:text-indigo-400 flex-shrink-0" title="Drag to reorder">
                       <GripVertical size={16}/>
                     </span>
-                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                      style={{background:(member.color||"#844429")+"30",color:member.color||"#844429"}}>
-                      {member.firstName[0]}{member.lastName?.[0]||""}
-                    </div>
+                    <Avatar photoUrl={member.photoUrl} name={`${member.firstName} ${member.lastName || ""}`} color={member.color} size={36} rounded="full" />
                     <div className="min-w-0 flex-1">
                       <div className="text-[13px] font-semibold text-white truncate leading-tight">{member.firstName} {member.lastName}</div>
                       {roleLabel && <div className="text-[11px] text-slate-500 truncate uppercase tracking-wide">{roleLabel}</div>}
@@ -44414,8 +44459,8 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
       {/* User */}
       <div className="border-t border-slate-800/60 p-3">
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
-          <div className="w-7 h-7 rounded-lg bg-indigo-600/20 flex items-center justify-center text-xs font-bold text-indigo-400 flex-shrink-0">{currentUser.avatar || currentUser.name?.[0] || "?"}</div>
-          {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-indigo-400 font-semibold uppercase">{currentUser.role}</div></div>}
+          <Avatar photoUrl={currentUser.photoUrl} name={currentUser.name} initials={currentUser.avatar} color={currentUser.color || "#844429"} size={28} rounded="lg" />
+          {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-amber-500 font-semibold uppercase">{currentUser.role}</div></div>}
           {!collapsed && <NotificationBell recipientType="user" recipientId={currentUser.id} panelClass="bottom-full left-0 mb-2" onNavigate={setActiveView} onViewAll={() => setActiveView("notifications")}/>}
           {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
         </div>
