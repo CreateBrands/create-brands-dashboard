@@ -334,6 +334,8 @@ const FEATURE_REGISTRY = [
   { key: "feat.docs.approve", label: "Approve RTW / contract docs", section: "team", defaultRoles: ["owner","hq_staff"] },
   // EOD
   { key: "feat.eod.submit", label: "Submit EOD report", section: "eod", defaultRoles: ["owner","hq_staff","manager"] },
+  // Helpdesk
+  { key: "feat.helpdesk.manage", label: "Manage Help Desk (assign & triage tickets)", section: "comms", defaultRoles: ["owner","hq_staff"] },
   // COGS / Inventory tabs
   { key: "feat.cogs.inventory",  label: "COGS · Inventory",         section: "cogs", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.cogs.preps",      label: "COGS · Preps",             section: "cogs", defaultRoles: ["owner","hq_staff"] },
@@ -14446,6 +14448,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               schedules={schedules || []} shiftPresets={[]} onAddSchedule={() => {}} onDeleteSchedule={() => {}} onPublishWeek={() => {}}
               punchRecords={punchRecords || []} onUpdatePunchRecord={onAmendPunch} onAddPunchComment={onAddPunchComment}
               isEmployee={true}
+              canManageHelpdesk={false}
             />
           )}
 
@@ -37254,7 +37257,7 @@ function NewTicketForm({ brands, stores = [], currentUser, onSubmit, onCancel })
 }
 
 // ── Manager Helpdesk ──────────────────────────────────────────────────────────
-function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], tickets, opsTeam, users, currentUser, onUpdate, onDelete }) {
+function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], tickets, opsTeam, users, currentUser, canManageHelpdesk, onUpdate, onDelete }) {
   const { user } = useAuth();
 
   // Store scope (same pattern as other views). Used for: which tickets the
@@ -37277,7 +37280,10 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
   }, [visibleScopedStores, selStore]);
   const inScopeStoreIds = useMemo(() => new Set(visibleScopedStores.map(s => s.id)), [visibleScopedStores]);
   const visibleBrandIds = useMemo(() => new Set(visibleScopedStores.map(s => s.brandId)), [visibleScopedStores]);
-  const canAssign = isHqOrAbove(user.role);   // Q6 — only owner/HQ can assign
+  // Who can assign/triage tickets — driven by the "Manage Help Desk" permission
+  // (feat.helpdesk.manage). Falls back to the owner/HQ role check when the prop
+  // isn't supplied (e.g. older render paths), preserving prior behaviour.
+  const canAssign = canManageHelpdesk !== undefined ? canManageHelpdesk : isHqOrAbove(user.role);
 
   // ── Bucket filter (replaces "see everything" mental model) ────────────────
   // - mine:        tickets assigned to me (default for managers)
@@ -38419,6 +38425,7 @@ function CommunicationView({
   punchRecords, onUpdatePunchRecord, onAddPunchComment,
   onUpdateBrand,
   isEmployee, initialTab, hideTabs,
+  canManageHelpdesk = false,
 }) {
   const [tab, setTab] = useState(initialTab || (isEmployee ? "chat" : "helpdesk"));
   // Keep tab in sync when the sidebar deep-links to a different sub-item.
@@ -38515,7 +38522,7 @@ function CommunicationView({
         {tab === "helpdesk" && (
           isEmployee
             ? <EmployeeHelpdeskView brands={brands} stores={stores} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
-            : <HelpdeskManagerView  brands={brands} stores={stores} visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
+            : <HelpdeskManagerView  brands={brands} stores={stores} visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} canManageHelpdesk={canManageHelpdesk} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
         )}
         {tab === "chat" && (
           <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead} onReactMessage={onReactMessage} onEditMessage={onEditMessage} onDeleteMessage={onDeleteMessage}/>
@@ -47405,6 +47412,7 @@ export default function App() {
               punchRecords={punchRecords} onUpdatePunchRecord={handleAmendPunch}
               onUpdateBrand={updateBrand}
               isEmployee={false}
+              canManageHelpdesk={canFeature("feat.helpdesk.manage")}
               initialTab={commsTab} hideTabs={true}
             />}
             {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
