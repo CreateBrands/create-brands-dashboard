@@ -5347,6 +5347,69 @@ export async function fetchReviewStats() {
 
 // ===== end GBP_REVIEWS_V1 =====
 
+// ===== GBP_INSIGHTS_V1: staff leaderboard + sentiment (from google_review_insights) =====
+// Trigger the extraction Edge Function (processes a batch of un-analysed reviews).
+export async function triggerReviewInsights(body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-review-insights", { body, headers });
+  if (error) throw error;
+  return data;
+}
+
+// Staff leaderboard: counts how often each staff member is named in reviews,
+// optionally scoped to a store and/or a date window. Aggregates client-side from
+// the insights rows (staff_mentioned is a text[] per review).
+export async function fetchStaffLeaderboard({ storeId = null, from = null, to = null } = {}) {
+  let q = supabase.from("google_review_insights")
+    .select("store_id, staff_mentioned, star_rating, staff_sentiment, create_time")
+    .not("staff_mentioned", "eq", "{}")
+    .limit(20000);
+  if (storeId) q = q.eq("store_id", storeId);
+  if (from)    q = q.gte("create_time", from);
+  if (to)      q = q.lte("create_time", to + "T23:59:59");
+  const { data, error } = await q;
+  if (error) throw error;
+
+  // name -> { name, mentions, stars[], stores:Set, positive }
+  const tally = {};
+  (data || []).forEach((r) => {
+    (r.staff_mentioned || []).forEach((rawName) => {
+      const name = (rawName || "").trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (!tally[key]) tally[key] = { name, mentions: 0, starSum: 0, starN: 0, stores: new Set(), positive: 0 };
+      const t = tally[key];
+      t.mentions += 1;
+      if (typeof r.star_rating === "number") { t.starSum += r.star_rating; t.starN += 1; }
+      if (r.store_id) t.stores.add(r.store_id);
+      if (r.staff_sentiment === "positive") t.positive += 1;
+    });
+  });
+
+  return Object.values(tally)
+    .map((t) => ({
+      name: t.name,
+      mentions: t.mentions,
+      avgStars: t.starN ? t.starSum / t.starN : null,
+      stores: Array.from(t.stores),
+      positiveRate: t.mentions ? t.positive / t.mentions : 0,
+    }))
+    .sort((a, b) => b.mentions - a.mentions);
+}
+
+// Coverage helper: how many text reviews are processed vs total (for the
+// "analysing… X of Y" state in the UI).
+export async function fetchInsightsCoverage() {
+  const { count: total } = await supabase.from("google_reviews")
+    .select("review_id", { count: "exact", head: true })
+    .not("comment", "is", null).neq("comment", "");
+  const { count: done } = await supabase.from("google_review_insights")
+    .select("review_id", { count: "exact", head: true });
+  return { total: total || 0, done: done || 0, remaining: Math.max(0, (total || 0) - (done || 0)) };
+}
+// ===== end GBP_INSIGHTS_V1 =====
+
 // ===== COGS_V1 — cost of goods / recipe costing =============================
 // Tables: cogs_ingredients, cogs_preps, cogs_prep_components,
 //         cogs_products, cogs_product_components, cogs_pos_map. RLS off.

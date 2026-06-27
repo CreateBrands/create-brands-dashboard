@@ -103,6 +103,7 @@ import {
   deleteInvoice,
   listStoresLite,
   fetchGoogleReviews,
+  fetchStaffLeaderboard, triggerReviewInsights, fetchInsightsCoverage,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -15216,7 +15217,131 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
 // ===== end INVOICES_VIEW_V1 =====
 
 // ===== GOOGLE_REVIEWS_VIEW_V1 =====
+// Staff recognition leaderboard — who gets named/praised in Google reviews.
+// Reads pre-extracted google_review_insights (populated by gbp-review-insights).
+function StaffLeaderboard({ stores = [], storeId = null }) {
+  const [rows, setRows] = useState([]);
+  const [coverage, setCoverage] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [analysing, setAnalysing] = useState(false);
+  const [period, setPeriod] = useState("90");   // 30 | 90 | all
+  const [scope, setScope] = useState(storeId || "all");
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const from = period === "all" ? null
+        : new Date(Date.now() - Number(period) * 864e5).toISOString().slice(0, 10);
+      const [lb, cov] = await Promise.all([
+        fetchStaffLeaderboard({ storeId: scope === "all" ? null : scope, from }),
+        fetchInsightsCoverage(),
+      ]);
+      setRows(lb); setCoverage(cov);
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [period, scope]);
+
+  // Run extraction in batches until everything is processed.
+  const analyse = async () => {
+    setAnalysing(true); setErr(null);
+    try {
+      let guard = 0;
+      // process up to ~10 batches per click (300 reviews each) to avoid runaway.
+      while (guard < 30) {
+        const res = await triggerReviewInsights({ limit: 300 });
+        guard++;
+        if (!res?.moreToProcess) break;
+      }
+      await load();
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setAnalysing(false); }
+  };
+
+  const storeName = (id) => stores.find(s => s.id === id)?.name || id;
+  const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`);
+  const maxMentions = rows.length ? rows[0].mentions : 1;
+  const shopStores = (stores || []).filter(s => !s.archivedAt);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          {!storeId && (
+            <select value={scope} onChange={e => setScope(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+              <option value="all">All stores</option>
+              {shopStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            </select>
+          )}
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5">
+            {[["30", "30 days"], ["90", "90 days"], ["all", "All time"]].map(([k, l]) => (
+              <button key={k} onClick={() => setPeriod(k)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold ${period === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
+            ))}
+          </div>
+        </div>
+        {coverage && coverage.remaining > 0 && (
+          <button onClick={analyse} disabled={analysing}
+            className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40">
+            {analysing ? "Analysing…" : `Analyse ${coverage.remaining.toLocaleString()} reviews`}
+          </button>
+        )}
+      </div>
+
+      {coverage && (
+        <div className="text-[11px] text-slate-600">
+          {coverage.done.toLocaleString()} of {coverage.total.toLocaleString()} text reviews analysed
+          {coverage.remaining > 0 ? ` · ${coverage.remaining.toLocaleString()} pending — hit Analyse` : " · up to date"}
+        </div>
+      )}
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Loading…</div>}
+
+      {!loading && rows.length === 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">
+          {coverage && coverage.done === 0
+            ? "No reviews analysed yet — hit “Analyse” to extract staff mentions from your reviews."
+            : "No staff named in reviews for this period yet."}
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <div className="space-y-1.5">
+          {rows.slice(0, 30).map((r, i) => (
+            <div key={r.name} className="flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5">
+              <span className="w-7 text-center text-sm font-bold text-slate-300 flex-shrink-0">{medal(i)}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-white truncate">{r.name}</span>
+                  {r.avgStars != null && <span className="text-[11px] text-amber-400">{r.avgStars.toFixed(1)}★</span>}
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full mt-1.5 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-indigo-500 to-indigo-400 rounded-full"
+                    style={{ width: `${Math.max(6, (r.mentions / maxMentions) * 100)}%` }} />
+                </div>
+                {!storeId && r.stores.length > 0 && (
+                  <div className="text-[10px] text-slate-600 mt-1 truncate">
+                    {r.stores.slice(0, 3).map(storeName).join(" · ")}{r.stores.length > 3 ? ` +${r.stores.length - 3}` : ""}
+                  </div>
+                )}
+              </div>
+              <div className="text-right flex-shrink-0">
+                <div className="text-lg font-bold text-white leading-none">{r.mentions}</div>
+                <div className="text-[10px] text-slate-500">mention{r.mentions === 1 ? "" : "s"}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
+  const [view, setView] = useState("reviews");   // reviews | leaderboard
   const [reviews, setReviews] = useState([]);
   const [filter, setFilter] = useState(compact ? "low" : "all");   // all | low (<=2)
   const [loading, setLoading] = useState(true);
@@ -15271,7 +15396,14 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
         <div className="flex items-center gap-2">
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
+            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"]].map(([k, l]) => (
+              <button key={k} onClick={() => setView(k)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
+            ))}
+          </div>
         </div>
+        {view === "reviews" && (
         <div className="flex gap-1.5 items-center">
           {["all", "low"].map(f => (
             <button key={f} onClick={() => setFilter(f)}
@@ -15288,7 +15420,11 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
             {drafting ? "Drafting…" : "Generate replies"}
           </button>
         </div>
+        )}
       </div>
+
+      {view === "leaderboard" && <StaffLeaderboard stores={stores} storeId={storeId} />}
+      {view === "leaderboard" ? null : (<>
 
       {state?.last_run_at && (
         <div className="text-[11px] text-slate-600">
@@ -15342,6 +15478,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           </div>
         ))}
       </div>
+      </>)}
     </div>
   );
 }
