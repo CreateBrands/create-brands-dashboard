@@ -649,27 +649,27 @@ function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = fal
     amber:   "from-amber-500/20 to-amber-500/5 border-amber-400/30",
     red:     "from-rose-600/20 to-rose-600/5 border-rose-500/30",
     sky:     "from-orange-600/20 to-orange-600/5 border-orange-500/30",
-    slate:   "from-stone-700/40 to-stone-700/10 border-stone-700",
+    slate:   "from-slate-700/40 to-slate-700/10 border-slate-700",
   };
-  const iconColors = { brand: "text-amber-400", indigo: "text-amber-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-rose-400", sky: "text-orange-400", slate: "text-stone-500" };
+  const iconColors = { brand: "text-amber-400", indigo: "text-amber-400", emerald: "text-emerald-400", amber: "text-amber-400", red: "text-rose-400", sky: "text-orange-400", slate: "text-slate-500" };
   const eff = alert ? "red" : accent;
   return (
     <div className={`rounded-2xl bg-gradient-to-br ${accents[eff] || accents.brand} border p-5 flex flex-col gap-2`}>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">{label}</span>
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
         {Icon && <Icon size={16} className={iconColors[eff] || iconColors.brand} />}
       </div>
       <div className="text-2xl font-bold text-white tabular-nums">{value}</div>
-      {sub && <div className="text-xs text-stone-500">{sub}</div>}
+      {sub && <div className="text-xs text-slate-500">{sub}</div>}
     </div>
   );
 }
 
 function AnalysisBlock({ title, children, className = "", action }) {
   return (
-    <div className={`rounded-2xl bg-stone-900/80 border border-stone-700/70 overflow-hidden ${className}`}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-stone-700/70">
-        <h3 className="text-sm font-semibold text-stone-200">{title}</h3>
+    <div className={`rounded-2xl bg-slate-900/80 border border-slate-700/70 overflow-hidden ${className}`}>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/70">
+        <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
         {action}
       </div>
       <div className="p-5">{children}</div>
@@ -726,18 +726,18 @@ function ComparisonKPICard({ label, current, previous, format, icon: Icon, inver
       <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: barColor }} />
       <div className="flex items-center gap-2">
         {Icon && <Icon size={13} className={alert ? "text-rose-400" : ac.icon} />}
-        <span className="text-xs font-semibold text-stone-400 uppercase tracking-widest">{label}</span>
-        {onClick && <span className="ml-auto text-[10px] text-stone-500">view ›</span>}
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">{label}</span>
+        {onClick && <span className="ml-auto text-[10px] text-slate-500">view ›</span>}
       </div>
       <div className="flex items-end justify-between gap-2">
         <div className={`text-xl font-bold ${alert ? "text-rose-400" : ac.val}`}>{currentVal}</div>
         {spark && spark.length >= 2 && <Sparkline data={spark} />}
       </div>
-      {subCurrent && <div className="text-xs text-stone-500">{subCurrent}</div>}
+      {subCurrent && <div className="text-xs text-slate-500">{subCurrent}</div>}
       {deltaEl}
       {previousVal && (
-        <div className="border-t border-stone-700/60 pt-2 mt-1 text-xs text-stone-500">
-          {prevLabel}: <span className="text-stone-400 font-medium">{previousVal}</span>
+        <div className="border-t border-slate-700/60 pt-2 mt-1 text-xs text-slate-500">
+          {prevLabel}: <span className="text-slate-400 font-medium">{previousVal}</span>
         </div>
       )}
     </div>
@@ -20139,11 +20139,16 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     }));
   }, [isSingleDay, hourlyRows, data, scopedStoreIds, salariedIds, scopedSalaried]);
 
+  // Brand-split palette: map to warm Chocoberry tones rather than each brand's
+  // stored .color (Chocoberry's stored colour is purple, off-brand for the donut).
+  const BRAND_SPLIT_COLORS = ["#844429", "#C9854F", "#B07F5E", "#D9A679", "#9A5436", "#E3C7A8"];
   const pieData = useMemo(() => visibleBrands.map(b => {
     const value = data.curSales.filter(r => scopedStoreIds.has(r.storeId) && brandOfStore[r.storeId] === b.id)
       .reduce((a, r) => a + r.revenue, 0);
-    return { name: b.name, value, color: b.color };
-  }).filter(p => p.value > 0), [data, visibleBrands, brandOfStore, scopedStoreIds]);
+    return { name: b.name, value };
+  }).filter(p => p.value > 0)
+    .map((p, i) => ({ ...p, color: BRAND_SPLIT_COLORS[i % BRAND_SPLIT_COLORS.length] })),
+    [data, visibleBrands, brandOfStore, scopedStoreIds]);
 
   const openIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.status === "Open").length;
   const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
@@ -20338,10 +20343,10 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       )}
       {/* ── Auto-insights: what needs attention ──────────────────────────── */}
       {insights.length > 0 && (
-        <div className="rounded-2xl border border-stone-700/50 bg-gradient-to-br from-stone-900/60 to-stone-950/40 p-4">
+        <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900/60 to-slate-950/40 p-4">
           <div className="flex items-center gap-2 mb-2.5">
             <Zap size={14} className="text-amber-400" />
-            <span className="text-xs font-bold text-stone-300 uppercase tracking-widest">What needs attention</span>
+            <span className="text-xs font-bold text-slate-300 uppercase tracking-widest">What needs attention</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {insights.map((ins, i) => {
@@ -20349,7 +20354,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
                 : ins.kind === "watch" ? { bar: "border-l-amber-500", dot: "bg-amber-500", txt: "text-amber-100" }
                 : { bar: "border-l-emerald-500", dot: "bg-emerald-500", txt: "text-emerald-100" };
               return (
-                <div key={i} className={`flex items-start gap-2 rounded-xl bg-stone-900/60 border border-stone-800 border-l-4 ${tone.bar} px-3 py-2`}>
+                <div key={i} className={`flex items-start gap-2 rounded-xl bg-slate-900/60 border border-slate-800 border-l-4 ${tone.bar} px-3 py-2`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${tone.dot} mt-1.5 flex-shrink-0`} />
                   <span className={`text-xs ${tone.txt} leading-snug`}>{ins.text}</span>
                 </div>
