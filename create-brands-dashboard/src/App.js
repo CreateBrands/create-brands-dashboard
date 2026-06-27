@@ -19166,54 +19166,97 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
         />
       </div>
 
-      {/* ── Top stores by revenue (channel mix & heatmap already shown below) ── */}
+      {/* ── Two-column: heatmap + channel breakdown + top items ──────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        {/* Heatmap */}
+        <div className="lg:col-span-2 rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
+          <h3 className="text-sm font-bold text-white mb-3">When orders come in</h3>
+          <div className="text-xs text-slate-500 mb-3">Hourly order density across the chain · darker = busier</div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[500px]">
+              {/* Header */}
+              <div className="grid gap-0.5 mb-1" style={{ gridTemplateColumns: "32px repeat(24, 1fr)" }}>
+                <div></div>
+                {Array.from({length: 24}, (_, h) => (
+                  <div key={h} className="text-center text-xs text-slate-600 font-mono py-0.5">{h % 3 === 0 ? String(h).padStart(2,"0") : ""}</div>
+                ))}
+              </div>
+              {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((dow, i) => (
+                <div key={dow} className="grid gap-0.5 mb-0.5" style={{ gridTemplateColumns: "32px repeat(24, 1fr)" }}>
+                  <div className="text-xs text-slate-500 font-semibold pr-2 text-right py-1">{dow}</div>
+                  {hourHeatmap[i].map((count, h) => {
+                    const intensity = count / maxHourCount;
+                    return (
+                      <div key={h} className="rounded-sm h-5"
+                        style={{
+                          background: count === 0 ? "rgba(120,90,60,0.10)" : `rgba(176,108,58,${0.18 + intensity * 0.72})`,
+                        }}
+                        title={`${dow} ${String(h).padStart(2,"0")}:00 — ${count} orders`}/>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Channel split */}
+        <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Channel split</h3>
+          <div className="text-xs text-slate-500 mb-4">{periodLabel} revenue by source</div>
+          {totals.revenue === 0 ? (
+            <div className="text-sm text-slate-500 italic">No orders this period</div>
+          ) : (
+            <div className="space-y-3">
+              <ChannelRow label="POS"        value={totals.revPos}   total={totals.revenue} color="bg-emerald-500" textColor="text-emerald-400"/>
+              <ChannelRow label="UberEats"   value={totals.revUber}  total={totals.revenue} color="bg-teal-500"    textColor="text-teal-400"/>
+              <ChannelRow label="Deliveroo"  value={totals.revDeli}  total={totals.revenue} color="bg-amber-600"   textColor="text-amber-500"/>
+              <ChannelRow label="JustEat"    value={totals.revJe}    total={totals.revenue} color="bg-orange-500"  textColor="text-orange-400"/>
+              <ChannelRow label="Flipdish Web" value={totals.revFda} total={totals.revenue} color="bg-pink-500"    textColor="text-pink-400"/>
+              <ChannelRow label="Kiosk"      value={totals.revKiosk} total={totals.revenue} color="bg-rose-400"    textColor="text-rose-400"/>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Top stores by revenue (vertical bars) ────────────────────────── */}
       {totals.revenue > 0 && (() => {
         const top = [...leaderboard]
           .filter(r => r.totalRevenue > 0)
-          .sort((a, b) => b.totalRevenue - a.totalRevenue);
+          .sort((a, b) => b.totalRevenue - a.totalRevenue)
+          .slice(0, 10);
         if (top.length === 0) return null;
         const maxRev = top[0].totalRevenue;
         const chainRev = totals.revenue;
         return (
           <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="text-sm font-bold text-white">Top stores by revenue</h3>
-                <div className="text-[11px] text-slate-500">{periodLabel} · share of £{(chainRev/1000).toFixed(0)}k chain total</div>
-              </div>
+            <div className="mb-4">
+              <h3 className="text-sm font-bold text-white">Top stores by revenue</h3>
+              <div className="text-[11px] text-slate-500">{periodLabel} · share of £{(chainRev/1000).toFixed(0)}k chain total</div>
             </div>
-            <div className="space-y-1.5">
-              {top.slice(0, 10).map((r, i) => {
+            <div className="flex items-end gap-2 md:gap-3 overflow-x-auto pb-1" style={{ minHeight: 220 }}>
+              {top.map((r, i) => {
                 const rev = r.totalRevenue;
                 const pct = chainRev > 0 ? (rev / chainRev) * 100 : 0;
-                const barW = maxRev > 0 ? (rev / maxRev) * 100 : 0;
+                const barH = maxRev > 0 ? Math.max(8, (rev / maxRev) * 150) : 8;
                 const up = (r.deltaPct || 0) >= 0;
                 const name = (r.store?.name || "").replace(/^Chocoberry /, "");
                 return (
-                  <div key={r.store?.id || i} className="flex items-center gap-3">
-                    <span className="w-4 text-[11px] text-slate-600 text-right flex-shrink-0">{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-xs font-medium text-white truncate">{name}</span>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-xs font-semibold text-white tabular-nums">{fmtMoney(rev)}</span>
-                          <span className={`text-[11px] font-bold tabular-nums ${up ? "text-emerald-400" : "text-amber-500"}`}>
-                            {up ? "▲" : "▼"} {Math.abs(r.deltaPct || 0).toFixed(0)}%
-                          </span>
-                        </div>
-                      </div>
-                      <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div className={`h-full ${up ? "bg-emerald-500" : "bg-amber-500"}`}
-                          style={{ width: `${Math.max(2, barW)}%` }} />
-                      </div>
-                      <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-600">
-                        <span>{r.totalOrders.toLocaleString("en-GB")} orders</span>
-                        <span>·</span>
-                        <span>{fmtMoneyDec(r.atv)} ATV</span>
-                        <span>·</span>
-                        <span>{pct.toFixed(1)}% of chain</span>
-                      </div>
+                  <div key={r.store?.id || i} className="flex flex-col items-center flex-1 min-w-[68px]">
+                    {/* value on top */}
+                    <div className="text-[11px] font-bold text-white tabular-nums mb-0.5">{fmtMoney(rev)}</div>
+                    <div className={`text-[10px] font-bold tabular-nums mb-1 ${up ? "text-emerald-400" : "text-amber-500"}`}>
+                      {up ? "▲" : "▼"}{Math.abs(r.deltaPct || 0).toFixed(0)}%
                     </div>
+                    {/* thick vertical bar */}
+                    <div className="w-9 md:w-11 rounded-t-lg" style={{
+                      height: `${barH}px`,
+                      background: up ? "#a8743e" : "#d9a679",  // brand brown / warm tan
+                    }} title={`${name}: ${fmtMoney(rev)} · ${pct.toFixed(1)}% of chain`} />
+                    {/* labels under */}
+                    <div className="text-[10px] font-semibold text-white text-center mt-1.5 leading-tight truncate w-full" title={name}>{name}</div>
+                    <div className="text-[9px] text-slate-500 text-center leading-tight">{r.totalOrders.toLocaleString("en-GB")} ord</div>
+                    <div className="text-[9px] text-slate-600 text-center leading-tight">{pct.toFixed(1)}%</div>
                   </div>
                 );
               })}
@@ -19309,10 +19352,10 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
                 const chanCounts = [
                   { key: "pos",   count: r.salePos,   color: "bg-emerald-500", label: "POS" },
                   { key: "uber",  count: r.saleUber,  color: "bg-teal-500",    label: "UberEats" },
-                  { key: "deli",  count: r.saleDeli,  color: "bg-cyan-500",    label: "Deliveroo" },
+                  { key: "deli",  count: r.saleDeli,  color: "bg-amber-600",   label: "Deliveroo" },
                   { key: "je",    count: r.saleJe,    color: "bg-orange-500",  label: "JustEat" },
                   { key: "fda",   count: r.saleFda,   color: "bg-pink-500",    label: "Web" },
-                  { key: "kiosk", count: r.saleKiosk, color: "bg-indigo-500",  label: "Kiosk" },
+                  { key: "kiosk", count: r.saleKiosk, color: "bg-rose-400",    label: "Kiosk" },
                 ];
                 const channelTotal = chanCounts.reduce((a, c) => a + c.count, 0);
                 return (
@@ -19353,8 +19396,8 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
                     </td>
                     <td className="px-3 py-2.5">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                        r.store.ownershipModel === "owned" ? "bg-indigo-600 text-white" :
-                        r.store.ownershipModel === "joint_venture" ? "bg-sky-600 text-white" :
+                        r.store.ownershipModel === "owned" ? "bg-amber-700 text-white" :
+                        r.store.ownershipModel === "joint_venture" ? "bg-stone-500 text-white" :
                         "bg-amber-500 text-amber-950"
                       }`}>
                         {r.store.ownershipModel === "joint_venture" ? "JV" : r.store.ownershipModel}
@@ -19365,7 +19408,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
               })}
             </tbody>
             {leaderboard.length > 0 && (
-              <tfoot className="bg-indigo-950/30 border-t border-indigo-500/30">
+              <tfoot className="bg-amber-950/20 border-t border-amber-700/30">
                 <tr>
                   <td className="px-4 py-3 font-bold text-white">Chain total</td>
                   <td className="px-3 py-3 text-right text-white font-black tabular-nums">{fmtMoney(totals.revenue)}</td>
@@ -19380,58 +19423,6 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
         </div>
       </div>
 
-      {/* ── Two-column: heatmap + channel breakdown + top items ──────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        {/* Heatmap */}
-        <div className="lg:col-span-2 rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
-          <h3 className="text-sm font-bold text-white mb-3">When orders come in</h3>
-          <div className="text-xs text-slate-500 mb-3">Hourly order density across the chain · darker = busier</div>
-          <div className="overflow-x-auto">
-            <div className="min-w-[500px]">
-              {/* Header */}
-              <div className="grid gap-0.5 mb-1" style={{ gridTemplateColumns: "32px repeat(24, 1fr)" }}>
-                <div></div>
-                {Array.from({length: 24}, (_, h) => (
-                  <div key={h} className="text-center text-xs text-slate-600 font-mono py-0.5">{h % 3 === 0 ? String(h).padStart(2,"0") : ""}</div>
-                ))}
-              </div>
-              {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((dow, i) => (
-                <div key={dow} className="grid gap-0.5 mb-0.5" style={{ gridTemplateColumns: "32px repeat(24, 1fr)" }}>
-                  <div className="text-xs text-slate-500 font-semibold pr-2 text-right py-1">{dow}</div>
-                  {hourHeatmap[i].map((count, h) => {
-                    const intensity = count / maxHourCount;
-                    return (
-                      <div key={h} className="rounded-sm h-5"
-                        style={{
-                          background: count === 0 ? "rgba(15,23,42,0.5)" : `rgba(99,102,241,${0.15 + intensity * 0.7})`,
-                        }}
-                        title={`${dow} ${String(h).padStart(2,"0")}:00 — ${count} orders`}/>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Channel split */}
-        <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
-          <h3 className="text-sm font-bold text-white mb-3">Channel split</h3>
-          <div className="text-xs text-slate-500 mb-4">{periodLabel} revenue by source</div>
-          {totals.revenue === 0 ? (
-            <div className="text-sm text-slate-500 italic">No orders this period</div>
-          ) : (
-            <div className="space-y-3">
-              <ChannelRow label="POS"        value={totals.revPos}   total={totals.revenue} color="bg-emerald-500" textColor="text-emerald-400"/>
-              <ChannelRow label="UberEats"   value={totals.revUber}  total={totals.revenue} color="bg-teal-500"    textColor="text-teal-400"/>
-              <ChannelRow label="Deliveroo"  value={totals.revDeli}  total={totals.revenue} color="bg-cyan-500"    textColor="text-cyan-400"/>
-              <ChannelRow label="JustEat"    value={totals.revJe}    total={totals.revenue} color="bg-orange-500"  textColor="text-orange-400"/>
-              <ChannelRow label="Flipdish Web" value={totals.revFda} total={totals.revenue} color="bg-pink-500"    textColor="text-pink-400"/>
-              <ChannelRow label="Kiosk"      value={totals.revKiosk} total={totals.revenue} color="bg-indigo-500"  textColor="text-indigo-400"/>
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* ── Items sold (product mix) ─────────────────────────────────────── */}
       <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 overflow-hidden">
@@ -19441,7 +19432,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
             <div className="text-xs text-slate-500 mt-0.5">Product mix across all visible stores · {periodLabel}</div>
           </div>
           {!showItems
-            ? <button onClick={() => setShowItems(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500">Load items sold</button>
+            ? <button onClick={() => setShowItems(true)} className="px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs font-semibold hover:bg-amber-600">Load items sold</button>
             : <button onClick={() => { invalidateFlipdishSalesCache?.(); setShowItems(false); setTimeout(() => setShowItems(true), 0); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Refresh</button>}
         </div>
 
