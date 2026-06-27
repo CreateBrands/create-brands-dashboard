@@ -104,6 +104,7 @@ import {
   listStoresLite,
   fetchGoogleReviews,
   fetchStaffLeaderboard, triggerReviewInsights, fetchInsightsCoverage, fetchReviewSentiment,
+  fetchDeletionSignals, triggerReviewDeletionCheck,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -15462,6 +15463,98 @@ function SentimentAnalysis({ stores = [], storeId = null }) {
   );
 }
 
+// Deleted-review monitoring — flags reviews Google has removed. Two signals:
+// a count drop since the last snapshot, and "stored-but-gone" (reviews we kept
+// that Google no longer shows). The latter you can often appeal with the text.
+function DeletionMonitor({ stores = [], storeId = null }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [scope, setScope] = useState(storeId || "all");
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try { setData(await fetchDeletionSignals({ storeId: scope === "all" ? null : scope })); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [scope]);
+
+  const runCheck = async () => {
+    setChecking(true); setErr(null);
+    try { await triggerReviewDeletionCheck(); await load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setChecking(false); }
+  };
+
+  const storeName = (id) => stores.find(s => s.id === id)?.name || (id || "Unmapped");
+  const shopStores = (stores || []).filter(s => !s.archivedAt);
+  const flagged = (data?.signals || []).filter(s => s.missing >= 2);
+  const totalMissing = flagged.reduce((sum, s) => sum + s.missing, 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          {!storeId && (
+            <select value={scope} onChange={e => setScope(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+              <option value="all">All stores</option>
+              {shopStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            </select>
+          )}
+        </div>
+        <button onClick={runCheck} disabled={checking}
+          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+          {checking ? "Checking…" : "Check now"}
+        </button>
+      </div>
+
+      <div className="text-[11px] text-slate-600">
+        Compares Google's live review count against what's stored. A gap means Google has removed reviews you'd previously captured — often appealable if they were legitimate.
+      </div>
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Loading…</div>}
+
+      {!loading && data && (
+        <>
+          <div className={`rounded-2xl p-4 border ${totalMissing > 0 ? "bg-rose-950/20 border-rose-800/50" : "bg-slate-900 border-slate-800"}`}>
+            <div className="text-2xl font-bold text-white">{totalMissing}</div>
+            <div className="text-xs text-slate-400">
+              {totalMissing > 0
+                ? `review(s) removed by Google across ${flagged.length} location(s) — text retained, may be appealable`
+                : "No removed reviews detected — your stored count matches or exceeds Google's"}
+            </div>
+          </div>
+
+          {flagged.length > 0 && (
+            <div className="space-y-1.5">
+              {flagged.map(s => (
+                <div key={s.locationId} className="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-white truncate">{storeName(s.storeId)}</div>
+                    <div className="text-[10px] text-slate-600">Google shows {s.google} · we have {s.have}</div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-lg font-bold text-rose-400 leading-none">{s.missing}</div>
+                    <div className="text-[10px] text-slate-500">removed</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="text-[11px] text-slate-600 bg-slate-900/50 border border-slate-800 rounded-xl p-3">
+            <span className="font-semibold text-slate-400">To appeal a removed review:</span> if you have the reviewer's name, date and text (stored here), and Google removed it rather than the user, request reinstatement via the Google Business Profile Help Center.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [view, setView] = useState("reviews");   // reviews | leaderboard
   const [reviews, setReviews] = useState([]);
@@ -15519,7 +15612,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"]].map(([k, l]) => (
+            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"]].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -15547,6 +15640,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
 
       {view === "leaderboard" && <StaffLeaderboard stores={stores} storeId={storeId} />}
       {view === "sentiment" && <SentimentAnalysis stores={stores} storeId={storeId} />}
+      {view === "deletions" && <DeletionMonitor stores={stores} storeId={storeId} />}
       {view !== "reviews" ? null : (<>
 
       {state?.last_run_at && (

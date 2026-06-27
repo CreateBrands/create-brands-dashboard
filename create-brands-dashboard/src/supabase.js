@@ -5452,6 +5452,50 @@ export async function fetchReviewSentiment({ storeId = null, from = null, to = n
     themes,
   };
 }
+// ===== GBP_DELETIONS_V1: deleted-review monitoring =====
+export async function triggerReviewDeletionCheck(body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-review-deletions", { body, headers });
+  if (error) throw error;
+  return data;
+}
+
+// Current deletion signals: per store, Google's count vs what we have stored.
+// A positive `missing` = reviews we kept that Google no longer shows (candidates
+// for appeal). Also returns the count-history trend for charting drops.
+export async function fetchDeletionSignals({ storeId = null } = {}) {
+  // current official counts
+  let sq = supabase.from("google_location_stats").select("location_id, store_id, total_review_count");
+  if (storeId) sq = sq.eq("store_id", storeId);
+  const { data: stats, error: se } = await sq;
+  if (se) throw se;
+
+  // stored counts per location
+  let rq = supabase.from("google_reviews").select("location_id, store_id").limit(50000);
+  if (storeId) rq = rq.eq("store_id", storeId);
+  const { data: stored, error: re } = await rq;
+  if (re) throw re;
+  const storedByLoc = {};
+  (stored || []).forEach(r => { storedByLoc[r.location_id] = (storedByLoc[r.location_id] || 0) + 1; });
+
+  const signals = (stats || []).map(s => {
+    const have = storedByLoc[s.location_id] || 0;
+    const google = s.total_review_count ?? null;
+    const missing = (typeof google === "number") ? Math.max(0, have - google) : 0;
+    return { locationId: s.location_id, storeId: s.store_id, google, have, missing };
+  }).sort((a, b) => b.missing - a.missing);
+
+  // recent history for trend (last 60 snapshots overall)
+  let hq = supabase.from("google_review_count_history")
+    .select("location_id, store_id, total_count, snapshot_at")
+    .order("snapshot_at", { ascending: false }).limit(2000);
+  if (storeId) hq = hq.eq("store_id", storeId);
+  const { data: history } = await hq;
+
+  return { signals, history: history || [] };
+}
+// ===== end GBP_DELETIONS_V1 =====
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================
