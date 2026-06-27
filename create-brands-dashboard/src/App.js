@@ -20155,6 +20155,25 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const criticalIssues = issues.filter(i => visibleBrandIds.includes(i.brandId) && i.priority === "Critical" && !["Resolved","Closed"].includes(i.status)).length;
   const prevLabel = (prevPeriod?.label || "Prior") + (inProgress ? " (to now)" : "");
 
+  // ── Store leaderboard: per-store revenue ranking (cur + prior delta) ───────
+  // Built from data already fetched — no extra query. Only meaningful when the
+  // selection spans more than one store.
+  const storeLeaderboard = useMemo(() => {
+    if (scopedStores.length < 2) return [];
+    const curByStore = {}, prevByStore = {};
+    (data.curSales || []).forEach(r => { if (scopedStoreIds.has(r.storeId)) curByStore[r.storeId] = (curByStore[r.storeId] || 0) + (Number(r.revenue) || 0); });
+    (data.prevSales || []).forEach(r => { if (scopedStoreIds.has(r.storeId)) prevByStore[r.storeId] = (prevByStore[r.storeId] || 0) + (Number(r.revenue) || 0); });
+    const rows = scopedStores.map(s => {
+      const rev = curByStore[s.id] || 0;
+      const prv = prevByStore[s.id] || 0;
+      const delta = prv > 0 ? ((rev - prv) / prv) * 100 : null;
+      return { id: s.id, name: s.shortName || s.name, rev, prv, delta };
+    }).filter(r => r.rev > 0 || r.prv > 0);
+    rows.sort((a, b) => b.rev - a.rev);
+    return rows;
+  }, [data.curSales, data.prevSales, scopedStores, scopedStoreIds]);
+  const leaderMax = useMemo(() => Math.max(1, ...storeLeaderboard.map(r => r.rev)), [storeLeaderboard]);
+
   // ── Auto-insights: surface what needs attention from the live KPIs ─────────
   const insights = useMemo(() => {
     const out = [];
@@ -20380,6 +20399,63 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
       </div>
+
+      {/* ── Store leaderboard (only when ranking >1 store) ───────────────────── */}
+      {storeLeaderboard.length >= 2 && (
+        <AnalysisBlock
+          title={`Store performance · ${period.label}`}
+          action={<span className="text-[11px] text-slate-500">{storeLeaderboard.length} stores · ranked by revenue</span>}
+        >
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-2.5">
+            {/* Top performers (left) */}
+            <div className="space-y-2.5">
+              <div className="text-[11px] font-bold text-emerald-600 uppercase tracking-widest mb-1">Top performers</div>
+              {storeLeaderboard.slice(0, 5).map((s, i) => (
+                <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group" title={`View ${s.name}`}>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-[11px] font-bold text-slate-500 w-4">{i + 1}</span>
+                    <span className="text-sm font-semibold text-slate-700 group-hover:text-amber-700 flex-1 text-left truncate">{s.name}</span>
+                    <span className="text-sm font-bold text-slate-700 tabular-nums">{fmtCurrency(s.rev)}</span>
+                    {s.delta != null && (
+                      <span className={`text-[10px] font-semibold w-12 text-right ${s.delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                        {s.delta >= 0 ? "▲" : "▼"} {Math.abs(s.delta).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  <div className="h-2 bg-slate-700 rounded-full overflow-hidden ml-6">
+                    <div className="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-800 group-hover:opacity-90" style={{ width: `${(s.rev / leaderMax) * 100}%` }} />
+                  </div>
+                </button>
+              ))}
+            </div>
+            {/* Bottom performers (right) */}
+            <div className="space-y-2.5">
+              <div className="text-[11px] font-bold text-rose-600 uppercase tracking-widest mb-1">Needs attention</div>
+              {storeLeaderboard.slice(Math.max(5, storeLeaderboard.length - 5)).reverse().map((s) => {
+                const rank = storeLeaderboard.findIndex(x => x.id === s.id) + 1;
+                return (
+                  <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group" title={`View ${s.name}`}>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-[11px] font-bold text-slate-500 w-4">{rank}</span>
+                      <span className="text-sm font-semibold text-slate-700 group-hover:text-amber-700 flex-1 text-left truncate">{s.name}</span>
+                      <span className="text-sm font-bold text-slate-700 tabular-nums">{fmtCurrency(s.rev)}</span>
+                      {s.delta != null && (
+                        <span className={`text-[10px] font-semibold w-12 text-right ${s.delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                          {s.delta >= 0 ? "▲" : "▼"} {Math.abs(s.delta).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="h-2 bg-slate-700 rounded-full overflow-hidden ml-6">
+                      <div className="h-full rounded-full bg-gradient-to-r from-stone-400 to-stone-500 group-hover:opacity-90" style={{ width: `${(s.rev / leaderMax) * 100}%` }} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="text-[10px] text-slate-500 pt-3 mt-1 border-t border-slate-700/40">Tap a store to drill into its figures{prevPeriod ? ` · ▲▼ vs ${prevLabel.replace(" (to now)", "")}` : ""}</div>
+        </AnalysisBlock>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
         <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2 flex flex-col">
