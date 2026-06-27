@@ -334,8 +334,11 @@ const FEATURE_REGISTRY = [
   { key: "feat.docs.approve", label: "Approve RTW / contract docs", section: "team", defaultRoles: ["owner","hq_staff"] },
   // EOD
   { key: "feat.eod.submit", label: "Submit EOD report", section: "eod", defaultRoles: ["owner","hq_staff","manager"] },
-  // Helpdesk
-  { key: "feat.helpdesk.manage", label: "Manage Help Desk (assign & triage tickets)", section: "comms", defaultRoles: ["owner","hq_staff"] },
+  // Helpdesk — 3 capability levels (role defaults; per-person overrides set in Access Control).
+  // view = see tickets assigned to you · respond = reply to them · manage = see ALL + assign to others.
+  { key: "feat.helpdesk.view",    label: "Help Desk · View assigned tickets", section: "comms", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.helpdesk.respond", label: "Help Desk · Respond to tickets",     section: "comms", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.helpdesk.manage",  label: "Help Desk · Manage (assign to others, see all)", section: "comms", defaultRoles: ["owner","hq_staff"] },
   // COGS / Inventory tabs
   { key: "feat.cogs.inventory",  label: "COGS · Inventory",         section: "cogs", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.cogs.preps",      label: "COGS · Preps",             section: "cogs", defaultRoles: ["owner","hq_staff"] },
@@ -14049,7 +14052,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
-  hdTickets, onAddHdTicket, onUpdateHdTicket, messages, onSendMessage, onMarkRead,
+  hdTickets, onAddHdTicket, onUpdateHdTicket, helpdeskLevel = "none", messages, onSendMessage, onMarkRead,
   availability, onAddAvailability, onUpdateAvailability,
   schedules, punchRecords, onAmendPunch, onAddPunchComment,
   onEmpPunchIn, onEmpPunchOut,
@@ -14449,6 +14452,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               punchRecords={punchRecords || []} onUpdatePunchRecord={onAmendPunch} onAddPunchComment={onAddPunchComment}
               isEmployee={true}
               canManageHelpdesk={false}
+              helpdeskLevel={helpdeskLevel}
             />
           )}
 
@@ -22235,6 +22239,41 @@ function PersonEntityAccess({ opsTeam = [], entities = [], entityOverrides = {},
               </div>
             );
           })}
+
+          {/* Help Desk access level â exclusive: setting one clears the others. */}
+          <div className="mt-3 pt-3 border-t border-slate-800">
+            <div className="text-sm text-slate-200 font-semibold mb-1">Help Desk access</div>
+            <div className="text-[11px] text-slate-500 mb-2">View = see tickets assigned to them · Respond = reply to them · Manage = see all tickets &amp; assign to others. “Default” falls back to their role.</div>
+            {(() => {
+              const cur = ov["hd.manage"] === true ? "manage"
+                : ov["hd.respond"] === true ? "respond"
+                : ov["hd.view"] === true ? "view"
+                : (["hd.manage","hd.respond","hd.view"].some(k => ov[k] !== undefined) ? "none" : "default");
+              const setLevel = async (level) => {
+                setBusy("hd");
+                try {
+                  await setEntityOverride(personId, "hd.manage",  level === "manage"  ? true : null);
+                  await setEntityOverride(personId, "hd.respond", level === "respond" ? true : null);
+                  await setEntityOverride(personId, "hd.view",    level === "view"    ? true : null);
+                  onReload?.();
+                } catch (e) { console.error(e); }
+                setBusy("");
+              };
+              const opts = [["default","Default"],["view","View"],["respond","Respond"],["manage","Manage"]];
+              return (
+                <div className="flex gap-1 flex-wrap">
+                  {opts.map(([k,lab]) => {
+                    const active = cur === k;
+                    const tone = k === "manage" ? "bg-amber-700 text-white" : k === "respond" ? "bg-emerald-600 text-white" : k === "view" ? "bg-sky-700 text-white" : "bg-slate-600 text-white";
+                    return (
+                      <button key={k} onClick={()=>setLevel(k)} disabled={busy==="hd"}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${active ? tone : "bg-slate-800 text-slate-400 hover:text-white"}`}>{lab}</button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
     </div>
@@ -36877,7 +36916,7 @@ function fmtTicketTime(iso) {
 }
 
 // Shared chat panel — used by both manager and employee
-function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStatusChange, onAssign, onAssignToggle, allPeople, brands, stores = [], canAssign = true }) {
+function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStatusChange, onAssign, onAssignToggle, allPeople, brands, stores = [], canAssign = true, canRespond = true }) {
   // Backward-compat: if a caller still passes onAssignToggle (older code), we
   // fall through to it. New code should use onAssign with single-assignee
   // semantics — handler picks a person ID and the modal updates the ticket.
@@ -37059,6 +37098,10 @@ function TicketChatPanel({ ticket, currentUser, onSendComment, isManager, onStat
           {isClosed ? (
             <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800/60 text-center text-xs text-slate-600">
               This ticket is closed
+            </div>
+          ) : !canRespond ? (
+            <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800/60 text-center text-xs text-slate-600">
+              You have view-only access to this ticket
             </div>
           ) : (
             <div className="flex-shrink-0 px-3 py-3 border-t border-slate-800/60 bg-slate-900/40">
@@ -37257,7 +37300,7 @@ function NewTicketForm({ brands, stores = [], currentUser, onSubmit, onCancel })
 }
 
 // ── Manager Helpdesk ──────────────────────────────────────────────────────────
-function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], tickets, opsTeam, users, currentUser, canManageHelpdesk, onUpdate, onDelete }) {
+function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], tickets, opsTeam, users, currentUser, canManageHelpdesk, helpdeskLevel = "manage", onUpdate, onDelete }) {
   const { user } = useAuth();
 
   // Store scope (same pattern as other views). Used for: which tickets the
@@ -37317,7 +37360,17 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
   // Scope predicate. Store-keyed tickets match by storeId; legacy
   // brand-keyed (storeId NULL) match by brand membership. Tickets with
   // NULL both are visible to owner/HQ as "general/HQ" tickets.
+  const myId = currentUser?.id;
+  const myOpsId = currentUser?.opsTeamMemberId || currentUser?.id;
+  const isAssignedToMe = (t) => {
+    const a = t.assignedTo || [];
+    return a.includes(myId) || a.includes(myOpsId) || a.includes(currentUser?.name);
+  };
+
+  const isManageLevel = helpdeskLevel === "manage";
   const inScope = (t) => {
+    // Strict visibility: view/respond levels only see tickets assigned to them.
+    if (!isManageLevel && !isAssignedToMe(t)) return false;
     if (t.storeId) {
       if (selStore === "all") return inScopeStoreIds.has(t.storeId);
       return t.storeId === selStore;
@@ -37335,13 +37388,6 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
   }, [tickets]);
 
   // Visible list = scope ∩ bucket ∩ status/priority/search.
-  const myId = currentUser?.id;
-  const myOpsId = currentUser?.opsTeamMemberId || currentUser?.id;
-  const isAssignedToMe = (t) => {
-    const a = t.assignedTo || [];
-    return a.includes(myId) || a.includes(myOpsId) || a.includes(currentUser?.name);
-  };
-
   const visible = tickets.filter(t => {
     if (!inScope(t)) return false;
     if (bucket === "mine"       && !isAssignedToMe(t))                  return false;
@@ -37572,7 +37618,7 @@ function HelpdeskManagerView({ brands, stores = [], visibleStoreIds = [], ticket
               ticket={activeTicket} currentUser={currentUser}
               onSendComment={handleSendComment} onStatusChange={handleStatusChange}
               onAssign={handleAssign} allPeople={allPeople} brands={brands} stores={stores}
-              isManager={true} canAssign={canAssign}
+              isManager={true} canAssign={canAssign} canRespond={helpdeskLevel === "manage" || helpdeskLevel === "respond"}
             />
           </>
         )}
@@ -38426,6 +38472,7 @@ function CommunicationView({
   onUpdateBrand,
   isEmployee, initialTab, hideTabs,
   canManageHelpdesk = false,
+  helpdeskLevel = "none",
 }) {
   const [tab, setTab] = useState(initialTab || (isEmployee ? "chat" : "helpdesk"));
   // Keep tab in sync when the sidebar deep-links to a different sub-item.
@@ -38520,9 +38567,12 @@ function CommunicationView({
       {/* Panels */}
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === "helpdesk" && (
-          isEmployee
-            ? <EmployeeHelpdeskView brands={brands} stores={stores} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
-            : <HelpdeskManagerView  brands={brands} stores={stores} visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} canManageHelpdesk={canManageHelpdesk} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
+          // Capability-driven routing:
+          //   manage/respond/view  → manager view (scoped to assigned-only unless manage)
+          //   none                 → raise-your-own-tickets view
+          (helpdeskLevel === "manage" || helpdeskLevel === "respond" || helpdeskLevel === "view")
+            ? <HelpdeskManagerView brands={brands} stores={stores} visibleStoreIds={(stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))).map(s => s.id)} tickets={tickets} opsTeam={opsTeam} users={users} currentUser={currentUser} helpdeskLevel={helpdeskLevel} canManageHelpdesk={helpdeskLevel === "manage"} onUpdate={onUpdateTicket} onDelete={onDeleteTicket}/>
+            : <EmployeeHelpdeskView brands={brands} stores={stores} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
         )}
         {tab === "chat" && (
           <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead} onReactMessage={onReactMessage} onEditMessage={onEditMessage} onDeleteMessage={onDeleteMessage}/>
@@ -46244,7 +46294,29 @@ export default function App() {
     return false;
   }, [accessPerms, entityOverrides, currentUser, currentUserRole]);
 
-  // Ownership entity gate: a store of ownership 'joint_venture'/'franchise' is
+  // Helpdesk capability level for the current user: "manage" | "respond" | "view" | "none".
+  // Owner is always "manage". Otherwise the per-person override (set by the owner in
+  // Access Control, stored as hd.manage / hd.respond / hd.view keys) wins; failing
+  // that, the role default from the feature registry applies. Highest level wins.
+  const helpdeskLevel = useCallback(() => {
+    if (currentUserRole.baseRole === "owner") return "manage";
+    const memberId = currentUser?.opsTeamMemberId || currentUser?.id;
+    const ov = entityOverrides?.[memberId] || {};
+    // person override: an explicit grant at any level takes precedence
+    if (ov["hd.manage"] === true) return "manage";
+    if (ov["hd.respond"] === true) return "respond";
+    if (ov["hd.view"] === true) return "view";
+    // an explicit person-level revoke (false) of all = none
+    const anyExplicit = ["hd.manage","hd.respond","hd.view"].some(k => ov[k] !== undefined);
+    if (anyExplicit) return "none";
+    // fall back to role defaults
+    if (canFeature("feat.helpdesk.manage")) return "manage";
+    if (canFeature("feat.helpdesk.respond")) return "respond";
+    if (canFeature("feat.helpdesk.view")) return "view";
+    return "none";
+  }, [entityOverrides, accessPerms, currentUser, currentUserRole, canFeature]);
+
+
   // only accessible if the user can access that ownership entity. Owned stores
   // (and anything else) are unaffected.
   const canAccessStore = useCallback((store) => {
@@ -46838,6 +46910,7 @@ export default function App() {
           onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
           onAddIssue={addIssue} onUpdateIssue={updateIssue}
           hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
+          helpdeskLevel={helpdeskLevel()}
           messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
           availability={availability} onAddAvailability={addAvailability} onUpdateAvailability={updateAvailability}
           schedules={schedules} punchRecords={punchRecords} onAmendPunch={handleAmendPunch} onAddPunchComment={handleAddPunchComment}
@@ -47413,6 +47486,7 @@ export default function App() {
               onUpdateBrand={updateBrand}
               isEmployee={false}
               canManageHelpdesk={canFeature("feat.helpdesk.manage")}
+              helpdeskLevel={helpdeskLevel()}
               initialTab={commsTab} hideTabs={true}
             />}
             {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
