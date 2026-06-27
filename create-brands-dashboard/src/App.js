@@ -711,18 +711,23 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
   );
 }
 
+// Shared KPI colour system — a fresh, brighter jewel-toned palette that still
+// harmonises with the warm cream page. Each family: tint (accent), bg (card
+// wash), bd (border), chip (icon background).
+const KPI_PALETTE = {
+  brand:   { tint: "#C2410C", bg: "#FDEEE3", bd: "#F4D6BE", chip: "#F8E1CD" }, // pumpkin
+  indigo:  { tint: "#5B53C9", bg: "#ECEBFB", bd: "#D2CFF3", chip: "#DFDDF7" }, // iris
+  emerald: { tint: "#0F8A6A", bg: "#E2F5EE", bd: "#BEE7D8", chip: "#CFEEE2" }, // jade
+  sky:     { tint: "#0E7FAE", bg: "#E2F2F9", bd: "#BDDFF0", chip: "#CFE9F4" }, // cerulean
+  amber:   { tint: "#D08700", bg: "#FCF1D6", bd: "#F1DCA6", chip: "#F7E7BE" }, // marigold
+  violet:  { tint: "#A638A0", bg: "#FBEAF8", bd: "#F0CAEA", chip: "#F5D9F1" }, // orchid
+  rose:    { tint: "#C2185B", bg: "#FCE8F0", bd: "#F4C6D8", chip: "#F8D6E3" }, // raspberry
+  red:     { tint: "#D32F2F", bg: "#FDE9E7", bd: "#F6C8C3", chip: "#FAD7D2" }, // vermilion
+  slate:   { tint: "#7A6E5D", bg: "#F4EFE6", bd: "#E2D7C5", chip: "#EBE2D2" }, // stone (warm)
+};
+
 function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false }) {
-  const PALETTE = {
-    brand:   { tint: "#B5651D", bg: "#FBF1E4", bd: "#EFD9BE", chip: "#F4E2C9" },
-    indigo:  { tint: "#7C6BC4", bg: "#F2EFFA", bd: "#DED7F0", chip: "#E6E0F5" },
-    emerald: { tint: "#4E8B5B", bg: "#EBF4EC", bd: "#CFE6D2", chip: "#DCEEDD" },
-    sky:     { tint: "#3E8E9E", bg: "#E8F3F4", bd: "#C6E2E5", chip: "#D6EBED" },
-    amber:   { tint: "#C79023", bg: "#FBF3DD", bd: "#EFE0B4", chip: "#F5E9C6" },
-    violet:  { tint: "#9B5DA8", bg: "#F6EEF7", bd: "#E6D2EA", chip: "#EEDDF1" },
-    red:     { tint: "#C0445A", bg: "#FBEBEE", bd: "#F0CDD4", chip: "#F6DAE0" },
-    slate:   { tint: "#8A7B66", bg: "#F6F0E6", bd: "#E5D8C3", chip: "#EDE4D3" },
-  };
-  const p = alert ? PALETTE.red : (PALETTE[accent] || PALETTE.brand);
+  const p = alert ? KPI_PALETTE.red : (KPI_PALETTE[accent] || KPI_PALETTE.brand);
   return (
     <div className="group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)]"
       style={{ background: p.bg, borderColor: p.bd }}>
@@ -851,17 +856,9 @@ function HeroRevenueCard({ current, previous, target, prevLabel, chart = [], ord
 function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null }) {
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
-  // Category colour system: each metric family gets a coordinated tint, a soft
-  // card-background wash, and a border — varied but harmonised on cream.
-  const PALETTE = {
-    brand:   { tint: "#B5651D", bg: "#FBF1E4", bd: "#EFD9BE", chip: "#F4E2C9" }, // terracotta
-    indigo:  { tint: "#7C6BC4", bg: "#F2EFFA", bd: "#DED7F0", chip: "#E6E0F5" }, // plum (labour hrs)
-    emerald: { tint: "#4E8B5B", bg: "#EBF4EC", bd: "#CFE6D2", chip: "#DCEEDD" }, // sage (efficiency)
-    sky:     { tint: "#3E8E9E", bg: "#E8F3F4", bd: "#C6E2E5", chip: "#D6EBED" }, // teal (avg spend)
-    amber:   { tint: "#C79023", bg: "#FBF3DD", bd: "#EFE0B4", chip: "#F5E9C6" }, // honey (SPLH)
-    red:     { tint: "#C0445A", bg: "#FBEBEE", bd: "#F0CDD4", chip: "#F6DAE0" }, // rose (alert)
-  };
-  const p = alert ? PALETTE.red : (PALETTE[accent] || PALETTE.brand);
+  // Category colour system (shared, jewel-toned). Each metric family gets a
+  // coordinated tint, soft card wash, and border — varied but cream-harmonised.
+  const p = alert ? KPI_PALETTE.red : (KPI_PALETTE[accent] || KPI_PALETTE.brand);
   let deltaEl = null;
   if (current != null && previous != null && previous !== 0) {
     const delta = ((current - previous) / Math.abs(previous)) * 100;
@@ -20321,6 +20318,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const cogsTrustworthy = USE_COGS_V2 && dashCogs && !err && !loading && !!singleStoreId
     && cur.revenue > 0 && dashCogs.cogs <= cur.revenue * 1.5;
   const primeCostPct = cogsTrustworthy ? ((cur.labourCost + dashCogs.cogs) / cur.revenue) * 100 : null;
+  const cogsPct = cogsTrustworthy && cur.revenue > 0 ? (dashCogs.cogs / cur.revenue) * 100 : null;
   const netMarginPct = cogsTrustworthy ? ((cur.revenue - cur.labourCost - dashCogs.cogs) / cur.revenue) * 100 : null;
   const dashCogsCoverage = cogsTrustworthy ? dashCogs.coverage : null;
 
@@ -20564,26 +20562,26 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <div className="rounded-2xl border border-[#E8DCC6] bg-[#FBF6EC] p-4"><AskDataView/></div>
       )}
       {drill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDrill(null)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 sticky top-0 bg-slate-900">
-              <h3 className="text-sm font-semibold text-white">{drill.title}</h3>
-              <button onClick={() => setDrill(null)} className="text-slate-500 hover:text-white text-lg leading-none">×</button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#3A2E26]/50 backdrop-blur-sm p-4" onClick={() => setDrill(null)}>
+          <div className="bg-[#FBF6EC] border border-[#E8DCC6] rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#EADFCB] sticky top-0 bg-[#FBF6EC] z-10">
+              <h3 className="text-sm font-bold text-[#3A2E26]">{drill.title}</h3>
+              <button onClick={() => setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center text-[#9A8770] hover:text-[#3A2E26] hover:bg-[#F0E6D5] transition-colors text-lg leading-none">×</button>
             </div>
             <table className="w-full text-xs">
-              <thead><tr className="text-slate-500 border-b border-slate-800">
-                {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</th>)}
+              <thead><tr className="text-[#9A8770] border-b border-[#EADFCB] bg-[#F6EEDF]">
+                {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2.5 font-semibold uppercase tracking-wider text-[10px] ${i===0?"text-left":"text-right"}`}>{c}</th>)}
               </tr></thead>
               <tbody>
-                {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-6 text-center text-slate-600">No data for this period</td></tr>}
+                {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-8 text-center text-[#B7A688]">No data for this period</td></tr>}
                 {drill.rows.map((r,ri) => (
-                  <tr key={ri} className="border-b border-slate-800/50">
-                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2 ${ci===0?"text-left text-slate-300":"text-right text-slate-400"}`}>{cell}</td>)}
+                  <tr key={ri} className="border-b border-[#F0E6D5] hover:bg-[#F6EEDF]/60 transition-colors">
+                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2.5 ${ci===0?"text-left font-medium text-[#3A2E26]":"text-right text-[#6B5D4F] tabular-nums"}`}>{cell}</td>)}
                   </tr>
                 ))}
               </tbody>
-              {drill.footer && <tfoot><tr className="border-t border-slate-700 font-semibold text-white">
-                {drill.footer.map((c,i) => <td key={i} className={`px-4 py-2 ${i===0?"text-left":"text-right"}`}>{c}</td>)}
+              {drill.footer && <tfoot><tr className="border-t-2 border-[#E0D0B5] font-bold text-[#3A2E26] bg-[#F6EEDF]">
+                {drill.footer.map((c,i) => <td key={i} className={`px-4 py-3 ${i===0?"text-left":"text-right tabular-nums"}`}>{c}</td>)}
               </tr></tfoot>}
             </table>
           </div>
@@ -20635,7 +20633,8 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+        <StatCard label="COGS %" value={cogsPct != null ? `${cogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={cogsPct != null ? `${fmtCurrency(dashCogs.cogs)} food cost` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent={cogsPct != null ? (cogsPct > 35 ? "red" : "sky") : "slate"} alert={cogsPct != null && cogsPct > 35} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
         <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "violet") : "slate"} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "emerald"} alert={criticalIssues > 0} />
@@ -20700,30 +20699,34 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
-        <AnalysisBlock title={`${isSingleDay ? "Hourly" : "Daily"} Gross Revenue · ${period.label}`} className="xl:col-span-2 flex flex-col">
+        {/* On single-day the hero already shows hourly bars; only show the full
+            chart on multi-day where it adds the daily breakdown + labour line. */}
+        {!isSingleDay && (
+        <AnalysisBlock title={`Daily Gross Revenue · ${period.label}`} className="xl:col-span-2 flex flex-col">
           {chart.length === 0 ? (
-            <div className="flex-1 min-h-[260px] flex items-center justify-center text-xs text-slate-600">
-              {loading ? "Loading…" : isSingleDay ? "No sales recorded for this day yet" : "No data for this period"}
+            <div className="flex-1 min-h-[260px] flex items-center justify-center text-xs text-[#9A8770]">
+              {loading ? "Loading…" : "No data for this period"}
             </div>
           ) : (
           <div className="flex-1 min-h-[260px]">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-              <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
-              <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => v >= 1000 ? `£${(v/1000).toFixed(0)}k` : `£${Math.round(v)}`} />
-              {!isSingleDay && <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />}
+              <CartesianGrid stroke="#EADFCB" strokeDasharray="3 3" />
+              <XAxis dataKey="label" tick={{ fill: "#9A8770", fontSize: 10 }} />
+              <YAxis yAxisId="left" tick={{ fill: "#9A8770", fontSize: 10 }} tickFormatter={v => v >= 1000 ? `£${(v/1000).toFixed(0)}k` : `£${Math.round(v)}`} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fill: "#9A8770", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />
               <Tooltip content={<ChartTooltip/>} />
-              <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-              <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#844429" opacity={0.85} radius={[3,3,0,0]} />
-              {!isSingleDay && <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#10b981" strokeWidth={2} dot={false} />}
+              <Legend wrapperStyle={{ fontSize: 11, color: "#8A7866" }} />
+              <Bar yAxisId="left" dataKey="revenue" name="£ Gross Revenue" fill="#B5651D" opacity={0.9} radius={[4,4,0,0]} />
+              <Line yAxisId="right" type="monotone" dataKey="laborPct" name="Labour %" stroke="#4E8B5B" strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
           </div>
           )}
         </AnalysisBlock>
-        <div className="flex flex-col gap-6">
-          <AnalysisBlock title="Revenue Split by Brand">
+        )}
+        <div className={`flex flex-col gap-6 ${isSingleDay ? "xl:col-span-2 xl:flex-row" : ""}`}>
+          <AnalysisBlock title="Revenue Split by Brand" className={isSingleDay ? "xl:flex-1" : ""}>
             <ResponsiveContainer width="100%" height={150}>
               <PieChart>
                 <Pie data={pieData} cx="50%" cy="50%" innerRadius={42} outerRadius={68} dataKey="value" paddingAngle={3}>
@@ -20741,7 +20744,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
               ))}
             </div>
           </AnalysisBlock>
-          <AnalysisBlock title="Google Rating">
+          <AnalysisBlock title="Google Rating" className={isSingleDay ? "xl:flex-1" : ""}>
             <div className="flex items-center gap-4 mb-3">
               <div className="flex flex-col items-center justify-center px-1">
                 <div className="text-4xl font-bold text-amber-500 leading-none">{ratingAvg != null ? ratingAvg.toFixed(2) : "—"}</div>
