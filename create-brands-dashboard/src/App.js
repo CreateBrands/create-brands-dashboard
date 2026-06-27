@@ -105,6 +105,7 @@ import {
   fetchGoogleReviews,
   fetchStaffLeaderboard, triggerReviewInsights, fetchInsightsCoverage, fetchReviewSentiment,
   fetchDeletionSignals, triggerReviewDeletionCheck,
+  fetchPerformanceMetrics, triggerPerformanceSync,
   triggerGoogleReviewsSync,
   getGoogleReviewsSyncState,
   generateReviewReplies,
@@ -15561,6 +15562,122 @@ function DeletionMonitor({ stores = [], storeId = null }) {
   );
 }
 
+// Discovery metrics — how customers find you on Google Search & Maps. Reads
+// gbp_performance_daily (populated by gbp-performance-sync). Genuinely new data:
+// impressions, direction requests, calls, website clicks, food orders per store.
+function PerformancePanel({ stores = [], storeId = null }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [period, setPeriod] = useState("30");
+  const [scope, setScope] = useState(storeId || "all");
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const from = new Date(Date.now() - Number(period) * 864e5).toISOString().slice(0, 10);
+      setData(await fetchPerformanceMetrics({ storeId: scope === "all" ? null : scope, from }));
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [period, scope]);
+
+  const runSync = async () => {
+    setSyncing(true); setErr(null);
+    try { await triggerPerformanceSync({ days: 60 }); await load(); }
+    catch (e) { setErr(e?.message || String(e)); }
+    finally { setSyncing(false); }
+  };
+
+  const storeName = (id) => stores.find(s => s.id === id)?.name || id;
+  const shopStores = (stores || []).filter(s => !s.archivedAt);
+  const o = data?.overall;
+  const fmt = (n) => (n || 0).toLocaleString();
+
+  const KPIS = o ? [
+    { label: "Total impressions", value: o.impressions, sub: `${fmt(o.imprMaps)} Maps · ${fmt(o.imprSearch)} Search` },
+    { label: "Direction requests", value: o.directions, sub: "people navigating to you" },
+    { label: "Calls", value: o.calls, sub: "tapped to call" },
+    { label: "Website clicks", value: o.websiteClicks, sub: "to your site" },
+    { label: "Food orders", value: o.foodOrders, sub: "via Google" },
+    { label: "Total actions", value: o.actions, sub: "all interactions" },
+  ] : [];
+
+  const maxImpr = data?.perStore?.length ? data.perStore[0].impressions : 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          {!storeId && (
+            <select value={scope} onChange={e => setScope(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+              <option value="all">All stores</option>
+              {shopStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            </select>
+          )}
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5">
+            {[["7", "7 days"], ["30", "30 days"], ["60", "60 days"]].map(([k, l]) => (
+              <button key={k} onClick={() => setPeriod(k)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold ${period === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <button onClick={runSync} disabled={syncing}
+          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:border-indigo-500 disabled:opacity-40">
+          {syncing ? "Syncing…" : "Sync metrics"}
+        </button>
+      </div>
+
+      <div className="text-[11px] text-slate-600">How customers discover and act on your listings across Google Search & Maps.</div>
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-500">Loading…</div>}
+
+      {!loading && data && !data.hasData && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">
+          No performance data yet — hit “Sync metrics” to pull from Google. (Data lags ~3 days, per Google.)
+        </div>
+      )}
+
+      {!loading && data && data.hasData && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {KPIS.map(k => (
+              <div key={k.label} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+                <div className="text-xl font-bold text-white">{fmt(k.value)}</div>
+                <div className="text-[11px] text-slate-400">{k.label}</div>
+                <div className="text-[10px] text-slate-600 mt-0.5">{k.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {!storeId && data.perStore.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-xs font-semibold text-slate-400 px-1">Impressions by store</div>
+              {data.perStore.map(s => (
+                <div key={s.storeId} className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-sm font-medium text-white truncate">{storeName(s.storeId)}</span>
+                    <span className="text-xs text-slate-400">{fmt(s.impressions)} impressions · {fmt(s.actions)} actions</span>
+                  </div>
+                  <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-sky-500 to-indigo-400 rounded-full"
+                      style={{ width: `${Math.max(4, (s.impressions / maxImpr) * 100)}%` }} />
+                  </div>
+                  <div className="text-[10px] text-slate-600 mt-1">
+                    {fmt(s.directions)} directions · {fmt(s.calls)} calls · {fmt(s.foodOrders)} food orders
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [view, setView] = useState("reviews");   // reviews | leaderboard
   const [reviews, setReviews] = useState([]);
@@ -15618,7 +15735,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
           <Star className="w-4 h-4 text-amber-400" />
           <h2 className="text-sm font-semibold text-slate-200">Google Reviews</h2>
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 ml-2">
-            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"]].map(([k, l]) => (
+            {[["reviews", "Reviews"], ["leaderboard", "Staff Leaderboard"], ["sentiment", "Sentiment"], ["deletions", "Deletions"], ["discovery", "Discovery"]].map(([k, l]) => (
               <button key={k} onClick={() => setView(k)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>{l}</button>
             ))}
@@ -15647,6 +15764,7 @@ function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact =
       {view === "leaderboard" && <StaffLeaderboard stores={stores} storeId={storeId} />}
       {view === "sentiment" && <SentimentAnalysis stores={stores} storeId={storeId} />}
       {view === "deletions" && <DeletionMonitor stores={stores} storeId={storeId} />}
+      {view === "discovery" && <PerformancePanel stores={stores} storeId={storeId} />}
       {view !== "reviews" ? null : (<>
 
       {state?.last_run_at && (

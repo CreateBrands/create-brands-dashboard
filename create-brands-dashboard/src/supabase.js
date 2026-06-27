@@ -5496,6 +5496,67 @@ export async function fetchDeletionSignals({ storeId = null } = {}) {
   return { signals, history: history || [] };
 }
 // ===== end GBP_DELETIONS_V1 =====
+
+// ===== GBP_PERFORMANCE_V1: discovery metrics (Maps/Search views, calls, etc) =====
+export async function triggerPerformanceSync(body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gbp-performance-sync", { body, headers });
+  if (error) throw error;
+  return data;
+}
+
+// Aggregated discovery metrics per store over a window. Sums each metric and
+// derives totals (impressions, actions). Used by the Store/Chain analytics panel.
+export async function fetchPerformanceMetrics({ storeId = null, from = null, to = null } = {}) {
+  let q = supabase.from("gbp_performance_daily")
+    .select("store_id, metric_date, impr_maps_desktop, impr_maps_mobile, impr_search_desktop, impr_search_mobile, calls, directions, website_clicks, conversations, bookings, food_orders, menu_clicks")
+    .limit(20000);
+  if (storeId) q = q.eq("store_id", storeId);
+  if (from)    q = q.gte("metric_date", from);
+  if (to)      q = q.lte("metric_date", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  const rows = data || [];
+
+  const blank = () => ({
+    imprMaps: 0, imprSearch: 0, impressions: 0,
+    calls: 0, directions: 0, websiteClicks: 0, conversations: 0,
+    bookings: 0, foodOrders: 0, menuClicks: 0, actions: 0,
+  });
+  const overall = blank();
+  const byStore = {};
+  const byDate = {};
+
+  rows.forEach((r) => {
+    const maps   = (r.impr_maps_desktop || 0) + (r.impr_maps_mobile || 0);
+    const search = (r.impr_search_desktop || 0) + (r.impr_search_mobile || 0);
+    const actions = (r.calls || 0) + (r.directions || 0) + (r.website_clicks || 0) +
+                    (r.conversations || 0) + (r.bookings || 0) + (r.food_orders || 0) + (r.menu_clicks || 0);
+    const add = (t) => {
+      t.imprMaps += maps; t.imprSearch += search; t.impressions += maps + search;
+      t.calls += r.calls || 0; t.directions += r.directions || 0; t.websiteClicks += r.website_clicks || 0;
+      t.conversations += r.conversations || 0; t.bookings += r.bookings || 0;
+      t.foodOrders += r.food_orders || 0; t.menuClicks += r.menu_clicks || 0; t.actions += actions;
+    };
+    add(overall);
+    if (r.store_id) { byStore[r.store_id] = byStore[r.store_id] || blank(); add(byStore[r.store_id]); }
+    if (r.metric_date) {
+      byDate[r.metric_date] = byDate[r.metric_date] || { date: r.metric_date, impressions: 0, actions: 0 };
+      byDate[r.metric_date].impressions += maps + search;
+      byDate[r.metric_date].actions += actions;
+    }
+  });
+
+  return {
+    overall,
+    perStore: Object.entries(byStore).map(([id, t]) => ({ storeId: id, ...t }))
+      .sort((a, b) => b.impressions - a.impressions),
+    trend: Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)),
+    hasData: rows.length > 0,
+  };
+}
+// ===== end GBP_PERFORMANCE_V1 =====
 // ===== end GBP_INSIGHTS_V1 =====
 
 // ===== COGS_V1 — cost of goods / recipe costing =============================
