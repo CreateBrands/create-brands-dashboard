@@ -721,13 +721,13 @@ const KPI_PALETTE = {
   brand:    { tint: "#9C5A2E", bg: "#F8EFE4", bd: "#E9D6C2", chip: "#F1E2D0" }, // mid-brown
   brown:    { tint: "#844429", bg: "#F4E9DD", bd: "#E2CFBC", chip: "#EBDCCB" }, // deep brown
   indigo:   { tint: "#844429", bg: "#F4E9DD", bd: "#E2CFBC", chip: "#EBDCCB" }, // (alias→brown)
-  rosewood: { tint: "#A0573F", bg: "#F7ECE5", bd: "#E8D2C5", chip: "#F0E0D5" }, // rosewood-brown
-  emerald:  { tint: "#A0573F", bg: "#F7ECE5", bd: "#E8D2C5", chip: "#F0E0D5" }, // (alias→rosewood)
+  rosewood: { tint: "#9C5A2E", bg: "#F8EFE4", bd: "#E9D6C2", chip: "#F1E2D0" }, // → mid-brown (rosewood retired)
+  emerald:  { tint: "#9C5A2E", bg: "#F8EFE4", bd: "#E9D6C2", chip: "#F1E2D0" }, // (alias→mid-brown)
   caramel:  { tint: "#C9854F", bg: "#FBF3E4", bd: "#EFE0C4", chip: "#F5E9CF" }, // caramel
   sky:      { tint: "#C9854F", bg: "#FBF3E4", bd: "#EFE0C4", chip: "#F5E9CF" }, // (alias→caramel)
   gold:     { tint: "#B8860B", bg: "#FBF6DD", bd: "#EFE3AE", chip: "#F5ECC2" }, // gold
   amber:    { tint: "#B8860B", bg: "#FBF6DD", bd: "#EFE3AE", chip: "#F5ECC2" }, // (alias→gold)
-  violet:   { tint: "#A0573F", bg: "#F7ECE5", bd: "#E8D2C5", chip: "#F0E0D5" }, // (alias→rosewood)
+  violet:   { tint: "#9C5A2E", bg: "#F8EFE4", bd: "#E9D6C2", chip: "#F1E2D0" }, // (alias→mid-brown)
   slate:    { tint: "#8A7B66", bg: "#F4EFE6", bd: "#E2D7C5", chip: "#EBE2D2" }, // warm stone
   red:      { tint: "#A8482E", bg: "#F6E0D8", bd: "#EAC8BC", chip: "#F0D3C7" }, // brick (alert tile)
 };
@@ -20666,52 +20666,76 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <div className="col-span-2 lg:row-span-2">
           <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} target={target} prevLabel={prevLabel} chart={chart} orders={cur.orders} wagePct={cur.wagePct} splh={cur.splh} onClick={openRevenueDrill} />
         </div>
-        <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="rosewood" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
+        <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="gold" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <ComparisonKPICard accent="caramel" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
-        <ComparisonKPICard accent="gold" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
+        <ComparisonKPICard accent="brand" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
         <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="brown" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatCard label="COGS %" value={cogsPct != null ? `${cogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={cogsPct != null ? `${fmtCurrency(dashCogs.cogs)} food cost` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent="caramel" status={cogsPct == null ? "neut" : cogsPct > 35 ? "bad" : cogsPct > 30 ? "warn" : "good"} note={cogsPct == null ? null : cogsPct > 35 ? "high" : cogsPct > 30 ? "watch" : "on track"} alert={cogsPct != null && cogsPct > 35} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent="brown" status={primeCostPct == null ? "neut" : primeCostPct > 65 ? "bad" : primeCostPct > 60 ? "warn" : "good"} note={primeCostPct == null ? null : primeCostPct > 65 ? "high" : primeCostPct > 60 ? "watch" : "healthy"} alert={primeCostPct != null && primeCostPct > 65} />
-        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent="rosewood" status={netMarginPct == null ? "neut" : netMarginPct < 0 ? "bad" : netMarginPct < 10 ? "warn" : "good"} note={netMarginPct == null ? null : netMarginPct < 0 ? "loss" : netMarginPct < 10 ? "thin" : "healthy"} />
+        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent="brand" status={netMarginPct == null ? "neut" : netMarginPct < 0 ? "bad" : netMarginPct < 10 ? "warn" : "good"} note={netMarginPct == null ? null : netMarginPct < 0 ? "loss" : netMarginPct < 10 ? "thin" : "healthy"} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent="gold" status={criticalIssues > 0 ? "bad" : openIssues > 0 ? "warn" : "good"} note={criticalIssues > 0 ? `${criticalIssues} critical` : openIssues > 0 ? `${openIssues} open` : "clear"} alert={criticalIssues > 0} />
         <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="caramel" status={ratingAvg == null ? "neut" : ratingAvg >= 4.3 ? "good" : ratingAvg >= 4.0 ? "warn" : "bad"} note={ratingAvg == null ? null : `${ratingAvg.toFixed(2)}★`} />
       </div>
 
       {/* ── Store leaderboard (only when ranking >1 store) ───────────────────── */}
-      {storeLeaderboard.length >= 1 && (
+      {storeLeaderboard.length >= 2 && (
         <AnalysisBlock
           title={`Store performance · ${period.label}`}
           action={<span className="text-[11px] text-[#9A8770]">All stores · ranked by revenue</span>}
         >
-          <div className="space-y-1">
-            {storeLeaderboard.map((s, i) => {
-              const dStatus = s.delta == null ? "neut" : s.delta >= 0 ? "good" : (s.delta <= -10 ? "bad" : "warn");
-              const dColor = STATUS_COLORS[dStatus].dot;
-              return (
-                <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group flex items-center gap-3.5 px-2 py-2 rounded-xl hover:bg-[#F6EEDF]/70 transition-colors" title={`View ${s.name}`}>
-                  <span className="text-[13px] font-bold text-[#C9854F] w-5 text-center flex-shrink-0">{i + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-3 mb-1.5">
-                      <span className="text-[13px] font-semibold text-[#3A2E26] truncate text-left">{s.name}</span>
-                      <span className="flex items-center gap-2.5 flex-shrink-0">
-                        <span className="text-[13px] font-bold text-[#3A2E26] tabular-nums">{fmtCurrency(s.rev)}</span>
-                        {s.delta != null && (
-                          <span className="text-[11px] font-semibold w-10 text-right tabular-nums" style={{ color: dColor }}>
-                            {s.delta >= 0 ? "▲" : "▼"}{Math.abs(s.delta).toFixed(0)}%
-                          </span>
-                        )}
-                      </span>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-2.5">
+            {/* Top performers (left) */}
+            <div className="space-y-2.5">
+              <div className="text-[11px] font-bold uppercase tracking-[0.1em] mb-1" style={{ color: "#4A7A3A" }}>Top performers</div>
+              {storeLeaderboard.slice(0, 5).map((s, i) => {
+                const dColor = s.delta == null ? "#9A8770" : s.delta >= 0 ? "#5C9442" : (s.delta <= -10 ? "#C2522E" : "#C99A2E");
+                return (
+                  <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group" title={`View ${s.name}`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[11px] font-bold text-[#C9854F] w-4">{i + 1}</span>
+                      <span className="text-sm font-semibold text-[#3A2E26] group-hover:text-[#844429] flex-1 text-left truncate">{s.name}</span>
+                      <span className="text-sm font-bold text-[#3A2E26] tabular-nums">{fmtCurrency(s.rev)}</span>
+                      {s.delta != null && (
+                        <span className="text-[10px] font-semibold w-12 text-right tabular-nums" style={{ color: dColor }}>
+                          {s.delta >= 0 ? "▲" : "▼"} {Math.abs(s.delta).toFixed(0)}%
+                        </span>
+                      )}
                     </div>
-                    <div className="h-1.5 bg-[#EADFCB] rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{ width: `${(s.rev / leaderMax) * 100}%`, background: "linear-gradient(90deg, #C9854F, #E8B583)" }} />
+                    <div className="h-2 bg-[#EADFCB] rounded-full overflow-hidden ml-6">
+                      <div className="h-full rounded-full group-hover:opacity-90 transition-all" style={{ width: `${(s.rev / leaderMax) * 100}%`, background: "linear-gradient(90deg, #C9854F, #8A4A2C)" }} />
                     </div>
-                  </div>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Needs attention (right) — bottom performers */}
+            <div className="space-y-2.5">
+              <div className="text-[11px] font-bold uppercase tracking-[0.1em] mb-1" style={{ color: "#A8482E" }}>Needs attention</div>
+              {storeLeaderboard.slice(Math.max(5, storeLeaderboard.length - 5)).reverse().map((s) => {
+                const rank = storeLeaderboard.findIndex(x => x.id === s.id) + 1;
+                const dColor = s.delta == null ? "#9A8770" : s.delta >= 0 ? "#5C9442" : (s.delta <= -10 ? "#C2522E" : "#C99A2E");
+                return (
+                  <button key={s.id} onClick={() => setStoreId(s.id)} className="w-full group" title={`View ${s.name}`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[11px] font-bold text-[#C9854F] w-4">{rank}</span>
+                      <span className="text-sm font-semibold text-[#3A2E26] group-hover:text-[#844429] flex-1 text-left truncate">{s.name}</span>
+                      <span className="text-sm font-bold text-[#3A2E26] tabular-nums">{fmtCurrency(s.rev)}</span>
+                      {s.delta != null && (
+                        <span className="text-[10px] font-semibold w-12 text-right tabular-nums" style={{ color: dColor }}>
+                          {s.delta >= 0 ? "▲" : "▼"} {Math.abs(s.delta).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="h-2 bg-[#EADFCB] rounded-full overflow-hidden ml-6">
+                      <div className="h-full rounded-full group-hover:opacity-90 transition-all" style={{ width: `${(s.rev / leaderMax) * 100}%`, background: "linear-gradient(90deg, #C9A877, #A8835C)" }} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div className="text-[10px] text-[#9A8770] pt-3 mt-1 border-t border-[#EADFCB]">Tap a store to drill into its figures{prevPeriod ? ` · ▲▼ vs ${prevLabel.replace(" (to now)", "")}` : ""}</div>
         </AnalysisBlock>
