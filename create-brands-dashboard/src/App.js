@@ -177,7 +177,7 @@ import {
   Home, MoreHorizontal,
   Cloud, Sun, CloudRain, ArrowRight,
   QrCode,
-  ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle,
+  ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, ArrowUpRight,
   Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
@@ -712,14 +712,16 @@ function EmptyState({ icon: Icon = Info, title, message, action, accent = "slate
 }
 
 function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false }) {
+  const TINTS = { brand: "#C9854F", indigo: "#C9854F", emerald: "#5B7A52", amber: "#C9A23F", red: "#B0485A", sky: "#C97F4F", slate: "#A89580" };
+  const tint = alert ? "#B0485A" : (TINTS[accent] || "#C9854F");
   return (
-    <div className="rounded-2xl border border-[#E8DCC6] bg-[#FBF6EC] p-4 flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.08em]">{label}</span>
-        {Icon && <Icon size={14} className={alert ? "text-[#B0485A]" : "text-[#B89B7C]"} />}
+    <div className="group relative rounded-2xl border border-[#EADFCB] bg-[#FCF8F0] p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(132,68,41,0.04)]">
+      <div className="flex items-center gap-2">
+        {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${tint}1A` }}><Icon size={14} style={{ color: tint }} /></div>}
+        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.06em] leading-tight">{label}</span>
       </div>
-      <div className={`text-[26px] leading-none font-bold tracking-tight tabular-nums mt-0.5 ${alert ? "text-[#B0485A]" : "text-[#3A2E26]"}`}>{value}</div>
-      {sub && <div className="text-xs text-[#9A8770] mt-0.5">{sub}</div>}
+      <div className={`text-[28px] leading-none font-bold tracking-tight tabular-nums ${alert ? "text-[#B0485A]" : "text-[#3A2E26]"}`}>{value}</div>
+      {sub && <div className="text-xs text-[#9A8770] -mt-0.5">{sub}</div>}
     </div>
   );
 }
@@ -757,40 +759,91 @@ function Sparkline({ data, color = "#C9854F", height = 28 }) {
   );
 }
 
+// Hero revenue card — the dashboard's north star. Dark brand-brown gradient,
+// large number, live sparkline. The one bold element on the page.
+function HeroRevenueCard({ current, previous, target, prevLabel, spark, orders, onClick }) {
+  const val = formatKPI(current, "currency");
+  let deltaPct = null, isUp = false;
+  if (current != null && previous != null && previous !== 0) {
+    deltaPct = ((current - previous) / Math.abs(previous)) * 100;
+    isUp = deltaPct > 0;
+  }
+  const pctToTarget = target?.revenue ? Math.min(100, (current / target.revenue) * 100) : null;
+  return (
+    <div onClick={onClick}
+      className="relative overflow-hidden rounded-3xl p-6 flex flex-col justify-between cursor-pointer group min-h-[230px]"
+      style={{ background: "linear-gradient(135deg, #8A4A2C 0%, #6E3520 55%, #4F2415 100%)" }}>
+      <div className="absolute -top-16 -right-16 w-56 h-56 rounded-full opacity-20 blur-2xl" style={{ background: "radial-gradient(circle, #E8B583 0%, transparent 70%)" }} />
+      <div className="absolute inset-0 opacity-[0.04]" style={{ backgroundImage: "radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)", backgroundSize: "22px 22px" }} />
+      <div className="relative flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm"><PoundSterling size={16} className="text-[#FBEAD2]"/></div>
+          <span className="text-[11px] font-semibold text-[#EAD0B5] uppercase tracking-[0.12em]">Revenue · Today</span>
+        </div>
+        <ArrowUpRight size={18} className="text-[#EAD0B5]/60 group-hover:text-[#FBEAD2] transition-colors" />
+      </div>
+      <div className="relative">
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="text-[44px] leading-none font-bold text-[#FFF8EE] tracking-tight">{val}</div>
+          {deltaPct != null && (
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold mb-1 ${isUp ? "bg-[#7FB069]/25 text-[#C9E8B5]" : "bg-[#E8889A]/20 text-[#F4C2CD]"}`}>
+              {isUp ? <TrendingUp size={12}/> : <TrendingDown size={12}/>}{deltaPct >= 0 ? "+" : ""}{deltaPct.toFixed(1)}%
+            </span>
+          )}
+        </div>
+        {spark && spark.length >= 2 && (
+          <div className="mt-3 -mx-1"><Sparkline data={spark} color="#F0C088" height={36} /></div>
+        )}
+        <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-xs text-[#E0C3A6]">{orders} orders · {prevLabel}: {previous != null ? formatKPI(previous, "currency") : "—"}</span>
+          {target && <span className="text-xs font-semibold text-[#FBEAD2]">{fmtCurrency(target.revenue)} target</span>}
+        </div>
+        {pctToTarget != null && (
+          <div className="mt-2 h-1.5 rounded-full bg-white/15 overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pctToTarget}%`, background: "linear-gradient(90deg, #F0C088, #FBEAD2)" }} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ComparisonKPICard({ label, current, previous, format, icon: Icon, invertDelta = false, alert = false, subCurrent, prevLabel = "Prior", accent = null, onClick = null, spark = null }) {
   const currentVal = formatKPI(current, format);
   const previousVal = previous != null ? formatKPI(previous, format) : null;
+  // Per-metric accent tint for the icon chip (subtle, brand-aligned).
+  const TINTS = {
+    indigo: "#C9854F", brand: "#C9854F", emerald: "#5B7A52",
+    sky: "#C97F4F", amber: "#C9A23F", red: "#B0485A",
+  };
+  const tint = alert ? "#B0485A" : (TINTS[accent] || "#C9854F");
   let deltaEl = null;
   if (current != null && previous != null && previous !== 0) {
     const delta = ((current - previous) / Math.abs(previous)) * 100;
     const isPositive = invertDelta ? delta < 0 : delta > 0;
     const sign = delta >= 0 ? "+" : "";
     deltaEl = (
-      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${isPositive ? "text-[#5B7A52]" : "text-[#B0485A]"}`}>
-        {isPositive ? <TrendingUp size={12}/> : <TrendingDown size={12}/>}{sign}{delta.toFixed(1)}%
-        <span className="font-normal text-[#A8957F]">vs {prevLabel}</span>
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${isPositive ? "bg-[#EAF1E4] text-[#4E6B45]" : "bg-[#F7E4E8] text-[#A03E50]"}`}>
+        {isPositive ? <TrendingUp size={11}/> : <TrendingDown size={11}/>}{sign}{delta.toFixed(1)}%
       </span>
     );
   }
-  // Quiet, uniform card. The accent is a single thin top-edge tint, not a loud
-  // stripe; values are warm ink; only the delta carries colour.
-  const accentBar = alert ? "#B0485A" : "#C9854F";
   return (
     <div onClick={onClick}
-      className={`relative rounded-2xl border border-[#E8DCC6] bg-[#FBF6EC] p-4 flex flex-col gap-1.5 transition-all ${onClick ? "cursor-pointer hover:border-[#C9854F] hover:shadow-sm" : ""}`}>
+      className={`group relative rounded-2xl border border-[#EADFCB] bg-[#FCF8F0] p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(132,68,41,0.04)] transition-all ${onClick ? "cursor-pointer hover:shadow-[0_8px_24px_rgba(132,68,41,0.10)] hover:-translate-y-0.5 hover:border-[#D9BD9B]" : ""}`}>
       <div className="flex items-center gap-2">
-        {Icon && <Icon size={14} className="text-[#B89B7C]" />}
-        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.08em]">{label}</span>
-        {onClick && <ChevronRight size={13} className="ml-auto text-[#C5B299]" />}
+        {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${tint}1A` }}><Icon size={14} style={{ color: tint }} /></div>}
+        <span className="text-[11px] font-semibold text-[#8A7866] uppercase tracking-[0.06em] leading-tight">{label}</span>
+        {onClick && <ArrowUpRight size={14} className="ml-auto text-[#C5B299] group-hover:text-[#844429] transition-colors" />}
       </div>
-      <div className="flex items-end justify-between gap-2 mt-0.5">
-        <div className="text-[26px] leading-none font-bold text-[#3A2E26] tracking-tight">{currentVal}</div>
-        {spark && spark.length >= 2 && <Sparkline data={spark} />}
+      <div className="flex items-end justify-between gap-2">
+        <div className="text-[28px] leading-none font-bold text-[#3A2E26] tracking-tight">{currentVal}</div>
+        {spark && spark.length >= 2 && <Sparkline data={spark} color={tint} height={30} />}
       </div>
-      {subCurrent && <div className="text-xs text-[#9A8770] mt-0.5">{subCurrent}</div>}
-      <div className="flex items-center justify-between gap-2 mt-1">
-        {deltaEl || <span />}
-        {previousVal && <span className="text-[11px] text-[#A8957F]">{prevLabel}: <span className="font-medium text-[#8A7866]">{previousVal}</span></span>}
+      {subCurrent && <div className="text-xs text-[#9A8770] -mt-0.5">{subCurrent}</div>}
+      <div className="flex items-center justify-between gap-2 pt-1.5 mt-auto border-t border-[#F0E6D5]">
+        {deltaEl || <span className="text-[11px] text-[#C5B299]">—</span>}
+        {previousVal && <span className="text-[11px] text-[#A8957F]">{prevLabel} {previousVal}</span>}
       </div>
     </div>
   );
@@ -20524,18 +20577,23 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <ComparisonKPICard onClick={openRevenueDrill} accent="indigo" label={`Revenue (gross) · ${period.label}`} current={cur.revenue} previous={prevPeriod ? prev.revenue : null} format="currency" icon={PoundSterling} subCurrent={target ? `Target ${fmtCurrency(target.revenue)}` : `${cur.orders} orders`} prevLabel={prevLabel} alert={target && cur.revenue < target.revenue} spark={revSpark} />
+      {/* ── Bento KPI grid: hero revenue + supporting metrics ──────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 auto-rows-fr">
+        {/* Hero spans 2 cols on desktop, full width on phone */}
+        <div className="col-span-2 lg:row-span-2">
+          <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} target={target} prevLabel={prevLabel} spark={revSpark} orders={cur.orders} onClick={openRevenueDrill} />
+        </div>
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
-        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
+        <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
+        <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <ComparisonKPICard accent="amber" label="SPLH" current={cur.splh} previous={prevPeriod ? prev.splh : null} format="splh" icon={Zap} subCurrent="Gross / labour hr" prevLabel={prevLabel} />
-        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store only" : (err||loading) ? "—" : "Pending COGS")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
-        <ComparisonKPICard onClick={() => openLabourDrill("hours")} accent="indigo" label="Labour Hours" current={cur.hours} previous={prevPeriod ? prev.hours : null} format="number" icon={Clock} invertDelta subCurrent={target ? `Target ${target.hours.toFixed(0)}h` : "Actual (punches)"} prevLabel={prevLabel} alert={target && cur.hours > target.hours} />
-        <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "slate"} alert={criticalIssues > 0} />
+        <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent={primeCostPct != null ? (primeCostPct > 60 ? "red" : "emerald") : "slate"} alert={primeCostPct != null && primeCostPct > 60} />
+        <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent={netMarginPct != null ? (netMarginPct < 0 ? "red" : "emerald") : "slate"} />
+        <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent={criticalIssues > 0 ? "red" : "emerald"} alert={criticalIssues > 0} />
+        <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="amber" />
       </div>
 
       {/* ── Store leaderboard (only when ranking >1 store) ───────────────────── */}
