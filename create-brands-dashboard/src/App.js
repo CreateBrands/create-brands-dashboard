@@ -16077,6 +16077,197 @@ function ReviewsOverview({ stores = [], storeId = null, onJump }) {
   );
 }
 
+// Chain command-center — full cross-store KPI grid. Its own top-level view.
+// One row per store: rating, reviews, 30d impressions, actions, sentiment,
+// listing issues, removed reviews. Sortable. Plus chain-summary header cards.
+function ChainCommandCenter({ stores = [], currentUser }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState("impressions");
+  const [sortDir, setSortDir] = useState("desc");
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setErr(null);
+      try {
+        const from30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+        const safe = (p) => p.then(v => v).catch(() => null);
+        const [stats, perf, sentiment, deletions, audit, staff, cov] = await Promise.all([
+          safe(fetchReviewStats()),
+          safe(fetchPerformanceMetrics({ from: from30 })),
+          safe(fetchReviewSentiment({ from: from30 })),
+          safe(fetchDeletionSignals({})),
+          safe(fetchListingsAudit({})),
+          safe(fetchStaffLeaderboard({ from: from30 })),
+          safe(fetchInsightsCoverage()),
+        ]);
+        if (cancelled) return;
+
+        // index helpers by store
+        const perfByStore = {};
+        (perf?.perStore || []).forEach(s => { perfByStore[s.storeId] = s; });
+        const delByStore = {};
+        (deletions?.signals || []).forEach(s => { delByStore[s.storeId] = s.missing || 0; });
+        const auditByStore = {};
+        (audit || []).forEach(a => { auditByStore[a.storeId] = a.issueCount || 0; });
+
+        // per-store rows from review stats (the spine — every store with reviews)
+        const rows = (stats || []).map(s => {
+          const p = perfByStore[s.storeId] || {};
+          return {
+            storeId: s.storeId,
+            name: stores.find(st => st.id === s.storeId)?.name || s.storeId,
+            rating: s.avg || 0,
+            reviews: s.n || 0,
+            impressions: p.impressions || 0,
+            actions: p.actions || 0,
+            directions: p.directions || 0,
+            foodOrders: p.foodOrders || 0,
+            issues: auditByStore[s.storeId] || 0,
+            removed: delByStore[s.storeId] || 0,
+          };
+        });
+
+        // chain summary
+        let totN = 0, totW = 0;
+        rows.forEach(r => { totN += r.reviews; totW += r.rating * r.reviews; });
+        const sent = sentiment?.sentiment || {};
+        const sentTotal = (sent.positive || 0) + (sent.neutral || 0) + (sent.negative || 0) + (sent.mixed || 0);
+
+        setData({
+          rows,
+          chainRating: totN ? totW / totN : null,
+          totalReviews: totN,
+          totalImpressions: perf?.overall?.impressions || 0,
+          totalActions: perf?.overall?.actions || 0,
+          posPct: sentTotal ? Math.round((sent.positive || 0) / sentTotal * 100) : null,
+          totalIssues: rows.reduce((a, r) => a + r.issues, 0),
+          totalRemoved: rows.reduce((a, r) => a + r.removed, 0),
+          topStaff: (staff || []).slice(0, 5),
+          coverage: cov,
+        });
+      } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [stores]);
+
+  const sortRows = (rows) => {
+    const r = [...rows].sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+    return r;
+  };
+  const setSort = (k) => { if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir("desc"); } };
+  const fmt = (n) => (n || 0).toLocaleString();
+
+  const COLS = [
+    { k: "name", l: "Store", align: "left" },
+    { k: "rating", l: "Rating", align: "right" },
+    { k: "reviews", l: "Reviews", align: "right" },
+    { k: "impressions", l: "Impr (30d)", align: "right" },
+    { k: "actions", l: "Actions", align: "right" },
+    { k: "foodOrders", l: "Food orders", align: "right" },
+    { k: "issues", l: "Issues", align: "right" },
+    { k: "removed", l: "Removed", align: "right" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Globe className="w-5 h-5 text-indigo-400" />
+        <h1 className="text-lg font-bold text-white">Google Command Center</h1>
+      </div>
+
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+      {loading && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">Loading chain data…</div>}
+
+      {!loading && data && (
+        <>
+          {/* chain summary cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-2xl font-bold text-amber-300">{data.chainRating != null ? `${data.chainRating.toFixed(2)}★` : "—"}</div>
+              <div className="text-xs text-slate-400">Chain rating</div>
+              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalReviews)} reviews</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-2xl font-bold text-white">{fmt(data.totalImpressions)}</div>
+              <div className="text-xs text-slate-400">Impressions (30d)</div>
+              <div className="text-[10px] text-slate-600 mt-0.5">{fmt(data.totalActions)} actions</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-2xl font-bold text-emerald-300">{data.posPct != null ? `${data.posPct}%` : "—"}</div>
+              <div className="text-xs text-slate-400">Positive sentiment</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-2xl font-bold text-white">{fmt(data.totalIssues)}<span className="text-sm text-slate-500"> / {fmt(data.totalRemoved)}</span></div>
+              <div className="text-xs text-slate-400">Listing issues / removed</div>
+            </div>
+          </div>
+
+          {/* per-store table */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800">
+                    {COLS.map(c => (
+                      <th key={c.k} onClick={() => setSort(c.k)}
+                        className={`px-3 py-2.5 font-semibold text-slate-400 cursor-pointer hover:text-white whitespace-nowrap ${c.align === "right" ? "text-right" : "text-left"}`}>
+                        {c.l}{sortKey === c.k ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortRows(data.rows).map(r => (
+                    <tr key={r.storeId} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                      <td className="px-3 py-2 text-white font-medium whitespace-nowrap">{r.name}</td>
+                      <td className="px-3 py-2 text-right text-amber-300">{r.rating ? r.rating.toFixed(2) : "—"}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.reviews)}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.impressions)}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.actions)}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.foodOrders)}</td>
+                      <td className={`px-3 py-2 text-right ${r.issues > 0 ? "text-amber-400" : "text-slate-600"}`}>{r.issues || "—"}</td>
+                      <td className={`px-3 py-2 text-right ${r.removed > 0 ? "text-rose-400" : "text-slate-600"}`}>{r.removed || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* top staff chain-wide */}
+          {data.topStaff.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs font-semibold text-slate-300 mb-2">Most-praised staff chain-wide (30d)</div>
+              <div className="flex gap-3 flex-wrap">
+                {data.topStaff.map((s, i) => (
+                  <span key={s.name} className="text-xs">
+                    <span className="font-bold text-white">{i + 1}. {s.name}</span>
+                    <span className="text-slate-500"> · {s.mentions}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {data.coverage && data.coverage.remaining > 0 && (
+            <div className="text-[11px] text-amber-300/70">
+              {data.coverage.remaining.toLocaleString()} reviews not yet analysed — sentiment & staff figures are partial.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function GoogleReviewsView({ stores = [], currentUser, storeId = null, compact = false }) {
   const [view, setView] = useState("overview");   // overview | reviews | leaderboard | sentiment | deletions | discovery | posts | listings
   const [reviews, setReviews] = useState([]);
@@ -45945,6 +46136,7 @@ export default function App() {
         { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
+      { key: "google-hub", label: "Google Command", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
     ]},
     { group: "OPERATIONS", items: [
@@ -46199,6 +46391,7 @@ export default function App() {
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={visibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
             {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} busyPeriods={busyPeriods||[]} onSaveBusyPeriod={saveBusyPeriod} onDeleteBusyPeriod={deleteBusyPeriod} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})} busyPeriods={busyPeriods||[]}/>}
+            {effectiveActiveView === "google-hub"     && canSeeView("google-hub") && <ChainCommandCenter stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
             {effectiveActiveView === "operations" && (() => {
               const effOpsTab = OPS_TAB_KEYS.includes(opsTab) ? opsTab : "ops-network";
