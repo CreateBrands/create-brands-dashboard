@@ -760,8 +760,9 @@ function Sparkline({ data, color = "#C9854F", height = 28 }) {
 }
 
 // Hero revenue card — the dashboard's north star. Dark brand-brown gradient,
-// large number, live sparkline. The one bold element on the page.
-function HeroRevenueCard({ current, previous, target, prevLabel, spark, orders, onClick }) {
+// large number, a live hourly revenue bar chart, and quick supporting stats so
+// the tile earns its size instead of sitting half-empty.
+function HeroRevenueCard({ current, previous, target, prevLabel, chart = [], orders, wagePct, splh, onClick }) {
   const val = formatKPI(current, "currency");
   let deltaPct = null, isUp = false;
   if (current != null && previous != null && previous !== 0) {
@@ -769,40 +770,69 @@ function HeroRevenueCard({ current, previous, target, prevLabel, spark, orders, 
     isUp = deltaPct > 0;
   }
   const pctToTarget = target?.revenue ? Math.min(100, (current / target.revenue) * 100) : null;
+  const bars = (chart || []).filter(c => c && c.revenue != null);
+  const maxBar = bars.length ? Math.max(...bars.map(b => b.revenue), 1) : 1;
+  const peak = bars.length ? bars.reduce((a, b) => b.revenue > a.revenue ? b : a, bars[0]) : null;
   return (
     <div onClick={onClick}
-      className="relative overflow-hidden rounded-3xl p-6 flex flex-col justify-between cursor-pointer group min-h-[230px]"
-      style={{ background: "linear-gradient(135deg, #8A4A2C 0%, #6E3520 55%, #4F2415 100%)" }}>
-      <div className="absolute -top-16 -right-16 w-56 h-56 rounded-full opacity-20 blur-2xl" style={{ background: "radial-gradient(circle, #E8B583 0%, transparent 70%)" }} />
-      <div className="absolute inset-0 opacity-[0.04]" style={{ backgroundImage: "radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)", backgroundSize: "22px 22px" }} />
-      <div className="relative flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm"><PoundSterling size={16} className="text-[#FBEAD2]"/></div>
-          <span className="text-[11px] font-semibold text-[#EAD0B5] uppercase tracking-[0.12em]">Revenue · Today</span>
+      className="relative overflow-hidden rounded-3xl p-6 flex flex-col cursor-pointer group h-full min-h-[300px]"
+      style={{ background: "linear-gradient(140deg, #8A4A2C 0%, #6E3520 50%, #46200F 100%)" }}>
+      <div className="absolute -top-20 -right-10 w-72 h-72 rounded-full opacity-25 blur-3xl" style={{ background: "radial-gradient(circle, #E8A766 0%, transparent 70%)" }} />
+      <div className="absolute inset-0 opacity-[0.05]" style={{ backgroundImage: "radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)", backgroundSize: "20px 20px" }} />
+
+      {/* Header */}
+      <div className="relative flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm"><PoundSterling size={17} className="text-[#FBEAD2]"/></div>
+          <div>
+            <div className="text-[11px] font-bold text-[#EAD0B5] uppercase tracking-[0.14em]">Revenue · Today</div>
+            <div className="text-[10px] text-[#C99E78]">{orders} orders{peak ? ` · peaks ${peak.label}` : ""}</div>
+          </div>
         </div>
-        <ArrowUpRight size={18} className="text-[#EAD0B5]/60 group-hover:text-[#FBEAD2] transition-colors" />
+        <div className="flex items-center gap-1.5 text-[10px] font-medium text-[#C9E8B5]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#7FB069] animate-pulse"/> LIVE
+          <ArrowUpRight size={16} className="text-[#EAD0B5]/50 group-hover:text-[#FBEAD2] transition-colors ml-1" />
+        </div>
       </div>
-      <div className="relative">
-        <div className="flex items-end gap-3 flex-wrap">
-          <div className="text-[44px] leading-none font-bold text-[#FFF8EE] tracking-tight">{val}</div>
-          {deltaPct != null && (
-            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold mb-1 ${isUp ? "bg-[#7FB069]/25 text-[#C9E8B5]" : "bg-[#E8889A]/20 text-[#F4C2CD]"}`}>
-              {isUp ? <TrendingUp size={12}/> : <TrendingDown size={12}/>}{deltaPct >= 0 ? "+" : ""}{deltaPct.toFixed(1)}%
-            </span>
-          )}
-        </div>
-        {spark && spark.length >= 2 && (
-          <div className="mt-3 -mx-1"><Sparkline data={spark} color="#F0C088" height={36} /></div>
+
+      {/* Big number + delta */}
+      <div className="relative flex items-end gap-3 flex-wrap">
+        <div className="text-[52px] leading-[0.9] font-bold text-[#FFF8EE] tracking-tight">{val}</div>
+        {deltaPct != null && (
+          <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-bold mb-1.5 ${isUp ? "bg-[#7FB069]/25 text-[#C9E8B5]" : "bg-[#E8889A]/20 text-[#F4C2CD]"}`}>
+            {isUp ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}{deltaPct >= 0 ? "+" : ""}{deltaPct.toFixed(1)}%
+          </span>
         )}
-        <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
-          <span className="text-xs text-[#E0C3A6]">{orders} orders · {prevLabel}: {previous != null ? formatKPI(previous, "currency") : "—"}</span>
-          {target && <span className="text-xs font-semibold text-[#FBEAD2]">{fmtCurrency(target.revenue)} target</span>}
+      </div>
+      <div className="relative text-xs text-[#E0C3A6] mt-1.5">{prevLabel} to now: {previous != null ? formatKPI(previous, "currency") : "—"}</div>
+
+      {/* Live hourly bars — fills the space */}
+      <div className="relative flex-1 flex items-end gap-[3px] mt-5 min-h-[64px]">
+        {bars.length > 0 ? bars.map((b, i) => (
+          <div key={i} className="flex-1 rounded-t-sm transition-all duration-500 hover:opacity-100"
+            style={{ height: `${Math.max(4, (b.revenue / maxBar) * 100)}%`, background: b === peak ? "linear-gradient(180deg,#FBEAD2,#E8A766)" : "rgba(240,192,136,0.45)", minHeight: "4px" }}
+            title={`${b.label}: ${fmtCurrency(b.revenue)}`} />
+        )) : (
+          <div className="w-full text-center text-[11px] text-[#C99E78] py-4">Hourly revenue will appear as sales come in</div>
+        )}
+      </div>
+
+      {/* Footer: target progress + quick stats */}
+      <div className="relative mt-4 pt-4 border-t border-white/10">
+        <div className="flex items-center justify-between text-xs mb-2">
+          <span className="text-[#E0C3A6]">{pctToTarget != null ? `${pctToTarget.toFixed(0)}% of target` : "No target set"}</span>
+          {target && <span className="font-semibold text-[#FBEAD2]">{fmtCurrency(target.revenue)} target</span>}
         </div>
         {pctToTarget != null && (
-          <div className="mt-2 h-1.5 rounded-full bg-white/15 overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pctToTarget}%`, background: "linear-gradient(90deg, #F0C088, #FBEAD2)" }} />
+          <div className="h-2 rounded-full bg-white/12 overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pctToTarget}%`, background: "linear-gradient(90deg, #E8A766, #FBEAD2)" }} />
           </div>
         )}
+        <div className="flex items-center gap-5 mt-4">
+          {wagePct != null && <div><div className="text-[10px] text-[#C99E78] uppercase tracking-wider">Wage</div><div className="text-sm font-bold text-[#FBEAD2]">{wagePct.toFixed(1)}%</div></div>}
+          {splh != null && <div><div className="text-[10px] text-[#C99E78] uppercase tracking-wider">SPLH</div><div className="text-sm font-bold text-[#FBEAD2]">{fmtCurrency(splh)}</div></div>}
+          {peak && <div><div className="text-[10px] text-[#C99E78] uppercase tracking-wider">Peak hour</div><div className="text-sm font-bold text-[#FBEAD2]">{peak.label}</div></div>}
+        </div>
       </div>
     </div>
   );
@@ -20581,7 +20611,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 auto-rows-fr">
         {/* Hero spans 2 cols on desktop, full width on phone */}
         <div className="col-span-2 lg:row-span-2">
-          <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} target={target} prevLabel={prevLabel} spark={revSpark} orders={cur.orders} onClick={openRevenueDrill} />
+          <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} target={target} prevLabel={prevLabel} chart={chart} orders={cur.orders} wagePct={cur.wagePct} splh={cur.splh} onClick={openRevenueDrill} />
         </div>
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="emerald" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <ComparisonKPICard accent="sky" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
