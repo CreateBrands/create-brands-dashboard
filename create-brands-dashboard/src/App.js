@@ -32403,7 +32403,7 @@ function CopyStructureModal({ sources, brands, targetStore, onCopy, onClose }) {
 // configuration-focused — you create/edit at one store at a time.
 function ChecklistListSection({ brands, stores, visibleStoreIds, checklists, onNew, onEdit, onDelete }) {
   const allVisibleStores = useMemo(
-    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
   const [storeId, setStoreId] = useState("");
@@ -32485,7 +32485,7 @@ function ChecklistListSection({ brands, stores, visibleStoreIds, checklists, onN
 // ─── Per-store Cleaning Tasks list (used in Ops Setup → Cleaning tab) ────────
 function CleaningTaskListSection({ brands, stores, visibleStoreIds, cleaningTasks, onNew, onEdit, onDelete }) {
   const allVisibleStores = useMemo(
-    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt && s.ownershipModel === "owned"),
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]
   );
   const [storeId, setStoreId] = useState("");
@@ -46830,6 +46830,17 @@ export default function App() {
   }, [currentUser, stores, isHQ, selectedEntityBrand, canAccessStore]);
 
   const visibleStoreIds = useMemo(() => visibleStores.map(s => s.id), [visibleStores]);
+  // Visible store ids narrowed by the role's default scope, so every module that
+  // uses it shows the SAME consistent set. When the default is "all"/"assigned"
+  // (or unset) it equals visibleStoreIds — a sensible broad baseline.
+  const scopedVisibleStoreIds = useMemo(() => {
+    const scope = resolveDefaultStoreId();
+    if (!scope || scope === "all") return visibleStoreIds;
+    const ids = new Set(Array.isArray(scope) ? scope : [scope]);
+    // resolveDefaultStoreId already expands brand:/assigned to plain ids.
+    const narrowed = visibleStoreIds.filter(id => ids.has(id));
+    return narrowed.length ? narrowed : visibleStoreIds; // never blank everything
+  }, [visibleStoreIds, resolveDefaultStoreId]);
 
   // Brands the user can step into (those they have at least one store in).
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
@@ -47721,7 +47732,7 @@ export default function App() {
               return (
                 <div>
                   {effTeamTab === "team" && <OpsTeamView
-                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+                    brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds}
                     storeDepartments={storeDepartments} storeRoles={storeRoles}
                     opsTeam={opsTeam} users={users}
                     customRoles={customRoles}
@@ -47730,7 +47741,7 @@ export default function App() {
                     currentUser={currentUser}
                   />}
                   {effTeamTab === "hiring" && <HiringView
-                    brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={visibleStoreIds}
+                    brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={scopedVisibleStoreIds}
                     applications={applications} opsTeam={opsTeam} currentUser={currentUser}
                     onAdd={addApplication} onUpdate={updateApplicationRow}
                     onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
@@ -47740,20 +47751,20 @@ export default function App() {
                     onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
                   />}
                   {effTeamTab === "training" && <TrainingAdminView
-                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds}
+                    brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds}
                     opsTeam={opsTeam} currentUser={currentUser}
                   />}
                   {effTeamTab === "contracts" && <ContractsAdminView
                     stores={stores} opsTeam={opsTeam} currentUser={currentUser}
                   />}
                   {effTeamTab === "time-attend" && <TimeAttendanceView
-                    brands={visibleBrands} stores={stores} visibleStoreIds={visibleStoreIds} opsTeam={opsTeam} schedules={schedules}
+                    brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} schedules={schedules}
                     punchRecords={punchRecords} currentUser={currentUser}
                     onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
                     onAddComment={handleAddPunchComment}
                     payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
                   />}
-                  {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={isHqOrAbove(currentUser.role) ? stores : stores.filter(s => (currentUser.storeIds||[]).includes(s.id))} opsTeam={opsTeam}/>}
+                  {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={stores.filter(s => scopedVisibleStoreIds.includes(s.id))} opsTeam={opsTeam}/>}
                 </div>
               );
             })()}
