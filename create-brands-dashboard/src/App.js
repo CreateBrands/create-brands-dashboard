@@ -10121,7 +10121,23 @@ function DistOrderPortalView({ currentUser }) {
 
 // Item detail: all attributes + read-only stock (on-hand/committed/available)
 // + movement history (the audit trail behind on-hand). Edit/Delete actions.
-function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy, currentUser }) {
+// P&L line groupings (F&B / hospitality). Shared by the Finance views and the
+// Distribution item income/expense account dropdowns.
+const PNL_LINES = [
+  ["revenue",   "Revenue"],
+  ["cogs",      "Cost of sales (COGS)"],
+  ["labour",    "Labour"],
+  ["occupancy", "Occupancy (rent, rates, utilities)"],
+  ["operating", "Operating expenses"],
+  ["marketing", "Marketing & delivery"],
+  ["admin",     "Admin & professional"],
+  ["finance",   "Finance & fees"],
+  ["other",     "Other / non-operating"],
+  ["transfer",  "Transfers (not P&L)"],
+];
+
+function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDelete, busy, currentUser }) {
+  const acctName = (id) => categories.find(c => c.id === id)?.name || id || "\u2014";
   const [tab, setTab] = useState("overview");
   const [moves, setMoves] = useState(null);
   const [txns, setTxns] = useState(null);
@@ -10200,8 +10216,8 @@ function DistItemDetail({ item, taxName, onClose, onEdit, onDelete, busy, curren
                 <Attr label="Buy rate" value={item.purchaseRate != null ? `\u00A3${item.purchaseRate}` : "\u2014"}/>
                 <Attr label="Sell rate" value={item.sellRate != null ? `\u00A3${item.sellRate}` : "\u2014"}/>
                 <Attr label="" value=""/>
-                <Attr label="Income acct" value={<span className="font-mono">{item.incomeAccountCode || "\u2014"}</span>}/>
-                <Attr label="Expense acct" value={<span className="font-mono">{item.expenseAccountCode || "\u2014"}</span>}/>
+                <Attr label="Income acct" value={acctName(item.incomeAccountCode)}/>
+                <Attr label="Expense acct" value={acctName(item.expenseAccountCode)}/>
               </div>
             </div>
             {/* Movement ledger (the raw stock audit trail) */}
@@ -10299,6 +10315,7 @@ function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
   const [taxRates, setTaxRates] = useState([]);
   const [ckProducts, setCkProducts] = useState([]);
+  const [categories, setCategories] = useState([]);   // Chart of Accounts (finance) for income/expense dropdowns
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
@@ -10329,10 +10346,11 @@ function DistItemsView({ currentUser }) {
   const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
-      const [its, tax, onHand, ckp] = await Promise.all([
-        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(), fetchCkProducts().catch(() => []),
+      const [its, tax, onHand, ckp, cats] = await Promise.all([
+        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(), fetchCkProducts().catch(() => []), fetchTxnCategories().catch(() => []),
       ]);
       setCkProducts(ckp || []);
+      setCategories((cats || []).filter(c => !c.archived));
       // Merge derived on-hand onto each item (committed=0 until sell side ships).
       const withStock = its.map(i => {
         const oh = onHand.get(i.id) || 0;
@@ -10569,7 +10587,7 @@ function DistItemsView({ currentUser }) {
 
       {/* Item detail + stock + movement history */}
       {detailItem && (
-        <DistItemDetail item={detailItem} taxName={taxName} onClose={() => setDetailItem(null)}
+        <DistItemDetail item={detailItem} taxName={taxName} categories={categories} onClose={() => setDetailItem(null)}
           onEdit={() => { setEditItem(detailItem); setDetailItem(null); }}
           onDelete={() => removeItem(detailItem)} busy={busy} currentUser={currentUser}/>
       )}
@@ -10599,9 +10617,23 @@ function DistItemsView({ currentUser }) {
               <label className="text-xs text-slate-400">Sell rate (£)
                 <input type="number" value={editItem.sellRate ?? ""} onChange={e => setEditItem({ ...editItem, sellRate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Income acct
-                <input value={editItem.incomeAccountCode || ""} onChange={e => setEditItem({ ...editItem, incomeAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
+                <select value={editItem.incomeAccountCode || ""} onChange={e => setEditItem({ ...editItem, incomeAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                  <option value="">— not set —</option>
+                  {PNL_LINES.map(([lineKey, lineLabel]) => {
+                    const opts = categories.filter(c => c.type === "income" && (c.pnlLine || "other") === lineKey);
+                    if (opts.length === 0) return null;
+                    return <optgroup key={lineKey} label={lineLabel}>{opts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>;
+                  })}
+                </select></label>
               <label className="text-xs text-slate-400">Expense acct
-                <input value={editItem.expenseAccountCode || ""} onChange={e => setEditItem({ ...editItem, expenseAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
+                <select value={editItem.expenseAccountCode || ""} onChange={e => setEditItem({ ...editItem, expenseAccountCode: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                  <option value="">— not set —</option>
+                  {PNL_LINES.map(([lineKey, lineLabel]) => {
+                    const opts = categories.filter(c => c.type === "expense" && (c.pnlLine || "other") === lineKey);
+                    if (opts.length === 0) return null;
+                    return <optgroup key={lineKey} label={lineLabel}>{opts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>;
+                  })}
+                </select></label>
               <label className="text-xs text-slate-400 col-span-2">Central Kitchen product link
                 <select value={editItem.ckProductId || ""} onChange={e => setEditItem({ ...editItem, ckProductId: e.target.value || null })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
                   <option value="">— not linked —</option>
@@ -35559,18 +35591,6 @@ function CategoryPicker({ value, categories = [], onPick }) {
 }
 
 // Richer P&L groupings suited to F&B / hospitality.
-const PNL_LINES = [
-  ["revenue",   "Revenue"],
-  ["cogs",      "Cost of sales (COGS)"],
-  ["labour",    "Labour"],
-  ["occupancy", "Occupancy (rent, rates, utilities)"],
-  ["operating", "Operating expenses"],
-  ["marketing", "Marketing & delivery"],
-  ["admin",     "Admin & professional"],
-  ["finance",   "Finance & fees"],
-  ["other",     "Other / non-operating"],
-  ["transfer",  "Transfers (not P&L)"],
-];
 // A practical F&B starter pack. type, pnlLine.
 const FNB_CATEGORY_PACK = [
   // Revenue
