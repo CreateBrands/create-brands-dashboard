@@ -11701,7 +11701,7 @@ function PrepEditor({ prep, rec, inv, prepCost, prepBatchCostById, reload, onDel
 
       <div>
         <div className="text-sm font-semibold text-slate-300 mb-2">Ingredients &amp; sub-preps</div>
-        <div className="rounded-lg border border-slate-800 overflow-hidden">
+        <div className="rounded-lg border border-slate-800 overflow-visible">
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2">Ingredient / prep</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
             <tbody>

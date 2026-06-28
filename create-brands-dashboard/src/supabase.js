@@ -6239,7 +6239,7 @@ export async function fetchRecipes() {
   if (err) throw err;
   return {
     preps: (preps.data||[]).map(p => ({ id:p.id, name:p.name, yieldQty:p.yield_qty, yieldUnit:p.yield_unit, notes:p.notes })),
-    prepComponents: (prepComps.data||[]).map(c => ({ id:c.id, prepId:c.prep_id, itemScope:c.item_scope, itemId:c.item_id, itemName:c.item_name, portionQty:c.portion_qty, unit:c.unit })),
+    prepComponents: (prepComps.data||[]).map(c => ({ id:c.id, prepId:c.prep_id, kind:c.component_kind||"ingredient", subPrepId:c.sub_prep_id, ingredientId:c.ingredient_id, componentName:c.component_name, itemScope:c.item_scope, itemId:c.item_id, itemName:c.item_name, portionQty:c.portion_qty, unit:c.unit })),
     modifiers: (mods.data||[]).map(m => ({ id:m.id, name:m.name, groupLabel:m.group_label, itemScope:m.item_scope, itemId:m.item_id, itemName:m.item_name, portionQty:m.portion_qty, unit:m.unit, sourceType:m.source_type||"item", prepId:m.prep_id, prepPortion:m.prep_portion, isGlobal:m.is_global||false, tillCaption:m.till_caption, collapseToMax:m.collapse_to_max||false })),
     products: (prods.data||[]).map(p => ({ id:p.id, name:p.name, category:p.category, posName:p.pos_name, notes:p.notes })),
     productVariants: (variants.data||[]).map(v => ({ id:v.id, productId:v.product_id, name:v.name, sortOrder:v.sort_order })),
