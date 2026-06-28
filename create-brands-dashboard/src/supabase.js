@@ -9019,13 +9019,31 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
   (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
   const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
   const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
-  const prepCost = (prep) => {
+  const prepBatchCost = (prep, _seen) => {
     if (!prep) return null;
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return null;
+    seen.add(prep.id);
     const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
-    if (!comps.length || !prep.yieldQty) return null;
+    if (!comps.length) return null;
     let total = 0, ok = true;
-    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
-    return ok ? total / Number(prep.yieldQty) : null;
+    comps.forEach(c => {
+      if (c.kind === "prep" && c.subPrepId) {
+        const sub = prepById.get(c.subPrepId);
+        const subBatch = sub ? prepBatchCost(sub, seen) : null;
+        const batches = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+        if (subBatch == null || isNaN(batches)) ok = false; else total += subBatch * batches;
+      } else {
+        const u = itemCost(c.itemScope, c.itemId);
+        if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
+      }
+    });
+    return ok ? total : null;
+  };
+  const prepCost = (prep) => {
+    if (!prep || !prep.yieldQty) return null;
+    const batch = prepBatchCost(prep);
+    return batch != null ? batch / Number(prep.yieldQty) : null;
   };
   const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
   const productBaseCost = (productId) => {
@@ -9064,9 +9082,12 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
       const rev = Number(li.retailPrice != null ? li.retailPrice : li.unitPrice) || 0;
       orderRevenue += rev;
       const pid = mapByName.get(norm(li.caption));
-      if (pid == null) return { caption: li.caption, revenue: rev, mapped: false, cogs: null, parts: [] };
-      const base = productBaseCost(pid);
-      const parts = [{ label: "base recipe", cost: base.missing === 0 ? base.cost : null, kind: "base" }];
+      // Even if the parent line isn't mapped to a product, it may still carry
+      // costable nested modifiers (e.g. a £0 "Soft Swirl Ice Cream Tubs" parent
+      // whose chosen swirl is a global modifier). So we no longer bail here —
+      // we cost the base recipe only if mapped, but always descend into children.
+      const base = pid != null ? productBaseCost(pid) : { cost: 0, missing: 0, count: 0 };
+      const parts = pid != null ? [{ label: "base recipe", cost: base.missing === 0 ? base.cost : null, kind: "base" }] : [];
       const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
       const collapseMax = {}; // group -> {cost, captions:[]}
       let modSum = 0;
@@ -9090,9 +9111,17 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
         if (g.cost != null) modSum += g.cost;
         parts.push({ label: `${g.group} (max of ${g.captions.length}: ${g.captions.join(", ")})`, cost: g.cost, kind: "collapse" });
       });
-      const lineCogs = (base.missing === 0 ? base.cost : 0) + modSum;
+      const lineCogs = (pid != null && base.missing === 0 ? base.cost : 0) + modSum;
       orderCogs += lineCogs;
-      return { caption: li.caption, revenue: rev, mapped: true, baseUncosted: base.missing > 0, cogs: +lineCogs.toFixed(4), parts };
+      // mapped = true if we matched a product OR costed at least one nested modifier.
+      const costedAnyMod = parts.some(p => (p.kind === "global" || p.kind === "scoped" || p.kind === "collapse") && p.cost != null);
+      return {
+        caption: li.caption, revenue: rev,
+        mapped: pid != null || costedAnyMod,
+        parentUnmapped: pid == null && costedAnyMod, // modifier costed under an unmapped parent
+        baseUncosted: pid != null && base.missing > 0,
+        cogs: +lineCogs.toFixed(4), parts,
+      };
     });
     return {
       saleId: s.sale_id, channel: s.channel, time: s.sale_time,

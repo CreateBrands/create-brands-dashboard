@@ -12914,7 +12914,7 @@ function TillAudit({ stores = [] }) {
                   {open.lines.map((l, i) => (
                     <div key={i} className="border-t border-slate-800/60 pt-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-white">{l.caption}{!l.mapped && <span className="text-red-400 text-[11px] ml-2">unmapped</span>}{l.baseUncosted && <span className="text-amber-400 text-[11px] ml-2">base uncosted</span>}</span>
+                        <span className="text-white">{l.caption}{!l.mapped && <span className="text-red-400 text-[11px] ml-2">unmapped</span>}{l.parentUnmapped && <span className="text-sky-400 text-[11px] ml-2">£0 parent · modifier costed</span>}{l.baseUncosted && <span className="text-amber-400 text-[11px] ml-2">base uncosted</span>}</span>
                         <span className="font-mono text-slate-300">{money4(l.cogs)}</span>
                       </div>
                       <div className="mt-1 space-y-0.5">
