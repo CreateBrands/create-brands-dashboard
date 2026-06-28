@@ -6874,15 +6874,38 @@ function SearchableItemSelect({ items = [], value, onSelect, placeholder = "Type
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const boxRef = useRef(null);
+  const btnRef = useRef(null);
   const inputRef = useRef(null);
   const [hi, setHi] = useState(0);
+  // Fixed-position coords for the dropdown panel, so it renders relative to the
+  // viewport and is never clipped by an ancestor's overflow-hidden. Recomputed
+  // when opening and on scroll/resize. Flips above the button if low on screen.
+  const [pos, setPos] = useState(null);
+  const measure = () => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (!b) return;
+    const PANEL_H = 320, GAP = 4;
+    const below = window.innerHeight - b.bottom;
+    const openUp = below < PANEL_H && b.top > below; // flip up if not enough room below
+    setPos({
+      left: b.left,
+      width: Math.max(b.width, 260),
+      top: openUp ? undefined : b.bottom + GAP,
+      bottom: openUp ? (window.innerHeight - b.top + GAP) : undefined,
+      maxH: openUp ? b.top - GAP - 8 : below - GAP - 8,
+    });
+  };
 
-  // Close on outside click.
+  // Close on outside click; reposition on scroll/resize while open.
   useEffect(() => {
     if (!open) return;
+    measure();
     const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) { setOpen(false); setQ(""); } };
+    const onMove = () => measure();
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => { document.removeEventListener("mousedown", onDoc); window.removeEventListener("scroll", onMove, true); window.removeEventListener("resize", onMove); };
   }, [open]);
 
   const filtered = useMemo(() => {
@@ -6905,18 +6928,19 @@ function SearchableItemSelect({ items = [], value, onSelect, placeholder = "Type
 
   return (
     <div ref={boxRef} className="relative w-full">
-      <button type="button" onClick={() => { setOpen(o => !o); setTimeout(() => inputRef.current?.focus(), 0); }}
+      <button ref={btnRef} type="button" onClick={() => { setOpen(o => !o); setTimeout(() => inputRef.current?.focus(), 0); }}
         className={`w-full text-left px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white truncate ${className}`}>
         {selected ? <span>{selected.name}{selected.sku ? <span className="text-slate-500"> ({selected.sku})</span> : null}</span> : <span className="text-slate-500">{placeholder}</span>}
       </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full min-w-[260px] rounded-lg bg-slate-900 border border-slate-700 shadow-xl">
+      {open && pos && (
+        <div className="fixed z-[1000] rounded-lg bg-slate-900 border border-slate-700 shadow-2xl"
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width }}>
           <div className="p-1.5 border-b border-slate-800">
             <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey}
               placeholder="Search name or SKU…" autoFocus
               className="w-full px-2 py-1.5 rounded-md bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-indigo-500"/>
           </div>
-          <div className="max-h-60 overflow-y-auto py-1">
+          <div className="overflow-y-auto py-1" style={{ maxHeight: Math.max(120, pos.maxH || 240) }}>
             {filtered.length === 0 && <div className="px-3 py-2 text-[11px] text-slate-500">No matches.</div>}
             {value && (
               <button type="button" onClick={() => pick(null)} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800 text-[11px] text-slate-500">
@@ -11701,7 +11725,7 @@ function PrepEditor({ prep, rec, inv, prepCost, prepBatchCostById, reload, onDel
 
       <div>
         <div className="text-sm font-semibold text-slate-300 mb-2">Ingredients &amp; sub-preps</div>
-        <div className="rounded-lg border border-slate-800 overflow-visible">
+        <div className="rounded-lg border border-slate-800 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2">Ingredient / prep</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
             <tbody>
