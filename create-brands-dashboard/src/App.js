@@ -46711,6 +46711,28 @@ export default function App() {
     return target || actualUser;   // fall back if the impersonated user vanishes
   }, [actualUser, impersonatedUserId, users]);
 
+  // Re-link a manager/staff member's store assignment from their ops_team
+  // profile on EVERY load — not just at fresh login. A restored session (from
+  // localStorage) can carry empty/stale storeIds (e.g. saved before the profile
+  // had stores, or before ops_team had loaded), which left managers seeing
+  // "stores (0)". This heals the session once ops_team data is available.
+  useEffect(() => {
+    if (!actualUser || !actualUser.email || (opsTeam || []).length === 0) return;
+    if (actualUser.role === "owner" || actualUser.role === "hq_staff") return; // global users: storeIds empty by design
+    const e = actualUser.email.trim().toLowerCase();
+    const m = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+    if (!m) return;
+    const linkedIds = (m.storeIds && m.storeIds.length) ? m.storeIds : (actualUser.storeIds || []);
+    const cur = actualUser.storeIds || [];
+    const changed = linkedIds.length !== cur.length || linkedIds.some(id => !cur.includes(id)) || (!actualUser.opsTeamMemberId && m.id);
+    if (changed) {
+      const healed = { ...actualUser, opsTeamMemberId: actualUser.opsTeamMemberId || m.id, storeIds: linkedIds };
+      setActualUser(healed);
+      try { localStorage.setItem("cb_session", JSON.stringify(healed)); } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opsTeam, actualUser?.email, actualUser?.role]);
+
   const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
 
   // Custom-role resolution. A person may hold a custom role (ops_team.role_id).
