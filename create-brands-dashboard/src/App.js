@@ -17336,7 +17336,7 @@ function OnboardingBoard({ stores, opsTeam }) {
     <div className="space-y-4">
       <div className="flex items-end justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2"><UserCheck size={18}/> Onboarding Board</h2>
+          <div style={{margin:"0 0 8px",padding:"6px 10px",background:"#FEF08A",color:"#713F12",fontSize:"12px",fontWeight:"700",borderRadius:"8px",fontFamily:"monospace"}}>DEBUG ONBOARDING: stores={(stores||[]).length} | activeStores={activeStores.length}</div><h2 className="text-base font-bold text-white flex items-center gap-2"><UserCheck size={18}/> Onboarding Board</h2>
           <p className="text-xs text-slate-500 mt-0.5">Read-only compliance grid — who's stuck where. Sorted by most outstanding items.</p>
         </div>
         <div className="flex items-end gap-2">
@@ -25821,6 +25821,7 @@ function TrainingAdminView({ brands, stores, visibleStoreIds, opsTeam, currentUs
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
+              <div style={{margin:"0 0 8px",padding:"6px 10px",background:"#FEF08A",color:"#713F12",fontSize:"12px",fontWeight:"700",borderRadius:"8px",fontFamily:"monospace"}}>DEBUG TRAINING: stores={(stores||[]).length} | visIds={(visibleStoreIds||[]).length} | visibleStores={visibleStores.length}</div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             <GraduationCap size={24}/> Training
           </h1>
@@ -27177,7 +27178,7 @@ function HiringView({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-white">Hiring</h1>
+          <div style={{margin:"0 0 8px",padding:"6px 10px",background:"#FEF08A",color:"#713F12",fontSize:"12px",fontWeight:"700",borderRadius:"8px",fontFamily:"monospace"}}>DEBUG HIRING: stores={(stores||[]).length} | visIds={(visibleStoreIds||[]).length} | allowed={allowedStores.length}</div><h1 className="text-2xl font-bold text-white">Hiring</h1>
           <p className="text-sm text-slate-500">
             {isHqOrAbove(currentUser?.role)
               ? "All candidate applications across the chain."
@@ -32780,7 +32781,7 @@ function OpsTeamView({
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Users size={24}/> Team</h1>
+          <div style={{margin:"0 0 8px",padding:"6px 10px",background:"#FEF08A",color:"#713F12",fontSize:"12px",fontWeight:"700",borderRadius:"8px",fontFamily:"monospace"}}>DEBUG TEAM: stores={(stores||[]).length} | visIds={(visibleStoreIds||[]).length} | groups={groups.length} | storeOpts={storeOpts.length}</div><h1 className="text-2xl font-bold text-white flex items-center gap-2"><Users size={24}/> Team</h1>
           <p className="text-sm text-slate-400 mt-1">{base.length} {base.length === 1 ? "member" : "members"}{pendingCount > 0 ? ` · ${pendingCount} pending setup` : ""}</p>
         </div>
         <button onClick={() => setTmModal("new")} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold"><Plus size={14}/> Add Member</button>
@@ -42472,7 +42473,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">Time & Attendance</h2>
+          <div style={{margin:"0 0 8px",padding:"6px 10px",background:"#FEF08A",color:"#713F12",fontSize:"12px",fontWeight:"700",borderRadius:"8px",fontFamily:"monospace"}}>DEBUG TIME: stores={(stores||[]).length} | visIds={(visibleStoreIds||[]).length} | sortedVis={sortedVisibleStores.length}</div><h2 className="text-base font-bold text-white">Time & Attendance</h2>
           <div className="text-xs text-slate-500 mt-0.5">Approve hours, review overtime, and amend records</div>
         </div>
         <div className="flex items-center gap-2">
