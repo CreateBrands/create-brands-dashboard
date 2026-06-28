@@ -2119,6 +2119,21 @@ export async function runFlipdishSync(body = {}) {
   return data;
 }
 
+// Rebuild store_day_aggregates from already-synced flipdish_sales for a date
+// range (inclusive). Use this when Flipdish backfills sales late (after an
+// outage): the raw sales land in flipdish_sales and show on the dashboard, but
+// the per-day aggregates that EOD Reconciliation reads aren't regenerated — so
+// recon shows "no Flipdish data" for those days. This recomputes them.
+// Calls the Postgres RPC rebuild_store_day_aggregates(p_from, p_to) which does
+// an INSERT … SELECT … ON CONFLICT scoped to the range (idempotent).
+export async function rebuildStoreDayAggregates({ from, to } = {}) {
+  if (!from || !to) throw new Error("rebuildStoreDayAggregates needs from and to dates");
+  const { data, error } = await supabase.rpc("rebuild_store_day_aggregates", { p_from: from, p_to: to });
+  if (error) throw error;
+  return data; // number of rows rebuilt
+}
+
+
 // ════════════════════════════════════════════════════════════════════════════
 // FLIPDISH SALES — webhook-driven, includes POS / UberEats / Deliveroo / JustEats / FlipdishWebApp
 // ════════════════════════════════════════════════════════════════════════════

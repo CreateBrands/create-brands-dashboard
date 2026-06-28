@@ -39,7 +39,7 @@ import {
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
-  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
+  fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
   subscribeTyping, uploadChatAttachment,
@@ -21185,6 +21185,28 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
   const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || null;
   const brandName = (id) => brands.find(b => b.id === id)?.name || id;
 
+  // Rebuild Flipdish daily aggregates for a date range. For when Flipdish
+  // backfills sales late after an outage: raw sales show on the dashboard but
+  // EOD recon (which reads store_day_aggregates) shows "no data" until rebuilt.
+  const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [rebuildFrom, setRebuildFrom] = useState(getTodayStr());
+  const [rebuildTo, setRebuildTo] = useState(getTodayStr());
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState("");
+  const doRebuild = async () => {
+    if (!rebuildFrom || !rebuildTo) { setRebuildMsg("Pick both dates."); return; }
+    if (rebuildFrom > rebuildTo) { setRebuildMsg("'From' must be on or before 'To'."); return; }
+    setRebuilding(true); setRebuildMsg("");
+    try {
+      const rows = await rebuildStoreDayAggregates({ from: rebuildFrom, to: rebuildTo });
+      const n = typeof rows === "number" ? rows : (Array.isArray(rows) ? rows.length : null);
+      setRebuildMsg(`✓ Rebuilt${n != null ? ` ${n} store-day` : ""} aggregate${n === 1 ? "" : "s"} for ${rebuildFrom}${rebuildTo !== rebuildFrom ? ` → ${rebuildTo}` : ""}. Re-open an entry to see it reconcile.`);
+    } catch (e) {
+      setRebuildMsg("Rebuild failed: " + (e?.message || String(e)) + " — has the rebuild_store_day_aggregates SQL function been created?");
+    } finally { setRebuilding(false); }
+  };
+
+
   const inScope = (e) => {
     if (isHq) return brands.some(b => b.id === e.brandId);
     if (e.storeId) return myStoreIds.includes(e.storeId);
@@ -21306,15 +21328,43 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
           <ClipboardList className="w-4 h-4 text-indigo-400" />
           <h2 className="text-sm font-semibold text-slate-200">EOD Reconciliation</h2>
         </div>
-        <div className="flex gap-1.5">
-          {["all", "open", "queried", "resolved"].map(f => (
-            <button key={f} onClick={() => setStatusFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize ${statusFilter === f ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"}`}>
-              {f}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 flex-wrap">
+          {isHq && (
+            <div className="flex items-center gap-1.5">
+              {rebuildOpen && (
+                <>
+                  <input type="date" value={rebuildFrom} onChange={e => setRebuildFrom(e.target.value)}
+                    className="px-2 py-1.5 rounded-lg text-xs bg-slate-900 text-slate-200 border border-slate-800" title="Rebuild from date"/>
+                  <span className="text-slate-500 text-xs">→</span>
+                  <input type="date" value={rebuildTo} onChange={e => setRebuildTo(e.target.value)}
+                    className="px-2 py-1.5 rounded-lg text-xs bg-slate-900 text-slate-200 border border-slate-800" title="Rebuild to date"/>
+                  <button onClick={doRebuild} disabled={rebuilding}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-60">
+                    {rebuilding ? "Rebuilding…" : "Rebuild"}
+                  </button>
+                </>
+              )}
+              <button onClick={() => { setRebuildOpen(o => !o); setRebuildMsg(""); }} title="Rebuild Flipdish daily aggregates (use after a late Flipdish backfill)"
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-slate-400 border border-slate-800 hover:text-white inline-flex items-center gap-1.5">
+                <RefreshCw size={12}/> {rebuildOpen ? "Close" : "Rebuild Flipdish"}
+              </button>
+            </div>
+          )}
+          <div className="flex gap-1.5">
+            {["all", "open", "queried", "resolved"].map(f => (
+              <button key={f} onClick={() => setStatusFilter(f)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize ${statusFilter === f ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"}`}>
+                {f}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+      {isHq && rebuildMsg && (
+        <div className={`text-xs rounded-lg px-3 py-2 border ${rebuildMsg.startsWith("✓") ? "text-emerald-300 bg-emerald-950/30 border-emerald-900/50" : "text-amber-300 bg-amber-950/30 border-amber-900/50"}`}>
+          {rebuildMsg}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-1 space-y-2">
