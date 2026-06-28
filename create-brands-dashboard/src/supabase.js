@@ -6317,12 +6317,20 @@ export async function updatePrep(id, patch) {
 }
 export async function deletePrep(id) { const { error } = await supabase.from("cogs_preps").delete().eq("id", id); if (error) throw error; }
 export async function addPrepComponent(prepId, c) {
-  const { error } = await supabase.from("cogs_prep_components").insert({ prep_id: prepId, item_scope: c.itemScope, item_id: c.itemId, item_name: c.itemName, portion_qty: c.portionQty ?? null, unit: c.unit });
+  // kind defaults to "ingredient". For a nested prep, pass kind:"prep" + subPrepId.
+  const row = { prep_id: prepId, component_kind: c.kind || "ingredient",
+    item_scope: c.itemScope ?? null, item_id: c.itemId ?? null, item_name: c.itemName ?? null,
+    ingredient_id: c.ingredientId ?? null, sub_prep_id: c.subPrepId ?? null,
+    portion_qty: c.portionQty ?? null, unit: c.unit ?? null,
+    component_name: c.componentName ?? c.itemName ?? null };
+  const { error } = await supabase.from("cogs_prep_components").insert(row);
   if (error) throw error;
 }
 export async function updatePrepComponent(id, c) {
   const b = {}; if ("portionQty" in c) b.portion_qty = c.portionQty===""?null:Number(c.portionQty); if ("unit" in c) b.unit = c.unit;
   if ("itemScope" in c) b.item_scope = c.itemScope; if ("itemId" in c) b.item_id = c.itemId; if ("itemName" in c) b.item_name = c.itemName;
+  if ("kind" in c) b.component_kind = c.kind; if ("subPrepId" in c) b.sub_prep_id = c.subPrepId; if ("ingredientId" in c) b.ingredient_id = c.ingredientId;
+  if ("componentName" in c) b.component_name = c.componentName;
   const { error } = await supabase.from("cogs_prep_components").update(b).eq("id", id); if (error) throw error;
 }
 export async function deletePrepComponent(id) { const { error } = await supabase.from("cogs_prep_components").delete().eq("id", id); if (error) throw error; }

@@ -11362,15 +11362,40 @@ function RecipeBuilder({ mode }) {
   }, [inv]);
   const itemCost = (scope, id) => { const it = itemById.get(scope+":"+id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
 
-  const prepCost = (prep) => {
-    if (!rec) return null;
+  // prepCost returns a prep's cost PER UNIT (total batch cost ÷ yield).
+  // Supports nested preps: a component can be a sub-prep (kind:"prep"/subPrepId),
+  // contributing a whole batch (or `qty` batches) of that sub-prep's batch cost.
+  // `_seen` guards against circular references (a prep that contains itself,
+  // directly or via a chain) — without it the recursion would never terminate.
+  const prepBatchCost = (prep, _seen) => {
+    if (!rec || !prep) return null;
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return null; // circular — bail (treated as uncosted)
+    seen.add(prep.id);
     const comps = rec.prepComponents.filter(c => c.prepId === prep.id);
-    if (!comps.length || !prep.yieldQty) return null;
+    if (!comps.length) return null;
     let total = 0, ok = true;
-    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
-    return ok ? total / Number(prep.yieldQty) : null;
+    comps.forEach(c => {
+      if (c.kind === "prep" && c.subPrepId) {
+        const sub = rec.preps.find(p => p.id === c.subPrepId);
+        const subBatch = sub ? prepBatchCost(sub, seen) : null; // full batch cost of the sub-prep
+        const batches = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty); // default 1 whole batch
+        if (subBatch == null || isNaN(batches)) ok = false; else total += subBatch * batches;
+      } else {
+        const u = itemCost(c.itemScope, c.itemId);
+        if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
+      }
+    });
+    return ok ? total : null;
+  };
+  const prepCost = (prep) => {
+    if (!prep || !prep.yieldQty) return null;
+    const batch = prepBatchCost(prep);
+    return batch != null ? batch / Number(prep.yieldQty) : null;
   };
   const prepCostPerUnit = (prepId) => { const p = rec?.preps.find(x => x.id === prepId); return p ? prepCost(p) : null; };
+  // Full batch cost of a prep (for "add a whole batch of sub-prep" display).
+  const prepBatchCostById = (prepId) => { const p = rec?.preps.find(x => x.id === prepId); return p ? prepBatchCost(p) : null; };
   const modifierCost = (m) => {
     if (m.sourceType === "prep") {
       const u = prepCostPerUnit(m.prepId);
@@ -11546,7 +11571,7 @@ function RecipeBuilder({ mode }) {
           {!selected ? (
             <div className="rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">Select a {label} to edit, or add a new one.</div>
           ) : (
-            <PrepEditor prep={selected} rec={rec} inv={inv} prepCost={prepCost} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
+            <PrepEditor prep={selected} rec={rec} inv={inv} prepCost={prepCost} prepBatchCostById={prepBatchCostById} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
           )}
         </div>
       </div>
@@ -11648,12 +11673,15 @@ function ModifierRow({ m, inv, preps, cost, onSave, onDelete }) {
   );
 }
 
-function PrepEditor({ prep, rec, inv, prepCost, reload, onDelete }) {
+function PrepEditor({ prep, rec, inv, prepCost, prepBatchCostById, reload, onDelete }) {
   const comps = rec.prepComponents.filter(c => c.prepId === prep.id);
   const [y, setY] = useState({ qty: prep.yieldQty??"", unit: prep.yieldUnit||"" });
   const [editErr, setEditErr] = useState(null);
   const cost = prepCost(prep);
-  const addComp = async () => { try { await addPrepComponent(prep.id, { portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
+  const addComp = async () => { try { await addPrepComponent(prep.id, { kind:"ingredient", portionQty:null, unit:"" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
+  // Other preps that can be nested here — exclude self to avoid the obvious self-reference.
+  const otherPreps = (rec.preps||[]).filter(p => p.id !== prep.id);
+  const addSubPrep = async () => { try { await addPrepComponent(prep.id, { kind:"prep", subPrepId:null, portionQty:1, unit:"batch" }); await reload(); } catch(e){ setEditErr(e.message||String(e)); } };
   return (
     <div className="rounded-xl border-2 border-indigo-500/40 bg-slate-900/60 p-5 space-y-5 shadow-lg shadow-indigo-900/20">
       <div className="flex items-center justify-between gap-3">
@@ -11672,35 +11700,52 @@ function PrepEditor({ prep, rec, inv, prepCost, reload, onDelete }) {
       </div>
 
       <div>
-        <div className="text-sm font-semibold text-slate-300 mb-2">Ingredients</div>
+        <div className="text-sm font-semibold text-slate-300 mb-2">Ingredients &amp; sub-preps</div>
         <div className="rounded-lg border border-slate-800 overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2">Ingredient (from inventory)</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
+            <thead className="bg-slate-900 text-slate-400 text-xs"><tr><th className="text-left px-3 py-2">Ingredient / prep</th><th className="text-right px-3 py-2 w-24">Portion</th><th className="text-left px-3 py-2 w-20">Unit</th><th className="text-right px-3 py-2 w-24">Cost</th><th className="w-10"></th></tr></thead>
             <tbody>
-              {comps.length===0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-500 text-sm">No ingredients yet. Click "Add ingredient" below.</td></tr>}
-              {comps.map(c => <PrepCompRow key={c.id} c={c} inv={inv} reload={reload}/>)}
+              {comps.length===0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-500 text-sm">Nothing yet. Add an ingredient (from inventory) or a sub-prep (from preps) below.</td></tr>}
+              {comps.map(c => <PrepCompRow key={c.id} c={c} inv={inv} preps={otherPreps} prepBatchCostById={prepBatchCostById} reload={reload}/>)}
             </tbody>
           </table>
         </div>
-        <button onClick={addComp} className="mt-3 px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <button onClick={addComp} className="px-4 py-2 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add ingredient</button>
+          <button onClick={addSubPrep} disabled={otherPreps.length===0} className="px-4 py-2 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={15}/> Add prep</button>
+        </div>
         {editErr && <div className="mt-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">Couldn't add: {editErr}</div>}
       </div>
     </div>
   );
 }
 
-function PrepCompRow({ c, inv, reload }) {
+function PrepCompRow({ c, inv, preps = [], prepBatchCostById, reload }) {
+  const isPrep = c.kind === "prep";
   const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
-  const it = c.itemScope ? m.get(c.itemScope+":"+c.itemId) : null;
+  const it = (!isPrep && c.itemScope) ? m.get(c.itemScope+":"+c.itemId) : null;
   const unit = it && it.costPerBaseUnit!=null ? Number(it.costPerBaseUnit) : null;
-  const cost = (unit!=null && c.portionQty!=null) ? unit*Number(c.portionQty) : null;
+  // For a sub-prep: cost = whole batch cost × number of batches (portionQty).
+  const subBatch = isPrep && c.subPrepId && prepBatchCostById ? prepBatchCostById(c.subPrepId) : null;
+  const cost = isPrep
+    ? (subBatch!=null ? subBatch * (c.portionQty==null||c.portionQty===""?1:Number(c.portionQty)) : null)
+    : ((unit!=null && c.portionQty!=null) ? unit*Number(c.portionQty) : null);
   const [f, setF] = useState({ portionQty:c.portionQty??"", unit:c.unit||"" });
-  const incomplete = !c.itemId;
+  const incomplete = isPrep ? !c.subPrepId : !c.itemId;
   return (
     <tr className={`border-t border-slate-800/60 ${incomplete?"bg-amber-500/5":""}`}>
-      <td className="px-3 py-2"><ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null}); await reload();}}/></td>
-      <td className="px-3 py-2 text-right"><input value={f.portionQty} onChange={e=>setF(s=>({...s,portionQty:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{portionQty:f.portionQty}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right" placeholder="0"/></td>
-      <td className="px-3 py-2"><input value={f.unit} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/></td>
+      <td className="px-3 py-2">
+        {isPrep ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] px-1.5 py-1 rounded bg-emerald-600 text-white uppercase font-bold flex-shrink-0">prep</span>
+            <SearchableItemSelect items={preps} value={c.subPrepId||""} onSelect={async p=>{ await updatePrepComponent(c.id,{subPrepId:p?.id||null, componentName:p?.name||null}); await reload(); }} placeholder="— pick a prep —" />
+          </div>
+        ) : (
+          <ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null}); await reload();}}/>
+        )}
+      </td>
+      <td className="px-3 py-2 text-right"><input value={f.portionQty} onChange={e=>setF(s=>({...s,portionQty:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{portionQty:f.portionQty}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right" placeholder={isPrep?"1":"0"}/></td>
+      <td className="px-3 py-2"><input value={isPrep?(f.unit||"batch"):f.unit} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder={isPrep?"batch":"g"}/></td>
       <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
       <td className="px-3 py-2 text-right"><button onClick={async()=>{await deletePrepComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
     </tr>
