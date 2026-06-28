@@ -464,10 +464,10 @@ function appUserToDb(u) { return { id: u.id, name: u.name, email: u.email, passw
 function dbUserToApp(u) { return { id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, brandIds: u.brand_ids, storeIds: u.store_ids || [], avatar: u.avatar }; }
 
 function appEntryToDb(e) {
-  return { id: e.id, brand_id: e.brandId, brand_name: e.brandName, date: e.date, manager: e.manager, submitted_by: e.submittedBy, net_sales: e.netSales, card_revenue: e.cardRevenue, lopay: e.lopay ?? 0, cash_expected: e.cashExpected, physical_cash: e.physicalCash, cash_variance: e.cashVariance, unreported_expense: e.unreportedExpense ?? 0, unreported_expense_note: e.unreportedExpenseNote ?? null, variance_justification: e.varianceJustification, opening_float: e.openingFloat, closing_float: e.closingFloat, labor_cost: e.laborCost, cogs_cost: e.cogsCost, total_hours: e.totalHours, total_orders: e.totalOrders, atv: e.atv, five_star_reviews: e.fiveStarReviews, mid_star_reviews: e.midStarReviews, one_star_reviews: e.oneStarReviews, notes: e.notes, maintenance_tickets: e.maintenanceTickets, timestamp: e.timestamp, store_id: e.storeId || null, amendments: e.amendments || [], reconciliation: e.reconciliation || [], recon_status: e.reconStatus || "open" };
+  return { id: e.id, brand_id: e.brandId, brand_name: e.brandName, date: e.date, manager: e.manager, submitted_by: e.submittedBy, net_sales: e.netSales, card_revenue: e.cardRevenue, cash_expected: e.cashExpected, physical_cash: e.physicalCash, cash_variance: e.cashVariance, variance_justification: e.varianceJustification, opening_float: e.openingFloat, closing_float: e.closingFloat, labor_cost: e.laborCost, cogs_cost: e.cogsCost, total_hours: e.totalHours, total_orders: e.totalOrders, atv: e.atv, five_star_reviews: e.fiveStarReviews, mid_star_reviews: e.midStarReviews, one_star_reviews: e.oneStarReviews, notes: e.notes, maintenance_tickets: e.maintenanceTickets, timestamp: e.timestamp, store_id: e.storeId || null, amendments: e.amendments || [], reconciliation: e.reconciliation || [], recon_status: e.reconStatus || "open" };
 }
 function dbEntryToApp(e) {
-  return { id: e.id, brandId: e.brand_id, brandName: e.brand_name, date: e.date, manager: e.manager, submittedBy: e.submitted_by, netSales: e.net_sales, cardRevenue: e.card_revenue, lopay: e.lopay ?? 0, cashExpected: e.cash_expected, physicalCash: e.physical_cash, cashVariance: e.cash_variance, unreportedExpense: e.unreported_expense ?? 0, unreportedExpenseNote: e.unreported_expense_note ?? "", varianceJustification: e.variance_justification, openingFloat: e.opening_float, closingFloat: e.closing_float, laborCost: e.labor_cost, cogsCost: e.cogs_cost, totalHours: e.total_hours, totalOrders: e.total_orders, atv: e.atv, fiveStarReviews: e.five_star_reviews, midStarReviews: e.mid_star_reviews, oneStarReviews: e.one_star_reviews, notes: e.notes, maintenanceTickets: e.maintenance_tickets ?? [], timestamp: e.timestamp, storeId: e.store_id || null, amendments: e.amendments ?? [], reconciliation: e.reconciliation ?? [], reconStatus: e.recon_status || "open" };
+  return { id: e.id, brandId: e.brand_id, brandName: e.brand_name, date: e.date, manager: e.manager, submittedBy: e.submitted_by, netSales: e.net_sales, cardRevenue: e.card_revenue, cashExpected: e.cash_expected, physicalCash: e.physical_cash, cashVariance: e.cash_variance, varianceJustification: e.variance_justification, openingFloat: e.opening_float, closingFloat: e.closing_float, laborCost: e.labor_cost, cogsCost: e.cogs_cost, totalHours: e.total_hours, totalOrders: e.total_orders, atv: e.atv, fiveStarReviews: e.five_star_reviews, midStarReviews: e.mid_star_reviews, oneStarReviews: e.one_star_reviews, notes: e.notes, maintenanceTickets: e.maintenance_tickets ?? [], timestamp: e.timestamp, storeId: e.store_id || null, amendments: e.amendments ?? [], reconciliation: e.reconciliation ?? [], reconStatus: e.recon_status || "open" };
 }
 
 function appIssueToDb(i) { return { id: i.id, brand_id: i.brandId, brand_name: i.brandName, type: i.type || "Issue", title: i.title, description: i.description, category: i.category, priority: i.priority, status: i.status, reported_by: i.reportedBy, assigned_to: i.assignedTo, comments: i.comments, created_at: i.createdAt, updated_at: i.updatedAt }; }
@@ -6418,6 +6418,33 @@ export async function setPosMapping(storeId, posName, productId) {
 export async function deletePosMapping(id) {
   const { error } = await supabase.from("cogs_pos_mappings").delete().eq("id", id);
   if (error) throw error;
+}
+
+// Copy ALL pos→product mappings from a source store to a target store. Used when
+// stores share a menu variation — map one store, then clone to its like-for-like
+// siblings instead of mapping each by hand. Overwrites the target: any till name
+// the source maps is set on the target to the same product; the target's own
+// existing rows for those names are replaced. Returns the count copied.
+export async function copyPosMappings(fromStoreId, toStoreId) {
+  if (!fromStoreId || !toStoreId || fromStoreId === toStoreId) throw new Error("Pick two different stores.");
+  const { data: src, error: srcErr } = await supabase
+    .from("cogs_pos_mappings").select("pos_name, product_id").eq("store_id", fromStoreId);
+  if (srcErr) throw srcErr;
+  const rows = (src || []).filter(r => r.pos_name && r.product_id);
+  if (rows.length === 0) return 0;
+  // Wipe the target's existing rows for the names we're about to set, then insert
+  // fresh — simplest way to "overwrite to match source" without N upserts.
+  const names = rows.map(r => r.pos_name);
+  const { error: delErr } = await supabase
+    .from("cogs_pos_mappings").delete().eq("store_id", toStoreId).in("pos_name", names);
+  if (delErr) throw delErr;
+  const insert = rows.map(r => ({ store_id: toStoreId, pos_name: r.pos_name, product_id: r.product_id }));
+  const BATCH = 200;
+  for (let i = 0; i < insert.length; i += BATCH) {
+    const { error: insErr } = await supabase.from("cogs_pos_mappings").insert(insert.slice(i, i + BATCH));
+    if (insErr) throw insErr;
+  }
+  return rows.length;
 }
 // ===== end POS_MAPPER_V1 =====
 

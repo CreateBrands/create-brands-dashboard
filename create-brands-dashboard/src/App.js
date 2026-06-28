@@ -135,7 +135,7 @@ import {
   addProductVariant, updateProductVariant, deleteProductVariant, enableProductVariations, deleteVariantKeepRecipe,
   addProductComponent, updateProductComponent, updateProductComponentRef, deleteProductComponent,
   attachProductModifier, detachProductModifier,
-  fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping,
+  fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping, copyPosMappings,
   fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
   discoverModifierCandidates, createModifierFromCaption,
   computeStoreCogsV2, auditTillOrders,
@@ -5792,9 +5792,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                                 return (
                                   <div key={job.id} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-2">
                                     <div className="flex items-center gap-2">
-                                      <select value={job.productId} onChange={e=>updateJob(job.id,{productId:e.target.value})} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                                        {ckProducts.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
-                                      </select>
+                                      <div className="flex-1"><SearchableItemSelect items={ckProducts} value={job.productId} onSelect={p=>updateJob(job.id,{productId:p?.id||""})} placeholder="— pick product —" /></div>
                                       <input type="number" value={job.qty} onChange={e=>updateJob(job.id,{qty:e.target.value})} placeholder="qty" className="w-16 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white text-center"/>
                                       <span className="text-[10px] text-slate-600 w-8">{prod?.outputUnit||""}</span>
                                       <select value={job.slot} onChange={e=>updateJob(job.id,{slot:e.target.value})} className="px-1.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-slate-300">
@@ -6266,10 +6264,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                           <button onClick={()=>createFromLine(idx)} className="px-2 py-1.5 rounded-lg bg-amber-500 text-amber-950 text-[10px] font-semibold whitespace-nowrap">Create</button>
                         </div>
                       ) : (
-                        <select value={l.ingredientId} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setGinLine(idx,{ingredientId:e.target.value, ingredientName:ing?.name||"", unit:ing?.unit||l.unit}); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                          <option value="">— pick ingredient —</option>
-                          {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
-                        </select>
+                        <div className="flex-1"><SearchableItemSelect items={ingredients} value={l.ingredientId} onSelect={ing=>setGinLine(idx,{ingredientId:ing?.id||"", ingredientName:ing?.name||"", unit:ing?.unit||l.unit})} placeholder="— pick ingredient —" /></div>
                       )}
                       {!l.needsCreate && l.ingredientId && <button onClick={()=>{ const ing=ingredients.find(i=>String(i.id)===String(l.ingredientId)); if(ing) openAllergenCheck(ing); }} title="Scan label & check allergens" className="text-slate-500 hover:text-amber-300 flex-shrink-0"><ShieldCheck size={14}/></button>}
                       <button onClick={()=>rmGinLine(idx)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14}/></button>
@@ -6452,16 +6447,10 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                       {c.kind === "prep" ? (
                         <>
                           <span className="text-[9px] px-1.5 py-1 rounded bg-emerald-600 text-white uppercase font-bold flex-shrink-0">prep</span>
-                          <select value={c.prepId||""} onChange={e=>{ const p=ckPreps.find(x=>String(x.id)===e.target.value); setProdComp(idx,{ prepId:e.target.value, ingredientName:p?.name||"", unit:p?.yieldUnit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                            <option value="">— pick prep —</option>
-                            {ckPreps.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
-                          </select>
+                          <div className="flex-1"><SearchableItemSelect items={ckPreps} value={c.prepId||""} onSelect={p=>setProdComp(idx,{ prepId:p?.id||"", ingredientName:p?.name||"", unit:p?.yieldUnit||c.unit })} placeholder="— pick prep —" /></div>
                         </>
                       ) : (
-                        <select value={c.ingredientId||""} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setProdComp(idx,{ ingredientId:e.target.value, ingredientName:ing?.name||"", unit: ing?.unit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                          <option value="">— pick ingredient —</option>
-                          {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
-                        </select>
+                        <div className="flex-1"><SearchableItemSelect items={ingredients} value={c.ingredientId||""} onSelect={ing=>setProdComp(idx,{ ingredientId:ing?.id||"", ingredientName:ing?.name||"", unit: ing?.unit||c.unit })} placeholder="— pick ingredient —" /></div>
                       )}
                       <input type="number" value={c.qty} onChange={e=>setProdComp(idx,{qty:e.target.value})} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
                       <span className="text-[11px] text-slate-500 w-8">{c.unit}</span>
@@ -6515,10 +6504,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 <div className="space-y-1.5">
                   {prepComps.map((c, idx) => (
                     <div key={idx} className="flex items-center gap-2">
-                      <select value={c.ingredientId||""} onChange={e=>{ const ing=ingredients.find(i=>String(i.id)===e.target.value); setPrepComp(idx,{ ingredientId:e.target.value, ingredientName:ing?.name||"", unit:ing?.unit||c.unit }); }} className="flex-1 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white">
-                        <option value="">— pick ingredient —</option>
-                        {ingredients.map(i=><option key={i.id} value={String(i.id)}>{i.name}</option>)}
-                      </select>
+                      <div className="flex-1"><SearchableItemSelect items={ingredients} value={c.ingredientId||""} onSelect={ing=>setPrepComp(idx,{ ingredientId:ing?.id||"", ingredientName:ing?.name||"", unit:ing?.unit||c.unit })} placeholder="— pick ingredient —" /></div>
                       <input type="number" value={c.qty} onChange={e=>setPrepComp(idx,{qty:e.target.value})} placeholder="qty" className="w-20 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"/>
                       <span className="text-[11px] text-slate-500 w-8">{c.unit}</span>
                       <button onClick={()=>rmPrepComp(idx)} className="text-slate-600 hover:text-red-400"><X size={13}/></button>
@@ -6553,9 +6539,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                       {osRows.length > 1 && <button onClick={()=>osRemoveRow(idx)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>}
                     </div>
                     <div><label className="text-[10px] uppercase text-slate-500">Product</label>
-                      <select value={r.productId} onChange={e=>osSetRow(idx,{productId:e.target.value})} className={inputCls}>
-                        {ckProducts.map(p=><option key={p.id} value={String(p.id)}>{p.name}</option>)}
-                      </select>
+                      <SearchableItemSelect items={ckProducts} value={r.productId} onSelect={p=>osSetRow(idx,{productId:p?.id||""})} placeholder="— pick product —" />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div><label className="text-[10px] uppercase text-slate-500">Qty{prod?.outputUnit?` (${prod.outputUnit})`:""}</label>
@@ -6585,9 +6569,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Product</label>
-                <select value={runProductId} onChange={e=>setRunProductId(e.target.value)} className={inputCls}>
-                  {ckProducts.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                <SearchableItemSelect items={ckProducts} value={runProductId} onSelect={p=>setRunProductId(p?.id||"")} placeholder="— pick product —" />
               </div>
               <div><label className={labelCls}>Planned qty <span className="text-slate-600 normal-case">(for yield)</span></label><input type="number" value={runPlanned} onChange={e=>setRunPlanned(e.target.value)} placeholder="target" className={inputCls}/></div>
               <div><label className={labelCls}>Quantity made</label><input type="number" value={runQty} onChange={e=>setRunQty(e.target.value)} className={inputCls}/></div>
@@ -6884,6 +6866,78 @@ function distComputeTotals(lines, taxRates, vatMode, discountValue, discountType
   return { rows, subTotalBeforeDiscount: +sub.toFixed(2), discountAmount: +discountAmount.toFixed(2), subTotal: +subTotal.toFixed(2), vatTotal: +vatTotal.toFixed(2), grandTotal: +(subTotal + vatTotal).toFixed(2) };
 }
 
+// Searchable, type-ahead item picker. Filters a (potentially large, 400+)
+// item catalogue by name or SKU as you type, instead of a long native <select>.
+// Drop-in for distribution line items: value = itemId, onSelect(item) fires on pick.
+function SearchableItemSelect({ items = [], value, onSelect, placeholder = "Type or select an item…", className = "" }) {
+  const selected = items.find(it => String(it.id) === String(value)) || null;
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const boxRef = useRef(null);
+  const inputRef = useRef(null);
+  const [hi, setHi] = useState(0);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) { setOpen(false); setQ(""); } };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    const base = term
+      ? items.filter(it => (it.name || "").toLowerCase().includes(term) || (it.sku || "").toLowerCase().includes(term))
+      : items;
+    return base.slice(0, 50); // cap render for performance on a big catalogue
+  }, [items, q]);
+
+  useEffect(() => { setHi(0); }, [q]);
+
+  const pick = (it) => { onSelect?.(it); setOpen(false); setQ(""); };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi(h => Math.min(h + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (filtered[hi]) pick(filtered[hi]); }
+    else if (e.key === "Escape") { setOpen(false); setQ(""); }
+  };
+
+  return (
+    <div ref={boxRef} className="relative w-full">
+      <button type="button" onClick={() => { setOpen(o => !o); setTimeout(() => inputRef.current?.focus(), 0); }}
+        className={`w-full text-left px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white truncate ${className}`}>
+        {selected ? <span>{selected.name}{selected.sku ? <span className="text-slate-500"> ({selected.sku})</span> : null}</span> : <span className="text-slate-500">{placeholder}</span>}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full min-w-[260px] rounded-lg bg-slate-900 border border-slate-700 shadow-xl">
+          <div className="p-1.5 border-b border-slate-800">
+            <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey}
+              placeholder="Search name or SKU…" autoFocus
+              className="w-full px-2 py-1.5 rounded-md bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-indigo-500"/>
+          </div>
+          <div className="max-h-60 overflow-y-auto py-1">
+            {filtered.length === 0 && <div className="px-3 py-2 text-[11px] text-slate-500">No matches.</div>}
+            {value && (
+              <button type="button" onClick={() => pick(null)} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800 text-[11px] text-slate-500">
+                <span className="w-2 h-2 rounded-full border border-slate-600"/> Clear selection
+              </button>
+            )}
+            {filtered.map((it, idx) => (
+              <button type="button" key={it.id} onClick={() => pick(it)} onMouseEnter={() => setHi(idx)}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left text-xs ${idx === hi ? "bg-slate-800" : "hover:bg-slate-800/60"} ${String(it.id) === String(value) ? "text-indigo-300" : "text-slate-200"}`}>
+                <span className="truncate">{it.name}</span>
+                {it.sku && <span className="text-[10px] text-slate-500 font-mono flex-shrink-0">{it.sku}</span>}
+              </button>
+            ))}
+            {!q && items.length > 50 && <div className="px-3 py-1.5 text-[10px] text-slate-600">Showing first 50 · type to search all {items.length}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Rich Zoho-style item table (Item · Account · Qty · Rate · VAT · Amount).
 function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent, discountType, setDiscountType }) {
   const upd = (i, patch) => setLines(lines.map((l, j) => j === i ? { ...l, ...patch } : l));
@@ -6906,9 +6960,8 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
           return (
             <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center">
               <div className="col-span-4">
-                <select value={l.itemId || ""} onChange={e => { const it = items.find(x => x.id === e.target.value); upd(i, { itemId: e.target.value, taxRateId: it?.taxRateId || l.taxRateId, unitPrice: l.unitPrice || it?.purchaseRate || "", accountCode: l.accountCode || it?.expenseAccountCode || "" }); }} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
-                  <option value="">Type or select an item…</option>{items.map(it => <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>)}
-                </select>
+                <SearchableItemSelect items={items} value={l.itemId || ""}
+                  onSelect={(it) => upd(i, { itemId: it?.id || "", taxRateId: it?.taxRateId || l.taxRateId, unitPrice: l.unitPrice || it?.purchaseRate || "", accountCode: l.accountCode || it?.expenseAccountCode || "" })} />
               </div>
               <div className="col-span-2"><input value={l.accountCode || ""} onChange={e => upd(i, { accountCode: e.target.value })} placeholder="Acct" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/></div>
               <div className="col-span-1"><input type="number" value={l.qty} onChange={e => upd(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
@@ -7469,7 +7522,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
               <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-4">Item details</div><div className="col-span-1 text-right">Qty</div><div className="col-span-2 text-right">Landed £/unit</div><div className="col-span-2">Batch</div><div className="col-span-3">Expiry</div></div>
               {(creating.lines || []).map((l, i) => (
                 <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center">
-                  <div className="col-span-4"><select value={l.itemId} onChange={e => updLine(i, { itemId: e.target.value, landedCost: l.landedCost || items.find(it=>it.id===e.target.value)?.purchaseRate || "" })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"><option value="">Select an item…</option>{items.map(it => <option key={it.id} value={it.id}>{it.name} ({it.sku})</option>)}</select></div>
+                  <div className="col-span-4"><SearchableItemSelect items={items} value={l.itemId} onSelect={it => updLine(i, { itemId: it?.id || "", landedCost: l.landedCost || it?.purchaseRate || "" })} placeholder="Select an item…" /></div>
                   <div className="col-span-1"><input type="number" value={l.qty} onChange={e => updLine(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/>{l.ordered != null && <div className="text-[9px] text-slate-500 text-right mt-0.5">of {l.outstanding} left</div>}</div>
                   <div className="col-span-2"><input type="number" value={l.landedCost} onChange={e => updLine(i, { landedCost: e.target.value })} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
                   <div className="col-span-2"><input value={l.batchNo} onChange={e => updLine(i, { batchNo: e.target.value })} placeholder="Batch" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/></div>
@@ -10635,10 +10688,7 @@ function DistItemsView({ currentUser }) {
                   })}
                 </select></label>
               <label className="text-xs text-slate-400 col-span-2">Central Kitchen product link
-                <select value={editItem.ckProductId || ""} onChange={e => setEditItem({ ...editItem, ckProductId: e.target.value || null })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
-                  <option value="">— not linked —</option>
-                  {ckProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                <SearchableItemSelect items={ckProducts} value={editItem.ckProductId || ""} onSelect={p => setEditItem({ ...editItem, ckProductId: p?.id || null })} placeholder="— not linked —" />
                 <span className="text-[10px] text-slate-500">When the CK dispatches this product to the warehouse, a draft goods receipt is created for this item.</span></label>
               <label className="text-xs text-slate-400">Reorder point
                 <input type="number" value={editItem.reorderPoint ?? ""} onChange={e => setEditItem({ ...editItem, reorderPoint: e.target.value })} placeholder="0" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
@@ -11544,13 +11594,14 @@ function ItemPicker({ inv, value, onChange, highlight }) {
     ...inv.store.map(x => ({ key: "store:"+x.id, scope: "store", id: x.id, name: x.name, label: x.name })),
     ...inv.ck.map(x => ({ key: "ck:"+x.id, scope: "ck", id: x.id, name: x.name, label: "CK · "+x.name })),
   ];
+  // Reuse the searchable picker: id=composite key, name=label (so search matches both store + CK names).
+  const searchItems = opts.map(o => ({ id: o.key, name: o.label }));
   return (
-    <select autoFocus={highlight} value={value || ""} onChange={e=>{ const o = opts.find(o=>o.key===e.target.value); onChange(o||null); }}
-      className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs ${highlight?"border-amber-500/60":"border-slate-700"}`}>
-      <option value="">⬇ choose an item…</option>
-      {opts.length===0 && <option value="" disabled>No inventory items yet — add them in the Inventory tab</option>}
-      {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-    </select>
+    <div className={highlight ? "rounded-lg ring-1 ring-amber-500/60" : ""}>
+      <SearchableItemSelect items={searchItems} value={value || ""}
+        onSelect={(picked) => { const o = picked ? opts.find(o => o.key === picked.id) : null; onChange(o || null); }}
+        placeholder={opts.length === 0 ? "No inventory items yet — add in Inventory" : "⬇ choose an item…"} />
+    </div>
   );
 }
 
@@ -12489,9 +12540,7 @@ function Purchases({ storeId, money }) {
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 grid grid-cols-2 lg:grid-cols-6 gap-2 items-end">
         <div><label className="block text-[10px] text-slate-500 mb-1">Date</label><input type="date" value={f.purchaseDate} onChange={e=>setF({...f,purchaseDate:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white"/></div>
         <div className="lg:col-span-2"><label className="block text-[10px] text-slate-500 mb-1">Item</label>
-          <select value={f.itemId} onChange={e=>setF({...f,itemId:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white">
-            <option value="">Select…</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
-          </select></div>
+          <SearchableItemSelect items={items} value={f.itemId} onSelect={it=>setF({...f,itemId:it?.id||""})} placeholder="Select…" /></div>
         <div><label className="block text-[10px] text-slate-500 mb-1">Qty (base unit)</label><input value={f.qty} onChange={e=>setF({...f,qty:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white text-right" placeholder="0"/></div>
         <div><label className="block text-[10px] text-slate-500 mb-1">Total cost £</label><input value={f.totalCost} onChange={e=>setF({...f,totalCost:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white text-right" placeholder="0.00"/></div>
         <button onClick={add} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold h-fit">+ Add</button>
@@ -13183,6 +13232,23 @@ function PosMapper({ stores = [] }) {
   const [filterMode, setFilterMode] = useState("all"); // all | mapped | unmapped
   const [ignored, setIgnored] = useState([]);          // [{id,posName}]
   const [showHidden, setShowHidden] = useState(false);
+  const [copyFrom, setCopyFrom] = useState("");      // source store id for "copy mappings from"
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyMsg, setCopyMsg] = useState("");
+  const doCopyFrom = async () => {
+    if (!copyFrom || !storeId) { setCopyMsg("Pick a store to copy from."); return; }
+    const srcName = activeStores.find(s => s.id === copyFrom)?.name || "that store";
+    const dstName = activeStores.find(s => s.id === storeId)?.name || "this store";
+    if (!window.confirm(`Copy all mappings from ${srcName} to ${dstName}? This overwrites ${dstName}'s mappings for any till name ${srcName} maps.`)) return;
+    setCopyBusy(true); setCopyMsg("");
+    try {
+      const n = await copyPosMappings(copyFrom, storeId);
+      await load(storeId);
+      setCopyMsg(`✓ Copied ${n} mapping${n === 1 ? "" : "s"} from ${srcName}.`);
+      setCopyFrom("");
+    } catch (e) { setCopyMsg("Copy failed: " + (e.message || String(e))); }
+    setCopyBusy(false);
+  };
 
   const load = async (sid) => {
     if (!sid) return;
@@ -13272,8 +13338,22 @@ function PosMapper({ stores = [] }) {
           className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
           {activeStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
+        {/* Copy mappings from a like-for-like store (same menu variation) */}
+        <div className="flex items-center gap-1.5 ml-auto">
+          <span className="text-[11px] text-slate-500">Same menu as another store?</span>
+          <select value={copyFrom} onChange={e=>{ setCopyFrom(e.target.value); setCopyMsg(""); }}
+            className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-white focus:border-indigo-500 focus:outline-none">
+            <option value="">Copy mappings from…</option>
+            {activeStores.filter(s => s.id !== storeId).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <button onClick={doCopyFrom} disabled={!copyFrom || copyBusy}
+            className="px-3 py-2 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40">
+            {copyBusy ? "Copying…" : "Copy"}
+          </button>
+        </div>
         {products.length === 0 && <span className="text-xs text-amber-400">No master products yet — build some in the Products tab first.</span>}
       </div>
+      {copyMsg && <div className={`text-xs rounded-lg px-3 py-2 border ${copyMsg.startsWith("✓") ? "text-emerald-300 bg-emerald-950/30 border-emerald-900/50" : "text-amber-300 bg-amber-950/30 border-amber-900/50"}`}>{copyMsg}</div>}
 
       {err && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{err}{err.toLowerCase().includes("relation")||err.includes("does not exist")?" — run pos_mapper_schema SQL first.":""}</div>}
 
