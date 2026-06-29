@@ -22506,6 +22506,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   };
 
   const flagged = rows ? rows.filter(r => r.rowError) : [];
+  // Staff who worked hours but resolve to £0 pay — almost always a missing hourly
+  // rate on their profile. These DON'T error (0 is a valid rate), so without this
+  // check they'd be silently paid £0. Surface them prominently before save/export.
+  const zeroPaid = rows ? rows.filter(r => !r.rowError && (r.totalHours || 0) > 0 && (r.totalPay || 0) === 0) : [];
 
   const saveRun = async () => {
     setErr(""); setSavedMsg("");
@@ -22683,6 +22687,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       {err && <div className="text-sm text-red-400 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-2">{err}</div>}
       {overlapWarn && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-xl px-4 py-2">{overlapWarn}</div>}
       {savedMsg && <div className="text-sm text-emerald-300 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 py-2">{savedMsg}</div>}
+
+      {zeroPaid.length > 0 && (
+        <div className="text-xs text-red-200 bg-red-950/40 border border-red-700/50 rounded-xl px-4 py-3">
+          <strong>⚠ {zeroPaid.length} employee(s) worked hours but resolve to £0 pay</strong> — their hourly rate is almost certainly not set. They will be paid <strong>nothing</strong> if you save/export this run. Set their rate on the Personal &amp; HR tab first:
+          <ul className="mt-1 list-disc list-inside space-y-0.5">
+            {zeroPaid.map(r => <li key={r.employeeId}>{r.name} — {(r.totalHours||0).toFixed(2)}h at £0</li>)}
+          </ul>
+        </div>
+      )}
 
       {flagged.length > 0 && (
         <div className="text-xs text-red-300 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-3">
