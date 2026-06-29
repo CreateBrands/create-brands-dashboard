@@ -46132,7 +46132,15 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
           <div className="text-sm font-semibold text-white truncate">{name}</div>
           {split && <div className="text-[10px] text-slate-500 mt-0.5">
             {item.status === "open" ? (
-              <><span className="text-slate-400">{fmtHrs(split.workedHours)} worked</span> · <span className="text-emerald-400 font-semibold">on shift for {elapsed(item.punchIn)}</span></>
+              // Live shift: lead with the running counter. Only add "worked" when a
+              // break makes it meaningfully less than time on shift (avoid repeating
+              // the same number twice).
+              (() => {
+                const breakDed = (split.breakMins || 0) >= 5; // a real deduction, not rounding
+                return breakDed
+                  ? <><span className="text-emerald-400 font-semibold">on shift for {elapsed(item.punchIn)}</span> · <span className="text-slate-400">{fmtHrs(split.workedHours)} worked</span></>
+                  : <span className="text-emerald-400 font-semibold">on shift for {elapsed(item.punchIn)}</span>;
+              })()
             ) : (
               <span className="text-slate-400">{fmtHrs(split.workedHours)} worked</span>
             )}
