@@ -20741,6 +20741,23 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
           : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
         return [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ];
       });
+      // Add salaried staff who didn't punch — the dashboard wage total includes
+      // their fixed daily cost, so the breakdown must show it too, or the popup
+      // total won't reconcile with the wage-cost tile. (Salaried staff who DID
+      // punch are already shown above via their punch row.)
+      const shownIds = new Set(punches.map(p => p.employeeId));
+      scopedSalaried.forEach(m => {
+        if (shownIds.has(m.id)) return;
+        const dayCost = salariedDailyCost(m) * daysInPeriod(period.from, period.to);
+        totCost += dayCost;
+        rows.push([
+          `${m.firstName} ${m.lastName || ""}`.trim(),
+          (m.storeIds || []).map(nameOfStore).filter(Boolean)[0] || "—",
+          period.label,
+          "salaried",
+          `${fmtCurrency(dayCost)} (salaried)`,
+        ]);
+      });
       setDrill({
         title: `Labour cost breakdown · ${period.label}`,
         columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
