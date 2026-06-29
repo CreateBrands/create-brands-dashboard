@@ -46132,15 +46132,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
           <div className="text-sm font-semibold text-white truncate">{name}</div>
           {split && <div className="text-[10px] text-slate-500 mt-0.5">
             {item.status === "open" ? (
-              // Live shift: lead with the running counter. Only add "worked" when a
-              // break makes it meaningfully less than time on shift (avoid repeating
-              // the same number twice).
-              (() => {
-                const breakDed = (split.breakMins || 0) >= 5; // a real deduction, not rounding
-                return breakDed
-                  ? <><span className="text-emerald-400 font-semibold">on shift for {elapsed(item.punchIn)}</span> · <span className="text-slate-400">{fmtHrs(split.workedHours)} worked</span></>
-                  : <span className="text-emerald-400 font-semibold">on shift for {elapsed(item.punchIn)}</span>;
-              })()
+              <span className="text-emerald-400 font-semibold">on shift for {elapsed(item.punchIn)}</span>
             ) : (
               <span className="text-slate-400">{fmtHrs(split.workedHours)} worked</span>
             )}
@@ -46236,34 +46228,13 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
       {/* Employee list — borderless to free up space */}
       <div>
-        {tab === "break" ? (() => {
-          // Two clear groups: currently on break (live) vs breaks finished today.
-          const liveIds = new Set(onBreak.map(p => p.id));
-          const finished = breaksTakenToday.filter(p => !liveIds.has(p.id));
-          if (onBreak.length === 0 && finished.length === 0) {
-            return <div className="text-center py-10 text-sm text-slate-500">No breaks taken today yet.</div>;
-          }
-          return (
-            <div className="space-y-4">
-              {onBreak.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 px-2 mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-600">
-                    <Coffee size={13}/> On break now ({onBreak.length})
-                  </div>
-                  {new Set(onBreak.map(i => i.storeId || "—")).size > 1 ? renderGrouped(onBreak) : onBreak.map(renderRow)}
-                </div>
-              )}
-              {finished.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 px-2 mb-1 mt-3 text-[11px] font-bold uppercase tracking-wide text-slate-500 border-t border-[#EADFCB] pt-3">
-                    Breaks taken today ({finished.length})
-                  </div>
-                  {new Set(finished.map(i => i.storeId || "—")).size > 1 ? renderGrouped(finished) : finished.map(renderRow)}
-                </div>
-              )}
-            </div>
-          );
-        })() : active.list.length === 0 ? (
+        {tab === "break" ? (
+          breaksTakenToday.length === 0 ? (
+            <div className="text-center py-10 text-sm text-slate-500">No breaks taken today yet.</div>
+          ) : (
+            new Set(breaksTakenToday.map(i => i.storeId || "—")).size > 1 ? renderGrouped(breaksTakenToday) : breaksTakenToday.map(renderRow)
+          )
+        ) : active.list.length === 0 ? (
           <div className="text-center py-10 text-sm text-slate-500">{`No one in this list${isToday?" right now":""}.`}</div>
         ) : (
           (() => {
