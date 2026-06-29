@@ -1127,8 +1127,8 @@ const EOD_COLUMNS = [
   { key: "physicalCash",          label: "Physical Cash (GBP)",    hint: "800",        required: false },
   { key: "cashVariance",          label: "Cash Variance (GBP)",    hint: "0",          required: false },
   { key: "varianceJustification", label: "Variance Justification", hint: "",           required: false },
-  { key: "openingFloat",          label: "Opening Float (GBP)",    hint: "200",        required: false },
-  { key: "closingFloat",          label: "Closing Float (GBP)",    hint: "200",        required: false },
+  { key: "openingFloat",          label: "Opening Float (GBP)",    hint: "100",        required: false },
+  { key: "closingFloat",          label: "Closing Float (GBP)",    hint: "100",        required: false },
   { key: "laborCost",             label: "Labour Cost (GBP)",      hint: "1260",       required: true  },
   { key: "cogsCost",              label: "COGS (GBP)",             hint: "1350",       required: true  },
   { key: "totalHours",            label: "Total Hours",            hint: "32",         required: true  },
@@ -21361,7 +21361,9 @@ function EodReconBadge({ status }) {
 
 function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [], currentUser, onUpdateEntry, onDeleteEntry, onDepositCash }) {
   const isHq = isHqOrAbove(currentUser.role);
-  const myStoreIds = currentUser.storeIds || [];
+  // Include the manager's visible scope, not just currentUser.storeIds (which can
+  // be stale after a session restore) — so the Save/amend ability is reliable.
+  const myStoreIds = Array.from(new Set([...(currentUser.storeIds || []), ...(visibleStoreIds || [])]));
   const fmtMoney = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || null;
   const brandName = (id) => brands.find(b => b.id === id)?.name || id;
@@ -21443,6 +21445,9 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
     setDraft(d); setReason(""); setComment(""); setNotice("");
   }, [selId]);
 
+  // A manager can amend any entry within their visible scope (myStoreIds above
+  // already includes visibleStoreIds), so the Save button doesn't depend solely
+  // on currentUser.storeIds being populated. Every change is still logged.
   const canAmend = selected && (isHq || (selected.storeId ? myStoreIds.includes(selected.storeId) : (currentUser.brandIds || []).includes(selected.brandId)));
 
   const changedFields = useMemo(() => {
@@ -21858,7 +21863,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     storeId: sortedStores[0]?.id || "",
     date: today, manager: user.name, submittedBy: user.name,
     netSales: "", cardRevenue: "", lopay: "", cashExpected: "", physicalCash: "", varianceJustification: "",
-    openingFloat: 200, closingFloat: 200,
+    openingFloat: 100, closingFloat: 100,
     totalOrders: "", atv: "",
     unreportedExpense: "", unreportedExpenseNote: "",
     fiveStarReviews: "", midStarReviews: "", oneStarReviews: "",
@@ -21946,7 +21951,7 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false); setZone(0);
-      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", lopay:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:200, closingFloat:200, totalOrders:"", atv:"", unreportedExpense:"", unreportedExpenseNote:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
+      setForm({ storeId: sortedStores[0]?.id||"", date: today, manager: user.name, submittedBy: user.name, netSales:"", cardRevenue:"", lopay:"", cashExpected:"", physicalCash:"", varianceJustification:"", openingFloat:100, closingFloat:100, totalOrders:"", atv:"", unreportedExpense:"", unreportedExpenseNote:"", fiveStarReviews:"", midStarReviews:"", oneStarReviews:"", laborCost:"", cogsCost:"", totalHours:"", notes:"" });
     }, 2500);
   };
 
@@ -21968,10 +21973,6 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
     ["Physical cash", `£${(pc||0).toFixed(2)}`],
     ["Cash variance", `£${(variance||0).toFixed(2)}`],
     ["Unreported expense", `£${(parseFloat(form.unreportedExpense)||0).toFixed(2)}`],
-    ["Total orders", String(parseInt(form.totalOrders)||0)],
-    ["Labour cost", `£${(lc||0).toFixed(2)}`],
-    ["COGS", `£${(cc||0).toFixed(2)}`],
-    ["Total hours", String(th||0)],
   ];
 
   if (reviewing) return (
