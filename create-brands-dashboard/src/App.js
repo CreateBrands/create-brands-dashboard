@@ -45696,7 +45696,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 // Entity landing screen — pick a Brand or an Operations entity (tiles).
 // Edit a single punch: clock-in, clock-out, or delete. Recomputes hours/gross
 // on save. Times use the browser's local timezone via datetime-local inputs.
-function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
+function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelete }) {
   // Convert an ISO timestamp to a value for <input type="datetime-local"> (local).
   const toLocalInput = (iso) => {
     if (!iso) return "";
@@ -45709,20 +45709,40 @@ function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
+  const breakMins = Number(punch.breakMinutes) || 0;
+  const rate = Number(punch.hourlyRate) || 0;
+  // Live preview of hours/gross as the manager types. Overnight-aware: if the
+  // clock-out is at/before clock-in, treat it as the next day rather than negative.
+  const preview = useMemo(() => {
+    if (!inVal || !outVal) return null;
+    const inMs = new Date(inVal).getTime();
+    let outMs = new Date(outVal).getTime();
+    if (isNaN(inMs) || isNaN(outMs)) return null;
+    let overnight = false;
+    if (outMs <= inMs) { outMs += 86400000; overnight = true; } // roll to next day
+    const rawH = (outMs - inMs) / 3600000;
+    const netH = Math.max(0, rawH - breakMins / 60);
+    return { rawH, netH: Math.round(netH * 100) / 100, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
+  }, [inVal, outVal, breakMins, rate]);
+
+  const fmtHrs = (h) => { const m = Math.round(h * 60); return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`; };
+
   const save = async () => {
     setErr(null);
     if (!inVal) { setErr("Clock-in time is required."); return; }
     const inIso = new Date(inVal).toISOString();
-    const outIso = outVal ? new Date(outVal).toISOString() : null;
-    if (outIso && new Date(outIso) <= new Date(inIso)) { setErr("Clock-out must be after clock-in."); return; }
+    // Overnight: roll the clock-out forward a day if it's at/before clock-in.
+    let outIso = outVal ? new Date(outVal).toISOString() : null;
+    if (outIso && new Date(outIso) <= new Date(inIso)) outIso = new Date(new Date(outIso).getTime() + 86400000).toISOString();
+    if (preview && preview.long) {
+      if (!window.confirm(`This shift is ${fmtHrs(preview.netH)}, which looks unusually long. Save anyway?`)) return;
+    }
     setBusy(true);
     try {
-      const rate = Number(punch.hourlyRate) || 0;
       let hours = null, gross = null, status = "open";
       if (outIso) {
         const rawH = (new Date(outIso) - new Date(inIso)) / 3600000;
-        const breakH = (punch.breakMinutes || 0) / 60;
-        hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
+        hours = Math.round(Math.max(0, rawH - breakMins / 60) * 100) / 100;
         gross = Math.round(hours * rate * 100) / 100;
         status = "closed";
       }
@@ -45739,13 +45759,19 @@ function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
     catch (e) { setErr(e?.message || String(e)); setBusy(false); }
   };
 
-  const inputCls = "w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+  const inputCls = "w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-          <h3 className="font-bold text-white truncate">{memberName}</h3>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-300"><X size={18}/></button>
+        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-800">
+          <div className="min-w-0">
+            <h3 className="font-bold text-white truncate">{memberName}</h3>
+            <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-400">
+              {storeName && <span className="inline-flex items-center gap-1"><MapPin size={11}/> {storeName}</span>}
+              {punch.date && <span>· {new Date(punch.date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</span>}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 shrink-0"><X size={18}/></button>
         </div>
         <div className="p-5 space-y-4">
           <div>
@@ -45757,6 +45783,26 @@ function PunchEditModal({ punch, memberName, onClose, onSave, onDelete }) {
             <input type="datetime-local" value={outVal} onChange={e=>setOutVal(e.target.value)} className={inputCls}/>
             <div className="text-[10px] text-slate-500 mt-1">Leave blank to keep the shift open (still clocked in).</div>
           </div>
+
+          {/* Live totals as you type */}
+          {!outVal ? (
+            <div className="rounded-xl bg-amber-950/20 border border-amber-900/40 px-3 py-2.5 text-xs text-amber-300">Shift is still open — enter a clock-out to calculate hours.</div>
+          ) : preview && (
+            <div className={`rounded-xl border px-3 py-3 ${preview.long ? "bg-red-950/25 border-red-800/50" : "bg-slate-950/60 border-slate-800"}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Total hours</span>
+                <span className={`text-lg font-black tabular-nums ${preview.long ? "text-red-300" : "text-white"}`}>{fmtHrs(preview.netH)}</span>
+              </div>
+              <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
+                <span>{fmtHrs(preview.rawH)} clocked{breakMins > 0 ? ` − ${breakMins}m break` : ""}</span>
+                {rate > 0 && <span className="text-slate-300">≈ £{preview.gross.toFixed(2)} @ £{rate.toFixed(2)}/hr</span>}
+              </div>
+              {preview.overnight && <div className="mt-1.5 text-[11px] text-sky-300">⏱ Overnight shift — clock-out is on the next day.</div>}
+              {preview.long && <div className="mt-1.5 text-[11px] text-red-300 font-semibold">⚠ Unusually long — check for a missed clock-out.</div>}
+              {rate === 0 && <div className="mt-1.5 text-[11px] text-amber-400">No pay rate set for this employee — gross can't be shown.</div>}
+            </div>
+          )}
+
           {err && <div className="text-xs text-rose-400">{err}</div>}
           <div className="flex items-center justify-between gap-2 pt-1">
             <button onClick={del} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600/15 text-red-200 border border-red-600/30 hover:bg-red-600/25 disabled:opacity-40 text-sm font-semibold">
@@ -46052,6 +46098,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
         <PunchEditModal
           punch={editPunch}
           memberName={(() => { const m = memberOf(editPunch.employeeId); return editPunch.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown"); })()}
+          storeName={(() => { const s = (stores || []).find(x => x.id === editPunch.storeId); return s ? (s.shortName || s.name) : null; })()}
           onClose={() => setEditPunch(null)}
           onSave={onUpdatePunch}
           onDelete={onDeletePunch}
