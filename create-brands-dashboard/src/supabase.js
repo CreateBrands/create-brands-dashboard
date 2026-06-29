@@ -4778,13 +4778,25 @@ export function rateForBandOnDate(rates, band, onDate) {
 // Returns { rate, basis, band, age, error }. error is set (and rate null) when
 // a minimum-wage employee has no configured rate for their band on that date,
 // or DOB is missing — we FLAG, never guess.
-export function resolveHourlyRate(employee, workDate, rates) {
+export function resolveHourlyRate(employee, workDate, rates, payRatesByEmp) {
   // Accept BOTH the camelCase app shape (payBasis, hourlyRate, dob) and the
   // snake_case DB shape (pay_basis, hourly_rate) — callers pass either.
   const basis = employee?.payBasis ?? employee?.pay_basis ?? "fixed";
   const hourly = employee?.hourlyRate ?? employee?.hourly_rate;
   const dob = employee?.dob;
   if (basis === "fixed") {
+    // Effective-dated rate history takes priority when present.
+    const empId = employee?.id;
+    const history = payRatesByEmp && empId ? payRatesByEmp[empId] : null;
+    const histRate = fixedRateOnDate(history, workDate);
+    if (histRate === null) {
+      // Has rate history, but this shift predates the earliest effective date.
+      return { rate: 0, basis, band: null, age: null, error: null, beforeEffective: true };
+    }
+    if (histRate !== undefined) {
+      return { rate: histRate, basis, band: null, age: null, error: null };
+    }
+    // No history → fall back to the flat hourly_rate (legacy behaviour).
     const r = Number(hourly);
     if ((hourly == null) || isNaN(r)) {
       return { rate: null, basis, band: null, age: null, error: "No fixed hourly_rate set for this employee." };
@@ -4805,6 +4817,41 @@ export function resolveHourlyRate(employee, workDate, rates) {
     return { rate: null, basis, band, age, error: `No minimum-wage rate configured for band ${band} effective on ${workDate}. Add it in the Minimum Wage admin.` };
   }
   return { rate, basis, band, age, error: null };
+}
+
+// ── Effective-dated employee pay rates (fixed-basis staff) ───────────────────
+// Rate history: each row takes effect from effective_from. Resolver picks the
+// most recent rate whose effective_from <= the shift date. Shifts before the
+// earliest effective_from resolve to £0 (not yet on payroll).
+export async function fetchEmployeePayRates(employeeId) {
+  let q = supabase.from("employee_pay_rates").select("*");
+  if (employeeId) q = q.eq("employee_id", employeeId);
+  const { data, error } = await q.order("effective_from", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(r => ({ id: r.id, employeeId: r.employee_id, rate: r.rate != null ? Number(r.rate) : null, effectiveFrom: r.effective_from, note: r.note || "" }));
+}
+export async function upsertEmployeePayRate(row) {
+  const payload = {
+    id: row.id || `epr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    employee_id: row.employeeId, rate: Number(row.rate), effective_from: row.effectiveFrom, note: row.note || null,
+  };
+  const { data, error } = await supabase.from("employee_pay_rates").upsert(payload, { onConflict: "employee_id,effective_from" }).select().single();
+  if (error) throw error;
+  return { id: data.id, employeeId: data.employee_id, rate: Number(data.rate), effectiveFrom: data.effective_from, note: data.note || "" };
+}
+export async function deleteEmployeePayRate(id) {
+  const { error } = await supabase.from("employee_pay_rates").delete().eq("id", id);
+  if (error) throw error;
+}
+// Pick the fixed rate in effect on workDate from a rate-history array.
+// Returns null if the employee has history but the shift predates all of it.
+function fixedRateOnDate(payRates, workDate) {
+  if (!payRates || !payRates.length) return undefined; // no history → caller falls back to flat rate
+  const d = new Date(workDate);
+  const eligible = payRates
+    .filter(r => new Date(r.effectiveFrom) <= d)
+    .sort((a, b) => new Date(b.effectiveFrom) - new Date(a.effectiveFrom));
+  return eligible.length ? Number(eligible[0].rate) : null; // null = before earliest effective date
 }
 
 // ── Payroll periods (used in Stage 3/4) ─────────────────────────────────────

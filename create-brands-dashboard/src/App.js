@@ -91,6 +91,7 @@ import {
   fetchPayrollPeriods, upsertPayrollPeriod,
   fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, attachLoanContract, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
   resolveHourlyRate, ageOnDate, bandForAge,
+  fetchEmployeePayRates, upsertEmployeePayRate, deleteEmployeePayRate,
   uploadInvoiceFile,
   extractInvoice,
   listInvoices,
@@ -22424,11 +22425,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     if (new Date(from) > new Date(to)) return setErr("Start date must be on or before end date.");
     setRunning(true);
     try {
-      const [punches, rates, existing] = await Promise.all([
+      const [punches, rates, existing, allPayRates] = await Promise.all([
         fetchPunchRecords({ from, to }),
         fetchMinimumWageRates(),
         fetchPayrollPeriods({ periodStart: from, periodEnd: to }),
+        fetchEmployeePayRates(),  // all employees' effective-dated rate history
       ]);
+      // group rate history by employee id for the resolver
+      const payRatesByEmp = {};
+      (allPayRates || []).forEach(r => { (payRatesByEmp[r.employeeId] = payRatesByEmp[r.employeeId] || []).push(r); });
 
       if (existing && existing.length) {
         setOverlapWarn(`A payroll run for ${from} → ${to} was already saved (${existing.length} record${existing.length > 1 ? "s" : ""}). Saving again will overwrite those records.`);
@@ -22444,7 +22449,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         let rowError = "";
         for (const p of empPunches) {
           const hrs = Number(p.hoursWorked) || 0;
-          const res = resolveHourlyRate(emp, p.date, rates);
+          const res = resolveHourlyRate(emp, p.date, rates, payRatesByEmp);
           if (res.error) {
             rowError = res.error;
             continue;
@@ -29340,6 +29345,65 @@ function PersonalHrTab({ editHr, setEditHr, derivedHireDate, linkedApp, onSave, 
 // kiosk can identify staff from PIN alone (Q6 from kiosk auth design).
 // Validated here with a soft warning rather than a hard block — the save
 // will fail with a DB-level uniqueness error if the user persists.
+// Effective-dated pay-rate history for one employee. When rates exist here, the
+// payroll engine uses the rate in effect on each shift's date (and pays £0 for
+// shifts before the earliest effective date). Falls back to the flat Amount above
+// when no history rows exist.
+function PayRateHistoryEditor({ employeeId }) {
+  const [rows, setRows] = useState(null);
+  const [rate, setRate] = useState("");
+  const [eff, setEff] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const load = async () => {
+    if (!employeeId) { setRows([]); return; }
+    try { setRows(await fetchEmployeePayRates(employeeId)); }
+    catch (e) { setMsg(e?.message || String(e)); setRows([]); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [employeeId]);
+  const add = async () => {
+    if (!rate || !eff) { setMsg("Enter a rate and an effective-from date."); return; }
+    if (isNaN(Number(rate)) || Number(rate) < 0) { setMsg("Rate must be a positive number."); return; }
+    setBusy(true); setMsg("");
+    try { await upsertEmployeePayRate({ employeeId, rate: Number(rate), effectiveFrom: eff }); setRate(""); setEff(""); await load(); }
+    catch (e) { setMsg(e?.message || String(e)); }
+    setBusy(false);
+  };
+  const del = async (id) => { if (!window.confirm("Remove this rate?")) return; try { await deleteEmployeePayRate(id); await load(); } catch (e) { setMsg(e?.message || String(e)); } };
+  return (
+    <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 space-y-2">
+      <div className="text-sm font-semibold text-white">Effective-dated pay rates</div>
+      <div className="text-[11px] text-slate-500">Set a rate from a specific date. Payroll uses the rate in effect on each shift's date. Shifts before the earliest date are paid £0. Leave empty to use the flat Amount above.</div>
+      <div className="flex items-end gap-2 flex-wrap">
+        <div><label className="text-[10px] uppercase text-slate-500">Rate (£/hr)</label>
+          <input type="number" step="0.01" min="0" value={rate} onChange={e => setRate(e.target.value)} placeholder="8.50" className="block w-24 px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white"/></div>
+        <div><label className="text-[10px] uppercase text-slate-500">Effective from</label>
+          <input type="date" value={eff} onChange={e => setEff(e.target.value)} className="block px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white"/></div>
+        <button onClick={add} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold">{busy ? "Adding…" : "Add rate"}</button>
+      </div>
+      {msg && <div className="text-[11px] text-amber-300">{msg}</div>}
+      {rows === null ? <div className="text-[11px] text-slate-600">Loading…</div> : rows.length === 0 ? (
+        <div className="text-[11px] text-slate-600">No effective-dated rates — payroll uses the flat Amount above.</div>
+      ) : (
+        <div className="rounded-lg border border-slate-800 overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-900 text-slate-500"><tr><th className="text-left px-2 py-1.5">Effective from</th><th className="text-right px-2 py-1.5">Rate</th><th className="w-8"></th></tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} className="border-t border-slate-800/60">
+                  <td className="px-2 py-1.5 text-slate-200">{r.effectiveFrom}</td>
+                  <td className="px-2 py-1.5 text-right font-mono text-slate-200">£{Number(r.rate).toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-right"><button onClick={() => del(r.id)} className="text-slate-600 hover:text-red-400"><X size={14}/></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsTeam, onUpdateEmployee, currentUser }) {
   const COLORS = ["#844429","#10b981","#f59e0b","#ef4444","#a78bfa","#ec4899"];
 
@@ -29625,6 +29689,8 @@ function JobAssignmentTab({ employee, stores, storeRoles, storeDepartments, opsT
           />
         </div>
       </div>
+
+      {form.payType === "hourly" && employee?.id && <PayRateHistoryEditor employeeId={employee.id} />}
 
       <div className="flex items-start gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-3">
         <input id="phoneClockIn" type="checkbox" checked={!!form.phoneClockIn} onChange={e => set("phoneClockIn", e.target.checked)} className="mt-0.5 w-4 h-4 accent-indigo-600"/>
