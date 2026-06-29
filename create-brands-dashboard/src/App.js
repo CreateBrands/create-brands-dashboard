@@ -41865,63 +41865,188 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     };
   }, []);
 
-  // Camera startup — request front camera once on mount
-  useEffect(() => {
-    let cancelled = false;
-    async function startCamera() {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera not supported");
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
-        });
-        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(()=>{});
-        }
-        setCameraReady(true); setCameraError(false);
-      } catch (err) {
-        console.warn("Camera unavailable:", err);
-        setCameraError(true); setCameraReady(false);
+  // Shared lifecycle guard so the mount effect, the watchdog, and any in-flight
+  // camera restart all agree when the component is gone — prevents leaked
+  // MediaStreams (camera light stuck on) and setState-after-unmount warnings.
+  const camCancelledRef = useRef(false);
+  // Tracks presented-frame progress for freeze detection (filled by rVFC if available).
+  const frameProgressRef = useRef({ count: 0, lastCount: 0, lastAdvanceAt: 0, rvfc: false });
+
+  // Safely (re)start the camera. Centralised so mount + watchdog share one path.
+  // Guards against: concurrent starts, unmount mid-await, and leaking the old stream.
+  const startingRef = useRef(false);
+  const startCamera = useCallback(async () => {
+    if (startingRef.current) return;            // a start is already in flight
+    if (camCancelledRef.current) return;        // component gone
+    startingRef.current = true;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera not supported");
+      // Stop any existing stream BEFORE requesting a new one (some webcams allow
+      // only one active handle; not stopping first is a common freeze cause).
+      if (streamRef.current) {
+        try { streamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
+        streamRef.current = null;
       }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      // If we were unmounted (or another start won) while awaiting, discard this stream.
+      if (camCancelledRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+      // Reset freeze tracking on a fresh stream.
+      frameProgressRef.current = { count: 0, lastCount: 0, lastAdvanceAt: Date.now(), rvfc: false };
+      if (!camCancelledRef.current) { setCameraReady(true); setCameraError(false); }
+    } catch (err) {
+      console.warn("Camera start failed:", err);
+      if (!camCancelledRef.current) { setCameraError(true); setCameraReady(false); }
+    } finally {
+      startingRef.current = false;
     }
+  }, []);
+
+  // Camera startup — request front camera once on mount.
+  useEffect(() => {
+    camCancelledRef.current = false;
     startCamera();
     return () => {
-      cancelled = true;
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      camCancelledRef.current = true;
+      if (streamRef.current) {
+        try { streamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
+        streamRef.current = null;
+      }
+    };
+  }, [startCamera]);
+
+  // requestVideoFrameCallback loop — the reliable freeze signal. Each callback
+  // fires only when a NEW frame is presented, so a rising count == live feed.
+  // (currentTime alone is unreliable for live MediaStreams; rVFC is exact.)
+  useEffect(() => {
+    let handle = null;
+    let stopped = false;
+    const tick = () => {
+      if (stopped) return;
+      const v = videoRef.current;
+      if (v && typeof v.requestVideoFrameCallback === "function") {
+        frameProgressRef.current.rvfc = true;
+        frameProgressRef.current.count += 1;
+        frameProgressRef.current.lastAdvanceAt = Date.now();
+        handle = v.requestVideoFrameCallback(tick);
+      }
+    };
+    const v = videoRef.current;
+    if (v && typeof v.requestVideoFrameCallback === "function") {
+      handle = v.requestVideoFrameCallback(tick);
+    }
+    return () => {
+      stopped = true;
+      try { if (handle != null && videoRef.current?.cancelVideoFrameCallback) videoRef.current.cancelVideoFrameCallback(handle); } catch (_) {}
     };
   }, []);
 
-  // Watchdog: every 1 second, if the video element lost its stream (e.g., paused after overlay flipped),
-  // re-attach and play. Keeps the live preview working forever without page refresh.
+  // Watchdog: every 1s keep the preview alive and detect a frozen feed.
+  // Failure modes handled: (1) stream detached, (2) paused, (3) FROZEN feed
+  // (the root cause of capturing the previous person). A freeze restarts the
+  // camera so the next capture gets a live frame, not a stale one.
   useEffect(() => {
     const watchdog = setInterval(() => {
+      if (camCancelledRef.current) return;
       if (!streamRef.current || !videoRef.current) return;
       const v = videoRef.current;
-      if (v.srcObject !== streamRef.current) {
-        v.srcObject = streamRef.current;
+      if (v.srcObject !== streamRef.current) v.srcObject = streamRef.current;
+      if (v.paused || v.readyState < 2) { v.play().catch(() => {}); }
+
+      // Also detect a dead track (some OSes mark the track ended on sleep/USB blip).
+      const track = streamRef.current.getVideoTracks?.()[0];
+      const trackDead = track && (track.readyState === "ended" || track.muted === true);
+
+      const fp = frameProgressRef.current;
+      const now = Date.now();
+      let frozen = false;
+      if (fp.rvfc) {
+        // Preferred path: frame count must rise. If it hasn't advanced in 4s
+        // while playing, the feed is frozen.
+        if (fp.count > fp.lastCount) {
+          fp.lastCount = fp.count; fp.lastAdvanceAt = now;
+        } else if (!v.paused && v.readyState >= 2 && now - fp.lastAdvanceAt > 4000) {
+          frozen = true;
+        }
+      } else {
+        // Fallback (no rVFC): use currentTime with a more forgiving 5s window
+        // to avoid false positives on low-frame-rate webcams.
+        const ct = v.currentTime;
+        if (ct !== fp._ct) { fp._ct = ct; fp.lastAdvanceAt = now; }
+        else if (!v.paused && v.readyState >= 2 && now - fp.lastAdvanceAt > 5000) {
+          frozen = true;
+        }
       }
-      if (v.paused || v.readyState < 2) {
-        v.play().catch(()=>{});
+
+      if ((frozen || trackDead) && !startingRef.current) {
+        fp.lastAdvanceAt = now; // reset so we don't loop-restart
+        startCamera();          // unmount-safe; stops old stream, requests fresh
       }
     }, 1000);
     return () => clearInterval(watchdog);
   }, []);
 
-  // Capture a still frame as JPEG blob (returns null on failure)
+  // Capture a still frame as JPEG blob (returns null on failure).
+  // Hardened against the "stale/frozen frame" bug where a stalled camera feed
+  // made every subsequent punch capture the PREVIOUS person's face:
+  //  - forces the video to play and waits for a genuinely fresh frame before drawing
+  //  - uses requestVideoFrameCallback when available (fires only on a NEW frame)
+  //  - rejects a frame if the feed looks frozen/not-advancing
   const capturePhoto = () => new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => { if (settled) return; settled = true; resolve(val); };
     try {
-      if (!cameraReady || !videoRef.current || !canvasRef.current) { resolve(null); return; }
+      if (!cameraReady || !videoRef.current || !canvasRef.current) { finish(null); return; }
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      const w = video.videoWidth || 640, h = video.videoHeight || 480;
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, w, h);
-      canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.72);
-    } catch { resolve(null); }
+
+      const draw = () => {
+        try {
+          // Elements can go null if the kiosk unmounts mid-capture.
+          if (!videoRef.current || !canvasRef.current) { finish(null); return; }
+          const w = video.videoWidth || 640, h = video.videoHeight || 480;
+          if (!w || !h || video.readyState < 2) { finish(null); return; }
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) { finish(null); return; }
+          ctx.drawImage(video, 0, 0, w, h);
+          canvas.toBlob(blob => finish(blob), "image/jpeg", 0.72);
+        } catch { finish(null); }
+      };
+
+      // Absolute backstop: never let the capture Promise hang. If nothing has
+      // resolved within 1.5s, give up so the punch flow's .then() always runs.
+      setTimeout(() => finish(null), 1500);
+
+      // Make sure the stream is actually attached and playing before we grab a frame.
+      if (streamRef.current && video.srcObject !== streamRef.current) {
+        video.srcObject = streamRef.current;
+      }
+      const ensurePlaying = video.paused ? video.play().catch(()=>{}) : Promise.resolve();
+
+      ensurePlaying.then(() => {
+        if (settled) return;
+        // Prefer requestVideoFrameCallback: its callback fires ONLY when a new
+        // frame has been presented, so we can never capture a stale one.
+        if (typeof video.requestVideoFrameCallback === "function") {
+          video.requestVideoFrameCallback(() => draw());
+          // Safety: if no new frame arrives within 600ms the feed is frozen;
+          // draw whatever we have rather than wait for the 1.5s backstop.
+          setTimeout(() => { if (!settled) draw(); }, 600);
+        } else {
+          // Fallback: wait two animation frames so the <video> has advanced at
+          // least one frame past whatever was on screen when capture started.
+          requestAnimationFrame(() => requestAnimationFrame(draw));
+        }
+      });
+    } catch { finish(null); }
   });
 
   // Single source of truth for returning the kiosk to its idle PIN screen.
