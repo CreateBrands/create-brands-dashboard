@@ -42802,7 +42802,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     </div>
                     <div className="bg-slate-950/50 rounded-lg py-1.5">
                       <div className="text-[10px] text-slate-500">Hours</div>
-                      <div className="text-xs font-bold text-white tabular-nums">{r.status==="open"?fmtDur(liveHours(r)):fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
+                      <div className={`text-xs font-bold tabular-nums ${(() => { const h = r.gracedHours ?? r.hoursWorked ?? 0; return r.status !== "open" && (h < 0 || h > 16) ? "text-red-400" : "text-white"; })()}`}>{r.status==="open"?fmtDur(liveHours(r)):fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
+                      {r.status !== "open" && (() => { const h = r.gracedHours ?? r.hoursWorked ?? 0; return (h < 0 || h > 16) ? <div className="text-[9px] text-red-400 font-semibold mt-0.5">⚠ check — likely missed clock-out</div> : null; })()}
                     </div>
                     <div className="bg-slate-950/50 rounded-lg py-1.5">
                       <div className="text-[10px] text-slate-500">Sched</div>
@@ -43285,8 +43286,19 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
   const handleSave = () => {
     const dateBase    = record.date + "T";
     const newPunchIn  = new Date(dateBase + punchInTime  + ":00").toISOString();
-    const newPunchOut = punchOutTime ? new Date(dateBase + punchOutTime + ":00").toISOString() : null;
-    const hoursWorked = newPunchOut ? Math.round((Math.max(0, (new Date(newPunchOut)-new Date(newPunchIn))/3600000 - (record.breakMinutes||0)/60))*100)/100 : null;
+    let   newPunchOut = punchOutTime ? new Date(dateBase + punchOutTime + ":00").toISOString() : null;
+    // Overnight: if the clock-out time is at or before the clock-in time, it must
+    // be the NEXT day (e.g. in 23:00, out 00:30). Roll it forward 24h so we never
+    // store a negative span. (This was the cause of the −19h "amended" records.)
+    if (newPunchOut && new Date(newPunchOut) <= new Date(newPunchIn)) {
+      newPunchOut = new Date(new Date(newPunchOut).getTime() + 86400000).toISOString();
+    }
+    const spanH = newPunchOut ? (new Date(newPunchOut) - new Date(newPunchIn)) / 3600000 : null;
+    // Guard against an implausible span (likely a typo / forgotten clock-out).
+    if (spanH != null && spanH > 16) {
+      if (!window.confirm(`This shift is ${spanH.toFixed(1)} hours, which looks unusually long. Save anyway?`)) return;
+    }
+    const hoursWorked = newPunchOut ? Math.round((Math.max(0, spanH - (record.breakMinutes||0)/60))*100)/100 : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
     const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
     const _audit = [];
@@ -43468,17 +43480,30 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
   // employees scoped to the chosen store's brand (once a store is picked)
   const members = opsTeam.filter(m => storeId ? m.brandId === effBrandId : true);
   const member  = opsTeam.find(m => m.id === empId);
-  const hoursWorked = punchIn && punchOut ? Math.round(((new Date("2000-01-01T"+punchOut)-new Date("2000-01-01T"+punchIn))/3600000)*100)/100 : null;
+  // Overnight-safe span: if out <= in (e.g. in 23:00, out 01:00), treat out as next day.
+  const addSpanH = (punchIn && punchOut) ? (() => {
+    let mins = (new Date("2000-01-01T"+punchOut) - new Date("2000-01-01T"+punchIn)) / 60000;
+    if (mins <= 0) mins += 1440; // roll to next day
+    return mins / 60;
+  })() : null;
+  const hoursWorked = addSpanH != null ? Math.round(addSpanH * 100) / 100 : null;
 
   const handleSave = () => {
     if (!empId || !date || !storeId) return;
+    if (addSpanH != null && addSpanH > 16) {
+      if (!window.confirm(`This shift is ${addSpanH.toFixed(1)} hours, which looks unusually long. Add anyway?`)) return;
+    }
     const dateBase = date + "T";
+    const inIso = new Date(dateBase+punchIn+":00").toISOString();
+    let   outIso = new Date(dateBase+punchOut+":00").toISOString();
+    // Overnight: roll the clock-out to the next day if it's at/before clock-in.
+    if (new Date(outIso) <= new Date(inIso)) outIso = new Date(new Date(outIso).getTime() + 86400000).toISOString();
     const grossPay = hoursWorked && member?.hourlyRate ? Math.round(hoursWorked*member.hourlyRate*100)/100 : null;
     onSave({
       id: `pr-${Date.now()}`, brandId: effBrandId, storeId: storeId || null,
       employeeId: empId, employeeName: `${member.firstName} ${member.lastName}`.trim(),
-      date, punchIn: new Date(dateBase+punchIn+":00").toISOString(),
-      punchOut: new Date(dateBase+punchOut+":00").toISOString(),
+      date, punchIn: inIso,
+      punchOut: outIso,
       hoursWorked, hourlyRate: member?.hourlyRate || 0, grossPay,
       notes, status: "amended", approved: true, approvedBy: currentUser.name,
       amendedBy: currentUser.name,
