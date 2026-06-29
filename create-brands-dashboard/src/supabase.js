@@ -1102,6 +1102,32 @@ export async function insertPunchIn(record) {
 // gross_pay NULL — hours are recorded but pay is NOT auto-calculated, so a
 // manager confirms before it's paid. Returns the number of shifts closed.
 // stores: app-side stores with { id, autoClockoutTime } ("HH:MM").
+// ── Canonical punch-hours calculation (SINGLE SOURCE OF TRUTH) ───────────────
+// Every path that turns a clock-in/out into paid hours MUST use this, so the
+// failure modes are handled identically everywhere:
+//   • overnight  — if out <= in, the out is the next day (never negative)
+//   • breaks     — deduct break_minutes
+//   • open break — if a break was started and not ended, count elapsed break time
+//   • clamp      — never return below 0
+// Pass ISO strings (or Date) for punchIn/punchOut. Returns
+// { hours, rawHours, breakMins, overnight } with hours rounded to 2dp.
+export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null } = {}) {
+  if (!punchIn || !punchOut) return { hours: null, rawHours: null, breakMins: 0, overnight: false };
+  const inMs = new Date(punchIn).getTime();
+  let outMs = new Date(punchOut).getTime();
+  if (isNaN(inMs) || isNaN(outMs)) return { hours: null, rawHours: null, breakMins: 0, overnight: false };
+  let overnight = false;
+  if (outMs <= inMs) { outMs += 86400000; overnight = true; }
+  const rawHours = (outMs - inMs) / 3600000;
+  let breakMins = Number(breakMinutes) || 0;
+  if (breakStart && !breakEnd) {
+    const ref = breakEndRef ? new Date(breakEndRef).getTime() : outMs;
+    breakMins += Math.max(0, Math.round((ref - new Date(breakStart).getTime()) / 60000));
+  }
+  const hours = Math.round(Math.max(0, rawHours - breakMins / 60) * 100) / 100;
+  return { hours, rawHours, breakMins, overnight };
+}
+
 export async function sweepAutoClockouts(stores = []) {
   const cutoffByStore = {};
   (stores || []).forEach(s => { if (s.autoClockoutTime) cutoffByStore[s.id] = s.autoClockoutTime; });
@@ -1117,26 +1143,43 @@ export async function sweepAutoClockouts(stores = []) {
   for (const p of open) {
     const cutoff = cutoffByStore[p.store_id];
     if (!cutoff || !p.date || !p.punch_in) continue;
-    // The cutoff moment for this shift's own date.
+    // The store cut-off moment for this shift's own date.
     const cutoffMs = new Date(`${p.date}T${cutoff}:00`).getTime();
     if (isNaN(cutoffMs)) continue;
-    // Only act once the cutoff has actually passed.
+    // Only act once the store cut-off has actually passed.
     if (now <= cutoffMs) continue;
     const pInMs = new Date(p.punch_in).getTime();
-    // Deduct break time (including a break left open) from the capped span, so an
-    // auto-closed shift isn't overstated. gross stays null — manager reviews anyway.
-    let breakMins = p.break_minutes || 0;
-    if (p.break_start && !p.break_end) {
-      breakMins += Math.max(0, Math.round((cutoffMs - new Date(p.break_start).getTime()) / 60000));
+
+    // Decide the effective clock-out moment:
+    //   • If the shift was rostered, cap at the SCHEDULED END (fairest — uses the
+    //     real shift, not a blanket store time). Handle overnight schedules.
+    //   • Otherwise fall back to the store cut-off.
+    // We never extend hours: the cap is the EARLIER of (scheduled end, store cut-off)
+    // when a schedule exists, so a forgotten punch can't be inflated past either.
+    let effOutMs = cutoffMs;
+    if (p.scheduled_end) {
+      let schedEndMs = new Date(`${p.date}T${p.scheduled_end}:00`).getTime();
+      if (!isNaN(schedEndMs)) {
+        if (schedEndMs <= pInMs) schedEndMs += 86400000;   // overnight schedule
+        // Use scheduled end, but never later than the store cut-off ceiling.
+        effOutMs = Math.min(schedEndMs, cutoffMs);
+      }
     }
-    // Guard against bad data: cutoff must be after clock-in.
-    const hours = cutoffMs > pInMs ? Math.max(0, (cutoffMs - pInMs) / 3600000 - breakMins / 60) : 0;
+    // Guard: effective out must be after clock-in, else skip (bad data).
+    if (effOutMs <= pInMs) continue;
+
+    const outIso = new Date(effOutMs).toISOString();
+    const { hours } = computePunchHours({
+      punchIn: p.punch_in, punchOut: outIso,
+      breakMinutes: p.break_minutes, breakStart: p.break_start, breakEnd: p.break_end, breakEndRef: outIso,
+    });
+    const cappedAt = (p.scheduled_end && effOutMs < cutoffMs) ? "scheduled end" : "store cut-off";
     const { error: upErr } = await supabase.from("punch_records").update({
-      punch_out: new Date(cutoffMs).toISOString(),
-      hours_worked: +hours.toFixed(2),
+      punch_out: outIso,
+      hours_worked: hours,
       gross_pay: null,                 // NOT auto-paid — manager reviews
       status: "auto_closed",
-      notes: ((p.notes ? p.notes + " · " : "") + "Auto-closed at store cut-off — needs review").slice(0, 500),
+      notes: ((p.notes ? p.notes + " · " : "") + `Auto-closed at ${cappedAt} — needs review`).slice(0, 500),
       updated_at: new Date().toISOString(),
     }).eq("id", p.id);
     if (!upErr) closed++;

@@ -90,7 +90,7 @@ import {
   fetchMinimumWageRates, upsertMinimumWageRate, removeMinimumWageRate,
   fetchPayrollPeriods, upsertPayrollPeriod,
   fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, attachLoanContract, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
-  resolveHourlyRate, ageOnDate, bandForAge,
+  resolveHourlyRate, ageOnDate, bandForAge, computePunchHours,
   fetchEmployeePayRates, upsertEmployeePayRate, deleteEmployeePayRate,
   uploadInvoiceFile,
   extractInvoice,
@@ -13945,15 +13945,10 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
         setStatus({ type: "ok", msg: "Clocked in ✓" });
       } else {
         const now = new Date().toISOString();
-        const rawH = (Date.now() - new Date(openPunch.punchIn).getTime()) / 3600000;
-        // Include any break still open at clock-out (auto-end it now), matching
-        // the kiosk path — otherwise a mid-break clock-out overstates hours.
-        let totalBreakMins = openPunch.breakMinutes || 0;
-        if (openPunch.breakStart && !openPunch.breakEnd) {
-          totalBreakMins += Math.max(0, Math.round((Date.now() - new Date(openPunch.breakStart).getTime()) / 60000));
-        }
-        const breakH = totalBreakMins / 60;
-        const hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
+        const { hours } = computePunchHours({
+          punchIn: openPunch.punchIn, punchOut: now,
+          breakMinutes: openPunch.breakMinutes, breakStart: openPunch.breakStart, breakEnd: openPunch.breakEnd, breakEndRef: now,
+        });
         const gross = me.hourlyRate ? Math.round(hours * me.hourlyRate * 100) / 100 : null;
         await onPunchOut(openPunch.id, now, hours, gross);
         setStatus({ type: "ok", msg: "Clocked out ✓" });
@@ -14544,15 +14539,13 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         });
         setClockMsg({ type: "ok", msg: "Clocked in ✓" });
       } else {
-        const rawH = (Date.now() - new Date(myOpenPunch.punchIn).getTime()) / 3600000;
-        let totalBreakMins = myOpenPunch.breakMinutes || 0;
-        if (myOpenPunch.breakStart && !myOpenPunch.breakEnd) {
-          totalBreakMins += Math.max(0, Math.round((Date.now() - new Date(myOpenPunch.breakStart).getTime()) / 60000));
-        }
-        const breakH = totalBreakMins / 60;
-        const hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
+        const nowIso = new Date().toISOString();
+        const { hours } = computePunchHours({
+          punchIn: myOpenPunch.punchIn, punchOut: nowIso,
+          breakMinutes: myOpenPunch.breakMinutes, breakStart: myOpenPunch.breakStart, breakEnd: myOpenPunch.breakEnd, breakEndRef: nowIso,
+        });
         const gross = myOpsMember.hourlyRate ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
-        await onEmpPunchOut(myOpenPunch.id, new Date().toISOString(), hours, gross);
+        await onEmpPunchOut(myOpenPunch.id, nowIso, hours, gross);
         setClockMsg({ type: "ok", msg: "Clocked out ✓" });
       }
     } catch (e) {
@@ -22474,6 +22467,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           else lines.push({ key, hours: hrs, pay, rate: res.rate, band: res.band, basis: res.basis, age: res.age });
         }
         // default split BY AMOUNT: bank £ from employee default (capped at gross), cash = remainder
+        // Round gross to 2dp BEFORE splitting bank/cash, so the two parts always
+        // sum exactly to the gross (no sub-penny floating-point drift on payslips).
+        totalPay = Math.round(totalPay * 100) / 100;
         const defBank = emp.defaultBankAmount != null ? Number(emp.defaultBankAmount) : totalPay;
         const bankAmount = Math.min(defBank, totalPay);
         const cashAmount = Math.max(0, totalPay - bankAmount);
@@ -41915,14 +41911,11 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         const lateMs = effOutMs - seMs;
         if (lateMs > 0 && lateMs <= GRACE_OUT_MS) effOutMs = seMs;
       }
-      const rawHours = (effOutMs - effInMs) / 3600000;
-      // Include any break still open at clock-out (auto-end it now).
-      let totalBreakMins = openRecord.breakMinutes || 0;
-      if (openRecord.breakStart && !openRecord.breakEnd) {
-        totalBreakMins += Math.max(0, Math.round((Date.now() - new Date(openRecord.breakStart).getTime()) / 60000));
-      }
-      const breakHrs = totalBreakMins / 60;
-      const hoursWorked = Math.round(Math.max(0, rawHours - breakHrs) * 100) / 100;
+      const { hours: hoursWorked } = computePunchHours({
+        punchIn: new Date(effInMs).toISOString(), punchOut: new Date(effOutMs).toISOString(),
+        breakMinutes: openRecord.breakMinutes, breakStart: openRecord.breakStart, breakEnd: openRecord.breakEnd,
+        breakEndRef: new Date().toISOString(),
+      });
       const grossPay    = emp.hourlyRate ? Math.round(hoursWorked * emp.hourlyRate * 100) / 100 : null;
       let overtimeHrs = 0;
       if (!isUnscheduled) {
@@ -43387,7 +43380,7 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
     if (spanH != null && spanH > 16) {
       if (!window.confirm(`This shift is ${spanH.toFixed(1)} hours, which looks unusually long. Save anyway?`)) return;
     }
-    const hoursWorked = newPunchOut ? Math.round((Math.max(0, spanH - (record.breakMinutes||0)/60))*100)/100 : null;
+    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: record.breakMinutes }).hours : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
     const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
     const _audit = [];
@@ -43587,13 +43580,14 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
     let   outIso = new Date(dateBase+punchOut+":00").toISOString();
     // Overnight: roll the clock-out to the next day if it's at/before clock-in.
     if (new Date(outIso) <= new Date(inIso)) outIso = new Date(new Date(outIso).getTime() + 86400000).toISOString();
-    const grossPay = hoursWorked && member?.hourlyRate ? Math.round(hoursWorked*member.hourlyRate*100)/100 : null;
+    const savedHours = computePunchHours({ punchIn: inIso, punchOut: outIso }).hours;
+    const grossPay = savedHours && member?.hourlyRate ? Math.round(savedHours*member.hourlyRate*100)/100 : null;
     onSave({
       id: `pr-${Date.now()}`, brandId: effBrandId, storeId: storeId || null,
       employeeId: empId, employeeName: `${member.firstName} ${member.lastName}`.trim(),
       date, punchIn: inIso,
       punchOut: outIso,
-      hoursWorked, hourlyRate: member?.hourlyRate || 0, grossPay,
+      hoursWorked: savedHours, hourlyRate: member?.hourlyRate || 0, grossPay,
       notes, status: "amended", approved: true, approvedBy: currentUser.name,
       amendedBy: currentUser.name,
     });
@@ -45726,13 +45720,12 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
   const preview = useMemo(() => {
     if (!inVal || !outVal) return null;
     const inMs = new Date(inVal).getTime();
-    let outMs = new Date(outVal).getTime();
+    const outMs = new Date(outVal).getTime();
     if (isNaN(inMs) || isNaN(outMs)) return null;
-    let overnight = false;
-    if (outMs <= inMs) { outMs += 86400000; overnight = true; } // roll to next day
-    const rawH = (outMs - inMs) / 3600000;
-    const netH = Math.max(0, rawH - breakMins / 60);
-    return { rawH, netH: Math.round(netH * 100) / 100, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
+    const { hours: netH, rawHours: rawH, overnight } = computePunchHours({
+      punchIn: new Date(inVal).toISOString(), punchOut: new Date(outVal).toISOString(), breakMinutes: breakMins,
+    });
+    return { rawH, netH, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
   }, [inVal, outVal, breakMins, rate]);
 
   const fmtHrs = (h) => { const m = Math.round(h * 60); return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`; };
@@ -45751,8 +45744,7 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     try {
       let hours = null, gross = null, status = "open";
       if (outIso) {
-        const rawH = (new Date(outIso) - new Date(inIso)) / 3600000;
-        hours = Math.round(Math.max(0, rawH - breakMins / 60) * 100) / 100;
+        hours = computePunchHours({ punchIn: inIso, punchOut: outIso, breakMinutes: breakMins }).hours;
         gross = Math.round(hours * rate * 100) / 100;
         status = "closed";
       }
@@ -46935,6 +46927,11 @@ export default function App() {
       setAuditTrail(at); setHdTickets(hd); setMessages(msgs); setAvailability(avail);
       setSchedules(scheds); setShiftPresets(spreset); setPunchRecords(punches);
       setStores(st); setFlipdishStores(fs); setFlipdishSyncLog(fsl);
+      // Auto-clockout sweep at app level (not just the Who's Working screen), so
+      // forgotten punches get capped/flagged reliably whenever the app is open.
+      sweepAutoClockouts(st).then(n => {
+        if (n > 0) fetchPunchRecords().then(fresh => setPunchRecords(fresh)).catch(()=>{});
+      }).catch(()=>{});
       setStoreDepartments(sdepts || []); setStoreRoles(sroles || []);
       setApplications(apps || []);
       setAdvertisedRoles(adroles || []);
@@ -46948,6 +46945,19 @@ export default function App() {
       setDbReady(true);
     }).catch(err => { setDbError(err.message); });
   }, []);
+
+  // Periodic auto-clockout sweep: re-run every 15 minutes while the app is open,
+  // so forgotten punches get capped/flagged without waiting for a screen reload.
+  // (For true 24/7 coverage when nobody has the app open, a scheduled Supabase
+  // Edge Function runs the same sweep server-side — see auto-clockout cron.)
+  useEffect(() => {
+    if (!stores || !stores.length) return;
+    const tick = () => sweepAutoClockouts(stores).then(n => {
+      if (n > 0) fetchPunchRecords().then(fresh => setPunchRecords(fresh)).catch(()=>{});
+    }).catch(()=>{});
+    const interval = setInterval(tick, 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [stores]);
 
   useEffect(() => {
     if (!dbReady) return;
