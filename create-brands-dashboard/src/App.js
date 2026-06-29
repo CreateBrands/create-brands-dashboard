@@ -46124,7 +46124,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-white truncate">{name}</div>
           {split && <div className="text-[10px] text-slate-500 mt-0.5">
-            {item.status === "open" ? "so far: " : ""}{fmtHrs(split.workedHours)} worked · <span className={split.breakEnforced ? "text-amber-400" : "text-slate-400"}>{split.breakMins}m break{split.breakEnforced ? " (auto)" : ""}</span> · <span className="text-emerald-400 font-semibold">{fmtHrs(split.payableHours)} payable</span>
+            {item.status === "open" ? "so far: " : ""}{fmtHrs(split.workedHours)} worked · <span className={split.breakEnforced ? "text-amber-400" : "text-slate-400"}>{split.punchedBreakMins}m break taken{split.breakEnforced ? ` · ${split.breakMins}m min applied` : ""}</span> · <span className="text-emerald-400 font-semibold">{fmtHrs(split.payableHours)} payable</span>
           </div>}
         </div>
         <div className="flex items-center gap-4 flex-shrink-0 text-xs tabular-nums">
