@@ -46002,6 +46002,13 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       .sort((a,b) => new Date(b.breakStart) - new Date(a.breakStart)),
     [onShift]
   );
+  // Everyone who has taken (or is taking) a break today — for the BREAK tab list.
+  // The tile COUNT stays on onBreak (currently on break); this is the fuller list.
+  const breaksTakenToday = useMemo(
+    () => dayPunches.filter(p => (Number(p.breakMinutes) > 0) || p.breakStart)
+      .sort((a,b) => new Date(b.breakStart || b.punchIn || 0) - new Date(a.breakStart || a.punchIn || 0)),
+    [dayPunches]
+  );
   // Overdue = open and past scheduled end (forgotten clock-out).
   const overdue = useMemo(() => onShift.filter(p => {
     if (!p.scheduledEnd || !p.date) return false;
@@ -46023,7 +46030,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
   const TABS = [
     { key:"on", label:"On", list: onShift },
-    { key:"break", label:`Break${onBreak.length?` (${onBreak.length})`:""}`, list: onBreak },
+    { key:"break", label:`Break${onBreak.length?` (${onBreak.length})`:""}`, list: breaksTakenToday },
     { key:"overdue", label:"Overdue punches", list: overdue },
     { key:"upcoming", label:"Upcoming", list: upcoming },
     { key:"out", label:"Out", list: out },
@@ -46191,7 +46198,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       {/* Employee list — borderless to free up space */}
       <div>
         {active.list.length === 0 ? (
-          <div className="text-center py-10 text-sm text-slate-500">{tab==="break" ? "No one on break right now." : `No one in this list${isToday?" right now":""}.`}</div>
+          <div className="text-center py-10 text-sm text-slate-500">{tab==="break" ? "No breaks taken today yet." : `No one in this list${isToday?" right now":""}.`}</div>
         ) : active.list.map(renderRow)}
       </div>
 
