@@ -13920,8 +13920,11 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
   const [status, setStatus] = useState(null); // {type:"error"|"ok", msg}
   const [busy, setBusy] = useState(false);
 
-  // Only render for employees explicitly allowed to clock in by phone.
-  if (!me?.phoneClockIn) return null;
+  // Status is shown to EVERY employee so they always know if they're in or out.
+  // Only the clock-in/out BUTTON is gated to staff allowed to punch from phone;
+  // kiosk-only staff see their status read-only (no button).
+  if (!me) return null;
+  const canPunch = !!me.phoneClockIn;
 
   const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
   const openPunch = punchRecords.find(p => p.employeeId === myId && p.status === "open");
@@ -13995,12 +13998,18 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
               : store ? `${store.shortName || store.name}` : "No store linked"}
           </div>
         </div>
-        <button onClick={() => doPunch(isClockedIn ? "out" : "in")} disabled={busy}
-          className={`px-4 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 flex-shrink-0 ${isClockedIn ? "bg-white text-red-700" : "bg-white text-emerald-700"}`}>
-          {busy ? "Checking…" : isClockedIn ? "⏹ Clock out" : "▶ Clock in"}
-        </button>
+        {canPunch ? (
+          <button onClick={() => doPunch(isClockedIn ? "out" : "in")} disabled={busy}
+            className={`px-4 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 flex-shrink-0 ${isClockedIn ? "bg-white text-red-700" : "bg-white text-emerald-700"}`}>
+            {busy ? "Checking…" : isClockedIn ? "⏹ Clock out" : "▶ Clock in"}
+          </button>
+        ) : (
+          <div className="text-[10px] opacity-80 text-right flex-shrink-0 max-w-[90px] leading-tight">
+            {isClockedIn ? "Clock out at the till" : "Clock in at the till"}
+          </div>
+        )}
       </div>
-      {status && (
+      {status && canPunch && (
         <div className={`mt-3 text-xs font-semibold rounded-lg px-3 py-2 ${status.type === "error" ? "bg-red-600 text-white" : "bg-black/30 text-white"}`}>
           {status.msg}
         </div>
