@@ -22450,12 +22450,21 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         let totalHours = 0, totalPay = 0;
         const lines = [];
         let rowError = "";
+        let beforeEffectiveHours = 0;          // hours on shifts before the employee's earliest effective rate
+        const beforeEffectiveDates = [];
         for (const p of empPunches) {
           const hrs = Number(p.hoursWorked) || 0;
           const res = resolveHourlyRate(emp, p.date, rates, payRatesByEmp);
           if (res.error) {
             rowError = res.error;
             continue;
+          }
+          if (res.beforeEffective) {
+            // Shift predates this employee's earliest effective pay rate → resolves
+            // to £0. Track it so we can warn: the effective date may be set too
+            // late, accidentally zeroing real shifts.
+            beforeEffectiveHours += hrs;
+            beforeEffectiveDates.push(p.date);
           }
           const pay = hrs * res.rate;
           totalHours += hrs;
@@ -22492,6 +22501,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
           lines, rowError,
+          beforeEffectiveHours: Math.round(beforeEffectiveHours * 100) / 100,
+          beforeEffectiveDates,
         };
       });
       setRows(computed);
@@ -22521,6 +22532,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // rate on their profile. These DON'T error (0 is a valid rate), so without this
   // check they'd be silently paid £0. Surface them prominently before save/export.
   const zeroPaid = rows ? rows.filter(r => !r.rowError && (r.totalHours || 0) > 0 && (r.totalPay || 0) === 0) : [];
+  // Staff with shifts that fall BEFORE their earliest effective pay rate — those
+  // hours pay £0. Distinct from zeroPaid (no rate at all): here a rate exists but
+  // its effective-from date is later than some worked shifts, which may be a
+  // mistake (effective date set too late). Exclude fully-zero rows (already in
+  // zeroPaid) so we don't double-warn.
+  const beforeEff = rows ? rows.filter(r => !r.rowError && (r.beforeEffectiveHours || 0) > 0 && (r.totalPay || 0) > 0) : [];
 
   const saveRun = async () => {
     setErr(""); setSavedMsg("");
@@ -22704,6 +22721,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           <strong>⚠ {zeroPaid.length} employee(s) worked hours but resolve to £0 pay</strong> — their hourly rate is almost certainly not set. They will be paid <strong>nothing</strong> if you save/export this run. Set their rate on the Personal &amp; HR tab first:
           <ul className="mt-1 list-disc list-inside space-y-0.5">
             {zeroPaid.map(r => <li key={r.employeeId}>{r.name} — {(r.totalHours||0).toFixed(2)}h at £0</li>)}
+          </ul>
+        </div>
+      )}
+
+      {beforeEff.length > 0 && (
+        <div className="text-xs text-amber-200 bg-amber-950/30 border border-amber-700/50 rounded-xl px-4 py-3">
+          <strong>⚠ {beforeEff.length} employee(s) have shifts before their first pay rate</strong> — those hours are paid £0 because they fall before the rate's effective-from date. If that's not intended, set an earlier effective date on the Personal &amp; HR tab:
+          <ul className="mt-1 list-disc list-inside space-y-0.5">
+            {beforeEff.map(r => <li key={r.employeeId}>{r.name} — {(r.beforeEffectiveHours||0).toFixed(2)}h unpaid (before effective date)</li>)}
           </ul>
         </div>
       )}
