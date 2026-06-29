@@ -13926,6 +13926,7 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
   const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
   const openPunch = punchRecords.find(p => p.employeeId === myId && p.status === "open");
   const isClockedIn = !!openPunch;
+  const onBreak = isClockedIn && openPunch.breakStart && !openPunch.breakEnd;
 
   // Resolve the employee's store (first of their storeIds, or the open punch's store).
   const myStoreId = openPunch?.storeId || (me.storeIds && me.storeIds[0]) || null;
@@ -13975,24 +13976,32 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
     } finally { setBusy(false); }
   };
 
+  // Clear at-a-glance state so staff never have to guess whether they're in or out.
+  const stateBg = onBreak ? "#92400e" : isClockedIn ? "#15803d" : "#475569";
+  const stateLabel = onBreak ? "ON BREAK" : isClockedIn ? "CLOCKED IN" : "CLOCKED OUT";
+  const sinceTime = isClockedIn ? new Date(openPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : null;
+
   return (
-    <div className="emp-greeting bg-indigo-600 rounded-2xl p-4 text-white">
+    <div className="emp-greeting rounded-2xl p-4 text-white mb-3" style={{ backgroundColor: stateBg }}>
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm font-bold">{isClockedIn ? "You're clocked in" : "Clock in"}</div>
-          <div className="text-[11px] opacity-80">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${isClockedIn ? "bg-white animate-pulse" : "bg-white/50"}`}/>
+            <div className="text-base font-black tracking-wide">{stateLabel}</div>
+          </div>
+          <div className="text-[11px] opacity-90 mt-1">
             {isClockedIn
-              ? `Since ${new Date(openPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}${store ? ` · ${store.shortName || store.name}` : ""}`
-              : store ? `${store.shortName || store.name} · location checked` : "No store linked"}
+              ? `Since ${sinceTime}${store ? ` · ${store.shortName || store.name}` : ""}${onBreak ? " · on break now" : ""}`
+              : store ? `${store.shortName || store.name}` : "No store linked"}
           </div>
         </div>
         <button onClick={() => doPunch(isClockedIn ? "out" : "in")} disabled={busy}
-          className={`px-4 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 ${isClockedIn ? "bg-white/90 text-red-700" : "bg-white/90 text-indigo-700"}`}>
-          {busy ? "Checking location…" : isClockedIn ? "⏹ Clock out" : "▶ Clock in"}
+          className={`px-4 py-2.5 rounded-xl text-sm font-bold disabled:opacity-50 flex-shrink-0 ${isClockedIn ? "bg-white text-red-700" : "bg-white text-emerald-700"}`}>
+          {busy ? "Checking…" : isClockedIn ? "⏹ Clock out" : "▶ Clock in"}
         </button>
       </div>
       {status && (
-        <div className={`mt-3 text-xs font-semibold rounded-lg px-3 py-2 ${status.type === "error" ? "bg-red-600 text-white" : "bg-emerald-600 text-white"}`}>
+        <div className={`mt-3 text-xs font-semibold rounded-lg px-3 py-2 ${status.type === "error" ? "bg-red-600 text-white" : "bg-black/30 text-white"}`}>
           {status.msg}
         </div>
       )}
@@ -14724,6 +14733,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           {/* Phone clock in/out — only for staff allowed to clock in by phone */}
           {canPhoneClock && (
             <div className="mb-3">
+              <div className={`flex items-center justify-center gap-2 mb-2 px-3 py-2 rounded-xl text-xs font-bold ${myOpenPunch ? (myOpenPunch.breakStart && !myOpenPunch.breakEnd ? "bg-amber-600 text-white" : "bg-emerald-600 text-white") : "bg-slate-700 text-slate-200"}`}>
+                <span className={`w-2 h-2 rounded-full ${myOpenPunch ? "bg-white animate-pulse" : "bg-white/50"}`}/>
+                {myOpenPunch ? (myOpenPunch.breakStart && !myOpenPunch.breakEnd ? "You are ON BREAK" : "You are CLOCKED IN") : "You are CLOCKED OUT"}
+              </div>
               <button onClick={doPhoneClock} disabled={clockBusy}
                 className={`w-full flex items-center justify-center gap-2 px-3 py-3.5 rounded-2xl text-sm font-bold disabled:opacity-50 ${myOpenPunch ? "bg-red-600 text-white hover:bg-red-500" : "bg-emerald-600 text-white hover:bg-emerald-500"}`}>
                 {clockBusy ? "Checking location…" : myOpenPunch ? "⏹ Clock out" : "▶ Clock in"}
