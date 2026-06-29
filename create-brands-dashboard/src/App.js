@@ -46166,6 +46166,33 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     return <PunchRow key={item.id} item={item} clickable={true} />;
   };
 
+  // Render a list grouped under store headings. Used when more than one store is
+  // in view, so staff are clearly separated by location rather than mixed flat.
+  const renderGrouped = (list) => {
+    if (!list || list.length === 0) return null;
+    // Group by storeId, preserving the list's existing sort within each group.
+    const groups = new Map();
+    list.forEach(item => {
+      const sid = item.storeId || "—";
+      if (!groups.has(sid)) groups.set(sid, []);
+      groups.get(sid).push(item);
+    });
+    // Order store groups alphabetically by name for a stable layout.
+    const ordered = [...groups.entries()].sort((a, b) => storeName(a[0]).localeCompare(storeName(b[0])));
+    return (
+      <div className="space-y-4">
+        {ordered.map(([sid, items]) => (
+          <div key={sid}>
+            <div className="flex items-center gap-2 px-2 mb-1 text-[11px] font-bold uppercase tracking-wide text-[#9C6B3F]">
+              <MapPin size={12}/> {storeName(sid)} <span className="text-slate-400 font-semibold">({items.length})</span>
+            </div>
+            {items.map(renderRow)}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -46211,7 +46238,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
                   <div className="flex items-center gap-2 px-2 mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-600">
                     <Coffee size={13}/> On break now ({onBreak.length})
                   </div>
-                  {onBreak.map(renderRow)}
+                  {new Set(onBreak.map(i => i.storeId || "—")).size > 1 ? renderGrouped(onBreak) : onBreak.map(renderRow)}
                 </div>
               )}
               {finished.length > 0 && (
@@ -46219,14 +46246,19 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
                   <div className="flex items-center gap-2 px-2 mb-1 mt-3 text-[11px] font-bold uppercase tracking-wide text-slate-500 border-t border-[#EADFCB] pt-3">
                     Breaks taken today ({finished.length})
                   </div>
-                  {finished.map(renderRow)}
+                  {new Set(finished.map(i => i.storeId || "—")).size > 1 ? renderGrouped(finished) : finished.map(renderRow)}
                 </div>
               )}
             </div>
           );
         })() : active.list.length === 0 ? (
           <div className="text-center py-10 text-sm text-slate-500">{`No one in this list${isToday?" right now":""}.`}</div>
-        ) : active.list.map(renderRow)}
+        ) : (
+          (() => {
+            const storeCount = new Set(active.list.map(i => i.storeId || "—")).size;
+            return storeCount > 1 ? renderGrouped(active.list) : active.list.map(renderRow);
+          })()
+        )}
       </div>
 
       {/* Labour graph + comparison */}
