@@ -47169,8 +47169,21 @@ export default function App() {
     if (actualUser.role !== "owner") return actualUser;
     if (!impersonatedUserId) return actualUser;
     const target = users.find(u => u.id === impersonatedUserId);
-    return target || actualUser;   // fall back if the impersonated user vanishes
-  }, [actualUser, impersonatedUserId, users]);
+    if (!target) return actualUser;   // fall back if the impersonated user vanishes
+    // The impersonated user's `users` record can have empty storeIds (they live
+    // on the ops_team profile and are normally healed onto the session only at a
+    // real login — which is skipped during owner impersonation). Without store
+    // scope, a manager preview shows zero data. So resolve their storeIds from
+    // their ops_team profile here, the same way a real manager login would.
+    if (target.role !== "owner" && target.role !== "hq_staff" && (!target.storeIds || target.storeIds.length === 0)) {
+      const e = (target.email || "").trim().toLowerCase();
+      const m = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+      if (m && m.storeIds && m.storeIds.length) {
+        return { ...target, storeIds: m.storeIds, opsTeamMemberId: target.opsTeamMemberId || m.id };
+      }
+    }
+    return target;
+  }, [actualUser, impersonatedUserId, users, opsTeam]);
 
   // Re-link a manager/staff member's store assignment from their ops_team
   // profile on EVERY load — not just at fresh login. A restored session (from
