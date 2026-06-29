@@ -551,21 +551,31 @@ function resolvePeriod(preset, customFrom, customTo) {
 function resolvePrevPeriod(preset, customFrom, customTo) {
   const today = new Date(); today.setHours(0,0,0,0);
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
-  const twoDaysAgo = new Date(today); twoDaysAgo.setDate(twoDaysAgo.getDate()-2);
+  // Like-for-like: a single day compares to the SAME WEEKDAY last week, not the
+  // adjacent day (Mon vs Sun is misleading — trading patterns differ by weekday).
+  const sameDayLastWeek = new Date(today); sameDayLastWeek.setDate(sameDayLastWeek.getDate()-7);
+  const yestLastWeek = new Date(yest); yestLastWeek.setDate(yestLastWeek.getDate()-7);
   const mon = getMonday(today);
   const lastMon = new Date(mon); lastMon.setDate(lastMon.getDate()-7);
   const lastSun = new Date(mon); lastSun.setDate(lastSun.getDate()-1);
   const weekBefore = new Date(lastMon); weekBefore.setDate(weekBefore.getDate()-7);
   const weekBeforeSun = new Date(lastMon); weekBeforeSun.setDate(weekBeforeSun.getDate()-1);
+  const wdName = (d) => d.toLocaleDateString("en-GB", { weekday: "long" });
   switch (preset) {
-    case "today": return { from: fmtDateLocal(yest), to: fmtDateLocal(yest), label: "Yesterday" };
-    case "yesterday": return { from: fmtDateLocal(twoDaysAgo), to: fmtDateLocal(twoDaysAgo), label: "2 Days Ago" };
+    case "today": return { from: fmtDateLocal(sameDayLastWeek), to: fmtDateLocal(sameDayLastWeek), label: `Last ${wdName(today)}` };
+    case "yesterday": return { from: fmtDateLocal(yestLastWeek), to: fmtDateLocal(yestLastWeek), label: `Last ${wdName(yest)}` };
     case "this_week": return { from: fmtDateLocal(lastMon), to: fmtDateLocal(lastSun), label: "Last Week" };
     case "last_week": return { from: fmtDateLocal(weekBefore), to: fmtDateLocal(weekBeforeSun), label: "Week Before" };
     case "custom": {
       if (!customFrom || !customTo) return null;
       const f = new Date(customFrom), t = new Date(customTo);
       const diff = t - f;
+      // Single-day custom → same weekday last week; multi-day → shift back by its
+      // own length (a like-for-like prior window of equal length).
+      if (diff === 0) {
+        const sdlw = new Date(f); sdlw.setDate(sdlw.getDate()-7);
+        return { from: fmtDateLocal(sdlw), to: fmtDateLocal(sdlw), label: `Last ${wdName(f)}` };
+      }
       return { from: fmtDateLocal(new Date(f - diff - 86400000)), to: fmtDateLocal(new Date(f - 86400000)), label: "Prior Period" };
     }
     default: return null;
@@ -809,7 +819,7 @@ function Sparkline({ data, color = "#C9854F", height = 28 }) {
 // Hero revenue card — the dashboard's north star. Light caramel→cream gradient
 // (warm, not dark), brown text, a live hourly revenue bar chart, and quick
 // supporting stats so the tile earns its size.
-function HeroRevenueCard({ current, previous, target, prevLabel, chart = [], orders, wagePct, splh, onClick }) {
+function HeroRevenueCard({ current, previous, forecast = null, target, prevLabel, chart = [], orders, wagePct, splh, onClick }) {
   const val = formatKPI(current, "currency");
   let deltaPct = null, status = "neut";
   if (current != null && previous != null && previous !== 0) {
@@ -855,6 +865,13 @@ function HeroRevenueCard({ current, previous, target, prevLabel, chart = [], ord
         )}
       </div>
       <div className="relative text-xs text-[#8A6A48] mt-1.5">{prevLabel} to now: {previous != null ? formatKPI(previous, "currency") : "—"}</div>
+      {forecast != null && (
+        <div className="relative inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-lg self-start" style={{ background: "rgba(132,68,41,0.10)" }}>
+          <TrendingUp size={13} className="text-[#844429]"/>
+          <span className="text-xs font-bold text-[#844429]">Forecast {formatKPI(forecast, "currency")}</span>
+          <span className="text-[10px] text-[#A8835C]">end of day</span>
+        </div>
+      )}
 
       {/* Live hourly bars — fills the space */}
       <div className="relative flex-1 flex items-end gap-[3px] mt-5 min-h-[64px]">
@@ -18642,8 +18659,18 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
     else if (period === "custom" && customFrom && customTo) { from = startOfDay(new Date(customFrom)); to = endOfDay(new Date(customTo)); label = `${customFrom} → ${customTo}`; }
     else { from = startOfDay(now); from.setDate(now.getDate()-7); to = yesterdayEnd(); label = "Last 7 days"; }   // 7 days before today, excl. today
     const span = to.getTime() - from.getTime();
-    const prevTo = new Date(from.getTime() - 1);
-    const prevFrom = new Date(prevTo.getTime() - span);
+    // Like-for-like comparison: a single day compares to the SAME WEEKDAY last
+    // week (not the adjacent day). Multi-day ranges shift back by their own length.
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const isSingle = (period === "today" || period === "yesterday" || (period === "custom" && customFrom && customTo && startOfDay(new Date(customFrom)).getTime() === startOfDay(new Date(customTo)).getTime()));
+    let prevFrom, prevTo;
+    if (isSingle) {
+      prevFrom = startOfDay(new Date(from.getTime() - 7 * oneDayMs));
+      prevTo = endOfDay(prevFrom);
+    } else {
+      prevTo = new Date(from.getTime() - 1);
+      prevFrom = new Date(prevTo.getTime() - span);
+    }
     return { fromDate: from, toDate: to, prevFromDate: prevFrom, prevToDate: prevTo, periodLabel: label };
   }, [period, customFrom, customTo]);
 
@@ -20309,7 +20336,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         // statement timeout on wide in-progress ranges; sequential keeps it light.
         const curSalesRaw = await Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: period.from, to: period.to, brandId: b })));
         const curPunchRaw = await Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: period.from, to: period.to })));
-        let prevSalesRaw = [], prevPunchRaw = [];
+        let prevSalesRaw = [], prevPunchRaw = [], prevFullRaw = [];
         if (prevPeriod) {
           // When the current period is in progress, clip the comparison period's
           // sales to the same time-of-day for a like-for-like running total.
@@ -20317,11 +20344,17 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
             ? await Promise.all(visibleBrandIds.map(b => fetchSalesToTime({ from: prevPeriod.from, to: prevPeriod.to, cutoffMinutes: nowCutoffMin, brandId: b })))
             : await Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b })));
           prevPunchRaw = await Promise.all(visibleBrandIds.map(b => fetchPunchRecords({ brandId: b, from: prevPeriod.from, to: prevPeriod.to })));
+          // Also pull the comparison period's FULL-day total (no cutoff) — used to
+          // forecast today's end-of-day from how the same weekday finished last week.
+          if (inProgress) {
+            prevFullRaw = await Promise.all(visibleBrandIds.map(b => fetchSalesDaily({ from: prevPeriod.from, to: prevPeriod.to, brandId: b })));
+          }
         }
         if (cancelled) return;
         setData({
           curSales: curSalesRaw.flat(), curPunch: curPunchRaw.flat(),
           prevSales: prevSalesRaw.flat(), prevPunch: prevPunchRaw.flat(),
+          prevFull: prevFullRaw.flat(),
         });
       } catch (e) { if (!cancelled) setErr(e?.message || String(e)); }
       finally { if (!cancelled) setLoading(false); }
@@ -20532,6 +20565,28 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const cur = useMemo(() => rollup(data.curSales, data.curPunch, null, salariedPeriodCost), [data, scopedStoreIds, dashTick, salariedIds, salariedByIdAll, salariedPeriodCost]);
   // When in progress, clip the comparison day's punches to the same time-of-day.
   const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null, salariedPrevCost), [data, scopedStoreIds, inProgress, nowCutoffMin, salariedIds, salariedByIdAll, salariedPrevCost]);
+
+  // End-of-day revenue forecast (only while the period is in progress). Project
+  // today's finish from how the same weekday finished last week: if last week's
+  // same day did £X by this time and £Y in full, today's £current likely lands at
+  // current × (Y / X). Falls back to a clock-based projection if no prior data.
+  const forecast = useMemo(() => {
+    if (!inProgress || !isSingleDay) return null;
+    const curRev = cur.revenue || 0;
+    if (curRev <= 0) return null;
+    const prevToNow = prev.revenue || 0;
+    const prevFullRev = (data.prevFull || []).filter(r => scopedStoreIds.has(r.storeId)).reduce((a, r) => a + (Number(r.revenue) || 0), 0);
+    if (prevToNow > 0 && prevFullRev > 0) {
+      // Shape-based projection using last week's same weekday.
+      return Math.round(curRev * (prevFullRev / prevToNow));
+    }
+    // Fallback: simple clock-based pace (assume trading 08:00–22:00 = 840 min).
+    const dayStartMin = 8 * 60, dayEndMin = 22 * 60;
+    const elapsed = Math.max(1, Math.min(nowCutoffMin, dayEndMin) - dayStartMin);
+    const totalTrading = dayEndMin - dayStartMin;
+    if (elapsed >= totalTrading) return curRev;
+    return Math.round(curRev * (totalTrading / elapsed));
+  }, [inProgress, isSingleDay, cur.revenue, prev.revenue, data.prevFull, scopedStoreIds, nowCutoffMin]);
 
   // Theoretical COGS (recipe x sales) for Prime Cost % and Net Margin. Only for a
   // single selected store (the engine is per-store); "all" leaves these blank.
@@ -20872,7 +20927,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 auto-rows-fr">
         {/* Hero spans 2 cols on desktop, full width on phone */}
         <div className="col-span-2 lg:row-span-2">
-          <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} target={target} prevLabel={prevLabel} chart={chart} orders={cur.orders} wagePct={cur.wagePct} splh={cur.splh} onClick={openRevenueDrill} />
+          <HeroRevenueCard current={cur.revenue} previous={prevPeriod ? prev.revenue : null} forecast={forecast} target={target} prevLabel={prevLabel} chart={chart} orders={cur.orders} wagePct={cur.wagePct} splh={cur.splh} onClick={openRevenueDrill} />
         </div>
         <ComparisonKPICard onClick={() => openLabourDrill("cost")} accent="gold" label="Wage Cost %" current={cur.wagePct} previous={prevPeriod ? prev.wagePct : null} format="percent" icon={Users} invertDelta subCurrent={`${fmtCurrency(cur.labourCost)} labour${cur.wagePct != null && cur.wagePct > 30 ? " · above 30%" : ""}`} prevLabel={prevLabel} alert={cur.wagePct != null && cur.wagePct > 35} />
         <ComparisonKPICard accent="caramel" label="Avg Spend / Order" current={cur.atv} previous={prevPeriod ? prev.atv : null} format="currency" icon={ChefHat} subCurrent={`${cur.orders} orders`} prevLabel={prevLabel} />
