@@ -42706,6 +42706,20 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     return r.gracedHours ?? r.hoursWorked ?? 0;
   };
 
+  // Worked / break / payable split for a row, using the canonical break rule.
+  // For an open shift we show a live projection using "now" as the clock-out.
+  const breakSplit = (r) => {
+    const inIso = r.gracedIn ?? r.punchIn;
+    if (!inIso) return null;
+    const outIso = r.status === "open" ? new Date().toISOString() : (r.gracedOut ?? r.punchOut);
+    if (!outIso) return null;
+    return computePunchHours({
+      punchIn: inIso, punchOut: outIso,
+      breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
+      breakEndRef: new Date().toISOString(),
+    });
+  };
+
   // Summary per employee
   const summary = {};
   enriched.forEach(r => {
@@ -42903,21 +42917,36 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     </div>
                     {pill}
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-center mb-2">
+                  <div className="grid grid-cols-4 gap-2 text-center mb-2">
                     <div className="bg-slate-950/50 rounded-lg py-1.5">
                       <div className="text-[10px] text-slate-500">In – Out</div>
                       <div className="text-xs font-mono font-semibold"><span className="text-emerald-400">{fmtTime(r.gracedIn ?? r.punchIn)}</span><span className="text-slate-600">–</span><span className={r.punchOut?"text-red-400":"text-amber-400"}>{r.punchOut?fmtTime(r.gracedOut ?? r.punchOut):"in"}</span></div>
                     </div>
-                    <div className="bg-slate-950/50 rounded-lg py-1.5">
-                      <div className="text-[10px] text-slate-500">Hours</div>
-                      <div className={`text-xs font-bold tabular-nums ${(() => { const h = r.gracedHours ?? r.hoursWorked ?? 0; return r.status !== "open" && (h < 0 || h > 16) ? "text-red-400" : "text-white"; })()}`}>{r.status==="open"?fmtDur(liveHours(r)):fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
-                      {r.status !== "open" && (() => { const h = r.gracedHours ?? r.hoursWorked ?? 0; return (h < 0 || h > 16) ? <div className="text-[9px] text-red-400 font-semibold mt-0.5">⚠ check — likely missed clock-out</div> : null; })()}
-                    </div>
-                    <div className="bg-slate-950/50 rounded-lg py-1.5">
-                      <div className="text-[10px] text-slate-500">Sched</div>
-                      <div className="text-xs font-mono text-slate-300">{r.scheduledStart ? `${r.scheduledStart}` : <span className="text-red-400/70">none</span>}</div>
-                    </div>
+                    {(() => {
+                      const bs = breakSplit(r);
+                      const worked = bs ? bs.workedHours : (r.status === "open" ? liveHours(r) : (r.gracedHours ?? r.hoursWorked ?? 0));
+                      const flagLong = r.status !== "open" && (worked < 0 || worked > 16);
+                      return (
+                        <>
+                          <div className="bg-slate-950/50 rounded-lg py-1.5">
+                            <div className="text-[10px] text-slate-500">Worked</div>
+                            <div className={`text-xs font-bold tabular-nums ${flagLong ? "text-red-400" : "text-white"}`}>{fmtDur(worked)}</div>
+                            {flagLong && <div className="text-[9px] text-red-400 font-semibold mt-0.5">⚠ check</div>}
+                          </div>
+                          <div className="bg-slate-950/50 rounded-lg py-1.5">
+                            <div className="text-[10px] text-slate-500">Break</div>
+                            <div className={`text-xs font-bold tabular-nums ${bs && bs.breakEnforced ? "text-amber-400" : "text-slate-300"}`}>{bs ? `${bs.breakMins}m` : "—"}</div>
+                            {bs && bs.breakEnforced && <div className="text-[9px] text-amber-400/80 mt-0.5">auto</div>}
+                          </div>
+                          <div className="bg-slate-950/50 rounded-lg py-1.5">
+                            <div className="text-[10px] text-slate-500">Payable</div>
+                            <div className="text-xs font-black tabular-nums text-emerald-300">{bs ? fmtDur(bs.payableHours) : fmtDur(worked)}</div>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
+                  <div className="text-[10px] text-slate-500 mb-2 text-center">Sched: {r.scheduledStart ? <span className="font-mono text-slate-300">{r.scheduledStart}{r.scheduledEnd ? `–${r.scheduledEnd}` : ""}</span> : <span className="text-red-400/70">none</span>}{(() => { const bs = breakSplit(r); return bs && bs.breakEnforced ? <span className="text-amber-400/80"> · break auto-applied (min {bs.requiredBreakMins}m)</span> : (bs && bs.punchedBreakMins > 0 ? <span className="text-slate-500"> · {bs.punchedBreakMins}m break punched</span> : null); })()}</div>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {r.status === "open" && <button onClick={()=>setAmendModal(r)} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">⏹ Clock out</button>}
                     {needsApproval && <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">✓ Approve</button>}
@@ -45748,10 +45777,10 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     const inMs = new Date(inVal).getTime();
     const outMs = new Date(outVal).getTime();
     if (isNaN(inMs) || isNaN(outMs)) return null;
-    const { hours: netH, rawHours: rawH, overnight } = computePunchHours({
+    const { hours: netH, rawHours: rawH, overnight, breakMins: deducted, breakEnforced, requiredBreakMins: reqMin, punchedBreakMins: punched, workedHours } = computePunchHours({
       punchIn: new Date(inVal).toISOString(), punchOut: new Date(outVal).toISOString(), breakMinutes: breakMins,
     });
-    return { rawH, netH, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
+    return { rawH, netH, worked: workedHours, deducted, breakEnforced, reqMin, punched, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
   }, [inVal, outVal, breakMins, rate]);
 
   const fmtHrs = (h) => { const m = Math.round(h * 60); return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`; };
@@ -45818,13 +45847,17 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
           ) : preview && (
             <div className={`rounded-xl border px-3 py-3 ${preview.long ? "bg-red-950/25 border-red-800/50" : "bg-slate-950/60 border-slate-800"}`}>
               <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Total hours</span>
-                <span className={`text-lg font-black tabular-nums ${preview.long ? "text-red-300" : "text-white"}`}>{fmtHrs(preview.netH)}</span>
+                <span className="text-xs text-slate-400">Payable hours</span>
+                <span className={`text-lg font-black tabular-nums ${preview.long ? "text-red-300" : "text-emerald-300"}`}>{fmtHrs(preview.netH)}</span>
               </div>
-              <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
-                <span>{fmtHrs(preview.rawH)} clocked{breakMins > 0 ? ` − ${breakMins}m break` : ""}</span>
-                {rate > 0 && <span className="text-slate-300">≈ £{preview.gross.toFixed(2)} @ £{rate.toFixed(2)}/hr</span>}
+              <div className="mt-1.5 grid grid-cols-3 gap-2 text-center">
+                <div><div className="text-[10px] text-slate-500">Worked</div><div className="text-xs font-bold text-white tabular-nums">{fmtHrs(preview.worked)}</div></div>
+                <div><div className="text-[10px] text-slate-500">Break</div><div className={`text-xs font-bold tabular-nums ${preview.breakEnforced ? "text-amber-400" : "text-slate-300"}`}>{preview.deducted}m</div></div>
+                <div><div className="text-[10px] text-slate-500">Payable</div><div className="text-xs font-bold text-emerald-300 tabular-nums">{fmtHrs(preview.netH)}</div></div>
               </div>
+              {rate > 0 && <div className="mt-1.5 text-[11px] text-slate-300 text-right">≈ £{preview.gross.toFixed(2)} @ £{rate.toFixed(2)}/hr</div>}
+              {preview.breakEnforced && <div className="mt-1.5 text-[11px] text-amber-400">⏸ Minimum {preview.reqMin}m break auto-applied{preview.punched > 0 ? ` (only ${preview.punched}m was punched)` : " (no break punched)"}.</div>}
+              {!preview.breakEnforced && preview.punched > 0 && <div className="mt-1.5 text-[11px] text-slate-500">{preview.punched}m break punched (meets the minimum).</div>}
               {preview.overnight && <div className="mt-1.5 text-[11px] text-sky-300">⏱ Overnight shift — clock-out is on the next day.</div>}
               {preview.long && <div className="mt-1.5 text-[11px] text-red-300 font-semibold">⚠ Unusually long — check for a missed clock-out.</div>}
               {rate === 0 && <div className="mt-1.5 text-[11px] text-amber-400">No pay rate set for this employee — gross can't be shown.</div>}

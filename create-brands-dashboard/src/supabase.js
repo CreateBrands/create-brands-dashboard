@@ -1111,21 +1111,58 @@ export async function insertPunchIn(record) {
 //   • clamp      — never return below 0
 // Pass ISO strings (or Date) for punchIn/punchOut. Returns
 // { hours, rawHours, breakMins, overnight } with hours rounded to 2dp.
-export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null } = {}) {
-  if (!punchIn || !punchOut) return { hours: null, rawHours: null, breakMins: 0, overnight: false };
+// Minimum unpaid break (minutes) required by raw shift length:
+//   under 6h → 20 · 6–10h → 30 · over 10h → 45
+export function requiredBreakMins(rawHours) {
+  if (!(rawHours > 0)) return 0;
+  if (rawHours < 6) return 20;
+  if (rawHours <= 10) return 30;
+  return 45;
+}
+
+// Canonical punch-hours calc with the unpaid-break rule applied.
+// breakMinutes = TOTAL punched break across any number of breaks. The deducted
+// break is max(total punched, minimum-for-tier) — so longer real breaks count in
+// full, and short/no breaks are bumped up to the legal minimum. All unpaid.
+// Returns a clear split: { workedHours (raw clocked), breakMins (deducted),
+// breakHours, payableHours, hours (=payableHours, kept for back-compat),
+// punchedBreakMins, requiredBreakMins, breakEnforced, rawHours, overnight }.
+export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null, applyBreakRule = true } = {}) {
+  const EMPTY = { hours: null, payableHours: null, workedHours: null, breakHours: null, breakMins: 0, punchedBreakMins: 0, requiredBreakMins: 0, breakEnforced: false, rawHours: null, overnight: false };
+  if (!punchIn || !punchOut) return EMPTY;
   const inMs = new Date(punchIn).getTime();
   let outMs = new Date(punchOut).getTime();
-  if (isNaN(inMs) || isNaN(outMs)) return { hours: null, rawHours: null, breakMins: 0, overnight: false };
+  if (isNaN(inMs) || isNaN(outMs)) return EMPTY;
   let overnight = false;
   if (outMs <= inMs) { outMs += 86400000; overnight = true; }
   const rawHours = (outMs - inMs) / 3600000;
-  let breakMins = Number(breakMinutes) || 0;
+
+  // Total punched break (including a break still open at the reference moment).
+  let punchedBreakMins = Number(breakMinutes) || 0;
   if (breakStart && !breakEnd) {
     const ref = breakEndRef ? new Date(breakEndRef).getTime() : outMs;
-    breakMins += Math.max(0, Math.round((ref - new Date(breakStart).getTime()) / 60000));
+    punchedBreakMins += Math.max(0, Math.round((ref - new Date(breakStart).getTime()) / 60000));
   }
-  const hours = Math.round(Math.max(0, rawHours - breakMins / 60) * 100) / 100;
-  return { hours, rawHours, breakMins, overnight };
+
+  // Apply the unpaid-break rule: deduct the greater of punched vs the minimum.
+  const reqMins = applyBreakRule ? requiredBreakMins(rawHours) : 0;
+  const breakMins = Math.max(punchedBreakMins, reqMins);
+  const breakEnforced = breakMins > punchedBreakMins;   // true when we bumped up to the minimum
+
+  const breakHours = Math.round((breakMins / 60) * 100) / 100;
+  const payableHours = Math.round(Math.max(0, rawHours - breakMins / 60) * 100) / 100;
+  return {
+    hours: payableHours,            // back-compat: existing callers read .hours
+    payableHours,
+    workedHours: Math.round(rawHours * 100) / 100,
+    breakHours,
+    breakMins,
+    punchedBreakMins,
+    requiredBreakMins: reqMins,
+    breakEnforced,
+    rawHours,
+    overnight,
+  };
 }
 
 export async function sweepAutoClockouts(stores = []) {
