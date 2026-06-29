@@ -17786,18 +17786,40 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
   };
   const storeName = (sid) => stores.find(s => s.id === sid)?.shortName || stores.find(s => s.id === sid)?.name || "—";
 
+  // Correct gross pay for an employee over the selected period, branching on pay
+  // type. CRITICAL: salaried (annual/monthly) staff must NEVER be paid hours ×
+  // rate — their `hourlyRate` column actually holds their salary amount, so
+  // multiplying by hours produces millions (the report bug). For them gross =
+  // fixed salaried cost for the period (daily slice × days). Hourly staff sum
+  // their punch grossPay.
+  const empMember = (empId, empName) =>
+    (opsTeam || []).find(m => m.id === empId) ||
+    (opsTeam || []).find(m => `${m.firstName} ${m.lastName}`.trim() === (empName || "").trim()) || null;
+  const grossForEmployee = (empId, empName, punches) => {
+    const m = empMember(empId, empName);
+    if (m && isSalaried(m)) {
+      return Math.round(salariedDailyCost(m) * daysInPeriod(from, to) * 100) / 100;
+    }
+    return punches.reduce((a, p) => a + (p.grossPay || 0), 0);
+  };
+
   // ── The unified report structure ──
   const report = useMemo(() => {
     const P = scoped.punches;
     if (reportType === "employee-detail") {
       const emp = pickableEmployees.find(m => m.id === employeeSel);
+      const empSalaried = emp && isSalaried(emp);
       const rows = P.filter(p => p.employeeId === employeeSel)
         .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
         .map(p => ({ date: fmtD(p.date), in: fmtT(p.punchIn), out: fmtT(p.punchOut),
-          hours: n2(p.hoursWorked), ot: n2(p.overtimeHours), gross: gbp(p.grossPay), store: storeName(p.storeId) }));
+          hours: n2(p.hoursWorked), ot: n2(p.overtimeHours),
+          // Salaried staff aren't paid per shift — per-row gross is meaningless,
+          // so show a dash. Their pay is the fixed period figure in the total.
+          gross: empSalaried ? "—" : gbp(p.grossPay), store: storeName(p.storeId) }));
       const tot = P.filter(p => p.employeeId === employeeSel);
+      const totalGross = grossForEmployee(employeeSel, emp ? `${emp.firstName} ${emp.lastName}` : "", tot);
       return {
-        title: `Timesheet — ${emp ? `${emp.firstName} ${emp.lastName}` : "Select an employee"}`,
+        title: `Timesheet — ${emp ? `${emp.firstName} ${emp.lastName}` : "Select an employee"}${empSalaried ? " (salaried)" : ""}`,
         columns: [
           { key: "date", label: "Date", width: 16 }, { key: "in", label: "In", width: 9 },
           { key: "out", label: "Out", width: 9 }, { key: "hours", label: "Hours", width: 9, num: true },
@@ -17807,7 +17829,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
         rows,
         totals: { date: "TOTAL", hours: n2(tot.reduce((a, p) => a + (p.hoursWorked || 0), 0)),
           ot: n2(tot.reduce((a, p) => a + (p.overtimeHours || 0), 0)),
-          gross: gbp(tot.reduce((a, p) => a + (p.grossPay || 0), 0)) },
+          gross: gbp(totalGross) },
         needsEmployee: !employeeSel,
       };
     }
@@ -17815,9 +17837,16 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
       const byEmp = {};
       P.forEach(p => {
         const k = p.employeeId || p.employeeName;
-        if (!byEmp[k]) byEmp[k] = { name: p.employeeName, days: new Set(), hours: 0, ot: 0, gross: 0, store: storeName(p.storeId) };
+        if (!byEmp[k]) byEmp[k] = { id: p.employeeId, name: p.employeeName, days: new Set(), hours: 0, ot: 0, punches: [], store: storeName(p.storeId) };
         byEmp[k].days.add(p.date); byEmp[k].hours += p.hoursWorked || 0;
-        byEmp[k].ot += p.overtimeHours || 0; byEmp[k].gross += p.grossPay || 0;
+        byEmp[k].ot += p.overtimeHours || 0; byEmp[k].punches.push(p);
+      });
+      // Compute correct gross per employee (salaried staff use fixed period pay,
+      // never hours × salary). Keep a numeric total that matches the rows.
+      let grossTotal = 0;
+      Object.values(byEmp).forEach(r => {
+        r.gross = grossForEmployee(r.id, r.name, r.punches);
+        grossTotal += r.gross;
       });
       const rows = Object.values(byEmp).sort((a, b) => b.hours - a.hours)
         .map(r => ({ name: r.name, days: r.days.size, hours: n2(r.hours), ot: n2(r.ot), gross: gbp(r.gross), store: r.store }));
@@ -17831,7 +17860,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
         rows,
         totals: { name: "TOTAL", hours: n2(P.reduce((a, p) => a + (p.hoursWorked || 0), 0)),
           ot: n2(P.reduce((a, p) => a + (p.overtimeHours || 0), 0)),
-          gross: gbp(P.reduce((a, p) => a + (p.grossPay || 0), 0)) },
+          gross: gbp(grossTotal) },
       };
     }
     if (reportType === "daily") {
@@ -18174,7 +18203,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
       rows: ex.sort((a, b) => a.date.localeCompare(b.date)),
       totals: { name: `${ex.length} exception${ex.length === 1 ? "" : "s"}` },
     };
-  }, [reportType, scoped, employeeSel, pickableEmployees, from, stores]);
+  }, [reportType, scoped, employeeSel, pickableEmployees, from, to, stores, opsTeam]);
 
   // ── Excel export (same structure the table renders) ──
   const exportExcel = async () => {
