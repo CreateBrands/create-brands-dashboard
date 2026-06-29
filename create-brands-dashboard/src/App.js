@@ -46197,8 +46197,35 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
       {/* Employee list — borderless to free up space */}
       <div>
-        {active.list.length === 0 ? (
-          <div className="text-center py-10 text-sm text-slate-500">{tab==="break" ? "No breaks taken today yet." : `No one in this list${isToday?" right now":""}.`}</div>
+        {tab === "break" ? (() => {
+          // Two clear groups: currently on break (live) vs breaks finished today.
+          const liveIds = new Set(onBreak.map(p => p.id));
+          const finished = breaksTakenToday.filter(p => !liveIds.has(p.id));
+          if (onBreak.length === 0 && finished.length === 0) {
+            return <div className="text-center py-10 text-sm text-slate-500">No breaks taken today yet.</div>;
+          }
+          return (
+            <div className="space-y-4">
+              {onBreak.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 px-2 mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-600">
+                    <Coffee size={13}/> On break now ({onBreak.length})
+                  </div>
+                  {onBreak.map(renderRow)}
+                </div>
+              )}
+              {finished.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 px-2 mb-1 mt-3 text-[11px] font-bold uppercase tracking-wide text-slate-500 border-t border-[#EADFCB] pt-3">
+                    Breaks taken today ({finished.length})
+                  </div>
+                  {finished.map(renderRow)}
+                </div>
+              )}
+            </div>
+          );
+        })() : active.list.length === 0 ? (
+          <div className="text-center py-10 text-sm text-slate-500">{`No one in this list${isToday?" right now":""}.`}</div>
         ) : active.list.map(renderRow)}
       </div>
 
