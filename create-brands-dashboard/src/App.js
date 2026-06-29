@@ -45904,6 +45904,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   const memberOf = (id) => opsTeam.find(m => m.id === id) || null;
   const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "—";
   const fmtT = (ts) => { try { return new Date(ts).toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" }); } catch { return "—"; } };
+  const fmtHrs = (h) => { if (h == null) return "—"; const m = Math.round(h * 60); return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`; };
   const elapsed = (ts) => { const m = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime())/60000)); const h=Math.floor(m/60); return h>0?`${h}h ${m%60}m`:`${m%60}m`; };
 
   // Punches on the selected day, scoped to store.
@@ -46030,6 +46031,13 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     const m = memberOf(item.employeeId);
     const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
     const accent = m?.color || "#844429";
+    // Worked / break / payable split using the canonical break rule. For an open
+    // shift we project using "now" as the clock-out so it shows live.
+    const splitOut = item.punchOut || (item.status === "open" ? new Date().toISOString() : null);
+    const split = item.punchIn && splitOut ? computePunchHours({
+      punchIn: item.punchIn, punchOut: splitOut,
+      breakMinutes: item.breakMinutes, breakStart: item.breakStart, breakEnd: item.breakEnd, breakEndRef: new Date().toISOString(),
+    }) : null;
     return (
       <div
         onClick={clickable ? () => setEditPunch(item) : undefined}
@@ -46037,6 +46045,9 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
         <Avatar photoUrl={m?.photoUrl} name={name} color={accent} size={40} rounded="full" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-white truncate">{name}</div>
+          {split && <div className="text-[10px] text-slate-500 mt-0.5">
+            {item.status === "open" ? "so far: " : ""}{fmtHrs(split.workedHours)} worked · <span className={split.breakEnforced ? "text-amber-400" : "text-slate-400"}>{split.breakMins}m break{split.breakEnforced ? " (auto)" : ""}</span> · <span className="text-emerald-400 font-semibold">{fmtHrs(split.payableHours)} payable</span>
+          </div>}
         </div>
         <div className="flex items-center gap-4 flex-shrink-0 text-xs tabular-nums">
           <div className="text-right">
