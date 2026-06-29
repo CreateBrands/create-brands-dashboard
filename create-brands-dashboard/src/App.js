@@ -46002,11 +46002,16 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     const inMs = new Date(inVal).getTime();
     const outMs = new Date(outVal).getTime();
     if (isNaN(inMs) || isNaN(outMs)) return null;
+    // If a break is still open, the preview closes it at the entered clock-out
+    // so the manager sees the real break/payable, not a stale "minimum applied".
+    const outIsoPrev = new Date(outVal).toISOString();
     const { hours: netH, rawHours: rawH, overnight, breakMins: deducted, breakEnforced, requiredBreakMins: reqMin, punchedBreakMins: punched, workedHours } = computePunchHours({
-      punchIn: new Date(inVal).toISOString(), punchOut: new Date(outVal).toISOString(), breakMinutes: breakMins,
+      punchIn: new Date(inVal).toISOString(), punchOut: outIsoPrev,
+      breakMinutes: breakMins, breakStart: punch.breakStart || null, breakEnd: punch.breakEnd || null,
+      breakEndRef: outIsoPrev,
     });
     return { rawH, netH, worked: workedHours, deducted, breakEnforced, reqMin, punched, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
-  }, [inVal, outVal, breakMins, rate]);
+  }, [inVal, outVal, breakMins, rate, punch.breakStart, punch.breakEnd]);
 
   const fmtHrs = (h) => { const m = Math.round(h * 60); return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`; };
 
@@ -46023,12 +46028,32 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     setBusy(true);
     try {
       let hours = null, gross = null, status = "open";
+      // Carry over the existing break fields; if we're setting a clock-out and a
+      // break is still open, close it at the clock-out time so it can't be
+      // orphaned as a "live" break on a closed punch.
+      let breakStartOut = punch.breakStart || null;
+      let breakEndOut   = punch.breakEnd   || null;
+      let breakMinsOut  = breakMins;
       if (outIso) {
-        hours = computePunchHours({ punchIn: inIso, punchOut: outIso, breakMinutes: breakMins }).hours;
+        if (breakStartOut && !breakEndOut) {
+          const sMs = new Date(breakStartOut).getTime();
+          const oMs = new Date(outIso).getTime();
+          const add = (isNaN(sMs) || isNaN(oMs)) ? 0 : Math.max(0, Math.round((oMs - sMs) / 60000));
+          breakEndOut  = outIso;
+          breakMinsOut = breakMins + add;
+        }
+        hours = computePunchHours({
+          punchIn: inIso, punchOut: outIso,
+          breakMinutes: breakMinsOut, breakStart: breakStartOut, breakEnd: breakEndOut,
+        }).hours;
         gross = Math.round(hours * rate * 100) / 100;
         status = "closed";
       }
-      await onSave({ ...punch, punchIn: inIso, punchOut: outIso, hoursWorked: hours, grossPay: gross, status });
+      await onSave({
+        ...punch, punchIn: inIso, punchOut: outIso,
+        breakStart: breakStartOut, breakEnd: breakEndOut, breakMinutes: breakMinsOut,
+        hoursWorked: hours, grossPay: gross, status,
+      });
       onClose();
     } catch (e) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }

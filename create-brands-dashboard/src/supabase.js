@@ -1227,10 +1227,33 @@ export async function sweepAutoClockouts(stores = []) {
 }
 
 export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
+  // Close any OPEN break when clocking out, so a break left running (break_start
+  // set, break_end null) can never be orphaned on a closed punch. The open break
+  // is ended at the clock-out moment and its minutes folded into break_minutes.
+  // (Root cause of the "2h 3m live break on a closed shift" bug.)
+  const { data: existing } = await supabase
+    .from("punch_records")
+    .select("break_start, break_end, break_minutes")
+    .eq("id", id).single();
+
+  const patch = {
+    punch_out: punchOut, hours_worked: hoursWorked, gross_pay: grossPay,
+    status: "closed", updated_at: new Date().toISOString(),
+  };
+
+  if (existing && existing.break_start && !existing.break_end) {
+    const startMs = new Date(existing.break_start).getTime();
+    const outMs   = new Date(punchOut).getTime();
+    // Guard against a break_start AFTER the clock-out (clock anomalies): never
+    // add negative minutes. Close the break at the clock-out time regardless.
+    const addMins = (isNaN(startMs) || isNaN(outMs)) ? 0 : Math.max(0, Math.round((outMs - startMs) / 60000));
+    patch.break_end = punchOut;
+    patch.break_minutes = (Number(existing.break_minutes) || 0) + addMins;
+  }
+
   const { data, error } = await supabase
     .from("punch_records")
-    .update({ punch_out: punchOut, hours_worked: hoursWorked, gross_pay: grossPay,
-               status: "closed", updated_at: new Date().toISOString() })
+    .update(patch)
     .eq("id", id).select().single();
   if (error) throw error;
   return dbPunchToApp(data);
