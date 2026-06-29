@@ -46167,6 +46167,34 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
         </div>
       );
     }
+    if (tab === "break") {
+      // Break tab: show BREAK info (duration + from–to), not shift schedule.
+      const m = memberOf(item.employeeId);
+      const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
+      const accent = m?.color || "#844429";
+      const onBreakNow = item.breakStart && !item.breakEnd;
+      // Duration: live elapsed if mid-break, else the recorded break minutes.
+      const liveMins = onBreakNow ? Math.max(0, Math.round((Date.now() - new Date(item.breakStart).getTime()) / 60000)) : null;
+      const totalMins = onBreakNow ? liveMins : (Number(item.breakMinutes) || 0);
+      const durLabel = `${Math.floor(totalMins/60) > 0 ? `${Math.floor(totalMins/60)}h ` : ""}${totalMins%60}m`;
+      const fromTo = item.breakStart
+        ? `${fmtT(item.breakStart)}${item.breakEnd ? `–${fmtT(item.breakEnd)}` : " – now"}`
+        : (Number(item.breakMinutes) > 0 ? "logged on timesheet" : "—");
+      return (
+        <div key={item.id} onClick={() => setEditPunch(item)}
+          className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/60 cursor-pointer">
+          <Avatar photoUrl={m?.photoUrl} name={name} color={accent} size={40} rounded="full" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-white truncate">{name}</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">{fromTo}</div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className="text-[9px] uppercase tracking-wide text-slate-600">Break</div>
+            <div className={`text-sm font-bold tabular-nums ${onBreakNow ? "text-amber-400" : "text-slate-200"}`}>{durLabel}{onBreakNow ? " (live)" : ""}</div>
+          </div>
+        </div>
+      );
+    }
     return <PunchRow key={item.id} item={item} clickable={true} />;
   };
 
