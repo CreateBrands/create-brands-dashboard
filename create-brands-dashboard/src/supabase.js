@@ -1123,8 +1123,14 @@ export async function sweepAutoClockouts(stores = []) {
     // Only act once the cutoff has actually passed.
     if (now <= cutoffMs) continue;
     const pInMs = new Date(p.punch_in).getTime();
+    // Deduct break time (including a break left open) from the capped span, so an
+    // auto-closed shift isn't overstated. gross stays null — manager reviews anyway.
+    let breakMins = p.break_minutes || 0;
+    if (p.break_start && !p.break_end) {
+      breakMins += Math.max(0, Math.round((cutoffMs - new Date(p.break_start).getTime()) / 60000));
+    }
     // Guard against bad data: cutoff must be after clock-in.
-    const hours = cutoffMs > pInMs ? Math.max(0, (cutoffMs - pInMs) / 3600000) : 0;
+    const hours = cutoffMs > pInMs ? Math.max(0, (cutoffMs - pInMs) / 3600000 - breakMins / 60) : 0;
     const { error: upErr } = await supabase.from("punch_records").update({
       punch_out: new Date(cutoffMs).toISOString(),
       hours_worked: +hours.toFixed(2),

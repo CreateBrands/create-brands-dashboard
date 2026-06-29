@@ -13946,7 +13946,13 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
       } else {
         const now = new Date().toISOString();
         const rawH = (Date.now() - new Date(openPunch.punchIn).getTime()) / 3600000;
-        const breakH = (openPunch.breakMinutes || 0) / 60;
+        // Include any break still open at clock-out (auto-end it now), matching
+        // the kiosk path — otherwise a mid-break clock-out overstates hours.
+        let totalBreakMins = openPunch.breakMinutes || 0;
+        if (openPunch.breakStart && !openPunch.breakEnd) {
+          totalBreakMins += Math.max(0, Math.round((Date.now() - new Date(openPunch.breakStart).getTime()) / 60000));
+        }
+        const breakH = totalBreakMins / 60;
         const hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
         const gross = me.hourlyRate ? Math.round(hours * me.hourlyRate * 100) / 100 : null;
         await onPunchOut(openPunch.id, now, hours, gross);
@@ -14539,7 +14545,11 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         setClockMsg({ type: "ok", msg: "Clocked in ✓" });
       } else {
         const rawH = (Date.now() - new Date(myOpenPunch.punchIn).getTime()) / 3600000;
-        const breakH = (myOpenPunch.breakMinutes || 0) / 60;
+        let totalBreakMins = myOpenPunch.breakMinutes || 0;
+        if (myOpenPunch.breakStart && !myOpenPunch.breakEnd) {
+          totalBreakMins += Math.max(0, Math.round((Date.now() - new Date(myOpenPunch.breakStart).getTime()) / 60000));
+        }
+        const breakH = totalBreakMins / 60;
         const hours = Math.round(Math.max(0, rawH - breakH) * 100) / 100;
         const gross = myOpsMember.hourlyRate ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
         await onEmpPunchOut(myOpenPunch.id, new Date().toISOString(), hours, gross);
