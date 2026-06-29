@@ -13970,7 +13970,7 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
           punchIn: openPunch.punchIn, punchOut: now,
           breakMinutes: openPunch.breakMinutes, breakStart: openPunch.breakStart, breakEnd: openPunch.breakEnd, breakEndRef: now,
         });
-        const gross = me.hourlyRate ? Math.round(hours * me.hourlyRate * 100) / 100 : null;
+        const gross = (me.hourlyRate && !isSalaried(me)) ? Math.round(hours * me.hourlyRate * 100) / 100 : null;
         await onPunchOut(openPunch.id, now, hours, gross);
         setStatus({ type: "ok", msg: "Clocked out ✓" });
       }
@@ -14579,7 +14579,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           punchIn: myOpenPunch.punchIn, punchOut: nowIso,
           breakMinutes: myOpenPunch.breakMinutes, breakStart: myOpenPunch.breakStart, breakEnd: myOpenPunch.breakEnd, breakEndRef: nowIso,
         });
-        const gross = myOpsMember.hourlyRate ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
+        const gross = (myOpsMember.hourlyRate && !isSalaried(myOpsMember)) ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
         await onEmpPunchOut(myOpenPunch.id, nowIso, hours, gross);
         setClockMsg({ type: "ok", msg: "Clocked out ✓" });
       }
@@ -42196,7 +42196,9 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
         breakMinutes: openRecord.breakMinutes, breakStart: openRecord.breakStart, breakEnd: openRecord.breakEnd,
         breakEndRef: new Date().toISOString(),
       });
-      const grossPay    = emp.hourlyRate ? Math.round(hoursWorked * emp.hourlyRate * 100) / 100 : null;
+      // Salaried staff: their hourlyRate column holds a salary, so hours × rate
+      // is meaningless — store null and let salaried pay be computed separately.
+      const grossPay = (emp.hourlyRate && !isSalaried(emp)) ? Math.round(hoursWorked * emp.hourlyRate * 100) / 100 : null;
       let overtimeHrs = 0;
       if (!isUnscheduled) {
         const schedHours = (seMs - ssMs) / 3600000;
