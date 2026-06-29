@@ -20449,7 +20449,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       const cutoffMs = new Date(r.date + "T00:00:00").getTime() + cutoffMin * 60000;
       if (end > cutoffMs) end = cutoffMs;
     }
-    return Math.max(0, (end - pIn) / 3600000);
+    // Apply the same unpaid-break rule as everywhere else (computePunchHours),
+    // so live/dashboard labour matches the payable hours shown in Who's Working.
+    const split = computePunchHours({
+      punchIn: new Date(pIn).toISOString(), punchOut: new Date(end).toISOString(),
+      breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd, breakEndRef: new Date(end).toISOString(),
+    });
+    return split.payableHours != null ? split.payableHours : Math.max(0, (end - pIn) / 3600000);
   };
   // Current hourly rate from the employee's live profile (falls back to the
   // punch's snapshot if not found). Used for OPEN shifts so that setting a
@@ -47176,8 +47182,13 @@ export default function App() {
     // scope, a manager preview shows zero data. So resolve their storeIds from
     // their ops_team profile here, the same way a real manager login would.
     if (target.role !== "owner" && target.role !== "hq_staff" && (!target.storeIds || target.storeIds.length === 0)) {
+      // Match the ops_team profile the same way the rest of the app does: by the
+      // linked member id first (opsTeamMemberId || id), then fall back to email.
+      const linkId = target.opsTeamMemberId || target.id;
       const e = (target.email || "").trim().toLowerCase();
-      const m = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+      const m = (opsTeam || []).find(mm => !mm.archivedAt && (
+        mm.id === linkId || (e && (mm.email || "").trim().toLowerCase() === e)
+      ));
       if (m && m.storeIds && m.storeIds.length) {
         return { ...target, storeIds: m.storeIds, opsTeamMemberId: target.opsTeamMemberId || m.id };
       }
