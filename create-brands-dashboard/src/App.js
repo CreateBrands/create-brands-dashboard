@@ -40195,7 +40195,7 @@ function BusyPeriodsManager({ busyPeriods, brands = [], stores = [], currentUser
   );
 }
 
-function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], busyPeriods = [], onSaveBusyPeriod, onDeleteBusyPeriod, onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore, onUpdateMember }) {
+function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], schedules, availability, shiftPresets, currentUser, punchRecords = [], busyPeriods = [], storeRoles = [], onSaveBusyPeriod, onDeleteBusyPeriod, onAdd, onUpdate, onDelete, onPublish, onUpdateBrand, onUpdateStore, onUpdateMember }) {
   const { user } = useAuth();
 
   // Store-first scoping (the new pattern). We pick a SINGLE store for the
@@ -40259,6 +40259,8 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   const [locked,     setLocked]     = useState(true);    // edits locked when published
   const [selected,   setSelected]   = useState(new Set()); // multi-select shift IDs
   const [autofillModal, setAutofillModal] = useState(null);
+  const [assignSlot,    setAssignSlot]    = useState(null); // open role slot being filled
+  const [planRoleModal, setPlanRoleModal] = useState(null); // "Plan by role" panel state
   const [salesModal,    setSalesModal]    = useState(false);
   const [bulkDeleting,  setBulkDeleting]  = useState(false);
   const [resizingShift, setResizingShift] = useState(null); // { id, startX, originalEndTime }
@@ -40323,6 +40325,25 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   });
   const allDepts = [...new Set(brandMembers.map(m=>m.department).filter(Boolean))];
   const allRoles = [...new Set(brandMembers.map(m=>m.role).filter(Boolean))];
+  // Role names available for the selected store (from store_roles), used by the
+  // "Plan by role" panel and the assign modal's role highlighting. Falls back to
+  // free-text roles already seen on staff if no store_roles are defined.
+  const storeRoleNames = useMemo(() => {
+    const fromStore = (storeRoles || [])
+      .filter(r => !r.archivedAt && (!r.storeId || r.storeId === storeId))
+      .map(r => r.name).filter(Boolean);
+    const merged = [...new Set([...fromStore, ...allRoles])];
+    return merged.sort((a,b)=>a.localeCompare(b));
+  }, [storeRoles, storeId, allRoles]);
+  // Does a member hold a given role? Checks role_ids → store_roles names, plus
+  // the legacy free-text `role` field.
+  const memberHasRole = (m, roleName) => {
+    if (!m || !roleName) return false;
+    if ((m.role || "").toLowerCase() === roleName.toLowerCase()) return true;
+    const ids = m.roleIds && m.roleIds.length ? m.roleIds : (m.roleId ? [m.roleId] : []);
+    const names = (storeRoles || []).filter(r => ids.includes(r.id)).map(r => (r.name||"").toLowerCase());
+    return names.includes(roleName.toLowerCase());
+  };
   // Presets are still brand-scoped (a brand's shift templates apply to all its
   // stores). If you want store-specific presets later, we'd add a per-store
   // override layer here.
@@ -40707,6 +40728,10 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 hover:bg-indigo-600/20 text-indigo-200 text-xs font-semibold transition-colors disabled:opacity-40" title="Auto-fill shifts from availability">
             <Zap size={13}/> Auto-fill
           </button>
+          <button onClick={()=>setPlanRoleModal({})} disabled={editLocked}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600/20 border border-amber-500/30 hover:bg-amber-600/30 text-amber-200 text-xs font-semibold transition-colors disabled:opacity-40" title="Plan coverage by role, then fill the open slots">
+            <Users size={13}/> Plan by role
+          </button>
           {!isMobile && (
             <div className="flex bg-slate-900 border border-slate-700 rounded-xl p-0.5 gap-0.5">
               <button onClick={()=>setViewMode("day")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode==="day"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Day</button>
@@ -40824,9 +40849,30 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                 {daySlots.length===0
                   ? <div className="text-center py-8 text-slate-500 text-sm italic">No shifts scheduled</div>
                   : daySlots.map(s=>{
+                      const isOpen = !s.employeeId;   // role slot not yet filled
                       const member = roster.find(m=>m.id===s.employeeId);
-                      const conflict = getSlotConflict(s, member);
+                      const conflict = isOpen ? null : getSlotConflict(s, member);
                       const hrs = calcShiftHours(s.startTime, s.endTime);
+                      if (isOpen) {
+                        // Open role slot — dashed card, role shown, Assign action.
+                        return (
+                          <div key={s.id} className="rounded-xl p-3 border border-dashed border-amber-500/40 bg-amber-500/5"
+                            onClick={()=>!editLocked && setAssignSlot(s)}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:getPresetColor(s.shift)}}/>
+                              <div className="text-sm font-bold text-amber-300 truncate">{s.role || "Open shift"}</div>
+                              <span className="text-[10px] text-amber-400/80 font-semibold ml-auto uppercase tracking-wide">Open</span>
+                            </div>
+                            <div className="text-xs text-slate-500">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h</div>
+                            {!editLocked && (
+                              <button onClick={(e)=>{e.stopPropagation();setAssignSlot(s);}}
+                                className="mt-2 w-full text-xs font-bold px-2 py-1.5 rounded-lg bg-amber-500/20 text-amber-200 hover:bg-amber-500/30">
+                                + Assign someone
+                              </button>
+                            )}
+                          </div>
+                        );
+                      }
                       return (
                         <div key={s.id} className={`bg-slate-900 rounded-xl p-3 border ${conflict ? "border-red-500/30" : "border-slate-800/60"}`}
                           onClick={()=>!editLocked && setShiftModal({date:dateStr,slot:s,memberId:s.employeeId,memberName:s.employeeName})}>
@@ -40835,7 +40881,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
                             <div className="text-sm font-bold text-white truncate">{s.employeeName}</div>
                             {!s.published && <span className="text-xs text-amber-400 font-semibold ml-auto">Draft</span>}
                           </div>
-                          <div className="text-xs text-slate-600">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h</div>
+                          <div className="text-xs text-slate-600">{s.shift} · {s.startTime}–{s.endTime} · {hrs.toFixed(1)}h{s.role?` · ${s.role}`:""}</div>
                           {conflict && <div className="text-xs text-red-400 font-semibold mt-1">⚠ {conflict==="unavailable"?"Employee unavailable":"Outside availability"}</div>}
                           {showCosts && member?.hourlyRate > 0 && <div className="text-xs text-emerald-400 font-semibold mt-1">{fmtMoney(hrs * effectiveHourlyRate(member))}</div>}
                         </div>
@@ -40950,6 +40996,31 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             </div>
 
             {filteredMembers.length===0 && <div className="text-center py-12 text-slate-500 text-sm">No team members match filters</div>}
+
+            {/* ── Open (unfilled) role slots row ─────────────────────────── */}
+            {(() => {
+              const openByDay = weekDayStrs.map(ds => weekSchedules.filter(s => !s.employeeId && s.date === ds && s.status !== "cancelled"));
+              if (!openByDay.some(a => a.length)) return null;
+              return (
+                <div className="grid border-b border-amber-500/20 bg-amber-500/[0.03]" style={{gridTemplateColumns:"minmax(210px,240px) repeat(7, minmax(0,1fr))"}}>
+                  <div className="flex items-center gap-2 px-4 py-2.5">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"/>
+                    <span className="text-xs font-bold uppercase tracking-wide text-amber-300">Open slots</span>
+                  </div>
+                  {openByDay.map((slots, di) => (
+                    <div key={di} className="border-l border-slate-800/60 p-1 space-y-1">
+                      {slots.map(s => (
+                        <button key={s.id} onClick={()=>!editLocked && setAssignSlot(s)} disabled={editLocked}
+                          className="w-full text-left rounded-lg px-2 py-1.5 border border-dashed border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10 disabled:opacity-50">
+                          <div className="text-[11px] font-bold text-amber-300 truncate">{s.role || "Open"}</div>
+                          <div className="text-[10px] text-slate-500">{s.startTime}–{s.endTime}</div>
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             {/* ── Employee rows ──────────────────────────────────────────── */}
             {memberSections.map((section) => (
@@ -41386,6 +41457,31 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
           onClose={()=>setAutofillModal(null)}
         />
       )}
+      {planRoleModal && (
+        <PlanByRoleModal
+          weekDays={weekDays} weekDayStrs={weekDayStrs} brandId={brandId} storeId={storeId}
+          roleNames={storeRoleNames} shiftPresets={brandPresets} currentUser={currentUser}
+          onApply={async (slots) => {
+            for (const s of slots) await onAdd(s);
+            setPlanRoleModal(null);
+          }}
+          onClose={()=>setPlanRoleModal(null)}
+        />
+      )}
+      {assignSlot && (
+        <AssignSlotModal
+          slot={assignSlot} roster={roster} memberHasRole={memberHasRole}
+          availability={availability}
+          onAssign={async (member) => {
+            await onAdd({ ...assignSlot, employeeId: member.id,
+              employeeName: `${member.firstName} ${member.lastName}`.trim(),
+              updatedAt: new Date().toISOString() });
+            setAssignSlot(null);
+          }}
+          onDeleteSlot={async () => { await onDelete(assignSlot.id); setAssignSlot(null); }}
+          onClose={()=>setAssignSlot(null)}
+        />
+      )}
       {salesModal && (
         <SalesForecastModal
           brand={brand} store={selectedStore} weekDays={weekDays} weekDayStrs={weekDayStrs}
@@ -41409,6 +41505,214 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
 }
 
 // ── Autofill Shifts Modal — proposes shifts based on availability ─────────────
+function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = [], shiftPresets = [], currentUser, onApply, onClose }) {
+  // Build coverage needs: per weekday, a set of {role, qty, preset/time}. Then
+  // generate that many OPEN shift rows (employeeId empty) to be filled later.
+  const presets = (shiftPresets || []).filter(p => !p.archivedAt);
+  const defPreset = presets[0] || null;
+  const [needs, setNeeds] = useState([
+    // one starter row
+    { role: roleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() },
+  ]);
+  const [busy, setBusy] = useState(false);
+
+  const addRow = () => setNeeds(n => [...n, { role: roleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() }]);
+  const updateRow = (i, patch) => setNeeds(n => n.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const removeRow = (i) => setNeeds(n => n.filter((_, idx) => idx !== i));
+  const toggleDay = (i, di) => setNeeds(n => n.map((r, idx) => {
+    if (idx !== i) return r;
+    const d = new Set(r.days); d.has(di) ? d.delete(di) : d.add(di); return { ...r, days: d };
+  }));
+  const applyPreset = (i, presetId) => {
+    const p = presets.find(x => x.id === presetId);
+    updateRow(i, p ? { presetId, startTime: p.startTime, endTime: p.endTime } : { presetId: "" });
+  };
+
+  const totalSlots = needs.reduce((a, r) => a + (r.days.size * (Number(r.qty) || 0)), 0);
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const slots = [];
+      needs.forEach(r => {
+        if (!r.role || !r.qty || r.days.size === 0) return;
+        const preset = presets.find(p => p.id === r.presetId);
+        r.days.forEach(di => {
+          for (let k = 0; k < Number(r.qty); k++) {
+            slots.push({
+              id: `sch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${di}-${k}`,
+              brandId, storeId,
+              employeeId: "", employeeName: "",            // OPEN slot
+              date: weekDayStrs[di],
+              shift: preset?.name || "Shift",
+              startTime: r.startTime, endTime: r.endTime,
+              role: r.role, department: "",
+              published: false, status: "scheduled",
+              createdBy: currentUser?.id || "",
+              createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+            });
+          }
+        });
+      });
+      if (slots.length) await onApply(slots);
+    } finally { setBusy(false); }
+  };
+
+  const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  // weekDays[0] is the week start; map display order to its actual weekday index.
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-white">Plan by role</h3>
+              <p className="text-xs text-slate-400 mt-0.5">Set how many of each role you need per day. We'll create open slots for you to fill.</p>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20}/></button>
+          </div>
+        </div>
+        <div className="p-5 space-y-3">
+          {roleNames.length === 0 && (
+            <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
+              No roles found for this store. You can still type a role name on each row.
+            </div>
+          )}
+          {needs.map((r, i) => (
+            <div key={i} className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/60">
+              <div className="flex flex-wrap items-end gap-2 mb-2">
+                <div className="flex-1 min-w-[120px]">
+                  <label className="text-[10px] uppercase text-slate-500 font-semibold">Role</label>
+                  {roleNames.length > 0 ? (
+                    <select value={r.role} onChange={e => updateRow(i, { role: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white">
+                      {!roleNames.includes(r.role) && r.role && <option value={r.role}>{r.role}</option>}
+                      {roleNames.map(rn => <option key={rn} value={rn}>{rn}</option>)}
+                    </select>
+                  ) : (
+                    <input value={r.role} onChange={e => updateRow(i, { role: e.target.value })} placeholder="e.g. Barista"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"/>
+                  )}
+                </div>
+                <div className="w-16">
+                  <label className="text-[10px] uppercase text-slate-500 font-semibold">Qty</label>
+                  <input type="number" min={1} max={20} value={r.qty} onChange={e => updateRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"/>
+                </div>
+                {presets.length > 0 && (
+                  <div className="min-w-[120px]">
+                    <label className="text-[10px] uppercase text-slate-500 font-semibold">Shift</label>
+                    <select value={r.presetId} onChange={e => applyPreset(i, e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white">
+                      <option value="">Custom</option>
+                      {presets.map(p => <option key={p.id} value={p.id}>{p.name} ({p.startTime}–{p.endTime})</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="w-20">
+                  <label className="text-[10px] uppercase text-slate-500 font-semibold">From</label>
+                  <input type="time" value={r.startTime} onChange={e => updateRow(i, { startTime: e.target.value, presetId: "" })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-1 py-1.5 text-sm text-white"/>
+                </div>
+                <div className="w-20">
+                  <label className="text-[10px] uppercase text-slate-500 font-semibold">To</label>
+                  <input type="time" value={r.endTime} onChange={e => updateRow(i, { endTime: e.target.value, presetId: "" })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-1 py-1.5 text-sm text-white"/>
+                </div>
+                {needs.length > 1 && <button onClick={() => removeRow(i)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 mb-0.5"><Trash2 size={14}/></button>}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {DOW.map((d, di) => (
+                  <button key={di} onClick={() => toggleDay(i, di)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${r.days.has(di) ? "bg-amber-500 text-slate-900" : "bg-slate-900 text-slate-400 hover:text-white border border-slate-700"}`}>
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <button onClick={addRow} className="text-xs font-semibold text-amber-300 hover:text-amber-200 flex items-center gap-1">
+            <Plus size={14}/> Add another role
+          </button>
+        </div>
+        <div className="p-5 border-t border-slate-800 flex items-center justify-between">
+          <div className="text-xs text-slate-400">{totalSlots} open slot{totalSlots === 1 ? "" : "s"} will be created</div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={generate} disabled={busy || totalSlots === 0}
+              className="px-4 py-2 rounded-xl bg-amber-500 text-slate-900 text-sm font-bold hover:bg-amber-400 disabled:opacity-40">
+              {busy ? "Creating…" : `Create ${totalSlots} slot${totalSlots === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssignSlotModal({ slot, roster = [], memberHasRole, availability = [], onAssign, onDeleteSlot, onClose }) {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Sort: people WITH the slot's role first, then alphabetical. Filter by search.
+  const sorted = useMemo(() => {
+    const list = roster.filter(m => !m.archivedAt);
+    const ql = q.trim().toLowerCase();
+    const filtered = ql ? list.filter(m => `${m.firstName} ${m.lastName}`.toLowerCase().includes(ql)) : list;
+    return filtered.slice().sort((a, b) => {
+      const ar = memberHasRole(a, slot.role) ? 0 : 1;
+      const br = memberHasRole(b, slot.role) ? 0 : 1;
+      if (ar !== br) return ar - br;
+      return `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
+    });
+  }, [roster, q, slot.role, memberHasRole]);
+
+  // Is this person already scheduled or unavailable that day? (light hint only)
+  const dayUnavail = (m) => (availability || []).some(a =>
+    a.employeeId === m.id && a.date === slot.date && a.status === "unavailable");
+
+  const assign = async (m) => { setBusy(true); try { await onAssign(m); } finally { setBusy(false); } };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-md max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-white">Fill open slot</h3>
+              <p className="text-xs text-slate-400 mt-0.5">{slot.role || "Shift"} · {slot.startTime}–{slot.endTime}</p>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20}/></button>
+          </div>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search staff…" autoFocus
+            className="mt-3 w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"/>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-1">
+          {sorted.length === 0 && <div className="text-center py-6 text-slate-500 text-sm">No staff found.</div>}
+          {sorted.map(m => {
+            const has = memberHasRole(m, slot.role);
+            const unavail = dayUnavail(m);
+            return (
+              <button key={m.id} onClick={() => assign(m)} disabled={busy}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-800 text-left disabled:opacity-50">
+                <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName}`} color={m.color || "#844429"} size={36} rounded="full"/>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-white truncate">{m.firstName} {m.lastName}</div>
+                  <div className="text-[11px] text-slate-500">{unavail ? <span className="text-red-400">Unavailable this day</span> : (m.role || "—")}</div>
+                </div>
+                {has && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 flex-shrink-0">Has role</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="p-4 border-t border-slate-800 flex justify-between">
+          <button onClick={onDeleteSlot} className="px-3 py-2 rounded-xl bg-red-600/15 text-red-300 text-sm font-semibold hover:bg-red-600/25">Delete slot</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AutofillShiftsModal({ weekDays, weekDayStrs, brandId, storeId, opsTeam, availability, shiftPresets, existingSchedules, currentUser, onApply, onClose }) {
   const [presetId,    setPresetId]    = useState(shiftPresets[0]?.id || "");
   const [selectedDays, setSelectedDays] = useState(new Set(weekDayStrs));
@@ -48689,7 +48993,7 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={scopedVisibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
-            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} busyPeriods={busyPeriods||[]} onSaveBusyPeriod={saveBusyPeriod} onDeleteBusyPeriod={deleteBusyPeriod} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
+            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} busyPeriods={busyPeriods||[]} storeRoles={storeRoles||[]} onSaveBusyPeriod={saveBusyPeriod} onDeleteBusyPeriod={deleteBusyPeriod} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})} busyPeriods={busyPeriods||[]}/>}
             {effectiveActiveView === "google-hub"     && canSeeView("google-hub") && <ChainCommandCenter stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}
