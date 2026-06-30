@@ -179,7 +179,7 @@ import {
   Cloud, Sun, CloudRain, ArrowRight,
   QrCode,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, ArrowUpRight,
-  Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw,
+  Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw, Copy,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
@@ -41510,32 +41510,52 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
   // generate that many OPEN shift rows (employeeId empty) to be filled later.
   const presets = (shiftPresets || []).filter(p => !p.archivedAt);
   const defPreset = presets[0] || null;
-  const [needs, setNeeds] = useState([
-    // one starter row
-    { role: roleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() },
-  ]);
+  const newRow = () => ({ role: roleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() });
+  const [needs, setNeeds] = useState([newRow()]);
   const [busy, setBusy] = useState(false);
 
-  const addRow = () => setNeeds(n => [...n, { role: roleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() }]);
+  // Esc to close + focus the first field on open (keyboard accessibility).
+  const firstFieldRef = useRef(null);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const t = setTimeout(() => firstFieldRef.current?.focus(), 60);
+    return () => { window.removeEventListener("keydown", onKey); clearTimeout(t); };
+  }, [onClose]);
+
+  const addRow = () => setNeeds(n => [...n, newRow()]);
+  const dupRow = (i) => setNeeds(n => { const c = { ...n[i], days: new Set(n[i].days) }; const copy = [...n]; copy.splice(i + 1, 0, c); return copy; });
   const updateRow = (i, patch) => setNeeds(n => n.map((r, idx) => idx === i ? { ...r, ...patch } : r));
   const removeRow = (i) => setNeeds(n => n.filter((_, idx) => idx !== i));
   const toggleDay = (i, di) => setNeeds(n => n.map((r, idx) => {
     if (idx !== i) return r;
     const d = new Set(r.days); d.has(di) ? d.delete(di) : d.add(di); return { ...r, days: d };
   }));
+  const setDays = (i, arr) => setNeeds(n => n.map((r, idx) => idx === i ? { ...r, days: new Set(arr) } : r));
   const applyPreset = (i, presetId) => {
     const p = presets.find(x => x.id === presetId);
     updateRow(i, p ? { presetId, startTime: p.startTime, endTime: p.endTime } : { presetId: "" });
   };
 
-  const totalSlots = needs.reduce((a, r) => a + (r.days.size * (Number(r.qty) || 0)), 0);
+  const shiftHrs = (start, end) => {
+    if (!start || !end) return 0;
+    const a = new Date("2000-01-01T" + start + ":00"), b = new Date("2000-01-01T" + end + ":00");
+    const h = (b - a) / 3600000; return h < 0 ? h + 24 : h;
+  };
+  const rowValid = (r) => r.role && Number(r.qty) > 0 && r.days.size > 0;
+  const rowSlots = (r) => r.days.size * (Number(r.qty) || 0);
+  const totalSlots = needs.reduce((a, r) => a + (rowValid(r) ? rowSlots(r) : 0), 0);
+  const totalHours = needs.reduce((a, r) => a + (rowValid(r) ? rowSlots(r) * shiftHrs(r.startTime, r.endTime) : 0), 0);
+
+  // Live per-day coverage preview (how many slots land on each weekday).
+  const perDay = weekDayStrs.map((_, di) => needs.reduce((a, r) => a + (rowValid(r) && r.days.has(di) ? Number(r.qty) : 0), 0));
 
   const generate = async () => {
     setBusy(true);
     try {
       const slots = [];
       needs.forEach(r => {
-        if (!r.role || !r.qty || r.days.size === 0) return;
+        if (!rowValid(r)) return;
         const preset = presets.find(p => p.id === r.presetId);
         r.days.forEach(di => {
           for (let k = 0; k < Number(r.qty); k++) {
@@ -41559,89 +41579,171 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
   };
 
   const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  // weekDays[0] is the week start; map display order to its actual weekday index.
+  const dayNums = weekDays.map(d => d.getDate());
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-2xl max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b border-slate-800">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-bold text-white">Plan by role</h3>
-              <p className="text-xs text-slate-400 mt-0.5">Set how many of each role you need per day. We'll create open slots for you to fill.</p>
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="planrole-title">
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-800 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <Users size={18} className="text-amber-300"/>
             </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20}/></button>
+            <div>
+              <h3 id="planrole-title" className="text-lg font-bold text-white leading-tight">Plan by role</h3>
+              <p className="text-xs text-slate-400 mt-0.5">Set how many of each role you need, then pick the days. We'll create open slots you can fill with people.</p>
+            </div>
           </div>
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-1 -mr-1 rounded-lg hover:bg-slate-800"><X size={20}/></button>
         </div>
-        <div className="p-5 space-y-3">
+
+        {/* Body */}
+        <div className="px-6 py-4 space-y-3 overflow-y-auto flex-1">
           {roleNames.length === 0 && (
-            <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
-              No roles found for this store. You can still type a role name on each row.
+            <div className="flex items-start gap-2 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2.5">
+              <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-400"/>
+              <span>No roles are set up for this store yet, so you can type a role name freely below. To get the "has role" matching when filling slots, add roles under Team &amp; Roles.</span>
             </div>
           )}
-          {needs.map((r, i) => (
-            <div key={i} className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/60">
-              <div className="flex flex-wrap items-end gap-2 mb-2">
-                <div className="flex-1 min-w-[120px]">
-                  <label className="text-[10px] uppercase text-slate-500 font-semibold">Role</label>
-                  {roleNames.length > 0 ? (
-                    <select value={r.role} onChange={e => updateRow(i, { role: e.target.value })}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white">
-                      {!roleNames.includes(r.role) && r.role && <option value={r.role}>{r.role}</option>}
-                      {roleNames.map(rn => <option key={rn} value={rn}>{rn}</option>)}
-                    </select>
-                  ) : (
-                    <input value={r.role} onChange={e => updateRow(i, { role: e.target.value })} placeholder="e.g. Barista"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"/>
-                  )}
-                </div>
-                <div className="w-16">
-                  <label className="text-[10px] uppercase text-slate-500 font-semibold">Qty</label>
-                  <input type="number" min={1} max={20} value={r.qty} onChange={e => updateRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"/>
-                </div>
-                {presets.length > 0 && (
-                  <div className="min-w-[120px]">
-                    <label className="text-[10px] uppercase text-slate-500 font-semibold">Shift</label>
-                    <select value={r.presetId} onChange={e => applyPreset(i, e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white">
-                      <option value="">Custom</option>
-                      {presets.map(p => <option key={p.id} value={p.id}>{p.name} ({p.startTime}–{p.endTime})</option>)}
-                    </select>
+
+          {needs.map((r, i) => {
+            const hrs = shiftHrs(r.startTime, r.endTime);
+            const slots = rowSlots(r);
+            const valid = rowValid(r);
+            return (
+              <div key={i} className={`rounded-xl p-3.5 border transition-colors ${valid ? "bg-slate-800/40 border-slate-700/60" : "bg-slate-800/20 border-slate-700/40"}`}>
+                <div className="flex flex-wrap items-end gap-2.5 mb-3">
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Role</label>
+                    {roleNames.length > 0 ? (
+                      <select ref={i === 0 ? firstFieldRef : null} value={r.role} onChange={e => updateRow(i, { role: e.target.value })}
+                        aria-label="Role"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50">
+                        {!roleNames.includes(r.role) && r.role && <option value={r.role}>{r.role}</option>}
+                        {roleNames.map(rn => <option key={rn} value={rn}>{rn}</option>)}
+                      </select>
+                    ) : (
+                      <input ref={i === 0 ? firstFieldRef : null} value={r.role} onChange={e => updateRow(i, { role: e.target.value })} placeholder="e.g. Barista"
+                        aria-label="Role"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50"/>
+                    )}
                   </div>
-                )}
-                <div className="w-20">
-                  <label className="text-[10px] uppercase text-slate-500 font-semibold">From</label>
-                  <input type="time" value={r.startTime} onChange={e => updateRow(i, { startTime: e.target.value, presetId: "" })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-1 py-1.5 text-sm text-white"/>
+                  <div className="w-[88px]">
+                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">How many</label>
+                    <div className="flex items-stretch bg-slate-900 border border-slate-700 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-amber-500/50">
+                      <button type="button" aria-label="Decrease" onClick={() => updateRow(i, { qty: Math.max(1, (Number(r.qty) || 1) - 1) })}
+                        className="px-2 text-slate-400 hover:text-white hover:bg-slate-800">−</button>
+                      <input type="number" min={1} max={20} value={r.qty} aria-label="Quantity"
+                        onChange={e => updateRow(i, { qty: Math.max(1, Math.min(20, Number(e.target.value) || 1)) })}
+                        className="w-full bg-transparent text-center text-sm text-white py-2 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"/>
+                      <button type="button" aria-label="Increase" onClick={() => updateRow(i, { qty: Math.min(20, (Number(r.qty) || 1) + 1) })}
+                        className="px-2 text-slate-400 hover:text-white hover:bg-slate-800">+</button>
+                    </div>
+                  </div>
+                  {presets.length > 0 && (
+                    <div className="min-w-[150px]">
+                      <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Shift preset</label>
+                      <select value={r.presetId} onChange={e => applyPreset(i, e.target.value)} aria-label="Shift preset"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50">
+                        <option value="">Custom time</option>
+                        {presets.map(p => <option key={p.id} value={p.id}>{p.name} ({p.startTime}–{p.endTime})</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <div className="w-[96px]">
+                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">From</label>
+                    <input type="time" value={r.startTime} onChange={e => updateRow(i, { startTime: e.target.value, presetId: "" })} aria-label="Start time"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50"/>
+                  </div>
+                  <div className="w-[96px]">
+                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">To</label>
+                    <input type="time" value={r.endTime} onChange={e => updateRow(i, { endTime: e.target.value, presetId: "" })} aria-label="End time"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50"/>
+                  </div>
                 </div>
-                <div className="w-20">
-                  <label className="text-[10px] uppercase text-slate-500 font-semibold">To</label>
-                  <input type="time" value={r.endTime} onChange={e => updateRow(i, { endTime: e.target.value, presetId: "" })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-1 py-1.5 text-sm text-white"/>
+
+                {/* Day picker with date numbers + quick presets */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mr-1">Days</span>
+                  {DOW.map((d, di) => {
+                    const on = r.days.has(di);
+                    const isWeekend = di >= 5;
+                    return (
+                      <button key={di} type="button" onClick={() => toggleDay(i, di)} aria-pressed={on}
+                        aria-label={`${d} ${dayNums[di]}${on ? ", selected" : ""}`}
+                        className={`flex flex-col items-center justify-center w-11 py-1 rounded-lg text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/50 ${
+                          on ? "bg-amber-500 text-slate-900" : `bg-slate-900 border border-slate-700 hover:border-slate-600 ${isWeekend ? "text-slate-500" : "text-slate-300"} hover:text-white`}`}>
+                        <span className="leading-none">{d}</span>
+                        <span className={`text-[10px] leading-tight mt-0.5 ${on ? "text-slate-800" : "text-slate-600"}`}>{dayNums[di]}</span>
+                      </button>
+                    );
+                  })}
+                  <div className="flex items-center gap-1 ml-1">
+                    <button type="button" onClick={() => setDays(i, [0,1,2,3,4])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/40">Weekdays</button>
+                    <button type="button" onClick={() => setDays(i, [5,6])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/40">Weekend</button>
+                    <button type="button" onClick={() => setDays(i, [0,1,2,3,4,5,6])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/40">All</button>
+                    {r.days.size > 0 && <button type="button" onClick={() => setDays(i, [])} className="text-[10px] font-bold px-2 py-1 rounded-md text-slate-500 hover:text-slate-300">Clear</button>}
+                  </div>
                 </div>
-                {needs.length > 1 && <button onClick={() => removeRow(i)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-red-400 mb-0.5"><Trash2 size={14}/></button>}
+
+                {/* Row summary + actions */}
+                <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-slate-800/60">
+                  <div className="text-[11px] text-slate-400">
+                    {valid
+                      ? <span><span className="text-amber-300 font-bold">{slots}</span> slot{slots === 1 ? "" : "s"} · {hrs.toFixed(1)}h each · <span className="text-slate-300">{(slots * hrs).toFixed(1)}h total</span></span>
+                      : <span className="text-slate-600">Pick a role and at least one day</span>}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => dupRow(i)} aria-label="Duplicate row" title="Duplicate"
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40"><Copy size={13}/></button>
+                    {needs.length > 1 && (
+                      <button type="button" onClick={() => removeRow(i)} aria-label="Remove row" title="Remove"
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-red-500/40"><Trash2 size={13}/></button>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1">
+            );
+          })}
+
+          <button type="button" onClick={addRow}
+            className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-amber-300 hover:text-amber-200 border border-dashed border-amber-500/30 hover:border-amber-500/50 rounded-xl py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/40">
+            <Plus size={15}/> Add another role
+          </button>
+
+          {/* Live coverage preview */}
+          {totalSlots > 0 && (
+            <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-3">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-2">Coverage preview</div>
+              <div className="grid grid-cols-7 gap-1.5">
                 {DOW.map((d, di) => (
-                  <button key={di} onClick={() => toggleDay(i, di)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${r.days.has(di) ? "bg-amber-500 text-slate-900" : "bg-slate-900 text-slate-400 hover:text-white border border-slate-700"}`}>
-                    {d}
-                  </button>
+                  <div key={di} className="text-center">
+                    <div className="text-[10px] text-slate-500 font-semibold">{d}</div>
+                    <div className={`mt-1 rounded-lg py-1.5 text-sm font-bold ${perDay[di] > 0 ? "bg-amber-500/15 text-amber-300" : "bg-slate-900/60 text-slate-700"}`}>
+                      {perDay[di] || "–"}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
-          ))}
-          <button onClick={addRow} className="text-xs font-semibold text-amber-300 hover:text-amber-200 flex items-center gap-1">
-            <Plus size={14}/> Add another role
-          </button>
+          )}
         </div>
-        <div className="p-5 border-t border-slate-800 flex items-center justify-between">
-          <div className="text-xs text-slate-400">{totalSlots} open slot{totalSlots === 1 ? "" : "s"} will be created</div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-800 flex items-center justify-between gap-4">
+          <div className="text-xs text-slate-400">
+            {totalSlots > 0
+              ? <span><span className="text-white font-bold">{totalSlots}</span> open slot{totalSlots === 1 ? "" : "s"} · <span className="text-white font-bold">{totalHours.toFixed(1)}h</span> total coverage</span>
+              : <span className="text-slate-500">Nothing to create yet</span>}
+          </div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-            <button onClick={generate} disabled={busy || totalSlots === 0}
-              className="px-4 py-2 rounded-xl bg-amber-500 text-slate-900 text-sm font-bold hover:bg-amber-400 disabled:opacity-40">
-              {busy ? "Creating…" : `Create ${totalSlots} slot${totalSlots === 1 ? "" : "s"}`}
+            <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-500">Cancel</button>
+            <button type="button" onClick={generate} disabled={busy || totalSlots === 0}
+              className="px-5 py-2 rounded-xl bg-amber-500 text-slate-900 text-sm font-bold hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-300 transition-colors">
+              {busy ? "Creating…" : totalSlots === 0 ? "Create slots" : `Create ${totalSlots} slot${totalSlots === 1 ? "" : "s"}`}
             </button>
           </div>
         </div>
