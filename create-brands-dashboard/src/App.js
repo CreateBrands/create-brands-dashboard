@@ -40729,7 +40729,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             <Zap size={13}/> Auto-fill
           </button>
           <button onClick={()=>setPlanRoleModal({})} disabled={editLocked}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600/20 border border-amber-500/30 hover:bg-amber-600/30 text-amber-200 text-xs font-semibold transition-colors disabled:opacity-40" title="Plan coverage by role, then fill the open slots">
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#C9854F] hover:bg-[#b87642] text-white text-xs font-bold transition-colors disabled:opacity-40 shadow-sm" title="Plan coverage by role, then fill the open slots">
             <Users size={13}/> Plan by role
           </button>
           {!isMobile && (
@@ -41582,29 +41582,29 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
   const dayNums = weekDays.map(d => d.getDate());
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="planrole-title">
-      <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-[#FBF6EC] rounded-2xl border border-[#E8DCC6] shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
 
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-start justify-between gap-4">
+        <div className="px-6 py-4 border-b border-[#E8DCC6] flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <Users size={18} className="text-amber-300"/>
+            <div className="w-9 h-9 rounded-xl bg-[#F4E9DD] border border-[#E2CFBC] flex items-center justify-center flex-shrink-0 mt-0.5">
+              <Users size={18} className="text-[#C9854F]"/>
             </div>
             <div>
-              <h3 id="planrole-title" className="text-lg font-bold text-white leading-tight">Plan by role</h3>
-              <p className="text-xs text-slate-400 mt-0.5">Set how many of each role you need, then pick the days. We'll create open slots you can fill with people.</p>
+              <h3 id="planrole-title" className="text-lg font-bold text-[#844429] leading-tight">Plan by role</h3>
+              <p className="text-xs text-[#9A8770] mt-0.5">Set how many of each role you need, then pick the days. We'll create open slots you can fill with people.</p>
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-1 -mr-1 rounded-lg hover:bg-slate-800"><X size={20}/></button>
+          <button onClick={onClose} aria-label="Close" className="text-[#9A8770] hover:text-[#844429] p-1 -mr-1 rounded-lg hover:bg-[#F4E9DD]"><X size={20}/></button>
         </div>
 
         {/* Body */}
         <div className="px-6 py-4 space-y-3 overflow-y-auto flex-1">
           {roleNames.length === 0 && (
-            <div className="flex items-start gap-2 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2.5">
-              <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-400"/>
+            <div className="flex items-start gap-2 text-xs text-[#8a5a1e] bg-[#FBF3E4] border border-[#EFE0C4] rounded-xl px-3 py-2.5">
+              <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-[#C9854F]"/>
               <span>No roles are set up for this store yet, so you can type a role name freely below. To get the "has role" matching when filling slots, add roles under Team &amp; Roles.</span>
             </div>
           )}
@@ -41614,94 +41614,94 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
             const slots = rowSlots(r);
             const valid = rowValid(r);
             return (
-              <div key={i} className={`rounded-xl p-3.5 border transition-colors ${valid ? "bg-slate-800/40 border-slate-700/60" : "bg-slate-800/20 border-slate-700/40"}`}>
+              <div key={i} className={`rounded-xl p-3.5 border transition-colors ${valid ? "bg-white border-[#E8DCC6]" : "bg-[#FCF8F1] border-[#EEE3D2]"}`}>
                 <div className="flex flex-wrap items-end gap-2.5 mb-3">
                   <div className="flex-1 min-w-[140px]">
-                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Role</label>
+                    <label className="block text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-1">Role</label>
                     {roleNames.length > 0 ? (
                       <select ref={i === 0 ? firstFieldRef : null} value={r.role} onChange={e => updateRow(i, { role: e.target.value })}
                         aria-label="Role"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50">
+                        className="w-full bg-white border border-[#E2CFBC] rounded-lg px-2.5 py-2 text-sm text-[#3A2E26] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]">
                         {!roleNames.includes(r.role) && r.role && <option value={r.role}>{r.role}</option>}
                         {roleNames.map(rn => <option key={rn} value={rn}>{rn}</option>)}
                       </select>
                     ) : (
                       <input ref={i === 0 ? firstFieldRef : null} value={r.role} onChange={e => updateRow(i, { role: e.target.value })} placeholder="e.g. Barista"
                         aria-label="Role"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50"/>
+                        className="w-full bg-white border border-[#E2CFBC] rounded-lg px-2.5 py-2 text-sm text-[#3A2E26] placeholder:text-[#B9A88F] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]"/>
                     )}
                   </div>
                   <div className="w-[88px]">
-                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">How many</label>
-                    <div className="flex items-stretch bg-slate-900 border border-slate-700 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-amber-500/50">
+                    <label className="block text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-1">How many</label>
+                    <div className="flex items-stretch bg-white border border-[#E2CFBC] rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-[#C9854F]/40">
                       <button type="button" aria-label="Decrease" onClick={() => updateRow(i, { qty: Math.max(1, (Number(r.qty) || 1) - 1) })}
-                        className="px-2 text-slate-400 hover:text-white hover:bg-slate-800">−</button>
+                        className="px-2 text-[#9A8770] hover:text-[#844429] hover:bg-[#F4E9DD]">−</button>
                       <input type="number" min={1} max={20} value={r.qty} aria-label="Quantity"
                         onChange={e => updateRow(i, { qty: Math.max(1, Math.min(20, Number(e.target.value) || 1)) })}
-                        className="w-full bg-transparent text-center text-sm text-white py-2 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"/>
+                        className="w-full bg-transparent text-center text-sm text-[#3A2E26] py-2 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"/>
                       <button type="button" aria-label="Increase" onClick={() => updateRow(i, { qty: Math.min(20, (Number(r.qty) || 1) + 1) })}
-                        className="px-2 text-slate-400 hover:text-white hover:bg-slate-800">+</button>
+                        className="px-2 text-[#9A8770] hover:text-[#844429] hover:bg-[#F4E9DD]">+</button>
                     </div>
                   </div>
                   {presets.length > 0 && (
                     <div className="min-w-[150px]">
-                      <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Shift preset</label>
+                      <label className="block text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-1">Shift preset</label>
                       <select value={r.presetId} onChange={e => applyPreset(i, e.target.value)} aria-label="Shift preset"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50">
+                        className="w-full bg-white border border-[#E2CFBC] rounded-lg px-2.5 py-2 text-sm text-[#3A2E26] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]">
                         <option value="">Custom time</option>
                         {presets.map(p => <option key={p.id} value={p.id}>{p.name} ({p.startTime}–{p.endTime})</option>)}
                       </select>
                     </div>
                   )}
                   <div className="w-[96px]">
-                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">From</label>
+                    <label className="block text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-1">From</label>
                     <input type="time" value={r.startTime} onChange={e => updateRow(i, { startTime: e.target.value, presetId: "" })} aria-label="Start time"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50"/>
+                      className="w-full bg-white border border-[#E2CFBC] rounded-lg px-2 py-2 text-sm text-[#3A2E26] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]"/>
                   </div>
                   <div className="w-[96px]">
-                    <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">To</label>
+                    <label className="block text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-1">To</label>
                     <input type="time" value={r.endTime} onChange={e => updateRow(i, { endTime: e.target.value, presetId: "" })} aria-label="End time"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50"/>
+                      className="w-full bg-white border border-[#E2CFBC] rounded-lg px-2 py-2 text-sm text-[#3A2E26] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]"/>
                   </div>
                 </div>
 
                 {/* Day picker with date numbers + quick presets */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mr-1">Days</span>
+                  <span className="text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mr-1">Days</span>
                   {DOW.map((d, di) => {
                     const on = r.days.has(di);
                     const isWeekend = di >= 5;
                     return (
                       <button key={di} type="button" onClick={() => toggleDay(i, di)} aria-pressed={on}
                         aria-label={`${d} ${dayNums[di]}${on ? ", selected" : ""}`}
-                        className={`flex flex-col items-center justify-center w-11 py-1 rounded-lg text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/50 ${
-                          on ? "bg-amber-500 text-slate-900" : `bg-slate-900 border border-slate-700 hover:border-slate-600 ${isWeekend ? "text-slate-500" : "text-slate-300"} hover:text-white`}`}>
+                        className={`flex flex-col items-center justify-center w-11 py-1 rounded-lg text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[#C9854F]/50 ${
+                          on ? "bg-[#C9854F] text-white" : `bg-white border border-[#E2CFBC] hover:border-[#C9854F]/60 ${isWeekend ? "text-[#B9A88F]" : "text-[#6B5A48]"} hover:text-[#844429]`}`}>
                         <span className="leading-none">{d}</span>
-                        <span className={`text-[10px] leading-tight mt-0.5 ${on ? "text-slate-800" : "text-slate-600"}`}>{dayNums[di]}</span>
+                        <span className={`text-[10px] leading-tight mt-0.5 ${on ? "text-white/80" : "text-[#B9A88F]"}`}>{dayNums[di]}</span>
                       </button>
                     );
                   })}
                   <div className="flex items-center gap-1 ml-1">
-                    <button type="button" onClick={() => setDays(i, [0,1,2,3,4])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/40">Weekdays</button>
-                    <button type="button" onClick={() => setDays(i, [5,6])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/40">Weekend</button>
-                    <button type="button" onClick={() => setDays(i, [0,1,2,3,4,5,6])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/40">All</button>
-                    {r.days.size > 0 && <button type="button" onClick={() => setDays(i, [])} className="text-[10px] font-bold px-2 py-1 rounded-md text-slate-500 hover:text-slate-300">Clear</button>}
+                    <button type="button" onClick={() => setDays(i, [0,1,2,3,4])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-[#F4E9DD] text-[#844429] hover:bg-[#EBDCCB] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">Weekdays</button>
+                    <button type="button" onClick={() => setDays(i, [5,6])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-[#F4E9DD] text-[#844429] hover:bg-[#EBDCCB] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">Weekend</button>
+                    <button type="button" onClick={() => setDays(i, [0,1,2,3,4,5,6])} className="text-[10px] font-bold px-2 py-1 rounded-md bg-[#F4E9DD] text-[#844429] hover:bg-[#EBDCCB] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">All</button>
+                    {r.days.size > 0 && <button type="button" onClick={() => setDays(i, [])} className="text-[10px] font-bold px-2 py-1 rounded-md text-[#9A8770] hover:text-[#844429]">Clear</button>}
                   </div>
                 </div>
 
                 {/* Row summary + actions */}
-                <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-slate-800/60">
-                  <div className="text-[11px] text-slate-400">
+                <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-[#EEE3D2]">
+                  <div className="text-[11px] text-[#9A8770]">
                     {valid
-                      ? <span><span className="text-amber-300 font-bold">{slots}</span> slot{slots === 1 ? "" : "s"} · {hrs.toFixed(1)}h each · <span className="text-slate-300">{(slots * hrs).toFixed(1)}h total</span></span>
-                      : <span className="text-slate-600">Pick a role and at least one day</span>}
+                      ? <span><span className="text-[#C9854F] font-bold">{slots}</span> slot{slots === 1 ? "" : "s"} · {hrs.toFixed(1)}h each · <span className="text-[#6B5A48] font-semibold">{(slots * hrs).toFixed(1)}h total</span></span>
+                      : <span className="text-[#B9A88F]">Pick a role and at least one day</span>}
                   </div>
                   <div className="flex items-center gap-1">
                     <button type="button" onClick={() => dupRow(i)} aria-label="Duplicate row" title="Duplicate"
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40"><Copy size={13}/></button>
+                      className="p-1.5 rounded-lg text-[#9A8770] hover:text-[#844429] hover:bg-[#F4E9DD] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40"><Copy size={13}/></button>
                     {needs.length > 1 && (
                       <button type="button" onClick={() => removeRow(i)} aria-label="Remove row" title="Remove"
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-red-500/40"><Trash2 size={13}/></button>
+                        className="p-1.5 rounded-lg text-[#9A8770] hover:text-red-500 hover:bg-[#F4E9DD] focus:outline-none focus:ring-2 focus:ring-red-400/40"><Trash2 size={13}/></button>
                     )}
                   </div>
                 </div>
@@ -41710,19 +41710,19 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
           })}
 
           <button type="button" onClick={addRow}
-            className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-amber-300 hover:text-amber-200 border border-dashed border-amber-500/30 hover:border-amber-500/50 rounded-xl py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/40">
+            className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-[#C9854F] hover:text-[#844429] border border-dashed border-[#E2CFBC] hover:border-[#C9854F]/60 rounded-xl py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">
             <Plus size={15}/> Add another role
           </button>
 
           {/* Live coverage preview */}
           {totalSlots > 0 && (
-            <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-3">
-              <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-2">Coverage preview</div>
+            <div className="bg-white border border-[#E8DCC6] rounded-xl p-3">
+              <div className="text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-2">Coverage preview</div>
               <div className="grid grid-cols-7 gap-1.5">
                 {DOW.map((d, di) => (
                   <div key={di} className="text-center">
-                    <div className="text-[10px] text-slate-500 font-semibold">{d}</div>
-                    <div className={`mt-1 rounded-lg py-1.5 text-sm font-bold ${perDay[di] > 0 ? "bg-amber-500/15 text-amber-300" : "bg-slate-900/60 text-slate-700"}`}>
+                    <div className="text-[10px] text-[#9A8770] font-semibold">{d}</div>
+                    <div className={`mt-1 rounded-lg py-1.5 text-sm font-bold ${perDay[di] > 0 ? "bg-[#F4E9DD] text-[#844429]" : "bg-[#FCF8F1] text-[#C9BBA6]"}`}>
                       {perDay[di] || "–"}
                     </div>
                   </div>
@@ -41733,16 +41733,16 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-800 flex items-center justify-between gap-4">
-          <div className="text-xs text-slate-400">
+        <div className="px-6 py-4 border-t border-[#E8DCC6] flex items-center justify-between gap-4">
+          <div className="text-xs text-[#9A8770]">
             {totalSlots > 0
-              ? <span><span className="text-white font-bold">{totalSlots}</span> open slot{totalSlots === 1 ? "" : "s"} · <span className="text-white font-bold">{totalHours.toFixed(1)}h</span> total coverage</span>
-              : <span className="text-slate-500">Nothing to create yet</span>}
+              ? <span><span className="text-[#844429] font-bold">{totalSlots}</span> open slot{totalSlots === 1 ? "" : "s"} · <span className="text-[#844429] font-bold">{totalHours.toFixed(1)}h</span> total coverage</span>
+              : <span className="text-[#B9A88F]">Nothing to create yet</span>}
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-500">Cancel</button>
+            <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-[#F4E9DD] text-[#844429] text-sm font-semibold hover:bg-[#EBDCCB] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">Cancel</button>
             <button type="button" onClick={generate} disabled={busy || totalSlots === 0}
-              className="px-5 py-2 rounded-xl bg-amber-500 text-slate-900 text-sm font-bold hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-300 transition-colors">
+              className="px-5 py-2 rounded-xl bg-[#C9854F] text-white text-sm font-bold hover:bg-[#b87642] disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#C9854F]/50 transition-colors shadow-sm">
               {busy ? "Creating…" : totalSlots === 0 ? "Create slots" : `Create ${totalSlots} slot${totalSlots === 1 ? "" : "s"}`}
             </button>
           </div>
@@ -41775,40 +41775,40 @@ function AssignSlotModal({ slot, roster = [], memberHasRole, availability = [], 
   const assign = async (m) => { setBusy(true); try { await onAssign(m); } finally { setBusy(false); } };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-md max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="bg-[#FBF6EC] rounded-2xl border border-[#E8DCC6] shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-[#E8DCC6]">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-bold text-white">Fill open slot</h3>
-              <p className="text-xs text-slate-400 mt-0.5">{slot.role || "Shift"} · {slot.startTime}–{slot.endTime}</p>
+              <h3 className="text-lg font-bold text-[#844429]">Fill open slot</h3>
+              <p className="text-xs text-[#9A8770] mt-0.5">{slot.role || "Shift"} · {slot.startTime}–{slot.endTime}</p>
             </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20}/></button>
+            <button onClick={onClose} aria-label="Close" className="text-[#9A8770] hover:text-[#844429] p-1 rounded-lg hover:bg-[#F4E9DD]"><X size={20}/></button>
           </div>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search staff…" autoFocus
-            className="mt-3 w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"/>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search staff…" autoFocus aria-label="Search staff"
+            className="mt-3 w-full bg-white border border-[#E2CFBC] rounded-xl px-3 py-2 text-sm text-[#3A2E26] placeholder:text-[#B9A88F] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]"/>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          {sorted.length === 0 && <div className="text-center py-6 text-slate-500 text-sm">No staff found.</div>}
+          {sorted.length === 0 && <div className="text-center py-6 text-[#9A8770] text-sm">No staff found.</div>}
           {sorted.map(m => {
             const has = memberHasRole(m, slot.role);
             const unavail = dayUnavail(m);
             return (
               <button key={m.id} onClick={() => assign(m)} disabled={busy}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-800 text-left disabled:opacity-50">
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[#F4E9DD] text-left disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">
                 <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName}`} color={m.color || "#844429"} size={36} rounded="full"/>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-white truncate">{m.firstName} {m.lastName}</div>
-                  <div className="text-[11px] text-slate-500">{unavail ? <span className="text-red-400">Unavailable this day</span> : (m.role || "—")}</div>
+                  <div className="text-sm font-semibold text-[#3A2E26] truncate">{m.firstName} {m.lastName}</div>
+                  <div className="text-[11px] text-[#9A8770]">{unavail ? <span className="text-red-500">Unavailable this day</span> : (m.role || "—")}</div>
                 </div>
-                {has && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 flex-shrink-0">Has role</span>}
+                {has && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E4EFD9] text-[#5C9442] flex-shrink-0">Has role</span>}
               </button>
             );
           })}
         </div>
-        <div className="p-4 border-t border-slate-800 flex justify-between">
-          <button onClick={onDeleteSlot} className="px-3 py-2 rounded-xl bg-red-600/15 text-red-300 text-sm font-semibold hover:bg-red-600/25">Delete slot</button>
-          <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+        <div className="p-4 border-t border-[#E8DCC6] flex justify-between">
+          <button onClick={onDeleteSlot} className="px-3 py-2 rounded-xl bg-red-50 text-red-600 text-sm font-semibold hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300">Delete slot</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl bg-[#F4E9DD] text-[#844429] text-sm font-semibold hover:bg-[#EBDCCB] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">Cancel</button>
         </div>
       </div>
     </div>
