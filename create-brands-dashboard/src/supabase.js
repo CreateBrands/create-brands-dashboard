@@ -1135,8 +1135,8 @@ export function requiredBreakMins(rawHours) {
 // Returns a clear split: { workedHours (raw clocked), breakMins (deducted),
 // breakHours, payableHours, hours (=payableHours, kept for back-compat),
 // punchedBreakMins, requiredBreakMins, breakEnforced, rawHours, overnight }.
-export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null, applyBreakRule = true } = {}) {
-  const EMPTY = { hours: null, payableHours: null, workedHours: null, breakHours: null, breakMins: 0, punchedBreakMins: 0, requiredBreakMins: 0, breakEnforced: false, rawHours: null, overnight: false };
+export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null, applyBreakRule = true, breakPaid = false } = {}) {
+  const EMPTY = { hours: null, payableHours: null, workedHours: null, breakHours: null, breakMins: 0, punchedBreakMins: 0, requiredBreakMins: 0, breakEnforced: false, rawHours: null, overnight: false, breakPaid: false };
   if (!punchIn || !punchOut) return EMPTY;
   const inMs = new Date(punchIn).getTime();
   let outMs = new Date(punchOut).getTime();
@@ -1154,20 +1154,28 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
 
   // Apply the unpaid-break rule: deduct the greater of punched vs the minimum.
   const reqMins = applyBreakRule ? requiredBreakMins(rawHours) : 0;
-  const breakMins = Math.max(punchedBreakMins, reqMins);
+  let breakMins = Math.max(punchedBreakMins, reqMins);
   const breakEnforced = breakMins > punchedBreakMins;   // true when we bumped up to the minimum
 
+  // PAID BREAK OVERRIDE: a manager can mark the break as paid when it couldn't
+  // be allocated to the employee. The break is still recorded (punchedBreakMins
+  // is preserved for reporting), but it is NOT deducted from paid hours — the
+  // worker is paid the full raw shift.
+  const deductMins = breakPaid ? 0 : breakMins;
+
   const breakHours = Math.round((breakMins / 60) * 100) / 100;
-  const payableHours = Math.round(Math.max(0, rawHours - breakMins / 60) * 100) / 100;
+  const payableHours = Math.round(Math.max(0, rawHours - deductMins / 60) * 100) / 100;
   return {
     hours: payableHours,            // back-compat: existing callers read .hours
     payableHours,
     workedHours: Math.round(rawHours * 100) / 100,
     breakHours,
-    breakMins,
+    breakMins,                      // the break that WOULD apply (for display)
+    deductedBreakMins: deductMins,  // what was actually deducted (0 if paid)
     punchedBreakMins,
     requiredBreakMins: reqMins,
     breakEnforced,
+    breakPaid: !!breakPaid,
     rawHours,
     overnight,
   };
@@ -1336,6 +1344,7 @@ function appPunchToDb(p) {
     scheduled_start: p.scheduledStart || null, scheduled_end: p.scheduledEnd || null,
     break_start: p.breakStart || null, break_end: p.breakEnd || null,
     break_minutes: p.breakMinutes || 0,
+    break_paid: p.breakPaid ?? false,
     overtime_hours: p.overtimeHours || null,
     overtime_reason: p.overtimeReason || "",
     overtime_approved: p.overtimeApproved ?? false,
@@ -1361,6 +1370,7 @@ function dbPunchToApp(p) {
     scheduledEnd: p.scheduled_end?.slice(0,5) || null,
     breakStart: p.break_start || null, breakEnd: p.break_end || null,
     breakMinutes: p.break_minutes ? parseInt(p.break_minutes, 10) : 0,
+    breakPaid: p.break_paid ?? false,
     overtimeHours: p.overtime_hours ? parseFloat(p.overtime_hours) : null,
     overtimeReason: p.overtime_reason || "",
     overtimeApproved: p.overtime_approved ?? false,

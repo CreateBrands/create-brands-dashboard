@@ -43907,7 +43907,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     return computePunchHours({
       punchIn: inIso, punchOut: outIso,
       breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
-      breakEndRef: new Date().toISOString(),
+      breakEndRef: new Date().toISOString(), breakPaid: r.breakPaid,
     });
   };
 
@@ -44633,6 +44633,7 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
   const [punchInTime,  setPunchInTime]  = useState(toTimeStr(record.punchIn));
   const [punchOutTime, setPunchOutTime] = useState(toTimeStr(record.punchOut));
   const [notes,        setNotes]        = useState(record.notes || "");
+  const [breakPaid,    setBreakPaid]    = useState(record.breakPaid ?? false);
   const [confirmDel,   setConfirmDel]   = useState(false);
 
   const handleSave = () => {
@@ -44650,13 +44651,14 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
     if (spanH != null && spanH > 16) {
       if (!window.confirm(`This shift is ${spanH.toFixed(1)} hours, which looks unusually long. Save anyway?`)) return;
     }
-    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: record.breakMinutes }).hours : null;
+    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: record.breakMinutes, breakStart: record.breakStart, breakEnd: record.breakEnd, breakPaid }).hours : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
     const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
     const _audit = [];
     if (record.punchIn !== newPunchIn) _audit.push({ field: "punch_in", oldValue: fmtT(record.punchIn), newValue: fmtT(newPunchIn) });
     if ((record.punchOut || null) !== newPunchOut) _audit.push({ field: "punch_out", oldValue: fmtT(record.punchOut), newValue: fmtT(newPunchOut) });
-    onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes,
+    if ((record.breakPaid ?? false) !== breakPaid) _audit.push({ field: "break_paid", oldValue: (record.breakPaid ? "Yes" : "No"), newValue: (breakPaid ? "Yes" : "No") });
+    onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes, breakPaid,
              status: punchOutTime ? "amended" : "open", approved: false, updatedAt: new Date().toISOString(), _audit });
   };
 
@@ -44697,6 +44699,18 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
             ⏹ Force Clock Out Now
           </button>
         )}
+        {/* Paid break: manager marks the break as paid when it couldn't be
+            given, so it is NOT deducted from paid hours. */}
+        <button type="button" onClick={() => setBreakPaid(v => !v)}
+          className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border transition-colors ${breakPaid ? "bg-emerald-600/15 border-emerald-500/40" : "bg-slate-800/50 border-slate-700 hover:border-slate-600"}`}>
+          <div className="text-left">
+            <div className="text-sm font-semibold text-white">Mark break as paid</div>
+            <div className="text-[11px] text-slate-400">{breakPaid ? "Break will NOT be deducted — full shift paid" : "Break is deducted from paid hours (default)"}</div>
+          </div>
+          <div className={`w-10 h-6 rounded-full relative flex-shrink-0 transition-colors ${breakPaid ? "bg-emerald-600" : "bg-slate-700"}`}>
+            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${breakPaid ? "left-[18px]" : "left-0.5"}`}/>
+          </div>
+        </button>
         <div><label className={labelCls}>Notes</label>
           <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2}
             placeholder="Reason for amendment…" className={`${inputCls} resize-none`}/>
