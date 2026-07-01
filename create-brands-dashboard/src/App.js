@@ -48983,7 +48983,7 @@ export default function App() {
     const top = all.find(it => it.key === viewKey);
     if (top) return canRoleSeeSection(currentUserRole.matrixRole, top);
     for (const it of all) {
-      const child = (it.children || []).find(c => c.key === viewKey || c.view === viewKey);
+      const child = (it.children || []).find(c => c.key === viewKey || c.view === viewKey || c.tab === viewKey);
       if (child) {
         const roleKey = currentUserRole.matrixRole;
         const override = accessPerms?.[roleKey]?.[child.key];
