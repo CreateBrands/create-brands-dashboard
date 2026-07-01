@@ -47064,7 +47064,12 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
   const [inVal, setInVal] = useState(toLocalInput(punch.punchIn));
-  const [outVal, setOutVal] = useState(toLocalInput(punch.punchOut));
+  // If the stored clock-out exactly equals the clock-in, it's bad data (a
+  // zero-length shift), not a real clock-out — start with it blank so the shift
+  // shows as OPEN rather than a phantom 24h overnight.
+  const [outVal, setOutVal] = useState(
+    (punch.punchOut && punch.punchOut !== punch.punchIn) ? toLocalInput(punch.punchOut) : ""
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -47094,9 +47099,17 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     setErr(null);
     if (!inVal) { setErr("Clock-in time is required."); return; }
     const inIso = new Date(inVal).toISOString();
-    // Overnight: roll the clock-out forward a day if it's at/before clock-in.
+    // Overnight: roll the clock-out forward a day ONLY if it's strictly BEFORE
+    // the clock-in. Equal in/out is a zero-length shift, not a 24h overnight.
     let outIso = outVal ? new Date(outVal).toISOString() : null;
-    if (outIso && new Date(outIso) <= new Date(inIso)) outIso = new Date(new Date(outIso).getTime() + 86400000).toISOString();
+    if (outIso && new Date(outIso) < new Date(inIso)) outIso = new Date(new Date(outIso).getTime() + 86400000).toISOString();
+    // Guard: reject an out that exactly equals in (likely a bad pre-fill) so it
+    // can't be saved as a phantom shift. The manager should clear it (keep open)
+    // or enter the real clock-out.
+    if (outIso && new Date(outIso).getTime() === new Date(inIso).getTime()) {
+      setErr("Clock-out equals clock-in. Clear it to keep the shift open, or enter the real clock-out time.");
+      return;
+    }
     if (preview && preview.long) {
       if (!window.confirm(`This shift is ${fmtHrs(preview.netH)}, which looks unusually long. Save anyway?`)) return;
     }

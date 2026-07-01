@@ -1142,7 +1142,11 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   let outMs = new Date(punchOut).getTime();
   if (isNaN(inMs) || isNaN(outMs)) return EMPTY;
   let overnight = false;
-  if (outMs <= inMs) { outMs += 86400000; overnight = true; }
+  // Overnight ONLY when the clock-out is strictly BEFORE the clock-in (e.g. in
+  // 23:00, out 01:00). If they're exactly EQUAL, this is a zero-length shift (or
+  // a punch_out mistakenly set equal to punch_in) — NOT a 24h overnight shift.
+  // Treating equal as +24h was producing phantom "24h worked" records.
+  if (outMs < inMs) { outMs += 86400000; overnight = true; }
   const rawHours = (outMs - inMs) / 3600000;
 
   // Total punched break (including a break still open at the reference moment).
