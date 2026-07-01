@@ -9823,6 +9823,58 @@ export async function deleteDistItem(itemId) {
   return { archived: false };
 }
 
+// Is an item referenced anywhere that deleting it would corrupt history?
+// Checks stock movements, order lines, goods-receipt lines, price lists, and
+// COGS links. Returns the first blocking reference found, or null if orphaned.
+async function distItemReference(itemId) {
+  const checks = [
+    ["stock movement", supabase.from("dist_stock_movements").select("id").eq("item_id", itemId).limit(1)],
+    ["a sales order", supabase.from("dist_sales_order_lines").select("id").eq("item_id", itemId).limit(1)],
+    ["a goods receipt", supabase.from("dist_goods_receipt_lines").select("id").eq("item_id", itemId).limit(1)],
+  ];
+  for (const [label, q] of checks) {
+    const { data } = await q;
+    if (data && data.length) return label;
+  }
+  return null;
+}
+
+// Preview a bulk delete of INACTIVE items: classify each as hard-deletable
+// (no references) vs must-keep-archived (referenced in history).
+export async function previewDeleteInactiveDistItems() {
+  const { data, error } = await supabase.from("dist_items").select("id, name, sku").eq("active", false);
+  if (error) throw error;
+  const inactive = data || [];
+  const deletable = [], blocked = [];
+  for (const it of inactive) {
+    const ref = await distItemReference(it.id);
+    if (ref) blocked.push({ ...it, reason: ref }); else deletable.push(it);
+  }
+  return { total: inactive.length, deletable, blocked };
+}
+
+// Permanently delete inactive items that are safe to remove. Items referenced
+// in history are LEFT in place (kept archived) so nothing breaks. Also clears
+// their (empty) batches, collection links, and price-list rows first.
+export async function bulkDeleteInactiveDistItems(itemIds) {
+  const ids = [...new Set((itemIds || []).filter(Boolean))];
+  let deleted = 0; const errors = [];
+  for (const id of ids) {
+    try {
+      const ref = await distItemReference(id);
+      if (ref) { errors.push({ id, reason: `referenced in ${ref}` }); continue; }
+      // Clean up non-historical links first (safe to remove).
+      await supabase.from("dist_batches").delete().eq("item_id", id);
+      await supabase.from("dist_collection_items").delete().eq("item_id", id);
+      await supabase.from("dist_price_list_items").delete().eq("item_id", id);
+      const { error } = await supabase.from("dist_items").delete().eq("id", id);
+      if (error) { errors.push({ id, reason: error.message }); continue; }
+      deleted++;
+    } catch (e) { errors.push({ id, reason: e.message }); }
+  }
+  return { deleted, errors };
+}
+
 // ============================================================================
 // DISTRIBUTION — PHASE 2: BUY SIDE (vendors=contacts, POs, goods receipts,
 // bills, payments) + journal bridges into Finance (entity = brand-distribution).

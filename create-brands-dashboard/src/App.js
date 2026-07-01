@@ -147,7 +147,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
-  fetchDistItems, upsertDistItem, deleteDistItem, fetchDistBatches, createDistBatch,
+  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchDistBatches, createDistBatch,
   fetchDistMovements, addDistMovement, seedDistOpeningStock,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
   fetchDistPurchaseOrders, createDistPurchaseOrder, setDistPurchaseOrderStatus,
@@ -11067,6 +11067,9 @@ function DistItemsView({ currentUser }) {
   const [updateStrategy, setUpdateStrategy] = useState("merge"); // 'merge' | 'overwrite' | 'skip'
   const [seedOpening, setSeedOpening] = useState(true);
   const [importResult, setImportResult] = useState(null);
+  const [cleanupPreview, setCleanupPreview] = useState(null); // {total, deletable, blocked} or null
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState(null);
   const fileRef = useRef(null);
   const XLSX = useXLSX();
   const [busy, setBusy] = useState(false);
@@ -11296,6 +11299,7 @@ function DistItemsView({ currentUser }) {
             className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={async () => { setCleanupBusy(true); setCleanupResult(null); try { setCleanupPreview(await previewDeleteInactiveDistItems()); } catch (e) { setErr(e.message); } setCleanupBusy(false); }} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold flex items-center gap-1.5" title="Permanently remove inactive items"><Trash2 size={14}/> Clean up inactive</button>
           <button onClick={() => setImportOpen(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import CSV</button>
           <button onClick={() => setEditItem({ active: true, packCount: 1 })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New item</button>
         </div>
@@ -11323,6 +11327,43 @@ function DistItemsView({ currentUser }) {
       )}
 
       {/* Item detail + stock + movement history */}
+      {cleanupPreview && (
+        <Modal onClose={() => { setCleanupPreview(null); setCleanupResult(null); }} title="Clean up inactive items" maxW="max-w-lg">
+          <div className="space-y-3">
+            {cleanupResult ? (
+              <div className="text-sm text-slate-200">
+                <div className="text-emerald-300 font-semibold">Deleted {cleanupResult.deleted} item{cleanupResult.deleted===1?"":"s"}.</div>
+                {cleanupResult.errors?.length > 0 && <div className="text-xs text-amber-300 mt-2">{cleanupResult.errors.length} could not be deleted (referenced in history) and were left archived.</div>}
+                <button onClick={async () => { setCleanupPreview(null); setCleanupResult(null); await load(); }} className="mt-3 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Done</button>
+              </div>
+            ) : (
+              <>
+                <div className="text-sm text-slate-300">You have <span className="font-bold text-white">{cleanupPreview.total}</span> inactive item{cleanupPreview.total===1?"":"s"}.</div>
+                <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-3">
+                  <div className="text-sm font-semibold text-red-300">{cleanupPreview.deletable.length} will be permanently deleted</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">These aren't used in any order, receipt, or stock history - safe to remove.</div>
+                </div>
+                {cleanupPreview.blocked.length > 0 && (
+                  <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                    <div className="text-sm font-semibold text-slate-200">{cleanupPreview.blocked.length} will be kept</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">These appear in past orders or stock history, so deleting them would break those records. They stay archived (hidden) instead.</div>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle size={13}/> Permanent - this cannot be undone.</div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button onClick={() => setCleanupPreview(null)} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+                  <button disabled={cleanupBusy || cleanupPreview.deletable.length===0} onClick={async () => {
+                    setCleanupBusy(true);
+                    try { const res = await bulkDeleteInactiveDistItems(cleanupPreview.deletable.map(i=>i.id)); setCleanupResult(res); }
+                    catch (e) { setErr(e.message); }
+                    setCleanupBusy(false);
+                  }} className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-bold disabled:opacity-40">{cleanupBusy?"Deleting...":`Delete ${cleanupPreview.deletable.length} item${cleanupPreview.deletable.length===1?"":"s"}`}</button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
       {detailItem && (
         <DistItemDetail item={detailItem} taxName={taxName} categories={categories} onClose={() => setDetailItem(null)}
           onEdit={() => { setEditItem(detailItem); setDetailItem(null); }}
