@@ -162,6 +162,7 @@ import {
   fetchDistDashboard,
   fetchDistSearchIndex,
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
+  fetchDistCollections, upsertDistCollection, deleteDistCollection, fetchDistCollectionItems, setDistCollectionItems,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
   fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
@@ -179,7 +180,7 @@ import {
   Cloud, Sun, CloudRain, ArrowRight,
   QrCode,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, ArrowUpRight,
-  Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw, Copy,
+  Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw, Copy, LayoutGrid, List,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
@@ -7989,7 +7990,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Received</div><div className="text-xl font-bold text-emerald-300">{gbp(data.receivedTotal)}</div></div>
               </div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-                <div className="flex items-center justify-between mb-2"><div className="text-sm font-semibold text-white">Income</div><div className="text-xs text-slate-500">Last 6 months \u00B7 {gbp(data.incomeTotal)}</div></div>
+                <div className="flex items-center justify-between mb-2"><div className="text-sm font-semibold text-white">Income</div><div className="text-xs text-slate-500">Last 6 months · {gbp(data.incomeTotal)}</div></div>
                 <div className="flex items-end gap-2 h-32 pt-2">
                   {data.months.map(m => (
                     <div key={m.key} className="flex-1 flex flex-col items-center justify-end h-full">
@@ -9972,15 +9973,229 @@ function DistReorderReport() {
 // ============================================================================
 // DISTRIBUTION — STORE ORDERING PORTAL (blind). Store users order from the
 // warehouse at their own price-list prices. No stock is ever shown.
+// Owner setup for the Distribution order page: how items are displayed
+// (default browse mode + view), plus managing Collections (curated groups).
+function DistOrderSetupView() {
+  const [cfg, setCfg] = useState({ defaultBrowse: "category", defaultView: "card", categoryOrder: [], collectionOrder: [] });
+  const [collections, setCollections] = useState([]);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [editColl, setEditColl] = useState(null); // collection being edited (or {new})
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const [colls, its, settings] = await Promise.all([
+        fetchDistCollections({ includeInactive: true }).catch(() => []),
+        fetchDistItems().catch(() => []),
+        fetchAppSettings().catch(() => ({})),
+      ]);
+      setCollections(colls); setItems(its);
+      let c = {};
+      try { c = settings?.dist_order_display ? JSON.parse(settings.dist_order_display) : {}; } catch { c = {}; }
+      setCfg({ defaultBrowse: c.defaultBrowse || "category", defaultView: c.defaultView || "card", categoryOrder: c.categoryOrder || [], collectionOrder: c.collectionOrder || [] });
+    } catch (e) { setMsg(e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { reload(); }, []);
+
+  const allCategories = useMemo(() => Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort(), [items]);
+
+  const saveCfg = async (next) => {
+    setSaving(true); setMsg("");
+    try {
+      await upsertAppSetting("dist_order_display", JSON.stringify(next));
+      setCfg(next); setMsg("Saved. Applies to the order page immediately.");
+      setTimeout(() => setMsg(""), 2500);
+    } catch (e) { setMsg(e.message); }
+    setSaving(false);
+  };
+
+  const moveCategory = (cat, dir) => {
+    const order = cfg.categoryOrder.length ? [...cfg.categoryOrder] : [...allCategories];
+    const i = order.indexOf(cat);
+    if (i === -1) order.push(cat);
+    const j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    saveCfg({ ...cfg, categoryOrder: order });
+  };
+
+  if (loading) return <div className="py-16 text-center text-slate-500 text-sm">Loading…</div>;
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-white">Order Page</h2>
+        <p className="text-sm text-slate-400 mt-0.5">Control how the {items.length} distribution items are shown when stores place orders. This layout applies to all stores.</p>
+      </div>
+      {msg && <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">{msg}</div>}
+
+      {/* Display defaults */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-4">
+        <div className="text-sm font-bold text-white">Display defaults</div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1.5">Default browse mode</label>
+            <div className="flex bg-slate-950 border border-slate-700 rounded-xl p-0.5 w-fit">
+              {[["category","Categories"],["collection","Collections"]].map(([k,l]) => (
+                <button key={k} onClick={() => saveCfg({ ...cfg, defaultBrowse: k })} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${cfg.defaultBrowse===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1.5">Default view</label>
+            <div className="flex bg-slate-950 border border-slate-700 rounded-xl p-0.5 w-fit">
+              {[["card","Cards"],["list","List"]].map(([k,l]) => (
+                <button key={k} onClick={() => saveCfg({ ...cfg, defaultView: k })} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${cfg.defaultView===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <p className="text-[11px] text-slate-500">Stores can still switch between cards/list and categories/collections themselves — this just sets what they see first.</p>
+      </div>
+
+      {/* Category order */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+        <div className="text-sm font-bold text-white">Category order</div>
+        <p className="text-[11px] text-slate-500">Reorder how categories appear. Categories come from each item's Category field.</p>
+        <div className="space-y-1.5 max-h-72 overflow-y-auto">
+          {(cfg.categoryOrder.length ? cfg.categoryOrder.filter(c => allCategories.includes(c)).concat(allCategories.filter(c => !cfg.categoryOrder.includes(c))) : allCategories).map((c, idx, arr) => (
+            <div key={c} className="flex items-center justify-between bg-slate-950/50 rounded-lg px-3 py-2">
+              <span className="text-sm text-slate-200">{c} <span className="text-[11px] text-slate-500">({items.filter(i => i.category === c).length})</span></span>
+              <div className="flex items-center gap-1">
+                <button disabled={idx===0} onClick={() => moveCategory(c, -1)} className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30">↑</button>
+                <button disabled={idx===arr.length-1} onClick={() => moveCategory(c, 1)} className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30">↓</button>
+              </div>
+            </div>
+          ))}
+          {allCategories.length === 0 && <div className="text-xs text-slate-600 py-3 text-center">No categories yet. Set a Category on your items.</div>}
+        </div>
+      </div>
+
+      {/* Collections */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-white">Collections</div>
+          <button onClick={() => setEditColl({ new: true, name: "", description: "", active: true, itemIds: [] })} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={13}/> New collection</button>
+        </div>
+        <p className="text-[11px] text-slate-500">Curated groups that cut across categories (e.g. "Weekly Essentials", "New In"). An item can be in several collections.</p>
+        <div className="space-y-1.5">
+          {collections.length === 0 && <div className="text-xs text-slate-600 py-4 text-center">No collections yet. Create one to group items for quick ordering.</div>}
+          {collections.map(c => (
+            <div key={c.id} className="flex items-center justify-between bg-slate-950/50 rounded-lg px-3 py-2.5">
+              <div>
+                <div className="text-sm text-white font-semibold flex items-center gap-2">{c.name}{c.active===false && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">Hidden</span>}</div>
+                {c.description && <div className="text-[11px] text-slate-500">{c.description}</div>}
+              </div>
+              <button onClick={async () => { const ids = await fetchDistCollectionItems(c.id).then(r => r.map(x => x.itemId)).catch(() => []); setEditColl({ ...c, itemIds: ids }); }} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Edit</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {editColl && <DistCollectionEditModal coll={editColl} items={items} onClose={() => setEditColl(null)} onSaved={() => { setEditColl(null); reload(); }}/>}
+    </div>
+  );
+}
+
+// Create/edit a collection: name, visibility, and item membership (searchable).
+function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
+  const [name, setName] = useState(coll.name || "");
+  const [description, setDescription] = useState(coll.description || "");
+  const [active, setActive] = useState(coll.active !== false);
+  const [picked, setPicked] = useState(new Set(coll.itemIds || []));
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return items.filter(i => !s || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(s)).slice(0, 200);
+  }, [items, q]);
+
+  const toggle = (id) => setPicked(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const save = async () => {
+    if (!name.trim()) { setErr("Give the collection a name."); return; }
+    setBusy(true); setErr("");
+    try {
+      const saved = await upsertDistCollection({ id: coll.new ? undefined : coll.id, name: name.trim(), description, active, sortOrder: coll.sortOrder || 0 });
+      await setDistCollectionItems(saved.id, Array.from(picked));
+      onSaved();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const remove = async () => {
+    if (!window.confirm(`Delete the collection "${name}"? Items stay; only the grouping is removed.`)) return;
+    setBusy(true);
+    try { await deleteDistCollection(coll.id); onSaved(); } catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} title={coll.new ? "New collection" : "Edit collection"} maxW="max-w-2xl">
+      <div className="space-y-3">
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Weekly Essentials" className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Description (optional)</label>
+            <input value={description} onChange={e => setDescription(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded"/> Visible on the order page</label>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">Items in this collection</label>
+            <span className="text-[11px] text-indigo-300 font-semibold">{picked.size} selected</span>
+          </div>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…" className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white mb-2"/>
+          <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-800 divide-y divide-slate-800/60">
+            {filtered.map(i => {
+              const on = picked.has(i.id);
+              return (
+                <button key={i.id} onClick={() => toggle(i.id)} className={`w-full flex items-center gap-3 px-3 py-2 text-left ${on?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on?"bg-indigo-600 border-indigo-600":"border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</div>
+                  <div className="min-w-0 flex-1"><div className="text-sm text-white truncate">{i.name}</div><div className="text-[11px] text-slate-500">{i.category || "Uncategorised"}{i.sku?` · ${i.sku}`:""}</div></div>
+                </button>
+              );
+            })}
+            {filtered.length === 0 && <div className="px-3 py-6 text-center text-xs text-slate-600">No items match.</div>}
+          </div>
+          {items.length > 200 && q.trim() === "" && <p className="text-[10px] text-slate-600 mt-1">Showing first 200 — search to find more.</p>}
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          {!coll.new ? <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-lg bg-red-600/15 text-red-300 text-sm font-semibold hover:bg-red-600/25">Delete</button> : <span/>}
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold disabled:opacity-40">{busy?"Saving…":"Save collection"}</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // Category nav · search · quantity steppers · running cart · reorder-from-last.
 // Writes a Distribution sales order (commits stock) on checkout.
 // ============================================================================
-function DistOrderPortalView({ currentUser }) {
+function DistOrderPortalView({ currentUser, onNavigate }) {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [catalogue, setCatalogue] = useState([]);
+  const [collections, setCollections] = useState([]);   // curated groups
+  const [displayCfg, setDisplayCfg] = useState(null);    // owner-set layout config
   const [cart, setCart] = useState({});
-  const [cat, setCat] = useState("All");
+  const [cat, setCat] = useState("All");                 // active category OR collection id
+  const [browseMode, setBrowseMode] = useState("category"); // "category" | "collection"
+  const [viewMode, setViewMode] = useState("card");      // "card" | "list"
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -10005,6 +10220,26 @@ function DistOrderPortalView({ currentUser }) {
     })();
   }, [JSON.stringify(storeIds)]);
 
+  // Load collections + owner display config once. Config is a JSON blob in
+  // app_settings under "dist_order_display": { defaultBrowse, defaultView,
+  // categoryOrder[], collectionOrder[] }. Missing → sensible defaults.
+  useEffect(() => {
+    (async () => {
+      try {
+        const [colls, settings] = await Promise.all([
+          fetchDistCollections().catch(() => []),
+          fetchAppSettings().catch(() => ({})),
+        ]);
+        setCollections(colls);
+        let cfg = {};
+        try { cfg = settings?.dist_order_display ? JSON.parse(settings.dist_order_display) : {}; } catch { cfg = {}; }
+        setDisplayCfg(cfg);
+        if (cfg.defaultBrowse === "collection" && colls.length) setBrowseMode("collection");
+        if (cfg.defaultView === "list") setViewMode("list");
+      } catch { setDisplayCfg({}); }
+    })();
+  }, []);
+
   useEffect(() => {
     if (!customerId) return;
     (async () => {
@@ -10020,11 +10255,40 @@ function DistOrderPortalView({ currentUser }) {
     })();
   }, [customerId]);
 
-  const categories = useMemo(() => ["All", ...Array.from(new Set(catalogue.map(i => i.category))).sort()], [catalogue]);
+  // When browse mode flips, reset the active filter to "All".
+  useEffect(() => { setCat("All"); }, [browseMode]);
+
+  // Category list, honouring the owner's configured order (unlisted → alpha tail).
+  const categories = useMemo(() => {
+    const present = Array.from(new Set(catalogue.map(i => i.category).filter(Boolean)));
+    const order = displayCfg?.categoryOrder || [];
+    const ranked = [...present].sort((a, b) => {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1; if (ib === -1) return -1; return ia - ib;
+    });
+    return ["All", ...ranked];
+  }, [catalogue, displayCfg]);
+
+  // Active (visible) collections, ordered by their sortOrder / config.
+  const activeCollections = useMemo(() => {
+    const order = displayCfg?.collectionOrder || [];
+    return [...collections].filter(c => c.active !== false).sort((a, b) => {
+      const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+      if (ia === -1 && ib === -1) return (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name);
+      if (ia === -1) return 1; if (ib === -1) return -1; return ia - ib;
+    });
+  }, [collections, displayCfg]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return catalogue.filter(i => (cat === "All" || i.category === cat) && (!q || `${i.name} ${i.sku}`.toLowerCase().includes(q)));
-  }, [catalogue, cat, search]);
+    return catalogue.filter(i => {
+      const inFilter = cat === "All"
+        ? true
+        : (browseMode === "collection" ? (i.collectionIds || []).includes(cat) : i.category === cat);
+      return inFilter && (!q || `${i.name} ${i.sku}`.toLowerCase().includes(q));
+    });
+  }, [catalogue, cat, search, browseMode]);
 
   const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
   const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
@@ -10081,87 +10345,147 @@ function DistOrderPortalView({ currentUser }) {
   }
 
   return (
-    <div className="space-y-5 pb-24 lg:pb-0">
+    <div className="fixed inset-0 z-40 bg-slate-950 flex flex-col">
       {/* Header */}
-      <div className="flex items-end justify-between gap-3 flex-wrap">
-        <div>
-          <div className="text-[11px] uppercase tracking-widest text-indigo-400 font-semibold">Distribution</div>
-          <h2 className="text-2xl font-bold text-white leading-tight">Order supplies</h2>
+      <div className="flex-shrink-0 px-4 sm:px-6 py-3 border-b border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-indigo-400 font-semibold">Distribution</div>
+            <h2 className="text-xl font-bold text-white leading-tight">Order supplies</h2>
+          </div>
           {customers.length > 1 ? (
-            <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="mt-1.5 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
+            <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-          ) : customers.length === 1 ? <div className="text-sm text-slate-500 mt-0.5">{customers[0].name}</div> : null}
+          ) : customers.length === 1 ? <div className="text-sm text-slate-500 self-center">{customers[0].name}</div> : null}
         </div>
-        {lastOrder && <button onClick={reorderLast} className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-2"><RotateCcw size={15}/> Reorder last order</button>}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Browse mode: Categories vs Collections (only if collections exist) */}
+          {activeCollections.length > 0 && (
+            <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-0.5">
+              {[["category","Categories"],["collection","Collections"]].map(([k,l]) => (
+                <button key={k} onClick={() => setBrowseMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${browseMode===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+          )}
+          {/* View mode: card vs list */}
+          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-0.5">
+            <button onClick={() => setViewMode("card")} title="Card view" className={`px-2.5 py-1.5 rounded-lg transition-colors ${viewMode==="card"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}><LayoutGrid size={15}/></button>
+            <button onClick={() => setViewMode("list")} title="List view" className={`px-2.5 py-1.5 rounded-lg transition-colors ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}><List size={15}/></button>
+          </div>
+          {lastOrder && <button onClick={reorderLast} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><RotateCcw size={14}/> Reorder last</button>}
+          <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300" title="Close"><X size={18}/></button>
+        </div>
       </div>
-      {err && err !== "no-link" && <div className="text-xs text-red-400">{err}</div>}
+      {err && err !== "no-link" && <div className="px-6 py-2 text-xs text-red-400">{err}</div>}
+
 
       {loading ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4">
-          {Array.from({ length: 8 }).map((_, n) => <div key={n} className="rounded-2xl border border-slate-800 bg-slate-900 p-3 animate-pulse"><div className="h-32 rounded-xl bg-slate-800"/><div className="h-3 bg-slate-800 rounded mt-3 w-3/4"/><div className="h-3 bg-slate-800 rounded mt-2 w-1/3"/></div>)}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4">
+            {Array.from({ length: 10 }).map((_, n) => <div key={n} className="rounded-2xl border border-slate-800 bg-slate-900 p-3 animate-pulse"><div className="h-32 rounded-xl bg-slate-800"/><div className="h-3 bg-slate-800 rounded mt-3 w-3/4"/><div className="h-3 bg-slate-800 rounded mt-2 w-1/3"/></div>)}
+          </div>
         </div>
       ) : customerId && (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-          {/* Catalogue */}
-          <div className="lg:col-span-3 space-y-4">
-            {/* Sticky controls: search + category bar */}
-            <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-slate-950/80 backdrop-blur space-y-2.5">
-              <div className="relative"><Search size={16} className="absolute left-3.5 top-3 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search products…" className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
-              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">{categories.map(c => <button key={c} onClick={() => setCat(c)} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat===c?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{c}</button>)}</div>
-            </div>
-            {visible.length === 0 ? (
-              <div className="text-center text-sm text-slate-600 py-16">No products match. Try another category or clear the search.</div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4">
-                {visible.map(i => {
-                  const qty = cart[i.id] || 0;
-                  return (
-                    <div key={i.id} className={`group rounded-2xl border bg-slate-900 p-3 flex flex-col transition-all ${qty>0?"border-indigo-500/70 ring-1 ring-indigo-500/30":"border-slate-800 hover:border-slate-700"}`}>
-                      <div className="relative">
-                        <ProductImage i={i}/>
-                        {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center shadow-lg">{qty}</span>}
-                      </div>
-                      <div className="mt-3 flex-1">
-                        <div className="text-sm font-semibold text-white leading-snug line-clamp-2">{cleanName(i.name)}</div>
-                        <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1"><Package size={11}/> {unitLabel(i)}</div>
-                      </div>
-                      <div className="mt-2.5 flex items-end justify-between gap-2">
-                        <div className="text-lg font-bold text-white">{gbp(i.price)}</div>
-                        {qty > 0 ? (
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-lg leading-none flex items-center justify-center">−</button>
-                            <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"/>
-                            <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-lg leading-none flex items-center justify-center">+</button>
-                          </div>
-                        ) : (
-                          <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg bg-slate-800 group-hover:bg-indigo-600 text-slate-200 group-hover:text-white text-xs font-semibold flex items-center gap-1 transition-colors"><Plus size={14}/> Add</button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+        <div className="flex-1 flex min-h-0">
+          {/* Catalogue column (scrolls) */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Sticky controls: search + chip bar (categories OR collections) */}
+            <div className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-2 border-b border-slate-800/70 bg-slate-950 space-y-2.5">
+              <div className="relative max-w-xl"><Search size={16} className="absolute left-3.5 top-3 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${catalogue.length} products…`} className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {browseMode === "collection" ? (
+                  <>
+                    <button onClick={() => setCat("All")} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat==="All"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>All</button>
+                    {activeCollections.map(c => <button key={c.id} onClick={() => setCat(c.id)} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat===c.id?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{c.name}</button>)}
+                  </>
+                ) : (
+                  categories.map(c => <button key={c} onClick={() => setCat(c)} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat===c?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{c}</button>)
+                )}
               </div>
-            )}
+            </div>
+            {/* Scrolling product area */}
+            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 pb-28 lg:pb-4">
+              {visible.length === 0 ? (
+                <div className="text-center text-sm text-slate-600 py-16">No products match. Try another {browseMode==="collection"?"collection":"category"} or clear the search.</div>
+              ) : viewMode === "list" ? (
+                /* ── LIST VIEW — dense rows, best for 500+ items ── */
+                <div className="rounded-2xl border border-slate-800 bg-slate-900 divide-y divide-slate-800/70 overflow-hidden">
+                  {visible.map(i => {
+                    const qty = cart[i.id] || 0;
+                    return (
+                      <div key={i.id} className={`flex items-center gap-3 px-3 py-2.5 ${qty>0?"bg-indigo-600/10":"hover:bg-slate-800/40"}`}>
+                        <div className="w-10 h-10 rounded-lg overflow-hidden bg-slate-800 flex-shrink-0"><ProductImage i={i} size="h-10"/></div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-white truncate">{cleanName(i.name)}</div>
+                          <div className="text-[11px] text-slate-500 flex items-center gap-2"><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span className="text-slate-600">{i.sku}</span>}</div>
+                        </div>
+                        <div className="text-sm font-bold text-white w-16 text-right flex-shrink-0">{gbp(i.price)}</div>
+                        <div className="flex-shrink-0 w-[104px] flex justify-end">
+                          {qty > 0 ? (
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => bump(i.id, -1)} className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold leading-none flex items-center justify-center">−</button>
+                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-8 text-center py-1 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"/>
+                              <button onClick={() => bump(i.id, 1)} className="w-7 h-7 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold leading-none flex items-center justify-center">+</button>
+                            </div>
+                          ) : (
+                            <button onClick={() => bump(i.id, 1)} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1 transition-colors"><Plus size={13}/> Add</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* ── CARD VIEW ── */
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-4">
+                  {visible.map(i => {
+                    const qty = cart[i.id] || 0;
+                    return (
+                      <div key={i.id} className={`group rounded-2xl border bg-slate-900 p-3 flex flex-col transition-all ${qty>0?"border-indigo-500/70 ring-1 ring-indigo-500/30":"border-slate-800 hover:border-slate-700"}`}>
+                        <div className="relative">
+                          <ProductImage i={i}/>
+                          {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center shadow-lg">{qty}</span>}
+                        </div>
+                        <div className="mt-3 flex-1">
+                          <div className="text-sm font-semibold text-white leading-snug line-clamp-2">{cleanName(i.name)}</div>
+                          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1"><Package size={11}/> {unitLabel(i)}</div>
+                        </div>
+                        <div className="mt-2.5 flex items-end justify-between gap-2">
+                          <div className="text-lg font-bold text-white">{gbp(i.price)}</div>
+                          {qty > 0 ? (
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-lg leading-none flex items-center justify-center">−</button>
+                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"/>
+                              <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-lg leading-none flex items-center justify-center">+</button>
+                            </div>
+                          ) : (
+                            <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg bg-slate-800 group-hover:bg-indigo-600 text-slate-200 group-hover:text-white text-xs font-semibold flex items-center gap-1 transition-colors"><Plus size={14}/> Add</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Cart — sticky on desktop */}
-          <div className="hidden lg:block lg:col-span-1">
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 sticky top-4 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between"><span className="text-sm font-bold text-white flex items-center gap-2"><ShoppingCart size={16}/> Your order</span><span className="text-xs text-slate-500">{cartCount} item{cartCount!==1?"s":""}</span></div>
-              <div className="max-h-[26rem] overflow-y-auto divide-y divide-slate-800/60">
-                {cartLines.length === 0 && <div className="px-4 py-10 text-center text-sm text-slate-600">Your cart is empty.<br/>Tap <span className="text-slate-400">Add</span> on any product.</div>}
-                {cartLines.map(l => (
-                  <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                    <div className="min-w-0"><div className="text-sm text-white truncate">{cleanName(l.name)}</div><div className="text-[11px] text-slate-500">{l.qty} × {gbp(l.price)}</div></div>
-                    <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm text-white font-medium">{gbp(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></div>
-                  </div>
-                ))}
-              </div>
-              <div className="px-4 py-3 border-t border-slate-800 space-y-2.5">
-                <div className="flex justify-between text-sm"><span className="text-slate-400">Subtotal (excl. VAT)</span><span className="text-white font-bold">{gbp(cartTotal)}</span></div>
-                <button onClick={() => setConfirmOpen(true)} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
-              </div>
+          {/* Cart — fixed side panel on desktop */}
+          <div className="hidden lg:flex lg:flex-col w-80 flex-shrink-0 border-l border-slate-800 bg-slate-900">
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between"><span className="text-sm font-bold text-white flex items-center gap-2"><ShoppingCart size={16}/> Your order</span><span className="text-xs text-slate-500">{cartCount} item{cartCount!==1?"s":""}</span></div>
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60">
+              {cartLines.length === 0 && <div className="px-4 py-10 text-center text-sm text-slate-600">Your cart is empty.<br/>Tap <span className="text-slate-400">Add</span> on any product.</div>}
+              {cartLines.map(l => (
+                <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0"><div className="text-sm text-white truncate">{cleanName(l.name)}</div><div className="text-[11px] text-slate-500">{l.qty} × {gbp(l.price)}</div></div>
+                  <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm text-white font-medium">{gbp(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></div>
+                </div>
+              ))}
+            </div>
+            <div className="px-4 py-3 border-t border-slate-800 space-y-2.5">
+              <div className="flex justify-between text-sm"><span className="text-slate-400">Subtotal (excl. VAT)</span><span className="text-white font-bold">{gbp(cartTotal)}</span></div>
+              <button onClick={() => setConfirmOpen(true)} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
             </div>
           </div>
         </div>
@@ -49220,7 +49544,7 @@ export default function App() {
                 </div>
               );
             })()}
-            {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
@@ -49356,6 +49680,13 @@ export default function App() {
                   ].filter(i => i.gate()),
                 },
                 {
+                  key: "distribution-setup", label: "Distribution", icon: ShoppingCart, accent: "indigo",
+                  desc: "Order page layout and collections.",
+                  items: [
+                    { key: "dist-order-setup", label: "Order Page", desc: "Layout, collections, and how items are shown.", gate: gOwner },
+                  ].filter(i => i.gate()),
+                },
+                {
                   key: "system", label: "System", icon: ShieldCheck, accent: "amber",
                   desc: "Notifications and access control.",
                   items: [
@@ -49409,6 +49740,7 @@ export default function App() {
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}

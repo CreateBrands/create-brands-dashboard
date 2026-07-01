@@ -10439,17 +10439,69 @@ export async function fetchDistCustomersForStores(storeIds = []) {
 // price (price-list entry, else item default). One round-trip for the portal.
 // Deliberately returns NO stock figures — stores order blind (SoW principle).
 export async function fetchDistPortalCatalogue(customerId) {
-  const [items, priceList] = await Promise.all([
+  const [items, priceList, collLinks] = await Promise.all([
     fetchDistItems(),
     customerId ? fetchDistPriceList(customerId) : Promise.resolve([]),
+    supabase.from("dist_collection_items").select("collection_id, item_id").then(r => r.data || []),
   ]);
   const priceByItem = new Map((priceList || []).map(p => [p.itemId, p.sellPrice]));
+  // Map item -> [collectionId, …] so the portal can group by collection too.
+  const collsByItem = new Map();
+  (collLinks || []).forEach(l => {
+    if (!collsByItem.has(l.item_id)) collsByItem.set(l.item_id, []);
+    collsByItem.get(l.item_id).push(l.collection_id);
+  });
   return items.filter(i => i.active !== false).map(i => ({
     id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
     packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
     taxRateId: i.taxRateId, imageUrl: i.imageUrl || "",
+    collectionIds: collsByItem.get(i.id) || [],
     price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
   }));
+}
+
+// ── Distribution Collections (curated item groups, many-to-many) ────────────
+const mapDistCollection = (c) => ({
+  id: c.id, name: c.name || "", description: c.description || "",
+  sortOrder: c.sort_order != null ? Number(c.sort_order) : 0,
+  active: c.active !== false, createdAt: c.created_at,
+});
+export async function fetchDistCollections({ includeInactive } = {}) {
+  let q = supabase.from("dist_collections").select("*").order("sort_order").order("name");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapDistCollection);
+}
+export async function upsertDistCollection(c) {
+  const row = {
+    id: c.id || distId("dcol"), name: c.name || "", description: c.description || null,
+    sort_order: c.sortOrder != null ? Number(c.sortOrder) : 0, active: c.active !== false,
+  };
+  const { data, error } = await supabase.from("dist_collections").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistCollection(data) : null;
+}
+export async function deleteDistCollection(id) {
+  // Link rows cascade via FK on delete.
+  const { error } = await supabase.from("dist_collections").delete().eq("id", id);
+  if (error) throw error;
+}
+// Item membership for a collection.
+export async function fetchDistCollectionItems(collectionId) {
+  const { data, error } = await supabase.from("dist_collection_items")
+    .select("item_id, sort_order").eq("collection_id", collectionId).order("sort_order");
+  if (error) throw error;
+  return (data || []).map(r => ({ itemId: r.item_id, sortOrder: r.sort_order }));
+}
+// Replace the full membership of a collection with the given item ids.
+export async function setDistCollectionItems(collectionId, itemIds = []) {
+  const del = await supabase.from("dist_collection_items").delete().eq("collection_id", collectionId);
+  if (del.error) throw del.error;
+  if (!itemIds.length) return;
+  const rows = itemIds.map((itemId, idx) => ({ collection_id: collectionId, item_id: itemId, sort_order: idx }));
+  const { error } = await supabase.from("dist_collection_items").insert(rows);
+  if (error) throw error;
 }
 
 export async function resolveDistSellPrice(customerId, itemId) {
