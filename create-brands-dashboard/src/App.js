@@ -43438,8 +43438,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       summary[r.employeeId] = { name: r.employeeName, role: m?.role || "",
         hourlyRate: m?.hourlyRate || r.hourlyRate || 0,
         member: m || null, payType: m?.payType || "hourly",
-        totalHours: 0, regularHours: 0, overtimeHours: 0, approvedOT: 0,
-        weekHours: {},   // ISO-week-start -> paid hours, for the weekly OT engine
+        totalHours: 0, regularHours: 0, overtimeHours: 0, approvedOT: 0, pendingOtHours: 0,
+        weekHours: {},   // ISO-week-start -> paid hours, kept for WTD compliance only
         totalPay: 0, days: 0, pendingApproval: 0, pendingOT: 0 };
     }
     const s = summary[r.employeeId];
@@ -43451,29 +43451,45 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     }
     if (!r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)) s.pendingApproval += 1;
     if (r.overtimeHrs > 0 && !r.overtimeApproved) s.pendingOT += 1;
-    const approvedOT = (r.overtimeApproved && r.overtimeHrs > 0) ? r.overtimeHrs : 0;
-    s.approvedOT += approvedOT;
+    // OT model: overtime = hours worked BEYOND the scheduled shift (r.overtimeHrs),
+    // NOT a weekly 40h threshold. Only APPROVED OT is paid; unapproved OT is
+    // HELD/PENDING (excluded from pay until a decision).
+    const otThis = (r.overtimeHrs > 0) ? r.overtimeHrs : 0;
+    if (otThis > 0) {
+      if (r.overtimeApproved) s.approvedOT += otThis;
+      else s.pendingOtHours += otThis;   // held out of pay
+    }
   });
   Object.values(summary).forEach(s => {
-    // Hours-based overtime: split each week at the 40h threshold (UK model).
+    // Keep the weekly split ONLY for the WTD 48h compliance flag (not for pay).
     const split = splitWeeklyOvertime(s.weekHours);
-    s.regularHours  = split.regular;
-    s.overtimeHours = split.overtime;
     s.weeks = split.weeks;
-    // WTD compliance flag: any week averaging over 48h.
     s.wtdBreached = split.weeks.some(w => w.hours > OT_RULES.wtdLimit);
-    // Salaried staff: pay is the fixed daily slice × days worked in this view,
-    // NOT hours × rate (their "rate" column holds the annual/monthly amount).
+
+    // OT model (per policy): overtime = hours beyond the SCHEDULED shift.
+    //  · regular hours   = total worked − ALL overtime (approved + pending)
+    //  · approved OT      = paid at rate × multiplier
+    //  · pending OT       = HELD, excluded from pay until approved/rejected
+    const allOt = s.approvedOT + s.pendingOtHours;
+    s.regularHours  = Math.round(Math.max(0, s.totalHours - allOt) * 100) / 100;
+    s.overtimeHours = Math.round(s.approvedOT * 100) / 100;   // "overtime" now means PAID (approved) OT
+    s.heldOtHours   = Math.round(s.pendingOtHours * 100) / 100;
+
     if (isSalaried(s.member)) {
+      // Salaried staff: fixed daily slice × days; OT doesn't apply to salary.
       s.totalPay = Math.round(salariedDailyCost(s.member) * s.days * 100) / 100;
       s.isSalaried = true;
+      s.heldPay = 0;
     } else {
-      // Regular hours at rate + overtime at rate × multiplier.
-      s.totalPay = Math.round((s.regularHours * s.hourlyRate + s.overtimeHours * s.hourlyRate * OT_RULES.multiplier) * 100) / 100;
+      // Pay regular + APPROVED OT only. Unapproved OT is held out of the total.
+      s.totalPay = Math.round((s.regularHours * s.hourlyRate + s.approvedOT * s.hourlyRate * OT_RULES.multiplier) * 100) / 100;
+      // What WOULD be added if the pending OT were approved (for a "held" indicator).
+      s.heldPay  = Math.round(s.pendingOtHours * s.hourlyRate * OT_RULES.multiplier * 100) / 100;
     }
   });
 
   const totalPay        = Object.values(summary).reduce((a, s) => a + s.totalPay, 0);
+  const totalHeldPay    = Object.values(summary).reduce((a, s) => a + (s.heldPay || 0), 0);
   const totalHours      = Object.values(summary).reduce((a, s) => a + s.totalHours, 0);
   const pendingApproval = enriched.filter(r => !r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)).length;
   const pendingOT       = enriched.filter(r => r.overtimeHrs > 0 && !r.overtimeApproved && r.overtimeReason).length;
@@ -43959,6 +43975,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   </div>
                   <div className="text-right flex-shrink-0">
                     <div className="text-base font-black text-emerald-400 tabular-nums">£{(s.totalPay||0).toFixed(2)}</div>
+                    {s.heldPay>0 && <div className="text-[10px] text-red-400 font-semibold tabular-nums" title="Pay for unapproved overtime — added once approved">+£{s.heldPay.toFixed(2)} held</div>}
                     <div className="text-[10px] text-slate-500">{s.days} day{s.days===1?"":"s"}</div>
                   </div>
                 </div>
@@ -43968,8 +43985,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     <div className="text-sm font-bold text-white tabular-nums">{fmtDur(s.regularHours)}</div>
                   </div>
                   <div className="bg-slate-950/50 rounded-lg py-1.5">
-                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">OT</div>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">OT paid</div>
                     <div className={`text-sm font-bold tabular-nums ${s.overtimeHours>0?"text-amber-400":"text-slate-600"}`}>{s.overtimeHours>0?fmtDur(s.overtimeHours):"—"}</div>
+                    {s.heldOtHours>0 && <div className="text-[10px] text-red-400 font-semibold tabular-nums" title="Overtime beyond scheduled shift, awaiting approval — not included in pay">+{fmtDur(s.heldOtHours)} held</div>}
                   </div>
                   <div className="bg-slate-950/50 rounded-lg py-1.5">
                     <div className="text-[10px] text-slate-500 uppercase tracking-wide">Total</div>
@@ -44014,10 +44032,16 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   </td>
                   <td className="px-3 py-2 text-center text-slate-400 hidden sm:table-cell tabular-nums">{s.days}</td>
                   <td className="px-3 py-2 text-right text-white tabular-nums">{fmtDur(s.regularHours)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums hidden md:table-cell">{s.overtimeHours > 0 ? <span className="text-amber-400">{fmtDur(s.overtimeHours)}</span> : <span className="text-slate-600">—</span>}</td>
+                  <td className="px-3 py-2 text-right tabular-nums hidden md:table-cell">
+                    {s.overtimeHours > 0 ? <span className="text-amber-400">{fmtDur(s.overtimeHours)}</span> : <span className="text-slate-600">—</span>}
+                    {s.heldOtHours>0 && <span className="block text-[10px] text-red-400 font-semibold" title="Awaiting approval — not paid">+{fmtDur(s.heldOtHours)} held</span>}
+                  </td>
                   <td className="px-3 py-2 text-right font-bold text-white tabular-nums">{fmtDur(s.totalHours)}</td>
                   <td className="px-3 py-2 text-right text-slate-400 tabular-nums hidden md:table-cell">{s.isSalaried ? <span className="text-[10px] text-indigo-300">Salaried</span> : `£${(s.hourlyRate||0).toFixed(2)}`}</td>
-                  <td className="px-3 py-2 text-right font-bold text-emerald-400 tabular-nums">£{(s.totalPay||0).toFixed(2)}</td>
+                  <td className="px-3 py-2 text-right font-bold text-emerald-400 tabular-nums">
+                    £{(s.totalPay||0).toFixed(2)}
+                    {s.heldPay>0 && <span className="block text-[10px] text-red-400 font-semibold" title="Unapproved OT pay, held">+£{s.heldPay.toFixed(2)}</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
