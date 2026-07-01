@@ -48973,9 +48973,27 @@ export default function App() {
   };
   const canSeeView = (viewKey) => {
     if (["owner","hq_staff"].includes(currentUser?.role)) return true;
-    const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
-    if (!item) return false;
-    return canRoleSeeSection(currentUserRole.matrixRole, item);
+    // Search TOP-LEVEL items first, then CHILDREN (matched by their own key or
+    // their `view`). After the nav restructure, targets like "store-analytics"
+    // live as a child (key "dashboard:store-analytics", view "store-analytics"),
+    // so the old top-level-only lookup returned nothing and denied access even
+    // when the matrix granted it. We resolve the child and honour the matrix
+    // override stored under the CHILD'S key.
+    const all = NAV_GROUPS_RAW.flatMap(g => g.items);
+    const top = all.find(it => it.key === viewKey);
+    if (top) return canRoleSeeSection(currentUserRole.matrixRole, top);
+    for (const it of all) {
+      const child = (it.children || []).find(c => c.key === viewKey || c.view === viewKey);
+      if (child) {
+        const roleKey = currentUserRole.matrixRole;
+        const override = accessPerms?.[roleKey]?.[child.key];
+        if (override !== undefined) return override;
+        const roleList = child.roles || child.gateRole || it.roles || null;
+        if (roleList) return roleList.includes(roleKey) || roleList.includes(currentUser?.role);
+        return true; // no config → visible (no regression)
+      }
+    }
+    return false;
   };
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
