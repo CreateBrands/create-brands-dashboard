@@ -157,7 +157,7 @@ import {
   fetchDistSalesOrders, createDistSalesOrder, setDistSalesOrderStatus, computeDistCommitted,
   suggestDistFefo, fetchDistPicks, createDistPick, fetchDistDispatches, postDistDispatch,
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
-  fetchDistCreditNotes, postDistCreditNote, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
+  fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -9297,9 +9297,12 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {pays.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No payments received yet.</div>}
           {pays.map(p => (
-            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 group">
               <div><span className="text-white font-mono text-xs">{p.paymentNumber}</span> <span className="text-slate-400">{cName(p.customerId)}</span><div className="text-[11px] text-slate-500">{p.payDate} · {p.method} · {p.allocations.length} invoice{p.allocations.length!==1?"s":""}</div></div>
-              <span className="text-white font-semibold">£{p.amount.toFixed(2)}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-white font-semibold">£{p.amount.toFixed(2)}</span>
+                <button onClick={async () => { if (!window.confirm(`Delete payment ${p.paymentNumber}? This reverses the receipt and reopens the invoice(s) it paid. This cannot be undone.`)) return; try { await deleteDistInvoicePayment(p.id); await load(); } catch (e) { alert(e.message); } }} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete payment"><Trash2 size={14}/></button>
+              </div>
             </div>
           ))}
         </div>
@@ -9373,9 +9376,12 @@ function DistCreditNotesView({ currentUser }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {cns.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No credit notes yet.</div>}
           {cns.map(cn => { const t = distComputeTotals(cn.lines, taxRates, cn.vatMode, cn.discountPercent, cn.discountType); return (
-            <div key={cn.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50">
+            <div key={cn.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 group">
               <div><span className="text-white font-mono text-xs">{cn.cnNumber}</span> <span className="text-slate-400">{cName(cn.customerId)}</span><div className="text-[11px] text-slate-500">{cn.cnDate}</div></div>
-              <span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span>
+                <button onClick={async () => { if (!window.confirm(`Delete credit note ${cn.cnNumber}? This reverses its accounting entry. This cannot be undone.`)) return; try { await deleteDistCreditNote(cn.id); await load(); } catch (e) { alert(e.message); } }} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete credit note"><Trash2 size={14}/></button>
+              </div>
             </div>
           ); })}
         </div>

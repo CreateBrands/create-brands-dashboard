@@ -11410,7 +11410,51 @@ export async function postDistInvoicePayment(pay, allocations = []) {
   return id;
 }
 
-// ── CREDIT NOTES (Dr Sales + VAT / Cr AR) ──
+// Delete a payment received. It posted Dr Bank(+charges) / Cr AR, so deletion
+// posts a reversing journal (Cr Bank / Dr AR), removes the allocations, recomputes
+// each affected invoice's paid status, then deletes the payment.
+export async function deleteDistInvoicePayment(paymentId) {
+  const { data: head } = await supabase.from("dist_invoice_payments")
+    .select("*, dist_invoice_payment_allocations(*)").eq("id", paymentId).maybeSingle();
+  if (!head) throw new Error("Payment not found.");
+  const amount = Number(head.amount) || 0;
+  const bankCharges = Number(head.bank_charges) || 0;
+  // Reversing journal: Cr deposit (−) + Cr charges (−) / Dr AR (+).
+  if (amount > 0) {
+    const [bank, ar, charges] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, head.deposit_code || "1010"),
+      resolveAccountForEntity(DIST_ENTITY, "1100"),
+      resolveAccountForEntity(DIST_ENTITY, "5710"),
+    ]);
+    if (bank && ar) {
+      const jlines = [{ accountId: bank, amount: -amount }];
+      if (bankCharges > 0 && charges) jlines.push({ accountId: charges, amount: -bankCharges });
+      jlines.push({ accountId: ar, amount: +(amount + bankCharges) });
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of receipt ${head.payment_number || paymentId}`,
+          sourceKind: "dist_invoice_payment_reversal", sourceRef: `distrcptREV:${paymentId}`, lines: jlines,
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  // Which invoices were touched, so we can recompute their status after removal.
+  const touchedInvoices = [...new Set((head.dist_invoice_payment_allocations || []).map(a => a.invoice_id).filter(Boolean))];
+  await supabase.from("dist_invoice_payment_allocations").delete().eq("payment_id", paymentId);
+  const { error } = await supabase.from("dist_invoice_payments").delete().eq("id", paymentId);
+  if (error) throw error;
+  // Recompute each invoice's paid status from remaining allocations.
+  for (const invId of touchedInvoices) {
+    const { data: allocs } = await supabase.from("dist_invoice_payment_allocations").select("amount").eq("invoice_id", invId);
+    const paid = (allocs || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    const { data: invRow } = await supabase.from("dist_invoices").select("grand_total").eq("id", invId).maybeSingle();
+    const gt = Number(invRow?.grand_total) || 0;
+    const st = gt > 0 && paid + 0.005 >= gt ? "paid" : paid > 0 ? "part_paid" : "open";
+    await supabase.from("dist_invoices").update({ status: st }).eq("id", invId);
+  }
+  return { deleted: true };
+}
 const mapDistCN = (c) => ({
   id: c.id, cnNumber: c.cn_number || "", customerId: c.customer_id || null, invoiceId: c.invoice_id || null,
   cnDate: c.cn_date || null, status: c.status || "open", reference: c.reference || "", salesperson: c.salesperson || "", subject: c.subject || "",
@@ -11470,8 +11514,37 @@ export async function postDistCreditNote(cn, lines = []) {
   return id;
 }
 
-// ============================================================================
-// DISTRIBUTION — REPORTING LAYER (read-only; derives from existing data).
+// Delete a credit note. It posted Dr Sales+VAT / Cr AR, so deletion posts a
+// reversing journal (Cr Sales+VAT / Dr AR), then deletes lines + header.
+export async function deleteDistCreditNote(cnId) {
+  const { data: head } = await supabase.from("dist_credit_notes").select("*").eq("id", cnId).maybeSingle();
+  if (!head) throw new Error("Credit note not found.");
+  const { data: lines } = await supabase.from("dist_credit_note_lines").select("*").eq("cn_id", cnId);
+  const mapped = (lines || []).map(l => ({ qty: l.qty, unitPrice: l.unit_price, discount: l.discount, discountType: l.discount_type, taxRateId: l.tax_rate_id }));
+  const { net, vat } = await distDocNetVat({ lines: mapped, vatMode: head.vat_mode, discountValue: head.discount_percent, discountType: head.discount_type }).catch(() => ({ net: 0, vat: 0 }));
+  const gross = +(net + vat).toFixed(2);
+  if (gross > 0) {
+    const [sales, vatAcc, ar] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "4000"), resolveAccountForEntity(DIST_ENTITY, "2100"), resolveAccountForEntity(DIST_ENTITY, "1100"),
+    ]);
+    if (sales && ar) {
+      const jlines = [{ accountId: sales, amount: -net }];
+      if (vat > 0 && vatAcc) jlines.push({ accountId: vatAcc, amount: -vat });
+      jlines.push({ accountId: ar, amount: +gross });
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Reversal of credit note ${head.cn_number || cnId}`,
+          sourceKind: "dist_credit_note_reversal", sourceRef: `distcnREV:${cnId}`, lines: jlines,
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+  await supabase.from("dist_credit_note_lines").delete().eq("cn_id", cnId);
+  const { error } = await supabase.from("dist_credit_notes").delete().eq("id", cnId);
+  if (error) throw error;
+  return { deleted: true };
+}
 // Stock valuation, batch expiry, aged debtors/creditors, Distribution P&L,
 // reorder report. No new write paths.
 // ============================================================================
