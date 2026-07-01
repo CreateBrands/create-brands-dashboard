@@ -9983,6 +9983,7 @@ function DistOrderSetupView() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [editColl, setEditColl] = useState(null); // collection being edited (or {new})
+  const [editDept, setEditDept] = useState(null); // department being edited (or {new})
 
   const reload = async () => {
     setLoading(true);
@@ -10021,6 +10022,27 @@ function DistOrderSetupView() {
     if (j < 0 || j >= order.length) return;
     [order[i], order[j]] = [order[j], order[i]];
     saveCfg({ ...cfg, categoryOrder: order });
+  };
+
+  // Departments live inside the same config blob (a grouping layer, no table).
+  const departments = cfg.departments || [];
+  const saveDept = (dept) => {
+    const list = [...departments];
+    const idx = list.findIndex(d => d.id === dept.id);
+    if (idx === -1) list.push(dept); else list[idx] = dept;
+    saveCfg({ ...cfg, departments: list });
+    setEditDept(null);
+  };
+  const deleteDept = (id) => {
+    if (!window.confirm("Delete this department? Its categories/collections stay; only the grouping is removed.")) return;
+    saveCfg({ ...cfg, departments: departments.filter(d => d.id !== id) });
+  };
+  const moveDept = (id, dir) => {
+    const list = [...departments];
+    const i = list.findIndex(d => d.id === id); const j = i + dir;
+    if (i === -1 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    saveCfg({ ...cfg, departments: list });
   };
 
   if (loading) return <div className="py-16 text-center text-slate-500 text-sm">Loading…</div>;
@@ -10096,7 +10118,33 @@ function DistOrderSetupView() {
         </div>
       </div>
 
+      {/* Departments — top-level nav grouping categories + collections */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-white">Departments</div>
+          <button onClick={() => setEditDept({ id: `dept-${Date.now()}`, name: "", categories: [], collectionIds: [], _new: true })} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={13}/> New department</button>
+        </div>
+        <p className="text-[11px] text-slate-500">Big top-level nav on the order page (e.g. "Dry Items", "Fresh", "Frozen", "Equipment"). Each department groups any mix of categories and collections. Shown as a left sidebar; stores pick a department, then browse its categories/collections.</p>
+        <div className="space-y-1.5">
+          {departments.length === 0 && <div className="text-xs text-slate-600 py-4 text-center">No departments yet. Without them, the order page shows all categories directly.</div>}
+          {departments.map((d, idx) => (
+            <div key={d.id} className="flex items-center justify-between bg-slate-950/50 rounded-lg px-3 py-2.5">
+              <div>
+                <div className="text-sm text-white font-semibold">{d.name}</div>
+                <div className="text-[11px] text-slate-500">{(d.categories||[]).length} categor{(d.categories||[]).length===1?"y":"ies"} · {(d.collectionIds||[]).length} collection{(d.collectionIds||[]).length===1?"":"s"}</div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button disabled={idx===0} onClick={() => moveDept(d.id, -1)} className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30">↑</button>
+                <button disabled={idx===departments.length-1} onClick={() => moveDept(d.id, 1)} className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30">↓</button>
+                <button onClick={() => setEditDept({ ...d })} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold ml-1">Edit</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {editColl && <DistCollectionEditModal coll={editColl} items={items} onClose={() => setEditColl(null)} onSaved={() => { setEditColl(null); reload(); }}/>}
+      {editDept && <DistDepartmentEditModal dept={editDept} allCategories={allCategories} collections={collections} onClose={() => setEditDept(null)} onSave={saveDept} onDelete={editDept._new ? null : () => { deleteDept(editDept.id); setEditDept(null); }}/>}
     </div>
   );
 }
@@ -10183,6 +10231,75 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
   );
 }
 
+// Create/edit a department: name + which categories and collections it holds.
+function DistDepartmentEditModal({ dept, allCategories, collections, onClose, onSave, onDelete }) {
+  const [name, setName] = useState(dept.name || "");
+  const [cats, setCats] = useState(new Set(dept.categories || []));
+  const [colls, setColls] = useState(new Set(dept.collectionIds || []));
+  const [err, setErr] = useState("");
+
+  const toggleCat = (c) => setCats(p => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; });
+  const toggleColl = (id) => setColls(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const save = () => {
+    if (!name.trim()) { setErr("Give the department a name."); return; }
+    if (cats.size === 0 && colls.size === 0) { setErr("Add at least one category or collection."); return; }
+    onSave({ id: dept.id, name: name.trim(), categories: Array.from(cats), collectionIds: Array.from(colls) });
+  };
+
+  return (
+    <Modal onClose={onClose} title={dept._new ? "New department" : "Edit department"} maxW="max-w-2xl">
+      <div className="space-y-4">
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        <div>
+          <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Department name</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Dry Items, Fresh, Frozen, Equipment" className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5"><label className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">Categories in this department</label><span className="text-[11px] text-indigo-300 font-semibold">{cats.size} selected</span></div>
+          <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-800 divide-y divide-slate-800/60">
+            {allCategories.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-600">No categories yet.</div>}
+            {allCategories.map(c => {
+              const on = cats.has(c);
+              return (
+                <button key={c} onClick={() => toggleCat(c)} className={`w-full flex items-center gap-3 px-3 py-2 text-left ${on?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on?"bg-indigo-600 border-indigo-600":"border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</div>
+                  <span className="text-sm text-white">{c}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5"><label className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">Collections in this department</label><span className="text-[11px] text-indigo-300 font-semibold">{colls.size} selected</span></div>
+          <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-800 divide-y divide-slate-800/60">
+            {collections.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-600">No collections yet. Create collections above to add them here.</div>}
+            {collections.map(c => {
+              const on = colls.has(c.id);
+              return (
+                <button key={c.id} onClick={() => toggleColl(c.id)} className={`w-full flex items-center gap-3 px-3 py-2 text-left ${on?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on?"bg-indigo-600 border-indigo-600":"border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</div>
+                  <span className="text-sm text-white">{c.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          {onDelete ? <button onClick={onDelete} className="px-3 py-2 rounded-lg bg-red-600/15 text-red-300 text-sm font-semibold hover:bg-red-600/25">Delete</button> : <span/>}
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={save} className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Save department</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // Category nav · search · quantity steppers · running cart · reorder-from-last.
 // Writes a Distribution sales order (commits stock) on checkout.
 // ============================================================================
@@ -10195,6 +10312,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [cart, setCart] = useState({});
   const [cat, setCat] = useState("All");                 // active category OR collection id
   const [browseMode, setBrowseMode] = useState("category"); // "category" | "collection"
+  const [deptId, setDeptId] = useState("all");           // active Department (top nav), "all" = everything
   const [viewMode, setViewMode] = useState("card");      // "card" | "list"
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -10258,9 +10376,28 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   // When browse mode flips, reset the active filter to "All".
   useEffect(() => { setCat("All"); }, [browseMode]);
 
-  // Category list, honouring the owner's configured order (unlisted → alpha tail).
+  // Departments (top-level nav) from owner config. Each department groups a set
+  // of category names and/or collection ids. "all" = the whole catalogue.
+  const departments = useMemo(() => (displayCfg?.departments || []).filter(d => d && d.name), [displayCfg]);
+  const activeDept = useMemo(() => deptId === "all" ? null : departments.find(d => d.id === deptId), [departments, deptId]);
+  // Category/collection names allowed by the active department (null = no limit).
+  const deptCatSet = useMemo(() => activeDept ? new Set((activeDept.categories || []).map(c => c.toLowerCase())) : null, [activeDept]);
+  const deptCollSet = useMemo(() => activeDept ? new Set(activeDept.collectionIds || []) : null, [activeDept]);
+  // Does an item belong to the active department (via category OR collection)?
+  const itemInDept = (i) => {
+    if (!activeDept) return true;
+    if (deptCatSet.size && i.category && deptCatSet.has(i.category.toLowerCase())) return true;
+    if (deptCollSet.size && (i.collectionIds || []).some(id => deptCollSet.has(id))) return true;
+    return false;
+  };
+
+  // When department changes, reset the sub-filter to "All".
+  useEffect(() => { setCat("All"); }, [deptId]);
+
+  // Category list, honouring the owner's configured order (unlisted → alpha tail),
+  // and constrained to the active department when one is selected.
   const categories = useMemo(() => {
-    const present = Array.from(new Set(catalogue.map(i => i.category).filter(Boolean)));
+    let present = Array.from(new Set(catalogue.filter(itemInDept).map(i => i.category).filter(Boolean)));
     const order = displayCfg?.categoryOrder || [];
     const ranked = [...present].sort((a, b) => {
       const ia = order.indexOf(a), ib = order.indexOf(b);
@@ -10268,27 +10405,30 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       if (ia === -1) return 1; if (ib === -1) return -1; return ia - ib;
     });
     return ["All", ...ranked];
-  }, [catalogue, displayCfg]);
+  }, [catalogue, displayCfg, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Active (visible) collections, ordered by their sortOrder / config.
+  // Active (visible) collections, ordered by config, constrained to department.
   const activeCollections = useMemo(() => {
     const order = displayCfg?.collectionOrder || [];
-    return [...collections].filter(c => c.active !== false).sort((a, b) => {
+    let list = [...collections].filter(c => c.active !== false);
+    if (activeDept && deptCollSet.size) list = list.filter(c => deptCollSet.has(c.id));
+    return list.sort((a, b) => {
       const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
       if (ia === -1 && ib === -1) return (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name);
       if (ia === -1) return 1; if (ib === -1) return -1; return ia - ib;
     });
-  }, [collections, displayCfg]);
+  }, [collections, displayCfg, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return catalogue.filter(i => {
+      if (!itemInDept(i)) return false;
       const inFilter = cat === "All"
         ? true
         : (browseMode === "collection" ? (i.collectionIds || []).includes(cat) : i.category === cat);
       return inFilter && (!q || `${i.name} ${i.sku}`.toLowerCase().includes(q));
     });
-  }, [catalogue, cat, search, browseMode]);
+  }, [catalogue, cat, search, browseMode, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
   const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
@@ -10388,11 +10528,28 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         </div>
       ) : customerId && (
         <div className="flex-1 flex min-h-0">
+          {/* Department sidebar (top-level nav) — only when departments configured */}
+          {departments.length > 0 && (
+            <div className="hidden md:flex md:flex-col w-48 flex-shrink-0 border-r border-slate-800 bg-slate-900/60 overflow-y-auto py-2">
+              <button onClick={() => setDeptId("all")} className={`text-left px-4 py-2.5 text-sm font-semibold transition-colors ${deptId==="all"?"bg-indigo-600/20 text-white border-l-2 border-indigo-500":"text-slate-400 hover:text-white border-l-2 border-transparent"}`}>All items</button>
+              {departments.map(d => (
+                <button key={d.id} onClick={() => setDeptId(d.id)} className={`text-left px-4 py-2.5 text-sm font-semibold transition-colors ${deptId===d.id?"bg-indigo-600/20 text-white border-l-2 border-indigo-500":"text-slate-400 hover:text-white border-l-2 border-transparent"}`}>{d.name}</button>
+              ))}
+            </div>
+          )}
           {/* Catalogue column (scrolls) */}
           <div className="flex-1 flex flex-col min-w-0">
             {/* Sticky controls: search + chip bar (categories OR collections) */}
             <div className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-2 border-b border-slate-800/70 bg-slate-950 space-y-2.5">
-              <div className="relative max-w-xl"><Search size={16} className="absolute left-3.5 top-3 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${catalogue.length} products…`} className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1 max-w-xl"><Search size={16} className="absolute left-3.5 top-3 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${catalogue.length} products…`} className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
+                {departments.length > 0 && (
+                  <select value={deptId} onChange={e => setDeptId(e.target.value)} className="md:hidden px-2.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">
+                    <option value="all">All items</option>
+                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                )}
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {browseMode === "collection" ? (
                   <>
