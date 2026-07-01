@@ -1118,12 +1118,12 @@ export async function insertPunchIn(record) {
 // Pass ISO strings (or Date) for punchIn/punchOut. Returns
 // { hours, rawHours, breakMins, overnight } with hours rounded to 2dp.
 // Minimum unpaid break (minutes) required by raw shift length:
-//   3h or less → 0 (paid in full, too short to enforce a break)
-//   over 3h, under 6h → 20 · 6–10h → 30 · over 10h → 45
+//   4h or less → 0 (paid in full, too short to enforce a break)
+//   over 4h, under 6h → 15 · 6–10h → 30 · over 10h → 45
 export function requiredBreakMins(rawHours) {
   if (!(rawHours > 0)) return 0;
-  if (rawHours <= 3) return 0;     // shifts of 3h or less: no enforced break
-  if (rawHours < 6) return 20;
+  if (rawHours <= 4) return 0;     // shifts of 4h or less: no enforced break
+  if (rawHours < 6) return 15;
   if (rawHours <= 10) return 30;
   return 45;
 }
