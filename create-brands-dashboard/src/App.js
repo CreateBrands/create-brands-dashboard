@@ -23192,10 +23192,30 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
   }, [brands]);
   // Local editable copy of effective permissions, seeded from overrides+defaults.
   const baseOf = (r) => r.custom ? r.baseRole : r.key;
+  // Flatten a group's items to include CHILD destinations as their own
+  // controllable rows. The nav restructure moved many pages (Schedule, Time &
+  // Attendance, Training, Tasks, Distribution sub-pages…) under parent items as
+  // `children`; without this, those pages had no matrix row and their access
+  // couldn't be granted — which is how staff lost access. Children inherit the
+  // parent's `roles` default unless they set their own `roles`/`gateRole`.
+  const itemRows = useMemo(() => {
+    const rows = [];
+    (navGroups || []).forEach(g => (g.items || []).forEach(item => {
+      rows.push({ ...item, group: g.group });
+      (item.children || []).forEach(ch => {
+        rows.push({
+          key: ch.key, label: ch.label, group: g.group,
+          parentKey: item.key, isChild: true,
+          roles: ch.roles || ch.gateRole || item.roles || null,
+        });
+      });
+    }));
+    return rows;
+  }, [navGroups]);
   const seed = useMemo(() => {
     const m = {};
     ROLES.forEach(r => { m[r.key] = {}; });
-    navGroups.forEach(g => g.items.forEach(item => {
+    itemRows.forEach(item => {
       ROLES.forEach(r => {
         const override = accessPerms?.[r.key]?.[item.key];
         m[r.key][item.key] = override !== undefined ? override : (!item.roles || item.roles.includes(baseOf(r)));
@@ -23207,7 +23227,7 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
           m[r.key][feat.key] = ov !== undefined ? ov : feat.defaultRoles.includes(baseOf(r));
         });
       });
-    }));
+    });
     // Entity role-permissions (default: allowed; store-assignment base still gates)
     ENTITIES.forEach(ent => {
       ROLES.forEach(r => {
@@ -23216,7 +23236,7 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
       });
     });
     return m;
-  }, [navGroups, accessPerms, ENTITIES, ROLES]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [itemRows, accessPerms, ENTITIES, ROLES]); // eslint-disable-line react-hooks/exhaustive-deps
   const [grid, setGrid] = useState(seed);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -23237,12 +23257,12 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
     setBusy(true); setMsg("");
     try {
       const entries = [];
-      navGroups.forEach(g => g.items.forEach(item => {
+      itemRows.forEach(item => {
         ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: item.key, allowed: !!grid[r.key]?.[item.key] }); });
         (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
           ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: feat.key, allowed: !!grid[r.key]?.[feat.key] }); });
         });
-      }));
+      });
       ENTITIES.forEach(ent => {
         ROLES.forEach(r => { entries.push({ role: r.key, sectionKey: ent.key, allowed: !!grid[r.key]?.[ent.key] }); });
       });
@@ -23255,12 +23275,12 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
   const resetToDefaults = () => {
     const m = {};
     ROLES.forEach(r => { m[r.key] = {}; });
-    navGroups.forEach(g => g.items.forEach(item => {
+    itemRows.forEach(item => {
       ROLES.forEach(r => { m[r.key][item.key] = (!item.roles || item.roles.includes(baseOf(r))); });
       (FEATURES_BY_SECTION[item.key] || []).forEach(feat => {
         ROLES.forEach(r => { m[r.key][feat.key] = feat.defaultRoles.includes(baseOf(r)); });
       });
-    }));
+    });
     ENTITIES.forEach(ent => { ROLES.forEach(r => { m[r.key][ent.key] = true; }); });
     setGrid(m); setDirty(true);
   };
@@ -23415,12 +23435,12 @@ function AccessControlView({ navGroups = [], accessPerms = {}, onReload, brands 
                     {navGroups.map(g => (
                       <Fragment key={g.group}>
                         <div className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900/50">{g.group}</div>
-                        {g.items.map(item => {
+                        {itemRows.filter(it => it.group === g.group).map(item => {
                           const on = !!grid[selRole]?.[item.key];
                           return (
                             <Fragment key={item.key}>
-                              <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-800/60 hover:bg-slate-900/30">
-                                <span className="text-sm text-slate-200 font-semibold">{item.label}</span>
+                              <div className={`flex items-center justify-between px-4 py-2.5 border-t border-slate-800/60 hover:bg-slate-900/30 ${item.isChild ? "pl-8" : ""}`}>
+                                <span className={`font-semibold ${item.isChild ? "text-[13px] text-slate-300" : "text-sm text-slate-200"}`}>{item.isChild ? "↳ " : ""}{item.label}</span>
                                 <button onClick={()=>toggle(selRole, item.key)} className={`w-10 h-6 rounded-full relative transition-colors ${on?"bg-emerald-600":"bg-slate-700"}`}>
                                   <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on?"left-[18px]":"left-0.5"}`}/>
                                 </button>
@@ -48937,6 +48957,20 @@ export default function App() {
   // True if the current user is permitted to see a given view key, using the
   // SAME rule as the sidebar (canRoleSeeSection). Defined before NAV_GROUPS
   // because the child-gating map below calls it. References NAV_GROUPS_RAW only.
+  // Child access: honour an explicit matrix override for the child's own key.
+  // Owner/HQ always see everything. If no override is set, default to VISIBLE so
+  // children keep their prior behaviour (no silent loss); admins opt-in to
+  // restricting a child by toggling it off in Access Control.
+  const canRoleSeeChild = (child, parent) => {
+    if (["owner","hq_staff"].includes(currentUser?.role)) return true;
+    const roleKey = currentUserRole.matrixRole;
+    const override = accessPerms?.[roleKey]?.[child.key];
+    if (override !== undefined) return override;
+    // Fall back to any role list the child declares, then the parent's.
+    const roleList = child.roles || child.gateRole || null;
+    if (roleList) return roleList.includes(currentUserRole.matrixRole) || roleList.includes(currentUser?.role);
+    return true;
+  };
   const canSeeView = (viewKey) => {
     if (["owner","hq_staff"].includes(currentUser?.role)) return true;
     const item = NAV_GROUPS_RAW.flatMap(g => g.items).find(it => it.key === viewKey);
@@ -48952,9 +48986,13 @@ export default function App() {
       (!item.requiresEntity || selectedEntityBrand === item.requiresEntity)
     ).map(item => item.children ? { ...item, children: item.children.filter(c =>
       // Tab-style children may declare gateRole (allowed roles) or gateView
-      // (defer to canSeeView). Children with neither are always shown.
+      // (defer to canSeeView). Children with neither are always shown UNLESS an
+      // admin has set a matrix override for the child's own key — so the Access
+      // Control toggles for child pages (Schedule, Time & Attendance, Training,
+      // Distribution sub-pages…) actually take effect after the nav restructure.
       (!c.gateRole || c.gateRole.includes(currentUser?.role)) &&
-      (!c.gateView || canSeeView(c.gateView))
+      (!c.gateView || canSeeView(c.gateView)) &&
+      canRoleSeeChild(c, item)
     ) } : item) }))
     .filter(g => g.items.length > 0);
 
