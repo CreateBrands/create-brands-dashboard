@@ -1077,8 +1077,14 @@ export async function insertPunchIn(record) {
   // to open a second one — this is enforced server-side so it can't be bypassed
   // by stale UI state. The caller should clock them out (or close the old shift)
   // first. employeeId is the app-side field on the record.
+  //
+  // IMPORTANT: this guard applies ONLY when the NEW record is itself an OPEN
+  // clock-in (no punch_out). A completed record — e.g. a manager's manual hours
+  // entry, which always carries both punch_in and punch_out — is a historical
+  // row, not a live shift, so it must NOT be blocked by an unrelated open punch.
   const empId = record.employeeId;
-  if (empId) {
+  const isOpenClockIn = !record.punchOut && !record.punch_out;
+  if (empId && isOpenClockIn) {
     const { data: existing, error: chkErr } = await supabase
       .from("punch_records").select("id, date, punch_in")
       .eq("employee_id", empId).is("punch_out", null).limit(1);
