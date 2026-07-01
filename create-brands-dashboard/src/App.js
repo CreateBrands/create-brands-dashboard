@@ -8611,7 +8611,7 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d?.status==="dispatched"?"bg-emerald-600 text-white":"bg-indigo-600 text-white"}`}>{(d?.status||"").toUpperCase()}</span>
           {onEdit && d?.status !== "dispatched" && <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>}
-          {onDelete && d?.status !== "dispatched" && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
+          {onDelete && <button onClick={onDelete} className={`${onEdit ? "" : "ml-auto"} px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5`}><Trash2 size={13}/> Delete</button>}
         </div>
         {err && <div className="text-xs text-red-400">{err}</div>}
         {!d && !err && <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>}
@@ -8884,7 +8884,15 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
       }} onDelete={async () => {
         if (!window.confirm("Delete this pick? It frees the order to be re-picked.")) return;
         setBusy(true); setErr("");
-        try { await deleteDistPick(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); }
+        try { await deleteDistPick(detailId); setDetailId(null); await load(); }
+        catch (e) {
+          setBusy(false);
+          // If blocked because it's dispatched, guide the user to remove the dispatch.
+          if (/dispatched/i.test(e.message || "")) {
+            alert("This pick has been dispatched. Delete its dispatch first (which reverses the stock), then delete the pick.");
+          } else { setErr(e.message); }
+          return;
+        }
         setBusy(false);
       }}/>}
       {creating && (
@@ -8999,7 +9007,14 @@ function DistDispatchView({ currentUser, pendingConvert, setPendingConvert }) {
       }} onDelete={async () => {
         if (!window.confirm("Delete this dispatch? This reverses the stock movements and posts a reversing COGS journal. Can't be undone.")) return;
         setBusy(true); setErr("");
-        try { await deleteDistDispatch(detailId); setDetailId(null); await load(); } catch (e) { setErr(e.message); }
+        try { await deleteDistDispatch(detailId); setDetailId(null); await load(); }
+        catch (e) {
+          setBusy(false);
+          if (/invoice/i.test(e.message || "")) {
+            alert("An invoice references this dispatch. Delete the invoice first (Invoices tab), then delete the dispatch.");
+          } else { setErr(e.message); }
+          return;
+        }
         setBusy(false);
       }}/>}
       {creating && (
