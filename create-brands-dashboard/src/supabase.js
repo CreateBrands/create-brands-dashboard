@@ -10508,25 +10508,39 @@ export async function fetchDistCustomersForStores(storeIds = []) {
 // price (price-list entry, else item default). One round-trip for the portal.
 // Deliberately returns NO stock figures — stores order blind (SoW principle).
 export async function fetchDistPortalCatalogue(customerId) {
-  const [items, priceList, collLinks] = await Promise.all([
+  const [items, priceList, collLinks, collections] = await Promise.all([
     fetchDistItems(),
     customerId ? fetchDistPriceList(customerId) : Promise.resolve([]),
     supabase.from("dist_collection_items").select("collection_id, item_id").then(r => r.data || []),
+    fetchDistCollections().catch(() => []),
   ]);
   const priceByItem = new Map((priceList || []).map(p => [p.itemId, p.sellPrice]));
-  // Map item -> [collectionId, …] so the portal can group by collection too.
+  // Manual membership from the link table.
   const collsByItem = new Map();
   (collLinks || []).forEach(l => {
     if (!collsByItem.has(l.item_id)) collsByItem.set(l.item_id, []);
     collsByItem.get(l.item_id).push(l.collection_id);
   });
-  return items.filter(i => i.active !== false).map(i => ({
-    id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
-    packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
-    taxRateId: i.taxRateId, imageUrl: i.imageUrl || "",
-    collectionIds: collsByItem.get(i.id) || [],
-    price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
+  // Smart collections: an item belongs if its category is in the rule set.
+  const smart = (collections || []).filter(c => c.mode === "smart" && (c.ruleCategories || []).length);
+  const smartByCat = new Map();   // lowercased category -> [collectionId]
+  smart.forEach(c => (c.ruleCategories || []).forEach(cat => {
+    const k = String(cat).toLowerCase();
+    if (!smartByCat.has(k)) smartByCat.set(k, []);
+    smartByCat.get(k).push(c.id);
   }));
+  return items.filter(i => i.active !== false).map(i => {
+    const manual = collsByItem.get(i.id) || [];
+    const viaSmart = i.category ? (smartByCat.get(String(i.category).toLowerCase()) || []) : [];
+    const collectionIds = [...new Set([...manual, ...viaSmart])];
+    return {
+      id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
+      packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
+      taxRateId: i.taxRateId, imageUrl: i.imageUrl || "",
+      collectionIds,
+      price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
+    };
+  });
 }
 
 // ── Distribution Collections (curated item groups, many-to-many) ────────────
@@ -10534,6 +10548,7 @@ const mapDistCollection = (c) => ({
   id: c.id, name: c.name || "", description: c.description || "",
   sortOrder: c.sort_order != null ? Number(c.sort_order) : 0,
   active: c.active !== false, createdAt: c.created_at,
+  mode: c.mode || "manual", ruleCategories: c.rule_categories || [],
 });
 export async function fetchDistCollections({ includeInactive } = {}) {
   let q = supabase.from("dist_collections").select("*").order("sort_order").order("name");
@@ -10546,6 +10561,8 @@ export async function upsertDistCollection(c) {
   const row = {
     id: c.id || distId("dcol"), name: c.name || "", description: c.description || null,
     sort_order: c.sortOrder != null ? Number(c.sortOrder) : 0, active: c.active !== false,
+    mode: c.mode === "smart" ? "smart" : "manual",
+    rule_categories: c.mode === "smart" ? (c.ruleCategories || []) : [],
   };
   const { data, error } = await supabase.from("dist_collections").upsert(row).select().maybeSingle();
   if (error) throw error;

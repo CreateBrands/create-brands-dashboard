@@ -10180,7 +10180,9 @@ function DistOrderSetupView() {
           {collections.map(c => (
             <div key={c.id} className="flex items-center justify-between bg-slate-950/50 rounded-lg px-3 py-2.5">
               <div>
-                <div className="text-sm text-white font-semibold flex items-center gap-2">{c.name}{c.active===false && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">Hidden</span>}</div>
+                <div className="text-sm text-white font-semibold flex items-center gap-2">{c.name}
+                  {c.mode === "smart" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-200">Smart</span>}
+                  {c.active===false && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">Hidden</span>}</div>
                 {c.description && <div className="text-[11px] text-slate-500">{c.description}</div>}
               </div>
               <button onClick={async () => { const ids = await fetchDistCollectionItems(c.id).then(r => r.map(x => x.itemId)).catch(() => []); setEditColl({ ...c, itemIds: ids }); }} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Edit</button>
@@ -10225,24 +10227,58 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
   const [name, setName] = useState(coll.name || "");
   const [description, setDescription] = useState(coll.description || "");
   const [active, setActive] = useState(coll.active !== false);
+  const [mode, setMode] = useState(coll.mode === "smart" ? "smart" : "manual");
+  const [ruleCategories, setRuleCategories] = useState(new Set(coll.ruleCategories || []));
   const [picked, setPicked] = useState(new Set(coll.itemIds || []));
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return items.filter(i => !s || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(s)).slice(0, 200);
-  }, [items, q]);
+  const allCategories = useMemo(() => Array.from(new Set(items.map(i => i.category || "Uncategorised"))).sort(), [items]);
 
-  const toggle = (id) => setPicked(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // Available items (manual mode): everything not already picked, matching search,
+  // grouped by category so a whole category can be added in one click.
+  const availableByCat = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const groups = {};
+    items.forEach(i => {
+      if (picked.has(i.id)) return;
+      if (s && !`${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(s)) return;
+      const cat = i.category || "Uncategorised";
+      (groups[cat] = groups[cat] || []).push(i);
+    });
+    return Object.keys(groups).sort().map(cat => ({ cat, items: groups[cat].sort((a,b)=>a.name.localeCompare(b.name)) }));
+  }, [items, picked, q]);
+
+  const availableCount = useMemo(() => availableByCat.reduce((a,g)=>a+g.items.length,0), [availableByCat]);
+  const pickedItems = useMemo(() => items.filter(i => picked.has(i.id)).sort((a,b)=>a.name.localeCompare(b.name)), [items, picked]);
+
+  // Live preview count for SMART mode: how many items the category rule captures.
+  const smartCount = useMemo(() => {
+    if (mode !== "smart") return 0;
+    const set = new Set(Array.from(ruleCategories).map(c=>c.toLowerCase()));
+    return items.filter(i => i.category && set.has(i.category.toLowerCase())).length;
+  }, [mode, ruleCategories, items]);
+
+  const addItem = (id) => setPicked(p => new Set(p).add(id));
+  const removeItem = (id) => setPicked(p => { const n = new Set(p); n.delete(id); return n; });
+  const addCategory = (cat) => setPicked(p => { const n = new Set(p); items.forEach(i => { if ((i.category||"Uncategorised")===cat) n.add(i.id); }); return n; });
+  const addAllFiltered = () => setPicked(p => { const n = new Set(p); availableByCat.forEach(g=>g.items.forEach(i=>n.add(i.id))); return n; });
+  const clearAll = () => setPicked(new Set());
+  const toggleRuleCat = (cat) => setRuleCategories(p => { const n = new Set(p); n.has(cat)?n.delete(cat):n.add(cat); return n; });
 
   const save = async () => {
     if (!name.trim()) { setErr("Give the collection a name."); return; }
+    if (mode === "smart" && ruleCategories.size === 0) { setErr("Pick at least one category for the rule."); return; }
     setBusy(true); setErr("");
     try {
-      const saved = await upsertDistCollection({ id: coll.new ? undefined : coll.id, name: name.trim(), description, active, sortOrder: coll.sortOrder || 0 });
-      await setDistCollectionItems(saved.id, Array.from(picked));
+      const saved = await upsertDistCollection({
+        id: coll.new ? undefined : coll.id, name: name.trim(), description, active,
+        sortOrder: coll.sortOrder || 0, mode, ruleCategories: Array.from(ruleCategories),
+      });
+      // Manual membership only applies to manual collections.
+      if (mode === "manual") await setDistCollectionItems(saved.id, Array.from(picked));
+      else await setDistCollectionItems(saved.id, []);   // smart: clear stray manual links
       onSaved();
     } catch (e) { setErr(e.message); }
     setBusy(false);
@@ -10254,7 +10290,7 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
   };
 
   return (
-    <Modal onClose={onClose} title={coll.new ? "New collection" : "Edit collection"} maxW="max-w-2xl">
+    <Modal onClose={onClose} title={coll.new ? "New collection" : "Edit collection"} maxW="max-w-4xl">
       <div className="space-y-3">
         {err && <div className="text-xs text-red-400">{err}</div>}
         <div className="grid sm:grid-cols-2 gap-3">
@@ -10267,41 +10303,95 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
             <input value={description} onChange={e => setDescription(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
           </div>
         </div>
-        <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded"/> Visible on the order page</label>
-
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">Items in this collection</label>
-            <span className="text-[11px] text-indigo-300 font-semibold">{picked.size} selected</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded"/> Visible on the order page</label>
+          <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl p-0.5">
+            {[["manual","Hand-pick items"],["smart","Smart (by category)"]].map(([k,l]) => (
+              <button key={k} type="button" onClick={() => setMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${mode===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+            ))}
           </div>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…" className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white mb-2"/>
-          <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-800 divide-y divide-slate-800/60">
-            {filtered.map(i => {
-              const on = picked.has(i.id);
-              return (
-                <button key={i.id} onClick={() => toggle(i.id)} className={`w-full flex items-center gap-3 px-3 py-2 text-left ${on?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
-                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on?"bg-indigo-600 border-indigo-600":"border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</div>
-                  <div className="min-w-0 flex-1"><div className="text-sm text-white truncate">{i.name}</div><div className="text-[11px] text-slate-500">{i.category || "Uncategorised"}{i.sku?` · ${i.sku}`:""}</div></div>
-                </button>
-              );
-            })}
-            {filtered.length === 0 && <div className="px-3 py-6 text-center text-xs text-slate-600">No items match.</div>}
-          </div>
-          {items.length > 200 && q.trim() === "" && <p className="text-[10px] text-slate-600 mt-1">Showing first 200 — search to find more.</p>}
         </div>
+
+        {mode === "smart" ? (
+          /* ── SMART: pick categories; membership auto-updates as items change ── */
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-600/5 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs text-slate-300">Auto-includes every item in the chosen categories. New matching items join automatically.</div>
+              <div className="text-[11px] font-bold text-indigo-300">{smartCount} items</div>
+            </div>
+            <div className="flex flex-wrap gap-1.5 max-h-64 overflow-y-auto">
+              {allCategories.map(cat => {
+                const on = ruleCategories.has(cat);
+                const n = items.filter(i => (i.category||"Uncategorised")===cat).length;
+                return <button key={cat} type="button" onClick={() => toggleRuleCat(cat)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${on?"bg-indigo-600 text-white":"bg-slate-800 text-slate-300 border border-slate-700 hover:border-slate-600"}`}>{cat} <span className="opacity-60">({n})</span></button>;
+              })}
+            </div>
+          </div>
+        ) : (
+          /* ── MANUAL: two-panel — available (grouped by category) vs selected ── */
+          <div className="grid md:grid-cols-2 gap-3">
+            {/* Available */}
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 flex flex-col min-h-0">
+              <div className="p-2.5 border-b border-slate-800 space-y-2">
+                <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-300 uppercase tracking-wide">Available</span><span className="text-[11px] text-slate-500">{availableCount}</span></div>
+                <div className="flex gap-1.5">
+                  <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…" className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+                  {q.trim() && availableCount > 0 && <button type="button" onClick={addAllFiltered} className="px-2.5 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold whitespace-nowrap">Add all {availableCount}</button>}
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto max-h-80 p-1.5 space-y-2">
+                {availableByCat.length === 0 && <div className="text-center text-xs text-slate-600 py-8">Nothing left to add.</div>}
+                {availableByCat.map(g => (
+                  <div key={g.cat}>
+                    <div className="flex items-center justify-between px-2 py-1 sticky top-0 bg-slate-950/90">
+                      <span className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">{g.cat} <span className="text-slate-600">({g.items.length})</span></span>
+                      <button type="button" onClick={() => addCategory(g.cat)} className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200 px-1.5 py-0.5 rounded hover:bg-indigo-600/10">+ Add all</button>
+                    </div>
+                    {g.items.map(i => (
+                      <button key={i.id} type="button" onClick={() => addItem(i.id)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-left group">
+                        <Plus size={13} className="text-slate-600 group-hover:text-indigo-400 flex-shrink-0"/>
+                        <span className="text-sm text-white truncate flex-1">{i.name}</span>
+                        {i.sku && <span className="text-[10px] text-slate-600">{i.sku}</span>}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Selected */}
+            <div className="rounded-xl border border-indigo-500/30 bg-indigo-600/5 flex flex-col min-h-0">
+              <div className="p-2.5 border-b border-indigo-500/20 flex items-center justify-between">
+                <span className="text-xs font-bold text-indigo-200 uppercase tracking-wide">In this collection</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-indigo-300 font-bold">{pickedItems.length}</span>
+                  {pickedItems.length > 0 && <button type="button" onClick={clearAll} className="text-[10px] font-bold text-slate-500 hover:text-red-400">Clear</button>}
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto max-h-80 p-1.5">
+                {pickedItems.length === 0 && <div className="text-center text-xs text-slate-600 py-8">No items yet.<br/>Add from the left, or grab a whole category.</div>}
+                {pickedItems.map(i => (
+                  <div key={i.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/40 group">
+                    <span className="text-sm text-white truncate flex-1">{i.name}</span>
+                    <span className="text-[10px] text-slate-600">{i.category}</span>
+                    <button type="button" onClick={() => removeItem(i.id)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={13}/></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center justify-between pt-1">
           {!coll.new ? <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-lg bg-red-600/15 text-red-300 text-sm font-semibold hover:bg-red-600/25">Delete</button> : <span/>}
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold disabled:opacity-40">{busy?"Saving…":"Save collection"}</button>
+            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold disabled:opacity-40">{busy?"Saving…":mode==="smart"?`Save (${smartCount} items)`:`Save (${pickedItems.length} items)`}</button>
           </div>
         </div>
       </div>
     </Modal>
   );
 }
-
 // Create/edit a department: name + which categories and collections it holds.
 function DistDepartmentEditModal({ dept, allCategories, collections, onClose, onSave, onDelete }) {
   const [name, setName] = useState(dept.name || "");
