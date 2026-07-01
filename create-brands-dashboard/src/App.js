@@ -14594,7 +14594,11 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     const isMgr = isManagerOrAbove(currentUser.role);
     const myRoleNames = (() => {
       const ids = new Set(myOpsMember?.roleIds || (myOpsMember?.roleId ? [myOpsMember.roleId] : []));
-      return new Set((storeRoles || []).filter(r => ids.has(r.id)).map(r => (r.name || "").toLowerCase()));
+      const names = new Set((storeRoles || []).filter(r => ids.has(r.id)).map(r => (r.name || "").toLowerCase()));
+      // Add roles covered via today's scheduled shift(s), so the badge count
+      // includes shift-role tasks (e.g. a Barista covering a Head Waiter shift).
+      shiftRoleNamesToday(schedules, myOpsMember, null, null).forEach(rn => names.add(rn.toLowerCase()));
+      return names;
     })();
     const myDept = (myOpsMember?.department || "").toLowerCase();
     const myId = myOpsMember?.id;
@@ -14627,7 +14631,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       (a.storeId ? visibleSet.has(a.storeId) : currentUser.brandIds.includes(a.brandId))
       && isActiveToday(a) && targetedAtMe(a) && onShiftGate(a) && !doneToday(a)
     ).length;
-  }, [assignments, myVisibleStoreIds, myOpsMember, storeRoles, currentUser.role, currentUser.brandIds, currentUser.opsTeamMemberId, currentUser.id, punchRecords, checklistStates, auditTrail]);
+  }, [assignments, myVisibleStoreIds, myOpsMember, storeRoles, schedules, currentUser.role, currentUser.brandIds, currentUser.opsTeamMemberId, currentUser.id, punchRecords, checklistStates, auditTrail]);
 
   // EMP_BOTTOMNAV_V1: unread chat count (used by header Chat icon)
   const chatUnread = (() => {
@@ -24632,6 +24636,22 @@ function missingProfileFields(member) {
   return PROFILE_REQUIRED_FIELDS.filter(f => !f.test(member)).map(f => f.label);
 }
 
+// Role names a member is covering TODAY via their scheduled shift(s) at a store.
+// Used so that working a shift tagged with a role (e.g. "Head Waiter") grants
+// that role's tasks for the day, in ADDITION to the person's own profile roles.
+// All-day: based on having the shift scheduled today, not on being clocked in.
+function shiftRoleNamesToday(schedules, member, storeId, dateStr) {
+  if (!member || !Array.isArray(schedules)) return [];
+  const today = dateStr || (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
+  return schedules
+    .filter(s => s.employeeId === member.id
+      && s.date === today
+      && s.status !== "cancelled"
+      && (storeId ? (s.storeId ? s.storeId === storeId : true) : true)
+      && s.role)
+    .map(s => String(s.role));
+}
+
 function isActiveToday(a) {
   const f = a.freq, d = new Date().getDay();
   const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -24863,7 +24883,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 }
 
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [] }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [] }) {
   const { user } = useAuth();
 
   // visibleStores = the stores this user can see (already filtered upstream
@@ -24930,8 +24950,11 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   // Resolve the store-role NAMES this person holds (assignments store role by name).
   const myRoleNames = useMemo(() => {
     const ids = new Set(me?.roleIds || (me?.roleId ? [me.roleId] : []));
-    return new Set((storeRoles || []).filter(r => ids.has(r.id)).map(r => (r.name || "").toLowerCase()));
-  }, [me, storeRoles]);
+    const names = new Set((storeRoles || []).filter(r => ids.has(r.id)).map(r => (r.name || "").toLowerCase()));
+    // Add roles covered via today's scheduled shift(s) so shift-role tasks show.
+    shiftRoleNamesToday(schedules, me, null, null).forEach(rn => names.add(rn.toLowerCase()));
+    return names;
+  }, [me, storeRoles, schedules]);
   const myDept = (me?.department || "").toLowerCase();
   const myId = me?.id;
   const targetedAtMe = (a) => {
@@ -42710,7 +42733,12 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     if (!matched) return [];
     const myRoleIds = (matched.roleIds && matched.roleIds.length) ? matched.roleIds : (matched.roleId ? [matched.roleId] : []);
     const myRoles = myRoleIds.map(id => storeRoles.find(r => r.id === id)).filter(Boolean);
-    const myRoleNames = myRoles.map(r => r.name).filter(Boolean);
+    // Effective roles today = profile roles + the role of any shift scheduled
+    // today at this store. So a Barista covering a Head Waiter shift gets BOTH
+    // sets of role tasks. Matching is case-insensitive on the role name.
+    const profileRoleNames = myRoles.map(r => r.name).filter(Boolean);
+    const shiftRoleNames = shiftRoleNamesToday(schedules, matched, currentStore?.id, todayStr);
+    const myRoleNames = [...new Set([...profileRoleNames, ...shiftRoleNames])];
     // The employee's department name(s): from their own department field, plus
     // the departments of any roles they hold (resolved via storeDepartments).
     const myDeptNames = new Set();
@@ -42736,7 +42764,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       let mine = false;
       if (target === "employee") mine = a.personId && a.personId === matched.id;
       else if (target === "department") mine = a.department && myDeptNames.has(String(a.department).toLowerCase());
-      else mine = a.role && myRoleNames.includes(a.role);
+      else mine = a.role && myRoleNames.some(rn => rn.toLowerCase() === String(a.role).toLowerCase());
       if (!mine) return false;
       return dueToday(a);
     }).map(a => {
@@ -42747,7 +42775,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       const items = cl?.items || [];
       return { id: a.id, label, items, winStart: a.winStart, winEnd: a.winEnd, priority: a.priority, notes: a.notes };
     });
-  }, [matched, assignments, checklists, cleaningTasks, storeRoles, storeDepartments, currentStore]);
+  }, [matched, assignments, checklists, cleaningTasks, storeRoles, storeDepartments, currentStore, schedules, todayStr]);
 
   // Q10: small store name in corner. Long-press (1.5s) starts a logout
   // confirmation — manager can switch tablet to a different store.
@@ -49104,7 +49132,7 @@ export default function App() {
               return (
                 <div>
                   {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-                  {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}/>}
+                  {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords} schedules={schedules}/>}
                   {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
                   {effOpsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
                   {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
