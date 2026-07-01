@@ -41,6 +41,7 @@ import {
   fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
+  resolveAnnouncementAudience,
   notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
   subscribeTyping, uploadChatAttachment,
   insertStore, updateStore, deleteStore, linkFlipdishStore, unlinkFlipdishStore, backfillSalesStoreId,
@@ -3590,6 +3591,76 @@ function NotificationDiagnostics({ currentUser }) {
       <p className="text-[11px] text-slate-500 leading-snug">
         If “Has share-target handler” says <span className="text-red-400 font-semibold">NO — old SW</span>, your phone is still running an old service worker — that’s why sharing 405s. Tap Refresh after reopening the app; if it stays NO, the SW needs forcing to update.
       </p>
+    </div>
+  );
+}
+
+// ─── AnnouncementAudiencePicker — pick who an announcement targets ───────────
+function AnnouncementAudiencePicker({ opsTeam = [], stores = [], storeRoles = [], value, onChange, recipientCount }) {
+  const { scope = "company", storeIds = [], departments = [], roleIds = [], memberIds = [] } = value || {};
+  const [memberSearch, setMemberSearch] = useState("");
+  const activeTeam = useMemo(() => opsTeam.filter(m => !m.archivedAt && (m.status ? m.status === "active" : true)), [opsTeam]);
+  const pickStores = stores.filter(s => !s.archivedAt);
+  const deptOptions = useMemo(() => Array.from(new Set(activeTeam.map(m => m.department).filter(Boolean))).sort(), [activeTeam]);
+  const roleOptions = useMemo(() => {
+    const seen = new Map();
+    (storeRoles || []).filter(r => !r.archivedAt).forEach(r => { if (!seen.has(r.id)) seen.set(r.id, r.name); });
+    return Array.from(seen, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [storeRoles]);
+  const set = (patch) => onChange({ scope, storeIds, departments, roleIds, memberIds, ...patch });
+  const toggle = (arr, key, v) => set({ [key]: arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v] });
+  const filteredMembers = useMemo(() => {
+    const q = memberSearch.trim().toLowerCase();
+    return activeTeam.filter(m => !q || `${m.firstName} ${m.lastName} ${m.nickname}`.toLowerCase().includes(q))
+      .sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
+  }, [activeTeam, memberSearch]);
+  const scopeLabel = { company: "Everyone", store: "By store", department: "By department", role: "By role", person: "Specific people" };
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(scopeLabel).map(([k, l]) => (
+          <button key={k} type="button" onClick={() => set({ scope: k })} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${scope===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{l}</button>
+        ))}
+      </div>
+      {scope === "store" && (
+        <div className="flex flex-wrap gap-1.5">
+          {pickStores.map(s => <button key={s.id} type="button" onClick={() => toggle(storeIds, "storeIds", s.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${storeIds.includes(s.id)?"bg-indigo-600/30 text-indigo-200 border border-indigo-500/50":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{s.shortName || s.name}</button>)}
+        </div>
+      )}
+      {scope === "department" && (
+        <div className="flex flex-wrap gap-1.5">
+          {deptOptions.length === 0 && <div className="text-xs text-slate-600">No departments set on team members.</div>}
+          {deptOptions.map(d => <button key={d} type="button" onClick={() => toggle(departments, "departments", d)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${departments.includes(d)?"bg-indigo-600/30 text-indigo-200 border border-indigo-500/50":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{d}</button>)}
+        </div>
+      )}
+      {scope === "role" && (
+        <div className="flex flex-wrap gap-1.5">
+          {roleOptions.length === 0 && <div className="text-xs text-slate-600">No roles set up.</div>}
+          {roleOptions.map(r => <button key={r.id} type="button" onClick={() => toggle(roleIds, "roleIds", r.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${roleIds.includes(r.id)?"bg-indigo-600/30 text-indigo-200 border border-indigo-500/50":"bg-slate-800 text-slate-400 border border-slate-700"}`}>{r.name}</button>)}
+        </div>
+      )}
+      {scope === "person" && (
+        <div>
+          <input value={memberSearch} onChange={e => setMemberSearch(e.target.value)} placeholder="Search people…" className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-white mb-2"/>
+          <div className="max-h-52 overflow-y-auto rounded-xl border border-slate-800 divide-y divide-slate-800/60">
+            {filteredMembers.map(m => {
+              const on = memberIds.includes(m.id);
+              return (
+                <button key={m.id} type="button" onClick={() => toggle(memberIds, "memberIds", m.id)} className={`w-full flex items-center gap-3 px-3 py-2 text-left ${on?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on?"bg-indigo-600 border-indigo-600":"border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</div>
+                  <span className="text-sm text-white">{m.firstName} {m.lastName}</span>
+                  <span className="text-[11px] text-slate-500">{m.department || m.role || ""}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="flex items-center gap-2 text-xs pt-0.5">
+        <Users size={14} className="text-indigo-400"/>
+        <span className="text-slate-300 font-semibold">{recipientCount}</span>
+        <span className="text-slate-500">recipient{recipientCount === 1 ? "" : "s"}</span>
+      </div>
     </div>
   );
 }
@@ -47804,7 +47875,7 @@ function EntityPicker({ brands, stores, user, onPick, onLogout, financeAvailable
 // ─── Announcement pop-up ──────────────────────────────────────────────────────
 // Shows the latest active announcement once per person. Tapping "Got it" records
 // an acknowledgement (who + when) and never shows that announcement again for them.
-function AnnouncementGate({ currentUser }) {
+function AnnouncementGate({ currentUser, opsTeam = [] }) {
   const [ann, setAnn] = useState(null);     // the announcement to show, or null
   const [busy, setBusy] = useState(false);
   const personId = currentUser?.opsTeamMemberId || currentUser?.id;
@@ -47816,13 +47887,25 @@ function AnnouncementGate({ currentUser }) {
         if (!personId) return;
         const [all, myAcks] = await Promise.all([fetchAnnouncements(), fetchMyAnnouncementAcks(personId)]);
         const ackSet = new Set(myAcks || []);
-        // Most recent active announcement this person hasn't acknowledged yet.
-        const next = (all || []).find(a => a.active && !ackSet.has(a.id));
+        // Only announcements that TARGET this person. Company-wide (or legacy
+        // announcements with no scope) reach everyone; targeted ones are checked
+        // by resolving their audience and seeing if this person is included.
+        const targetsMe = (a) => {
+          const scope = a.scope || "company";
+          if (scope === "company") return true;
+          const ids = resolveAnnouncementAudience(
+            { scope, storeIds: a.storeIds, departments: a.departments, roleIds: a.roleIds, memberIds: a.memberIds },
+            opsTeam
+          );
+          return ids.includes(personId);
+        };
+        // Most recent active announcement this person hasn't acknowledged + is targeted by.
+        const next = (all || []).find(a => a.active && !ackSet.has(a.id) && targetsMe(a));
         if (alive) setAnn(next || null);
       } catch { /* fail quiet — never block the app on an announcement */ }
     })();
     return () => { alive = false; };
-  }, [personId]);
+  }, [personId, opsTeam]);
 
   if (!ann) return null;
   const dismiss = async () => {
@@ -47849,15 +47932,18 @@ function AnnouncementGate({ currentUser }) {
 }
 
 // ─── Announcements admin (owner/HQ) ──────────────────────────────────────────
-function AnnouncementsAdmin({ currentUser }) {
+function AnnouncementsAdmin({ currentUser, opsTeam = [], stores = [], storeRoles = [] }) {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [audience, setAudience] = useState({ scope: "company", storeIds: [], departments: [], roleIds: [], memberIds: [] });
   const [busy, setBusy] = useState(false);
   const [acksFor, setAcksFor] = useState(null);   // announcement id whose acks are open
   const [acks, setAcks] = useState([]);
   const [err, setErr] = useState("");
+
+  const recipientIds = useMemo(() => resolveAnnouncementAudience(audience, opsTeam), [audience, opsTeam]);
 
   const load = async () => {
     setLoading(true);
@@ -47868,10 +47954,11 @@ function AnnouncementsAdmin({ currentUser }) {
 
   const post = async () => {
     if (!title.trim()) { setErr("Give the announcement a title."); return; }
+    if (recipientIds.length === 0) { setErr("This audience has no recipients. Pick a different target."); return; }
     setBusy(true); setErr("");
     try {
-      await createAnnouncement({ title: title.trim(), body: body.trim(), createdBy: currentUser?.name || "" });
-      setTitle(""); setBody(""); await load();
+      await createAnnouncement({ title: title.trim(), body: body.trim(), createdBy: currentUser?.name || "", audience, opsTeam });
+      setTitle(""); setBody(""); setAudience({ scope: "company", storeIds: [], departments: [], roleIds: [], memberIds: [] }); await load();
     } catch (e) { setErr(e?.message || "Couldn't post the announcement."); }
     finally { setBusy(false); }
   };
@@ -47887,11 +47974,15 @@ function AnnouncementsAdmin({ currentUser }) {
     <div className="max-w-2xl space-y-6">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 space-y-3">
         <div className="text-sm font-bold text-white flex items-center gap-2"><Megaphone size={16}/> New announcement</div>
-        <p className="text-xs text-slate-500">This pops up once for every staff member and manager. When they tap "Got it," it's recorded and won't show them again. A new announcement pops fresh.</p>
+        <p className="text-xs text-slate-500">Target who sees it below. It pops once for each recipient; when they tap "Got it," it's recorded. Targeted (non-company) announcements also land in their notifications and send a push.</p>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-2">Audience</div>
+          <AnnouncementAudiencePicker opsTeam={opsTeam} stores={stores} storeRoles={storeRoles} value={audience} onChange={setAudience} recipientCount={recipientIds.length}/>
+        </div>
         <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Title (e.g. Chocoberry app is live)" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm"/>
         <textarea value={body} onChange={e=>setBody(e.target.value)} rows={6} placeholder="Write your announcement here…" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm resize-y"/>
         {err && <div className="text-xs text-red-400">{err}</div>}
-        <button onClick={post} disabled={busy} className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy ? "Posting…" : "Post announcement"}</button>
+        <button onClick={post} disabled={busy || recipientIds.length===0} className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50">{busy ? "Posting…" : `Post to ${recipientIds.length} recipient${recipientIds.length===1?"":"s"}`}</button>
       </div>
 
       <div className="space-y-2">
@@ -49320,7 +49411,7 @@ export default function App() {
     const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
     return (
       <AuthContext.Provider value={{ user: currentUser }}>
-        <AnnouncementGate currentUser={currentUser} />
+        <AnnouncementGate currentUser={currentUser} opsTeam={opsTeam} />
         <EmployeeShell
           currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users} storeRoles={storeRoles}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
@@ -49609,7 +49700,7 @@ export default function App() {
       <StoreScopeContext.Provider value={{ defaultScope: resolveDefaultStoreId(), liveStores: (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading"), resolveInitial: (avail, opts) => resolveInitialScope(resolveDefaultStoreId(), avail, opts) }}><div className="emp-theme flex h-screen bg-slate-950 overflow-hidden">
         <EmpThemeStyle/>
         <GlobalMobileStyle/>
-        <AnnouncementGate currentUser={currentUser_ctx} />
+        <AnnouncementGate currentUser={currentUser_ctx} opsTeam={opsTeam} />
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
@@ -49953,7 +50044,7 @@ export default function App() {
               helpdeskLevel={helpdeskLevel()}
               initialTab={commsTab} hideTabs={true}
             />}
-            {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} />}
+            {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} opsTeam={opsTeam} stores={stores} storeRoles={storeRoles} />}
             </DistDocLinkProvider>
           </main>
         </div>

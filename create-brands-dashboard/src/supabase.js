@@ -2073,6 +2073,39 @@ export async function notifyOpsMembers(opsMemberIds, { kind, title, body, linkVi
   } catch (e) { console.error("notifyOpsMembers failed:", e); }
 }
 
+// ── ANNOUNCEMENTS — audience targeting ───────────────────────────────────────
+// Resolve a targeting audience to the set of ops_team member ids it reaches.
+// audience = {
+//   scope: "company" | "store" | "department" | "role" | "person",
+//   storeIds?: [], departments?: [], roleIds?: [], memberIds?: [], brandId?
+// }
+// Active, non-archived members only. Returns an array of ops member ids.
+export function resolveAnnouncementAudience(audience, opsTeam = []) {
+  const active = (opsTeam || []).filter(m => !m.archivedAt && (m.status ? m.status === "active" : true));
+  const a = audience || {};
+  const inBrand = (m) => !a.brandId || m.brandId === a.brandId;
+  switch (a.scope) {
+    case "company":
+      return active.filter(inBrand).map(m => m.id);
+    case "store": {
+      const set = new Set(a.storeIds || []);
+      return active.filter(m => inBrand(m) && (m.storeIds || []).some(s => set.has(s))).map(m => m.id);
+    }
+    case "department": {
+      const set = new Set((a.departments || []).map(d => String(d).toLowerCase()));
+      return active.filter(m => inBrand(m) && m.department && set.has(m.department.toLowerCase())).map(m => m.id);
+    }
+    case "role": {
+      const set = new Set(a.roleIds || []);
+      return active.filter(m => inBrand(m) && (m.roleIds || []).some(r => set.has(r))).map(m => m.id);
+    }
+    case "person":
+      return active.filter(m => (a.memberIds || []).includes(m.id)).map(m => m.id);
+    default:
+      return [];
+  }
+}
+
 // Notify the recipients of an inbox message (individual, location, or broadcast).
 // Excludes the sender. Resolves recipients from users + ops_team by scope.
 export async function notifyMessageRecipients(msg) {
@@ -5350,17 +5383,33 @@ export async function setDefaultStoreScopeForRole(role, scope) {
 
 // ── Announcements ───────────────────────────────────────────────────────────
 function dbAnnouncementToApp(a) {
-  return { id: a.id, title: a.title, body: a.body || "", createdBy: a.created_by || "", createdAt: a.created_at, active: a.active !== false };
+  return { id: a.id, title: a.title, body: a.body || "", createdBy: a.created_by || "", createdAt: a.created_at, active: a.active !== false,
+    scope: a.scope || "company", storeIds: a.store_ids || [], departments: a.departments || [],
+    roleIds: a.role_ids || [], memberIds: a.member_ids || [], recipientCount: a.recipient_count || 0 };
 }
 export async function fetchAnnouncements() {
   const { data, error } = await supabase.from("announcements").select("*").order("created_at", { ascending: false });
   if (error) throw error;
   return (data || []).map(dbAnnouncementToApp);
 }
-export async function createAnnouncement({ title, body, createdBy }) {
-  const row = { id: `ann-${Date.now()}`, title, body: body || "", created_by: createdBy || null, active: true };
+export async function createAnnouncement({ title, body, createdBy, audience, opsTeam = [] }) {
+  // Backwards compatible: with no audience, behaves as a company-wide post.
+  const aud = audience || { scope: "company" };
+  const memberIds = resolveAnnouncementAudience(aud, opsTeam);
+  const row = {
+    id: `ann-${Date.now()}`, title, body: body || "", created_by: createdBy || null, active: true,
+    scope: aud.scope || "company",
+    store_ids: aud.storeIds || [], departments: aud.departments || [],
+    role_ids: aud.roleIds || [], member_ids: aud.memberIds || [],
+    recipient_count: memberIds.length,
+  };
   const { data, error } = await supabase.from("announcements").insert(row).select().single();
   if (error) throw error;
+  // Also deliver to each targeted member's notification bell + push, so a
+  // targeted announcement actively reaches them (not only the ack-on-login pop).
+  if (aud.scope !== "company") {
+    await notifyOpsMembers(memberIds, { kind: "announcement", title, body });
+  }
   return dbAnnouncementToApp(data);
 }
 export async function setAnnouncementActive(id, active) {
