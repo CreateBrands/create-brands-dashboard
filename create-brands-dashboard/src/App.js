@@ -158,6 +158,8 @@ import {
   suggestDistFefo, fetchDistPicks, createDistPick, fetchDistDispatches, postDistDispatch,
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
+  fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
+  runOrderingAssistant, approveOrderingTask, runProfitWatch,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -185,7 +187,7 @@ import {
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
-  ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera,
+  ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera, Sparkles,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Paperclip, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
@@ -10517,6 +10519,200 @@ function DistDepartmentEditModal({ dept, allCategories, collections, onClose, on
 // Category nav · search · quantity steppers · running cart · reorder-from-last.
 // Writes a Distribution sales order (commits stock) on checkout.
 // ============================================================================
+// ============================================================================
+// AGENT INBOX — the human-in-the-loop approval surface for all AI agents.
+// Draft actions land here; the owner approves, edits, or dismisses. Numbers are
+// computed server-side in code; Claude only writes the prose.
+// ============================================================================
+function AgentInboxView({ currentUser, onNavigate }) {
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [editing, setEditing] = useState(null); // task being edited
+  const [autonomy, setAutonomy] = useState({});
+  const [showSettings, setShowSettings] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [t, a] = await Promise.all([fetchAgentTasks({ status: "pending" }), fetchAgentAutonomy()]);
+      setTasks(t); setAutonomy(a || {});
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const runAgents = async () => {
+    setRunning(true); setErr(""); setMsg("");
+    try {
+      let made = 0;
+      // Ordering Assistant: one pass per distribution customer.
+      const customers = await fetchDistCustomers().catch(() => []);
+      for (const c of customers) {
+        const t = await runOrderingAssistant({ customerId: c.id, customerName: c.displayName || c.name, createdBy: currentUser?.id }).catch(() => null);
+        if (t) made++;
+      }
+      // Profit Watch: yesterday.
+      const y = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+      const pw = await runProfitWatch({ date: y, createdBy: currentUser?.id }).catch(() => null);
+      if (pw) made++;
+      setMsg(made ? `${made} new suggestion${made !== 1 ? "s" : ""} ready.` : "No new suggestions — everything looks on track.");
+      await load();
+    } catch (e) { setErr(e.message); }
+    setRunning(false);
+  };
+
+  const approve = async (task) => {
+    setErr("");
+    try {
+      if (task.agent === "ordering") {
+        const soId = await approveOrderingTask(task, { reviewedBy: currentUser?.id });
+        setMsg(`Order created (${soId}).`);
+      } else {
+        await updateAgentTaskStatus(task.id, "approved", { reviewedBy: currentUser?.id });
+        setMsg("Marked as done.");
+      }
+      await load();
+    } catch (e) { setErr(e.message); }
+  };
+  const dismiss = async (task) => {
+    try { await updateAgentTaskStatus(task.id, "dismissed", { reviewedBy: currentUser?.id }); await load(); }
+    catch (e) { setErr(e.message); }
+  };
+
+  const agentMeta = {
+    ordering: { label: "Ordering", color: "#844429", icon: ShoppingCart },
+    profit_watch: { label: "Profit Watch", color: "#C9854F", icon: TrendingUp },
+    compliance: { label: "Compliance", color: "#A32D2D", icon: Shield },
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="flex items-center justify-between mb-1">
+        <div>
+          <div className="text-[11px] uppercase tracking-widest font-semibold" style={{ color: "#C9854F" }}>Agentic AI</div>
+          <h1 className="text-2xl font-bold" style={{ color: "#3A2E26" }}>Agent Inbox</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowSettings(true)} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}><Settings size={15}/></button>
+          <button onClick={runAgents} disabled={running} className="px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
+            {running ? <RefreshCw size={15} className="animate-spin"/> : <Sparkles size={15}/>}{running ? "Running…" : "Run agents now"}
+          </button>
+        </div>
+      </div>
+      <p className="text-sm mb-4" style={{ color: "#9A8770" }}>Suggestions from your AI agents. Nothing happens until you approve it.</p>
+
+      {err && <div className="mb-3 px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FCEBEB", color: "#A32D2D" }}>{err}</div>}
+      {msg && <div className="mb-3 px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#E4EFD9", color: "#3B6D11" }}>{msg}</div>}
+
+      {loading ? (
+        <div className="text-center py-16 text-sm" style={{ color: "#9A8770" }}>Loading…</div>
+      ) : tasks.length === 0 ? (
+        <div className="text-center py-16 rounded-2xl" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+          <Sparkles size={28} className="mx-auto mb-3" style={{ color: "#C9854F" }}/>
+          <div className="font-bold" style={{ color: "#3A2E26" }}>Inbox zero</div>
+          <div className="text-sm mt-1" style={{ color: "#9A8770" }}>No suggestions waiting. Tap "Run agents now" to check.</div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {tasks.map(t => {
+            const meta = agentMeta[t.agent] || { label: t.agent, color: "#9A8770", icon: Sparkles };
+            const Icon = meta.icon;
+            return (
+              <div key={t.id} className="rounded-2xl p-4" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: meta.color }}><Icon size={17} color="#FDF2E0"/></div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: "#FDF2E0", color: meta.color }}>{meta.label}</span>
+                      <span className="text-[11px]" style={{ color: "#9A8770" }}>{new Date(t.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div className="font-bold mt-1.5" style={{ color: "#3A2E26" }}>{t.title}</div>
+                    {t.body && <div className="text-sm mt-1 leading-relaxed" style={{ color: "#5F5E5A" }}>{t.body}</div>}
+                    {t.agent === "ordering" && t.payload?.lines && (
+                      <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid #E8DCC6" }}>
+                        {t.payload.lines.slice(0, 8).map((l, i) => (
+                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm" style={{ backgroundColor: i % 2 ? "#FDF2E0" : "#FBF6EC" }}>
+                            <span style={{ color: "#3A2E26" }}>{cleanName(l.name)}</span>
+                            <span style={{ color: "#9A8770" }}>order <b style={{ color: "#844429" }}>{l.qty}</b> · have {l.available}</span>
+                          </div>
+                        ))}
+                        {t.payload.lines.length > 8 && <div className="px-3 py-1.5 text-xs" style={{ color: "#9A8770", backgroundColor: "#FBF6EC" }}>+{t.payload.lines.length - 8} more</div>}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 mt-3">
+                      <button onClick={() => approve(t)} className="px-4 py-1.5 rounded-lg text-sm font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{t.agent === "ordering" ? "Approve & create order" : "Mark done"}</button>
+                      {t.agent === "ordering" && <button onClick={() => setEditing(t)} className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Edit</button>}
+                      <button onClick={() => dismiss(t)} className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ color: "#9A8770" }}>Dismiss</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && <AgentOrderEditModal task={editing} onClose={() => setEditing(null)} onSaved={async (lines) => { editing.payload.lines = lines; setEditing(null); await load(); }}/>}
+      {showSettings && <AgentAutonomyModal autonomy={autonomy} onClose={() => setShowSettings(false)} onSave={async (a) => { await saveAgentAutonomy(a); setAutonomy(a); setShowSettings(false); }}/>}
+    </div>
+  );
+}
+
+// Edit a drafted order's quantities before approving.
+function AgentOrderEditModal({ task, onClose, onSaved }) {
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const [lines, setLines] = useState((task.payload?.lines || []).map(l => ({ ...l })));
+  const setQ = (i, v) => setLines(ls => ls.map((l, idx) => idx === i ? { ...l, qty: Math.max(0, Number(v) || 0) } : l));
+  return (
+    <Modal onClose={onClose} title="Edit suggested order" maxW="max-w-2xl">
+      <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+        {lines.map((l, i) => (
+          <div key={l.itemId} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+            <div className="min-w-0"><div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div><div className="text-[11px]" style={{ color: "#9A8770" }}>forecast {l.forecast} · have {l.available}</div></div>
+            <input type="number" value={l.qty} onChange={e => setQ(i, e.target.value)} className="w-20 text-center py-1.5 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Cancel</button>
+        <button onClick={() => onSaved(lines.filter(l => l.qty > 0))} className="px-5 py-2 rounded-xl text-sm font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Save changes</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Per-agent autonomy: Assistant (draft for approval) vs Agent (act within rules).
+function AgentAutonomyModal({ autonomy, onClose, onSave }) {
+  const [cfg, setCfg] = useState({ ordering: { mode: "assistant", autoMaxValue: 0 }, profit_watch: { mode: "assistant" }, ...(autonomy || {}) });
+  const set = (agent, patch) => setCfg(c => ({ ...c, [agent]: { ...c[agent], ...patch } }));
+  return (
+    <Modal onClose={onClose} title="Agent settings" maxW="max-w-lg">
+      <p className="text-sm mb-4" style={{ color: "#9A8770" }}>Choose how much each agent can do on its own. Assistant mode always waits for your approval.</p>
+      <div className="space-y-4">
+        <div className="rounded-xl p-3" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+          <div className="font-bold mb-2" style={{ color: "#3A2E26" }}>Ordering Assistant</div>
+          <div className="flex gap-2">
+            {[["assistant", "Assistant — I approve"], ["agent", "Agent — act within rules"]].map(([m, label]) => (
+              <button key={m} onClick={() => set("ordering", { mode: m })} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={cfg.ordering?.mode === m ? { backgroundColor: "#844429", color: "#FDF2E0" } : { backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>{label}</button>
+            ))}
+          </div>
+          {cfg.ordering?.mode === "agent" && (
+            <div className="mt-2 text-xs" style={{ color: "#9A8770" }}>Auto-place orders under £<input type="number" value={cfg.ordering?.autoMaxValue || 0} onChange={e => set("ordering", { autoMaxValue: Number(e.target.value) || 0 })} className="w-20 mx-1 px-2 py-1 rounded" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/> without asking. (Larger orders still need approval.)</div>
+          )}
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Cancel</button>
+        <button onClick={() => onSave(cfg)} className="px-5 py-2 rounded-xl text-sm font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Save</button>
+      </div>
+    </Modal>
+  );
+}
+
 function DistOrderPortalView({ currentUser, onNavigate }) {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
@@ -49728,6 +49924,8 @@ export default function App() {
   // Manager / Owner
   const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
+  const [agentPendingCount, setAgentPendingCount] = useState(0);
+  useEffect(() => { let a = true; fetchAgentTasks({ status: "pending", limit: 50 }).then(t => { if (a) setAgentPendingCount(t.length); }).catch(() => {}); const iv = setInterval(() => { fetchAgentTasks({ status: "pending", limit: 50 }).then(t => setAgentPendingCount(t.length)).catch(() => {}); }, 60000); return () => { a = false; clearInterval(iv); }; }, [activeView]);
   const commsUnread = (() => {
     const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
     return messages.filter(m => {
@@ -49797,6 +49995,7 @@ export default function App() {
         { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
       ]},
       { key: "dist-order",     label: "Order", icon: ShoppingCart, hideForCK: true },
+      { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "WAREHOUSE", items: [
@@ -50091,6 +50290,7 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "agent-inbox" && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView

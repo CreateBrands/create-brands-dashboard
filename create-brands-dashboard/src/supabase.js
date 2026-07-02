@@ -11785,3 +11785,230 @@ export async function fetchDistDashboard() {
     creditorBuckets: creditors.buckets || {},
   };
 }
+
+// ============================================================================
+// AGENTIC AI LAYER
+// Principle: deterministic code computes EVERY number; Claude only writes prose.
+// The Agent Inbox (agent_tasks) is the human-in-the-loop approval surface.
+// ============================================================================
+
+const agentId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const agentGbp = (n) => `£${(Number(n) || 0).toFixed(2)}`;
+
+// ── Agent Inbox CRUD ────────────────────────────────────────────────────────
+const mapAgentTask = (t) => ({
+  id: t.id, agent: t.agent, kind: t.kind, title: t.title, body: t.body || "",
+  status: t.status, severity: t.severity || "info", brandId: t.brand_id, storeId: t.store_id,
+  customerId: t.customer_id, payload: t.payload || {}, savings: t.savings != null ? Number(t.savings) : null,
+  resultRef: t.result_ref, createdBy: t.created_by, reviewedBy: t.reviewed_by,
+  createdAt: t.created_at, reviewedAt: t.reviewed_at,
+});
+
+export async function fetchAgentTasks({ status, agent, limit = 50 } = {}) {
+  let q = supabase.from("agent_tasks").select("*").order("created_at", { ascending: false }).limit(limit);
+  if (status) q = q.eq("status", status);
+  if (agent) q = q.eq("agent", agent);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapAgentTask);
+}
+
+export async function createAgentTask(t) {
+  const row = {
+    id: t.id || agentId("atask"), agent: t.agent, kind: t.kind, title: t.title, body: t.body || null,
+    status: t.status || "pending", severity: t.severity || "info", brand_id: t.brandId || null,
+    store_id: t.storeId || null, customer_id: t.customerId || null, payload: t.payload || {},
+    savings: t.savings != null ? Number(t.savings) : null, created_by: t.createdBy || "agent",
+  };
+  const { data, error } = await supabase.from("agent_tasks").insert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapAgentTask(data) : null;
+}
+
+export async function updateAgentTaskStatus(id, status, { reviewedBy, resultRef } = {}) {
+  const patch = { status, reviewed_at: new Date().toISOString() };
+  if (reviewedBy) patch.reviewed_by = reviewedBy;
+  if (resultRef) patch.result_ref = resultRef;
+  const { error } = await supabase.from("agent_tasks").update(patch).eq("id", id);
+  if (error) throw error;
+  return true;
+}
+
+export async function logAgentMetric(m) {
+  const row = {
+    id: agentId("amet"), agent: m.agent, task_id: m.taskId || null, store_id: m.storeId || null,
+    metric: m.metric, forecast: m.forecast != null ? Number(m.forecast) : null,
+    actual: m.actual != null ? Number(m.actual) : null, value: m.value != null ? Number(m.value) : null, note: m.note || null,
+  };
+  const { error } = await supabase.from("agent_metrics").insert(row);
+  if (error) throw error;
+  return true;
+}
+
+// ── Autonomy settings (Nory-style Assistant vs Agent mode, per agent) ────────
+// Stored in app_settings key "agent_autonomy": { ordering: {mode, autoMaxValue}, profit_watch: {mode}, ... }
+export async function fetchAgentAutonomy() {
+  const s = await fetchAppSettings().catch(() => ({}));
+  try { return s?.agent_autonomy ? JSON.parse(s.agent_autonomy) : {}; } catch { return {}; }
+}
+export async function saveAgentAutonomy(cfg) {
+  await upsertAppSetting("agent_autonomy", JSON.stringify(cfg || {}));
+  return true;
+}
+
+// ── Shared Claude helper (server-side; numbers already computed, Claude only phrases) ──
+// Reuses the same Edge-Function + secret pattern as askData. Falls back to a
+// deterministic string if the LLM is unavailable, so an agent NEVER blocks on it.
+export async function agentPhrase({ system, prompt, fallback }) {
+  try {
+    const headers = {};
+    if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+    const { data, error } = await supabase.functions.invoke("agent-llm", { body: { system, prompt }, headers });
+    if (error) throw error;
+    if (data?.ok && data.text) return data.text;
+    throw new Error(data?.error || "no text");
+  } catch (e) {
+    return fallback || "";
+  }
+}
+
+// ── ORDERING ASSISTANT ──────────────────────────────────────────────────────
+// Deterministic demand forecast per item from a customer's order history, compared
+// to live stock, producing draft PO lines. All maths here in code; no LLM numbers.
+export function forecastItemDemand(orderHistory, { lookbackOrders = 8 } = {}) {
+  // Simple, explainable baseline: average qty per recent order, per item.
+  const recent = (orderHistory || []).slice(0, lookbackOrders);
+  const totals = new Map(); // itemId -> { sum, orders }
+  recent.forEach(o => {
+    (o.lines || []).forEach(l => {
+      if (!l.itemId) return;
+      const cur = totals.get(l.itemId) || { sum: 0, orders: 0 };
+      cur.sum += Number(l.qty) || 0; cur.orders += 1;
+      totals.set(l.itemId, cur);
+    });
+  });
+  const out = new Map(); // itemId -> forecast qty (avg per order, rounded up)
+  totals.forEach((v, id) => { out.set(id, Math.ceil(v.sum / recent.length)); });
+  return out; // Map itemId -> expected qty next order
+}
+
+// Build draft order lines: forecast demand minus what's already available.
+export async function buildOrderingDraft({ customerId }) {
+  const [orders, stock, catalogue] = await Promise.all([
+    fetchDistSalesOrders({ customerId }).catch(() => []),
+    fetchDistStockSnapshot().catch(() => []),
+    fetchDistPortalCatalogue(customerId).catch(() => []),
+  ]);
+  const valid = (orders || []).filter(o => o.status !== "cancelled");
+  const demand = forecastItemDemand(valid);
+  const stockById = new Map((stock || []).map(s => [s.id, s]));
+  const catById = new Map((catalogue || []).map(c => [c.id, c]));
+  const lines = [];
+  demand.forEach((qty, itemId) => {
+    const st = stockById.get(itemId);
+    const available = st ? Number(st.available) || 0 : 0;
+    const gap = Math.max(0, qty - available);          // only order the shortfall
+    if (gap <= 0) return;
+    const cat = catById.get(itemId) || st || {};
+    lines.push({
+      itemId, name: cat.name || st?.name || itemId, forecast: qty, available,
+      qty: gap, unitPrice: Number(cat.price != null ? cat.price : st?.sellRate) || 0,
+      taxRateId: cat.taxRateId || st?.taxRateId || null,
+    });
+  });
+  lines.sort((a, b) => b.qty - a.qty);
+  const estValue = lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
+  return { customerId, lines, estValue, basisOrders: valid.length };
+}
+
+// Run the Ordering Assistant for a customer: build draft, phrase a note, post to Inbox.
+export async function runOrderingAssistant({ customerId, customerName, createdBy }) {
+  const draft = await buildOrderingDraft({ customerId });
+  if (!draft.lines.length) return null; // nothing to order — no noise in the Inbox
+  const top = draft.lines.slice(0, 6).map(l => `${l.name}: order ${l.qty} (need ~${l.forecast}, have ${l.available})`).join("; ");
+  const fallback = `Suggested order for ${customerName || "this store"} based on the last ${draft.basisOrders} orders: ${draft.lines.length} item(s), about ${agentGbp(draft.estValue)} ex VAT. ${top}.`;
+  const body = await agentPhrase({
+    system: "You write a one-paragraph, plain-English rationale for a restaurant supply order. Be concise and practical. Do NOT invent or change any numbers you are given.",
+    prompt: `Draft order for ${customerName || "a store"}. Based on the last ${draft.basisOrders} orders. Lines (item: order qty, forecast need, currently available): ${draft.lines.map(l => `${l.name}: order ${l.qty}, need ${l.forecast}, have ${l.available}`).join("; ")}. Total about ${agentGbp(draft.estValue)} ex VAT. Write one short paragraph explaining the suggestion.`,
+    fallback,
+  });
+  return createAgentTask({
+    agent: "ordering", kind: "draft_order", customerId,
+    title: `Suggested order: ${customerName || "store"} — ${draft.lines.length} items, ${agentGbp(draft.estValue)}`,
+    body, severity: "action", payload: { lines: draft.lines, estValue: draft.estValue, basisOrders: draft.basisOrders },
+    savings: null, createdBy: createdBy || "agent",
+  });
+}
+
+// Approve a drafted order → create the real sales order via the existing flow.
+export async function approveOrderingTask(task, { reviewedBy } = {}) {
+  const lines = (task.payload?.lines || []).map(l => ({
+    itemId: l.itemId, qty: Number(l.qty) || 0, unitPrice: Number(l.unitPrice) || 0, taxRateId: l.taxRateId || null,
+    discount: 0, discountType: "percent",
+  })).filter(l => l.itemId && l.qty > 0);
+  if (!lines.length) throw new Error("This draft has no orderable lines.");
+  const soId = await createDistSalesOrder({
+    customerId: task.customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10),
+    vatMode: "exclusive", createdBy: reviewedBy || "agent", note: "Created from Ordering Assistant suggestion",
+  }, lines);
+  await updateAgentTaskStatus(task.id, "approved", { reviewedBy, resultRef: soId });
+  return soId;
+}
+
+// ── PROFIT WATCH ────────────────────────────────────────────────────────────
+// Pull per-store daily figures for a date from the existing reporting layer:
+// labour% from the labour_vs_revenue view; COGS% target from settings. Targets
+// come from app_settings key "profit_targets" ({labourPct, cogsPct}) or defaults.
+export async function fetchProfitWatchInputs(day) {
+  const [labour, settings, stores] = await Promise.all([
+    fetchLabourVsRevenue({ from: day, to: day }).catch(() => []),
+    fetchAppSettings().catch(() => ({})),
+    fetchStores().catch(() => []),
+  ]);
+  let targets = { labourPct: 30, cogsPct: 30 };
+  try { if (settings?.profit_targets) targets = { ...targets, ...JSON.parse(settings.profit_targets) }; } catch (_) {}
+  const storeName = new Map((stores || []).map(s => [s.id, s.shortName || s.name]));
+  // One row per store for the day. COGS% left null unless a daily COGS source is
+  // wired per store; labour% drives the initial Profit Watch. (COGS can be added.)
+  return (labour || []).filter(r => r.storeId && r.storeId !== "unmatched" && r.labourPct != null).map(r => ({
+    storeId: r.storeId, storeName: storeName.get(r.storeId) || r.storeId, date: r.date,
+    labourPct: r.labourPct, labourTarget: targets.labourPct,
+    cogsPct: null, cogsTarget: targets.cogsPct,
+  }));
+}
+
+// Deterministic variance finder across sites, then Claude writes the morning brief.
+// Uses whatever daily figures are available; each variance is computed in code.
+export async function runProfitWatch({ date, createdBy } = {}) {
+  const day = date || new Date().toISOString().slice(0, 10);
+  // Pull the day's per-store figures from the existing reporting layer.
+  const rows = await fetchProfitWatchInputs(day).catch(() => []);
+  if (!rows || !rows.length) return null;
+  // Rank by absolute variance against target (labour % over, COGS % over).
+  const flagged = rows.map(r => {
+    const labourVar = (Number(r.labourPct) || 0) - (Number(r.labourTarget) || 0);
+    const cogsVar = (Number(r.cogsPct) || 0) - (Number(r.cogsTarget) || 0);
+    const worst = Math.max(Math.abs(labourVar), Math.abs(cogsVar));
+    return { ...r, labourVar, cogsVar, worst };
+  }).filter(r => r.worst >= 2) // only material variances (>=2 pts)
+    .sort((a, b) => b.worst - a.worst);
+  if (!flagged.length) return null;
+  const detail = flagged.slice(0, 6).map(r => {
+    const bits = [];
+    if (Math.abs(r.labourVar) >= 2) bits.push(`labour ${r.labourVar > 0 ? "+" : ""}${r.labourVar.toFixed(1)}pts`);
+    if (Math.abs(r.cogsVar) >= 2) bits.push(`COGS ${r.cogsVar > 0 ? "+" : ""}${r.cogsVar.toFixed(1)}pts`);
+    return `${r.storeName || r.storeId}: ${bits.join(", ")}`;
+  }).join("; ");
+  const fallback = `Profit Watch for ${day}: ${flagged.length} site(s) off target. ${detail}.`;
+  const body = await agentPhrase({
+    system: "You are a restaurant profit analyst writing a short morning brief for the owner. Be specific and practical, name the sites and the fix. Do NOT invent numbers — use only those given.",
+    prompt: `Date ${day}. Sites off target (variance in percentage points vs target): ${detail}. Write a short brief (3-5 sentences) highlighting the biggest issues and a suggested action for each.`,
+    fallback,
+  });
+  return createAgentTask({
+    agent: "profit_watch", kind: "brief", date: day,
+    title: `Profit Watch ${day} — ${flagged.length} site(s) off target`,
+    body, severity: "warn", payload: { date: day, flagged },
+    createdBy: createdBy || "agent",
+  });
+}
