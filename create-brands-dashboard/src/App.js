@@ -159,7 +159,7 @@ import {
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
-  runOrderingAssistant, approveOrderingTask, runProfitWatch,
+  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -10534,6 +10534,9 @@ function AgentInboxView({ currentUser, onNavigate }) {
   const [editing, setEditing] = useState(null); // task being edited
   const [autonomy, setAutonomy] = useState({});
   const [showSettings, setShowSettings] = useState(false);
+  const [pwDate, setPwDate] = useState(() => new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10)); // default: 2 days ago (settled)
+  const [stores, setStores] = useState([]);
+  useEffect(() => { fetchStores().then(setStores).catch(() => {}); }, []);
 
   const load = async () => {
     setLoading(true);
@@ -10555,9 +10558,8 @@ function AgentInboxView({ currentUser, onNavigate }) {
         const t = await runOrderingAssistant({ customerId: c.id, customerName: c.displayName || c.name, createdBy: currentUser?.id }).catch(() => null);
         if (t) made++;
       }
-      // Profit Watch: yesterday.
-      const y = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
-      const pw = await runProfitWatch({ date: y, createdBy: currentUser?.id }).catch(() => null);
+      // Profit Watch: the date the owner picked.
+      const pw = await runProfitWatch({ date: pwDate, createdBy: currentUser?.id }).catch(() => null);
       if (pw) made++;
       setMsg(made ? `${made} new suggestion${made !== 1 ? "s" : ""} ready.` : "No new suggestions — everything looks on track.");
       await load();
@@ -10597,6 +10599,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
           <h1 className="text-2xl font-bold" style={{ color: "#3A2E26" }}>Agent Inbox</h1>
         </div>
         <div className="flex items-center gap-2">
+          <input type="date" value={pwDate} max={new Date().toISOString().slice(0,10)} onChange={e => setPwDate(e.target.value)} title="Profit Watch date" className="px-2.5 py-2 rounded-xl text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
           <button onClick={() => setShowSettings(true)} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}><Settings size={15}/></button>
           <button onClick={runAgents} disabled={running} className="px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
             {running ? <RefreshCw size={15} className="animate-spin"/> : <Sparkles size={15}/>}{running ? "Running…" : "Run agents now"}
@@ -10657,7 +10660,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
       )}
 
       {editing && <AgentOrderEditModal task={editing} onClose={() => setEditing(null)} onSaved={async (lines) => { editing.payload.lines = lines; setEditing(null); await load(); }}/>}
-      {showSettings && <AgentAutonomyModal autonomy={autonomy} onClose={() => setShowSettings(false)} onSave={async (a) => { await saveAgentAutonomy(a); setAutonomy(a); setShowSettings(false); }}/>}
+      {showSettings && <AgentAutonomyModal autonomy={autonomy} stores={stores} onClose={() => setShowSettings(false)} onSave={async (a) => { await saveAgentAutonomy(a); setAutonomy(a); setShowSettings(false); }}/>}
     </div>
   );
 }
@@ -10685,17 +10688,24 @@ function AgentOrderEditModal({ task, onClose, onSaved }) {
   );
 }
 
-// Per-agent autonomy: Assistant (draft for approval) vs Agent (act within rules).
-function AgentAutonomyModal({ autonomy, onClose, onSave }) {
+// Per-agent autonomy + per-site Profit Watch targets.
+function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
   const [cfg, setCfg] = useState({ ordering: { mode: "assistant", autoMaxValue: 0 }, profit_watch: { mode: "assistant" }, ...(autonomy || {}) });
   const set = (agent, patch) => setCfg(c => ({ ...c, [agent]: { ...c[agent], ...patch } }));
+  const [targets, setTargets] = useState({ labourPct: 30, byStore: {} });
+  const [savingT, setSavingT] = useState(false);
+  useEffect(() => { fetchProfitTargets().then(t => setTargets({ labourPct: t.labourPct ?? 30, byStore: t.byStore || {} })).catch(() => {}); }, []);
+  const setStoreTarget = (id, v) => setTargets(t => ({ ...t, byStore: { ...t.byStore, [id]: v === "" ? "" : Number(v) } }));
+  const activeStores = (stores || []).filter(s => !s.archivedAt);
+  const saveTargets = async () => { setSavingT(true); try { await saveProfitTargets(targets); } catch (_) {} setSavingT(false); };
+
   return (
-    <Modal onClose={onClose} title="Agent settings" maxW="max-w-lg">
-      <p className="text-sm mb-4" style={{ color: "#9A8770" }}>Choose how much each agent can do on its own. Assistant mode always waits for your approval.</p>
+    <Modal onClose={onClose} title="Agent settings" maxW="max-w-2xl">
+      <p className="text-sm mb-4" style={{ color: "#9A8770" }}>Choose how much each agent can do on its own, and set your Profit Watch labour targets per site.</p>
       <div className="space-y-4">
         <div className="rounded-xl p-3" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
           <div className="font-bold mb-2" style={{ color: "#3A2E26" }}>Ordering Assistant</div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {[["assistant", "Assistant — I approve"], ["agent", "Agent — act within rules"]].map(([m, label]) => (
               <button key={m} onClick={() => set("ordering", { mode: m })} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={cfg.ordering?.mode === m ? { backgroundColor: "#844429", color: "#FDF2E0" } : { backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>{label}</button>
             ))}
@@ -10704,10 +10714,35 @@ function AgentAutonomyModal({ autonomy, onClose, onSave }) {
             <div className="mt-2 text-xs" style={{ color: "#9A8770" }}>Auto-place orders under £<input type="number" value={cfg.ordering?.autoMaxValue || 0} onChange={e => set("ordering", { autoMaxValue: Number(e.target.value) || 0 })} className="w-20 mx-1 px-2 py-1 rounded" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/> without asking. (Larger orders still need approval.)</div>
           )}
         </div>
+
+        <div className="rounded-xl p-3" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold" style={{ color: "#3A2E26" }}>Profit Watch — labour targets</div>
+            <button onClick={saveTargets} disabled={savingT} className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{savingT ? "Saving…" : "Save targets"}</button>
+          </div>
+          <div className="flex items-center gap-2 mb-3 text-sm">
+            <span style={{ color: "#9A8770" }}>Default target (all sites):</span>
+            <input type="number" value={targets.labourPct} onChange={e => setTargets(t => ({ ...t, labourPct: Number(e.target.value) || 0 }))} className="w-20 px-2 py-1 rounded" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+            <span style={{ color: "#9A8770" }}>%</span>
+          </div>
+          <div className="text-[10px] uppercase tracking-wide font-bold mb-1.5" style={{ color: "#9A8770" }}>Per-site override (leave blank to use default)</div>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {activeStores.map(s => (
+              <div key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg" style={{ backgroundColor: "#FDF2E0" }}>
+                <span className="text-sm truncate" style={{ color: "#3A2E26" }}>{s.shortName || s.name}</span>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <input type="number" placeholder={String(targets.labourPct)} value={targets.byStore[s.id] ?? ""} onChange={e => setStoreTarget(s.id, e.target.value)} className="w-16 text-center px-2 py-1 rounded text-sm" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                  <span className="text-xs" style={{ color: "#9A8770" }}>%</span>
+                </div>
+              </div>
+            ))}
+            {activeStores.length === 0 && <div className="text-xs text-center py-4" style={{ color: "#9A8770" }}>No sites loaded.</div>}
+          </div>
+        </div>
       </div>
       <div className="flex justify-end gap-2 mt-4">
-        <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Cancel</button>
-        <button onClick={() => onSave(cfg)} className="px-5 py-2 rounded-xl text-sm font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Save</button>
+        <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Close</button>
+        <button onClick={() => onSave(cfg)} className="px-5 py-2 rounded-xl text-sm font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Save autonomy</button>
       </div>
     </Modal>
   );

@@ -11856,6 +11856,19 @@ export async function saveAgentAutonomy(cfg) {
   return true;
 }
 
+// Profit Watch targets: { labourPct (default), cogsPct, byStore: { storeId: labourPct } }
+export async function fetchProfitTargets() {
+  const s = await fetchAppSettings().catch(() => ({}));
+  let t = { labourPct: 30, cogsPct: 30, byStore: {} };
+  try { if (s?.profit_targets) t = { ...t, ...JSON.parse(s.profit_targets) }; } catch (_) {}
+  if (!t.byStore) t.byStore = {};
+  return t;
+}
+export async function saveProfitTargets(t) {
+  await upsertAppSetting("profit_targets", JSON.stringify(t || {}));
+  return true;
+}
+
 // ── Shared Claude helper (server-side; numbers already computed, Claude only phrases) ──
 // Reuses the same Edge-Function + secret pattern as askData. Falls back to a
 // deterministic string if the LLM is unavailable, so an agent NEVER blocks on it.
@@ -11965,14 +11978,19 @@ export async function fetchProfitWatchInputs(day) {
     fetchAppSettings().catch(() => ({})),
     fetchStores().catch(() => []),
   ]);
-  let targets = { labourPct: 30, cogsPct: 30 };
+  let targets = { labourPct: 30, cogsPct: 30, byStore: {} };
   try { if (settings?.profit_targets) targets = { ...targets, ...JSON.parse(settings.profit_targets) }; } catch (_) {}
   const storeName = new Map((stores || []).map(s => [s.id, s.shortName || s.name]));
+  // Per-site labour target if set, else the default. cogsTarget stays default.
+  const labourTargetFor = (storeId) => {
+    const per = targets.byStore && targets.byStore[storeId];
+    return per != null && per !== "" ? Number(per) : Number(targets.labourPct) || 30;
+  };
   // One row per store for the day. COGS% left null unless a daily COGS source is
   // wired per store; labour% drives the initial Profit Watch. (COGS can be added.)
   return (labour || []).filter(r => r.storeId && r.storeId !== "unmatched" && r.labourPct != null).map(r => ({
     storeId: r.storeId, storeName: storeName.get(r.storeId) || r.storeId, date: r.date,
-    labourPct: r.labourPct, labourTarget: targets.labourPct,
+    labourPct: r.labourPct, labourTarget: labourTargetFor(r.storeId),
     cogsPct: null, cogsTarget: targets.cogsPct,
   }));
 }
@@ -11986,17 +12004,24 @@ export async function runProfitWatch({ date, createdBy } = {}) {
   if (!rows || !rows.length) return null;
   // Rank by absolute variance against target (labour % over, COGS % over).
   const flagged = rows.map(r => {
-    const labourVar = (Number(r.labourPct) || 0) - (Number(r.labourTarget) || 0);
-    const cogsVar = (Number(r.cogsPct) || 0) - (Number(r.cogsTarget) || 0);
-    const worst = Math.max(Math.abs(labourVar), Math.abs(cogsVar));
+    const hasLabour = r.labourPct != null;
+    const hasCogs = r.cogsPct != null;
+    // Guard: a very low labour% almost always means punches aren't fully recorded
+    // yet for that day, not a real efficiency win. Treat <8% as incomplete data
+    // and don't flag it, to avoid misleading "20pts under target" briefs.
+    const labourLooksComplete = hasLabour && Number(r.labourPct) >= 8;
+    const labourVar = labourLooksComplete ? (Number(r.labourPct) - (Number(r.labourTarget) || 0)) : null;
+    const cogsVar = hasCogs ? (Number(r.cogsPct) - (Number(r.cogsTarget) || 0)) : null;
+    // "worst" only considers metrics we actually have trustworthy data for.
+    const worst = Math.max(labourVar != null ? Math.abs(labourVar) : 0, cogsVar != null ? Math.abs(cogsVar) : 0);
     return { ...r, labourVar, cogsVar, worst };
-  }).filter(r => r.worst >= 2) // only material variances (>=2 pts)
+  }).filter(r => r.worst >= 3) // only material variances (>=3 pts)
     .sort((a, b) => b.worst - a.worst);
   if (!flagged.length) return null;
   const detail = flagged.slice(0, 6).map(r => {
     const bits = [];
-    if (Math.abs(r.labourVar) >= 2) bits.push(`labour ${r.labourVar > 0 ? "+" : ""}${r.labourVar.toFixed(1)}pts`);
-    if (Math.abs(r.cogsVar) >= 2) bits.push(`COGS ${r.cogsVar > 0 ? "+" : ""}${r.cogsVar.toFixed(1)}pts`);
+    if (r.labourVar != null && Math.abs(r.labourVar) >= 2) bits.push(`labour ${r.labourVar > 0 ? "+" : ""}${r.labourVar.toFixed(1)}pts`);
+    if (r.cogsVar != null && Math.abs(r.cogsVar) >= 2) bits.push(`COGS ${r.cogsVar > 0 ? "+" : ""}${r.cogsVar.toFixed(1)}pts`);
     return `${r.storeName || r.storeId}: ${bits.join(", ")}`;
   }).join("; ");
   const fallback = `Profit Watch for ${day}: ${flagged.length} site(s) off target. ${detail}.`;
