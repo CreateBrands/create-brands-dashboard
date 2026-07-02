@@ -43189,6 +43189,13 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       if (!camCancelledRef.current) { setCameraReady(true); setCameraError(false); }
     } catch (err) {
       console.warn("Camera start failed:", err);
+      // Detach any stale frame so the preview goes blank instead of showing the
+      // PREVIOUS person's frozen face while in the error state.
+      try { if (videoRef.current) videoRef.current.srcObject = null; } catch (_) {}
+      if (streamRef.current) {
+        try { streamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
+        streamRef.current = null;
+      }
       if (!camCancelledRef.current) { setCameraError(true); setCameraReady(false); }
     } finally {
       startingRef.current = false;
@@ -43241,7 +43248,15 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
   useEffect(() => {
     const watchdog = setInterval(() => {
       if (camCancelledRef.current) return;
-      if (!streamRef.current || !videoRef.current) return;
+      // If there's no live stream (e.g. camera errored, or another app grabbed it
+      // then released it), keep trying to (re)start it. Previously this returned
+      // early forever once the stream was gone, so the kiosk stayed stuck on the
+      // "camera unavailable" state showing a frozen frame until a full reload.
+      if (!streamRef.current) {
+        if (!startingRef.current) startCamera();
+        return;
+      }
+      if (!videoRef.current) return;
       const v = videoRef.current;
       if (v.srcObject !== streamRef.current) v.srcObject = streamRef.current;
       if (v.paused || v.readyState < 2) { v.play().catch(() => {}); }
@@ -43342,7 +43357,16 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     setLastAction(null); setPin(""); setMatched(null); setBreakMsg("");
     setError(""); setOverlayView(null);
     submittingRef.current = false; setSubmitting(false);
-  }, []);
+    // Belt-and-braces: when returning to the idle PIN screen for the next person,
+    // make sure the camera is live. If the stream died or froze, restart it so
+    // the next clock-in never captures (or shows) the previous person's frame.
+    try {
+      const v = videoRef.current, s = streamRef.current;
+      const track = s && s.getVideoTracks ? s.getVideoTracks()[0] : null;
+      const dead = !s || !track || track.readyState === "ended" || track.muted === true || (v && v.readyState < 2);
+      if (dead && !startingRef.current) startCamera();
+    } catch (_) {}
+  }, [startCamera]);
 
   // Auto-clear last action message. Skipped while a menu/tasks overlay is open
   // (the employee is mid-interaction). Punch-in gets a longer window so they
