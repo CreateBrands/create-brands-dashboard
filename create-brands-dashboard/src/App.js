@@ -48515,6 +48515,14 @@ export default function App() {
     try { return localStorage.getItem("cb_impersonate") || null; } catch { return null; }
   });
   const [loginMode, setLoginMode] = useState("employee");
+  const [agentPendingCount, setAgentPendingCount] = useState(0);
+  useEffect(() => {
+    let a = true;
+    const poll = () => fetchAgentTasks({ status: "pending", limit: 50 }).then(t => { if (a) setAgentPendingCount(t.length); }).catch(() => {});
+    poll();
+    const iv = setInterval(poll, 60000);
+    return () => { a = false; clearInterval(iv); };
+  }, []);
 
   const [brands,         setBrands]         = useState([]);
   const [users,          setUsers]          = useState([]);
@@ -49924,8 +49932,6 @@ export default function App() {
   // Manager / Owner
   const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
-  const [agentPendingCount, setAgentPendingCount] = useState(0);
-  useEffect(() => { let a = true; fetchAgentTasks({ status: "pending", limit: 50 }).then(t => { if (a) setAgentPendingCount(t.length); }).catch(() => {}); const iv = setInterval(() => { fetchAgentTasks({ status: "pending", limit: 50 }).then(t => setAgentPendingCount(t.length)).catch(() => {}); }, 60000); return () => { a = false; clearInterval(iv); }; }, [activeView]);
   const commsUnread = (() => {
     const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
     return messages.filter(m => {
