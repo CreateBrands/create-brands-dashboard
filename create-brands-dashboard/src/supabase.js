@@ -10584,7 +10584,28 @@ export async function fetchDistPortalCatalogue(customerId) {
   return items.filter(i => i.active !== false).map(i => {
     const manual = collsByItem.get(i.id) || [];
     const viaSmart = i.category ? (smartByCat.get(String(i.category).toLowerCase()) || []) : [];
-    const collectionIds = [...new Set([...manual, ...viaSmart])];
+    // Base membership: hand-picked links + smart-category matches + a manual
+    // collection's own includeCategories.
+    const base = new Set([...manual, ...viaSmart]);
+    (collections || []).forEach(c => {
+      if (c.mode === "smart") return;
+      const inc = (c.includeCategories || []).map(x => x.toLowerCase());
+      if (i.category && inc.includes(i.category.toLowerCase())) base.add(c.id);
+    });
+    // Nested: if an item is in collection X, and collection Y lists X as a child,
+    // the item is also in Y — resolved transitively (with cycle protection).
+    const childMap = new Map((collections || []).map(c => [c.id, (c.childCollectionIds || [])]));
+    const expanded = new Set(base);
+    let changed = true, guard = 0;
+    while (changed && guard < 20) {
+      changed = false; guard++;
+      (collections || []).forEach(parent => {
+        if (expanded.has(parent.id)) return;
+        const kids = childMap.get(parent.id) || [];
+        if (kids.some(k => expanded.has(k))) { expanded.add(parent.id); changed = true; }
+      });
+    }
+    const collectionIds = [...expanded];
     return {
       id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
       packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
@@ -10601,6 +10622,7 @@ const mapDistCollection = (c) => ({
   sortOrder: c.sort_order != null ? Number(c.sort_order) : 0,
   active: c.active !== false, createdAt: c.created_at,
   mode: c.mode || "manual", ruleCategories: c.rule_categories || [],
+  includeCategories: c.include_categories || [], childCollectionIds: c.child_collection_ids || [],
 });
 export async function fetchDistCollections({ includeInactive } = {}) {
   let q = supabase.from("dist_collections").select("*").order("sort_order").order("name");
@@ -10615,6 +10637,8 @@ export async function upsertDistCollection(c) {
     sort_order: c.sortOrder != null ? Number(c.sortOrder) : 0, active: c.active !== false,
     mode: c.mode === "smart" ? "smart" : "manual",
     rule_categories: c.mode === "smart" ? (c.ruleCategories || []) : [],
+    include_categories: c.mode === "smart" ? [] : (c.includeCategories || []),
+    child_collection_ids: c.mode === "smart" ? [] : (c.childCollectionIds || []),
   };
   const { data, error } = await supabase.from("dist_collections").upsert(row).select().maybeSingle();
   if (error) throw error;

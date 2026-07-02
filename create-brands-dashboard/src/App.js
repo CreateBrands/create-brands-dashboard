@@ -10097,7 +10097,17 @@ function DistOrderSetupView() {
       setCollections(colls); setItems(its);
       let c = {};
       try { c = settings?.dist_order_display ? JSON.parse(settings.dist_order_display) : {}; } catch { c = {}; }
-      setCfg({ defaultBrowse: c.defaultBrowse || "category", defaultView: c.defaultView || "card", categoryOrder: c.categoryOrder || [], collectionOrder: c.collectionOrder || [] });
+      // Preserve the WHOLE config (departments, and anything else) — only fill in
+      // defaults for the known fields. Previously this rebuilt cfg from 4 fields
+      // and silently dropped departments, so they vanished from the builder.
+      setCfg({
+        ...c,
+        defaultBrowse: c.defaultBrowse || "category",
+        defaultView: c.defaultView || "card",
+        categoryOrder: c.categoryOrder || [],
+        collectionOrder: c.collectionOrder || [],
+        departments: c.departments || [],
+      });
     } catch (e) { setMsg(e.message); }
     setLoading(false);
   };
@@ -10246,20 +10256,22 @@ function DistOrderSetupView() {
         </div>
       </div>
 
-      {editColl && <DistCollectionEditModal coll={editColl} items={items} onClose={() => setEditColl(null)} onSaved={() => { setEditColl(null); reload(); }}/>}
+      {editColl && <DistCollectionEditModal coll={editColl} items={items} allCollections={collections} onClose={() => setEditColl(null)} onSaved={() => { setEditColl(null); reload(); }}/>}
       {editDept && <DistDepartmentEditModal dept={editDept} allCategories={allCategories} collections={collections} onClose={() => setEditDept(null)} onSave={saveDept} onDelete={editDept._new ? null : () => { deleteDept(editDept.id); setEditDept(null); }}/>}
     </div>
   );
 }
 
 // Create/edit a collection: name, visibility, and item membership (searchable).
-function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
+function DistCollectionEditModal({ coll, items, allCollections = [], onClose, onSaved }) {
   const [name, setName] = useState(coll.name || "");
   const [description, setDescription] = useState(coll.description || "");
   const [active, setActive] = useState(coll.active !== false);
   const [mode, setMode] = useState(coll.mode === "smart" ? "smart" : "manual");
   const [ruleCategories, setRuleCategories] = useState(new Set(coll.ruleCategories || []));
   const [picked, setPicked] = useState(new Set(coll.itemIds || []));
+  const [inclCats, setInclCats] = useState(new Set(coll.includeCategories || []));
+  const [childColls, setChildColls] = useState(new Set(coll.childCollectionIds || []));
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -10305,6 +10317,7 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
       const saved = await upsertDistCollection({
         id: coll.new ? undefined : coll.id, name: name.trim(), description, active,
         sortOrder: coll.sortOrder || 0, mode, ruleCategories: Array.from(ruleCategories),
+        includeCategories: Array.from(inclCats), childCollectionIds: Array.from(childColls),
       });
       // Manual membership only applies to manual collections.
       if (mode === "manual") await setDistCollectionItems(saved.id, Array.from(picked));
@@ -10358,7 +10371,30 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
             </div>
           </div>
         ) : (
-          /* ── MANUAL: two-panel — available (grouped by category) vs selected ── */
+          /* ── MANUAL: nested includes + two-panel item picker ── */
+          <>
+          {/* Include whole categories / other collections (resolved flat on the order page) */}
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 mb-3 space-y-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1.5">Include whole categories <span className="text-slate-600 normal-case font-normal">— every item in these is pulled in</span></div>
+              <div className="flex flex-wrap gap-1.5">
+                {allCategories.map(c => { const on = inclCats.has(c); return (
+                  <button key={c} type="button" onClick={() => setInclCats(p => { const n = new Set(p); n.has(c)?n.delete(c):n.add(c); return n; })} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${on?"bg-indigo-600 text-white":"bg-slate-800 text-slate-300 border border-slate-700 hover:border-slate-600"}`}>{c}</button>
+                ); })}
+              </div>
+            </div>
+            {allCollections.filter(x => x.id !== coll.id).length > 0 && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1.5">Include other collections <span className="text-slate-600 normal-case font-normal">— their items are merged in</span></div>
+                <div className="flex flex-wrap gap-1.5">
+                  {allCollections.filter(x => x.id !== coll.id).map(x => { const on = childColls.has(x.id); return (
+                    <button key={x.id} type="button" onClick={() => setChildColls(p => { const n = new Set(p); n.has(x.id)?n.delete(x.id):n.add(x.id); return n; })} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${on?"bg-indigo-600 text-white":"bg-slate-800 text-slate-300 border border-slate-700 hover:border-slate-600"}`}>{x.name}{x.mode==="smart"?" (smart)":""}</button>
+                  ); })}
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Plus hand-picked individual items */}
           <div className="grid md:grid-cols-2 gap-3">
             {/* Available */}
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 flex flex-col min-h-0">
@@ -10409,6 +10445,7 @@ function DistCollectionEditModal({ coll, items, onClose, onSaved }) {
               </div>
             </div>
           </div>
+          </>
         )}
 
         <div className="flex items-center justify-between pt-1">
