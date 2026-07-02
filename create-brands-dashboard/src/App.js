@@ -6870,6 +6870,15 @@ function DistDocLinkProvider({ children, onNavigate, onConvert }) {
   const top = stack[stack.length - 1] || null;
   const close = () => setStack(s => s.slice(0, -1));
 
+  // Delete a document opened via a link, then close the modal. Guard errors
+  // (wrong order in the chain) are surfaced with clear guidance. So deletes work
+  // wherever a doc is opened from — not only inside its own list view.
+  const delDoc = async (fn, confirmMsg) => {
+    if (!window.confirm(confirmMsg)) return;
+    try { await fn(); close(); }
+    catch (e) { alert(e?.message || "Could not delete."); }
+  };
+
   // Lazy data for views that need a full object (SO, customer).
   const [obj, setObj] = useState(null);
   const [aux, setAux] = useState({ items: [], taxRates: [], customers: [], stores: [] });
@@ -6897,9 +6906,9 @@ function DistDocLinkProvider({ children, onNavigate, onConvert }) {
   return (
     <DistDocLinkContext.Provider value={{ openDoc, navigate, convert }}>
       {children}
-      {top && top.type === "invoice" && <DistInvoiceDetail invoiceId={top.id} onClose={close}/>}
-      {top && top.type === "pick" && <DistPickDetail pickId={top.id} onClose={close}/>}
-      {top && top.type === "dispatch" && <DistDispatchDetail dispatchId={top.id} onClose={close}/>}
+      {top && top.type === "invoice" && <DistInvoiceDetail invoiceId={top.id} onClose={close} onDelete={() => delDoc(() => deleteDistInvoice(top.id), "Delete this invoice? It reverses the sale (AR/Sales/VAT). Blocked if a payment is against it. Cannot be undone.")}/>}
+      {top && top.type === "pick" && <DistPickDetail pickId={top.id} onClose={close} onDelete={() => delDoc(() => deleteDistPick(top.id), "Delete this pick? It frees the order to be re-picked. Blocked if it has been dispatched (delete the dispatch first).")}/>}
+      {top && top.type === "dispatch" && <DistDispatchDetail dispatchId={top.id} onClose={close} onDelete={() => delDoc(() => deleteDistDispatch(top.id), "Delete this dispatch? It reverses the stock movements and posts a reversing COGS journal. Blocked if an invoice references it. Cannot be undone.")}/>}
       {top && top.type === "po" && <DistPODetail poId={top.id} onClose={close}/>}
       {top && top.type === "grn" && <DistGRNDetail grnId={top.id} onClose={close}/>}
       {top && top.type === "bill" && <DistBillDetail billId={top.id} onClose={close}/>}
