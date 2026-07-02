@@ -10525,7 +10525,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [displayCfg, setDisplayCfg] = useState(null);    // owner-set layout config
   const [cart, setCart] = useState({});
   const [cat, setCat] = useState("All");                 // active category OR collection id
-  const [browseMode, setBrowseMode] = useState("category"); // "category" | "collection"
+  const [browseMode, setBrowseMode] = useState("collection"); // nav is collection-based
   const [deptId, setDeptId] = useState("all");           // active Department (top nav), "all" = everything
   const [viewMode, setViewMode] = useState("card");      // "card" | "list"
   const [search, setSearch] = useState("");
@@ -10643,12 +10643,13 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     const q = search.trim().toLowerCase();
     return catalogue.filter(i => {
       if (!itemInDept(i)) return false;
-      const inFilter = cat === "All"
-        ? true
-        : (browseMode === "collection" ? (i.collectionIds || []).includes(cat) : i.category === cat);
-      return inFilter && (!q || `${i.name} ${i.sku}`.toLowerCase().includes(q));
+      // Nav is by COLLECTION now. "All" = whole department; otherwise the active
+      // collection. Category is no longer a nav axis (but still searchable below).
+      const inFilter = cat === "All" ? true : (i.collectionIds || []).includes(cat);
+      // Search still matches category text as a hidden fallback.
+      return inFilter && (!q || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(q));
     });
-  }, [catalogue, cat, search, browseMode, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, cat, search, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "Buy again": items this customer has ordered before, ranked by how many
   // separate orders they appear in (frequency), then most-recent. Mapped to the
@@ -10733,105 +10734,95 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-950 flex flex-col">
+    <div className="fixed inset-0 z-40 flex flex-col" style={{ backgroundColor: "#F4E9DD" }}>
       {/* Header */}
-      <div className="flex-shrink-0 px-4 sm:px-6 py-3 border-b border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex-shrink-0 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 flex-wrap" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
         <div className="flex items-center gap-3">
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-indigo-400 font-semibold">Distribution</div>
-            <h2 className="text-xl font-bold text-white leading-tight">Order supplies</h2>
+            <div className="text-[11px] uppercase tracking-widest font-semibold" style={{ color: "#C9854F" }}>Distribution</div>
+            <h2 className="text-xl font-bold leading-tight" style={{ color: "#3A2E26" }}>Order supplies</h2>
           </div>
           {customers.length > 1 ? (
-            <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
+            <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="px-2.5 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-          ) : customers.length === 1 ? <div className="text-sm text-slate-500 self-center">{customers[0].name}</div> : null}
+          ) : customers.length === 1 ? <div className="text-sm self-center" style={{ color: "#9A8770" }}>{customers[0].name}</div> : null}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Browse mode: Categories vs Collections (only if collections exist) */}
-          {activeCollections.length > 0 && (
-            <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-0.5">
-              {[["category","Categories"],["collection","Collections"]].map(([k,l]) => (
-                <button key={k} onClick={() => setBrowseMode(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${browseMode===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
-              ))}
-            </div>
-          )}
           {/* View mode: card vs list */}
-          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-0.5">
-            <button onClick={() => setViewMode("card")} title="Card view" className={`px-2.5 py-1.5 rounded-lg transition-colors ${viewMode==="card"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}><LayoutGrid size={15}/></button>
-            <button onClick={() => setViewMode("list")} title="List view" className={`px-2.5 py-1.5 rounded-lg transition-colors ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}><List size={15}/></button>
+          <div className="flex items-center rounded-xl p-0.5" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6" }}>
+            <button onClick={() => setViewMode("card")} title="Card view" className="px-2.5 py-1.5 rounded-lg transition-colors" style={viewMode==="card" ? { backgroundColor: "#844429", color: "#FDF2E0" } : { color: "#9A8770" }}><LayoutGrid size={15}/></button>
+            <button onClick={() => setViewMode("list")} title="List view" className="px-2.5 py-1.5 rounded-lg transition-colors" style={viewMode==="list" ? { backgroundColor: "#844429", color: "#FDF2E0" } : { color: "#9A8770" }}><List size={15}/></button>
           </div>
-          {frequentItems.length > 0 && <button onClick={() => setShowBuyAgain(v => !v)} className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 border ${showBuyAgain?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200"}`}><Star size={14}/> Buy again</button>}
-          {lastOrder && <button onClick={reorderLast} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><RotateCcw size={14}/> Reorder last</button>}
-          <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300" title="Close"><X size={18}/></button>
+          {frequentItems.length > 0 && <button onClick={() => setShowBuyAgain(v => !v)} className="px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5" style={showBuyAgain ? { backgroundColor: "#C9854F", color: "#fff" } : { backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}><Star size={14}/> Buy again</button>}
+          {lastOrder && <button onClick={reorderLast} className="px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}><RotateCcw size={14}/> Reorder last</button>}
+          <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }} title="Close"><X size={18}/></button>
         </div>
       </div>
-      {err && err !== "no-link" && <div className="px-6 py-2 text-xs text-red-400">{err}</div>}
+      {err && err !== "no-link" && <div className="px-6 py-2 text-xs" style={{ color: "#b91c1c" }}>{err}</div>}
 
 
       {loading ? (
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4">
-            {Array.from({ length: 10 }).map((_, n) => <div key={n} className="rounded-2xl border border-slate-800 bg-slate-900 p-3 animate-pulse"><div className="h-32 rounded-xl bg-slate-800"/><div className="h-3 bg-slate-800 rounded mt-3 w-3/4"/><div className="h-3 bg-slate-800 rounded mt-2 w-1/3"/></div>)}
+            {Array.from({ length: 10 }).map((_, n) => <div key={n} className="rounded-2xl p-3 animate-pulse" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}><div className="h-32 rounded-xl" style={{ backgroundColor: "#EADEC9" }}/><div className="h-3 rounded mt-3 w-3/4" style={{ backgroundColor: "#EADEC9" }}/><div className="h-3 rounded mt-2 w-1/3" style={{ backgroundColor: "#EADEC9" }}/></div>)}
           </div>
         </div>
       ) : customerId && (
         <div className="flex-1 flex min-h-0">
-          {/* Department sidebar (top-level nav) — only when departments configured */}
+          {/* Department rail (primary nav) — brown active, cream inactive */}
           {departments.length > 0 && (
-            <div className="hidden md:flex md:flex-col w-48 flex-shrink-0 border-r border-slate-800 bg-slate-900/60 overflow-y-auto py-2">
-              <button onClick={() => setDeptId("all")} className={`text-left px-4 py-2.5 text-sm font-semibold transition-colors ${deptId==="all"?"bg-indigo-600/20 text-white border-l-2 border-indigo-500":"text-slate-400 hover:text-white border-l-2 border-transparent"}`}>All items</button>
+            <div className="hidden md:flex md:flex-col w-52 flex-shrink-0 overflow-y-auto py-2" style={{ backgroundColor: "#FBF6EC", borderRight: "1px solid #E8DCC6" }}>
+              <div className="px-4 pt-1 pb-2 text-[10px] uppercase tracking-widest font-bold" style={{ color: "#9A8770" }}>Departments</div>
+              <button onClick={() => setDeptId("all")} className="text-left px-4 py-2.5 text-sm font-semibold transition-colors" style={deptId==="all" ? { backgroundColor: "#844429", color: "#FDF2E0" } : { color: "#3A2E26" }}>All items</button>
               {departments.map(d => (
-                <button key={d.id} onClick={() => setDeptId(d.id)} className={`text-left px-4 py-2.5 text-sm font-semibold transition-colors ${deptId===d.id?"bg-indigo-600/20 text-white border-l-2 border-indigo-500":"text-slate-400 hover:text-white border-l-2 border-transparent"}`}>{d.name}</button>
+                <button key={d.id} onClick={() => setDeptId(d.id)} className="text-left px-4 py-2.5 text-sm font-semibold transition-colors" style={deptId===d.id ? { backgroundColor: "#844429", color: "#FDF2E0" } : { color: "#3A2E26" }}>{d.name}</button>
               ))}
             </div>
           )}
           {/* Catalogue column (scrolls) */}
           <div className="flex-1 flex flex-col min-w-0">
-            {/* Sticky controls: search + chip bar (categories OR collections) */}
-            <div className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-2 border-b border-slate-800/70 bg-slate-950 space-y-2.5">
+            {/* Sticky controls: search + COLLECTION sub-bar */}
+            <div className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-2 space-y-2.5" style={{ backgroundColor: "#F4E9DD", borderBottom: "1px solid #E8DCC6" }}>
               <div className="flex items-center gap-2">
-                <div className="relative flex-1 max-w-xl"><Search size={16} className="absolute left-3.5 top-3 text-slate-500"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${catalogue.length} products…`} className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none"/></div>
+                <div className="relative flex-1 max-w-xl"><Search size={16} className="absolute left-3.5 top-3" style={{ color: "#9A8770" }}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${catalogue.length} products…`} className="w-full pl-10 pr-3 py-2.5 rounded-xl text-sm focus:outline-none" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#3A2E26" }}/></div>
                 {departments.length > 0 && (
-                  <select value={deptId} onChange={e => setDeptId(e.target.value)} className="md:hidden px-2.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">
+                  <select value={deptId} onChange={e => setDeptId(e.target.value)} className="md:hidden px-2.5 py-2.5 rounded-xl text-sm" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
                     <option value="all">All items</option>
                     {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </select>
                 )}
               </div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {browseMode === "collection" ? (
-                  <>
-                    <button onClick={() => setCat("All")} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat==="All"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>All</button>
-                    {activeCollections.map(c => <button key={c.id} onClick={() => setCat(c.id)} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat===c.id?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{c.name}</button>)}
-                  </>
-                ) : (
-                  categories.map(c => <button key={c} onClick={() => setCat(c)} className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${cat===c?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400 hover:text-white"}`}>{c}</button>)
-                )}
-              </div>
+              {/* Collection chips — caramel active. Only show if there are collections. */}
+              {activeCollections.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <button onClick={() => setCat("All")} className="px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors" style={cat==="All" ? { backgroundColor: "#C9854F", color: "#fff" } : { backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#844429" }}>All</button>
+                  {activeCollections.map(c => <button key={c.id} onClick={() => setCat(c.id)} className="px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors" style={cat===c.id ? { backgroundColor: "#C9854F", color: "#fff" } : { backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#844429" }}>{c.name}</button>)}
+                </div>
+              )}
             </div>
             {/* Scrolling product area */}
             <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 pb-28 lg:pb-4">
               {showBuyAgain && frequentItems.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-indigo-500/30 bg-indigo-600/5 p-3">
-                  <div className="flex items-center gap-2 mb-2"><Star size={14} className="text-indigo-300"/><span className="text-xs font-bold text-indigo-200 uppercase tracking-wide">Buy again — your usual items</span></div>
+                <div className="mb-4 rounded-2xl p-3" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+                  <div className="flex items-center gap-2 mb-2"><Star size={14} style={{ color: "#C9854F" }}/><span className="text-xs font-bold uppercase tracking-wide" style={{ color: "#844429" }}>Buy again — your usual items</span></div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-2">
                     {frequentItems.slice(0, 15).map(i => {
                       const qty = cart[i.id] || 0;
                       return (
-                        <div key={i.id} className={`rounded-xl border p-2 flex items-center gap-2 ${qty>0?"border-indigo-500/60 bg-indigo-600/10":"border-slate-800 bg-slate-900"}`}>
+                        <div key={i.id} className="rounded-xl p-2 flex items-center gap-2" style={qty>0 ? { border: "1px solid #5C9442", backgroundColor: "#E4EFD9" } : { border: "1px solid #E8DCC6", backgroundColor: "#FDF2E0" }}>
                           <div className="min-w-0 flex-1">
-                            <div className="text-xs font-semibold text-white truncate">{cleanName(i.name)}</div>
-                            <div className="text-[10px] text-slate-500">{gbp(i.price)}</div>
+                            <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+                            <div className="text-[10px]" style={{ color: "#9A8770" }}>{gbp(i.price)}</div>
                           </div>
                           {qty > 0 ? (
                             <div className="flex items-center gap-0.5 flex-shrink-0">
-                              <button onClick={() => bump(i.id, -1)} className="w-6 h-6 rounded bg-slate-800 text-white text-sm leading-none">−</button>
-                              <span className="w-5 text-center text-xs text-white">{qty}</span>
-                              <button onClick={() => bump(i.id, 1)} className="w-6 h-6 rounded bg-indigo-600 text-white text-sm leading-none">+</button>
+                              <button onClick={() => bump(i.id, -1)} className="w-6 h-6 rounded text-sm leading-none" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
+                              <span className="w-5 text-center text-xs" style={{ color: "#3A2E26" }}>{qty}</span>
+                              <button onClick={() => bump(i.id, 1)} className="w-6 h-6 rounded text-sm leading-none" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
                             </div>
                           ) : (
-                            <button onClick={() => bump(i.id, 1)} className="flex-shrink-0 w-7 h-7 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white flex items-center justify-center"><Plus size={14}/></button>
+                            <button onClick={() => bump(i.id, 1)} className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/></button>
                           )}
                         </div>
                       );
@@ -10840,29 +10831,29 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                 </div>
               )}
               {visible.length === 0 ? (
-                <div className="text-center text-sm text-slate-600 py-16">No products match. Try another {browseMode==="collection"?"collection":"category"} or clear the search.</div>
+                <div className="text-center text-sm py-16" style={{ color: "#9A8770" }}>No products match. Try another collection or clear the search.</div>
               ) : viewMode === "list" ? (
                 /* ── LIST VIEW — dense rows, best for 500+ items ── */
-                <div className="rounded-2xl border border-slate-800 bg-slate-900 divide-y divide-slate-800/70 overflow-hidden">
+                <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", backgroundColor: "#FBF6EC" }}>
                   {visible.map(i => {
                     const qty = cart[i.id] || 0;
                     return (
-                      <div key={i.id} className={`flex items-center gap-3 px-3 py-2.5 ${qty>0?"bg-indigo-600/10":"hover:bg-slate-800/40"}`}>
-                        <div className="w-10 h-10 rounded-lg overflow-hidden bg-slate-800 flex-shrink-0"><ProductImage i={i} size="h-10"/></div>
+                      <div key={i.id} className="flex items-center gap-3 px-3 py-2.5" style={qty>0 ? { backgroundColor: "#E4EFD9", borderBottom: "1px solid #F0E4D2" } : { borderBottom: "1px solid #F0E4D2" }}>
+                        <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0" style={{ backgroundColor: "#F0E4D2" }}><ProductImage i={i} size="h-10"/></div>
                         <div className="min-w-0 flex-1">
-                          <div className="text-sm font-semibold text-white truncate">{cleanName(i.name)}</div>
-                          <div className="text-[11px] text-slate-500 flex items-center gap-2"><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span className="text-slate-600">{i.sku}</span>}</div>
+                          <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+                          <div className="text-[11px] flex items-center gap-2" style={{ color: "#9A8770" }}><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span style={{ color: "#A8835C" }}>{i.sku}</span>}</div>
                         </div>
-                        <div className="text-sm font-bold text-white w-16 text-right flex-shrink-0">{gbp(i.price)}</div>
+                        <div className="text-sm font-bold w-16 text-right flex-shrink-0" style={{ color: "#844429" }}>{gbp(i.price)}</div>
                         <div className="flex-shrink-0 w-[104px] flex justify-end">
                           {qty > 0 ? (
                             <div className="flex items-center gap-1">
-                              <button onClick={() => bump(i.id, -1)} className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold leading-none flex items-center justify-center">−</button>
-                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-8 text-center py-1 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"/>
-                              <button onClick={() => bump(i.id, 1)} className="w-7 h-7 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold leading-none flex items-center justify-center">+</button>
+                              <button onClick={() => bump(i.id, -1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
+                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-8 text-center py-1 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                              <button onClick={() => bump(i.id, 1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
                             </div>
                           ) : (
-                            <button onClick={() => bump(i.id, 1)} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1 transition-colors"><Plus size={13}/> Add</button>
+                            <button onClick={() => bump(i.id, 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={13}/> Add</button>
                           )}
                         </div>
                       </div>
@@ -10875,25 +10866,25 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                   {visible.map(i => {
                     const qty = cart[i.id] || 0;
                     return (
-                      <div key={i.id} className={`group rounded-2xl border bg-slate-900 p-3 flex flex-col transition-all ${qty>0?"border-indigo-500/70 ring-1 ring-indigo-500/30":"border-slate-800 hover:border-slate-700"}`}>
+                      <div key={i.id} className="group rounded-2xl p-3 flex flex-col transition-all" style={qty>0 ? { backgroundColor: "#FBF6EC", border: "2px solid #5C9442" } : { backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
                         <div className="relative">
                           <ProductImage i={i}/>
-                          {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center shadow-lg">{qty}</span>}
+                          {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full text-xs font-bold flex items-center justify-center shadow-lg" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{qty}</span>}
                         </div>
                         <div className="mt-3 flex-1">
-                          <div className="text-sm font-semibold text-white leading-snug line-clamp-2">{cleanName(i.name)}</div>
-                          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1"><Package size={11}/> {unitLabel(i)}</div>
+                          <div className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+                          <div className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#9A8770" }}><Package size={11}/> {unitLabel(i)}</div>
                         </div>
                         <div className="mt-2.5 flex items-end justify-between gap-2">
-                          <div className="text-lg font-bold text-white">{gbp(i.price)}</div>
+                          <div className="text-lg font-bold" style={{ color: "#844429" }}>{gbp(i.price)}</div>
                           {qty > 0 ? (
                             <div className="flex items-center gap-1">
-                              <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-lg leading-none flex items-center justify-center">−</button>
-                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"/>
-                              <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-lg leading-none flex items-center justify-center">+</button>
+                              <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
+                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                              <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
                             </div>
                           ) : (
-                            <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg bg-slate-800 group-hover:bg-indigo-600 text-slate-200 group-hover:text-white text-xs font-semibold flex items-center gap-1 transition-colors"><Plus size={14}/> Add</button>
+                            <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/> Add</button>
                           )}
                         </div>
                       </div>
@@ -10905,20 +10896,20 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           </div>
 
           {/* Cart — fixed side panel on desktop */}
-          <div className="hidden lg:flex lg:flex-col w-80 flex-shrink-0 border-l border-slate-800 bg-slate-900">
-            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between"><span className="text-sm font-bold text-white flex items-center gap-2"><ShoppingCart size={16}/> Your order</span><span className="text-xs text-slate-500">{cartCount} item{cartCount!==1?"s":""}</span></div>
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60">
-              {cartLines.length === 0 && <div className="px-4 py-10 text-center text-sm text-slate-600">Your cart is empty.<br/>Tap <span className="text-slate-400">Add</span> on any product.</div>}
+          <div className="hidden lg:flex lg:flex-col w-80 flex-shrink-0" style={{ backgroundColor: "#FBF6EC", borderLeft: "1px solid #E8DCC6" }}>
+            <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid #E8DCC6" }}><span className="text-sm font-bold flex items-center gap-2" style={{ color: "#3A2E26" }}><ShoppingCart size={16}/> Your order</span><span className="text-xs" style={{ color: "#9A8770" }}>{cartCount} item{cartCount!==1?"s":""}</span></div>
+            <div className="flex-1 overflow-y-auto">
+              {cartLines.length === 0 && <div className="px-4 py-10 text-center text-sm" style={{ color: "#9A8770" }}>Your cart is empty.<br/>Tap <span style={{ color: "#844429" }}>Add</span> on any product.</div>}
               {cartLines.map(l => (
-                <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                  <div className="min-w-0"><div className="text-sm text-white truncate">{cleanName(l.name)}</div><div className="text-[11px] text-slate-500">{l.qty} × {gbp(l.price)}</div></div>
-                  <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm text-white font-medium">{gbp(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></div>
+                <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2" style={{ borderBottom: "1px solid #F0E4D2" }}>
+                  <div className="min-w-0"><div className="text-sm truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div><div className="text-[11px]" style={{ color: "#9A8770" }}>{l.qty} × {gbp(l.price)}</div></div>
+                  <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm font-medium" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} style={{ color: "#A8835C" }}><Trash2 size={14}/></button></div>
                 </div>
               ))}
             </div>
-            <div className="px-4 py-3 border-t border-slate-800 space-y-2.5">
-              <div className="flex justify-between text-sm"><span className="text-slate-400">Subtotal (excl. VAT)</span><span className="text-white font-bold">{gbp(cartTotal)}</span></div>
-              <button onClick={() => setConfirmOpen(true)} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
+            <div className="px-4 py-3 space-y-2.5" style={{ borderTop: "1px solid #E8DCC6" }}>
+              <div className="flex justify-between text-sm"><span style={{ color: "#9A8770" }}>Subtotal (excl. VAT)</span><span className="font-bold" style={{ color: "#C9854F" }}>{gbp(cartTotal)}</span></div>
+              <button onClick={() => setConfirmOpen(true)} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl disabled:opacity-40 text-sm font-semibold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Review &amp; place order</button>
             </div>
           </div>
         </div>
@@ -10926,7 +10917,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
       {/* Mobile cart bar + drawer */}
       {cartCount > 0 && (
-        <button onClick={() => setCartOpen(true)} className="lg:hidden fixed bottom-4 left-4 right-4 z-30 py-3.5 rounded-2xl bg-indigo-600 text-white font-semibold shadow-2xl flex items-center justify-between px-5">
+        <button onClick={() => setCartOpen(true)} className="lg:hidden fixed bottom-4 left-4 right-4 z-30 py-3.5 rounded-2xl font-semibold shadow-2xl flex items-center justify-between px-5" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
           <span className="flex items-center gap-2"><ShoppingCart size={18}/> {cartCount} item{cartCount!==1?"s":""}</span>
           <span>{gbp(cartTotal)} ›</span>
         </button>
