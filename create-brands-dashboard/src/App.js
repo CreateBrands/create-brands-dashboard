@@ -10510,6 +10510,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [err, setErr] = useState("");
   const [placing, setPlacing] = useState(false);
   const [lastOrder, setLastOrder] = useState(null);
+  const [orderHistory, setOrderHistory] = useState([]);   // past orders for "buy again"
+  const [showBuyAgain, setShowBuyAgain] = useState(false);
+  const [deliveryDate, setDeliveryDate] = useState("");   // checkout: requested delivery
+  const [orderNote, setOrderNote] = useState("");         // checkout: note to distribution
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);   // mobile cart drawer
   const [placed, setPlaced] = useState(null);
@@ -10558,7 +10562,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           fetchDistPortalCatalogue(customerId), fetchDistSalesOrders({ customerId }),
         ]);
         setCatalogue(rows);
-        setLastOrder((orders || []).find(o => o.status !== "cancelled") || null);
+        const valid = (orders || []).filter(o => o.status !== "cancelled");
+        setLastOrder(valid[0] || null);
+        setOrderHistory(valid);
       } catch (e) { setErr(e.message); }
       setLoading(false);
     })();
@@ -10621,6 +10627,30 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     });
   }, [catalogue, cat, search, browseMode, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // "Buy again": items this customer has ordered before, ranked by how many
+  // separate orders they appear in (frequency), then most-recent. Mapped to the
+  // CURRENT catalogue so prices/availability are live. Powers the quick panel.
+  const frequentItems = useMemo(() => {
+    const freq = new Map();   // itemId -> { count, lastAt }
+    (orderHistory || []).forEach(o => {
+      const seen = new Set();
+      (o.lines || []).forEach(l => {
+        if (!l.itemId || seen.has(l.itemId)) return;
+        seen.add(l.itemId);
+        const cur = freq.get(l.itemId) || { count: 0, lastAt: 0 };
+        cur.count += 1;
+        const t = new Date(o.createdAt || 0).getTime();
+        if (t > cur.lastAt) cur.lastAt = t;
+        freq.set(l.itemId, cur);
+      });
+    });
+    const byId = new Map(catalogue.map(i => [i.id, i]));
+    return Array.from(freq.entries())
+      .map(([id, f]) => ({ item: byId.get(id), ...f }))
+      .filter(x => x.item)   // still in catalogue
+      .sort((a, b) => (b.count - a.count) || (b.lastAt - a.lastAt))
+      .map(x => x.item);
+  }, [orderHistory, catalogue]);
   const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
   const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
 
@@ -10644,8 +10674,12 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     setPlacing(true); setErr("");
     try {
       const lines = cartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent" }));
-      const id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: "Placed via store ordering portal" }, lines);
-      setPlaced({ id, count: cartCount, total: cartTotal }); setCart({}); setConfirmOpen(false); setCartOpen(false);
+      const noteParts = [];
+      if (deliveryDate) noteParts.push(`Requested delivery: ${deliveryDate}`);
+      if (orderNote.trim()) noteParts.push(orderNote.trim());
+      noteParts.push("Placed via store ordering portal");
+      const id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
+      setPlaced({ id, count: cartCount, total: cartTotal }); setCart({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
     } catch (e) { setErr(e.message); }
     setPlacing(false);
   };
@@ -10704,6 +10738,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             <button onClick={() => setViewMode("card")} title="Card view" className={`px-2.5 py-1.5 rounded-lg transition-colors ${viewMode==="card"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}><LayoutGrid size={15}/></button>
             <button onClick={() => setViewMode("list")} title="List view" className={`px-2.5 py-1.5 rounded-lg transition-colors ${viewMode==="list"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}><List size={15}/></button>
           </div>
+          {frequentItems.length > 0 && <button onClick={() => setShowBuyAgain(v => !v)} className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 border ${showBuyAgain?"bg-indigo-600 border-indigo-500 text-white":"bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200"}`}><Star size={14}/> Buy again</button>}
           {lastOrder && <button onClick={reorderLast} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><RotateCcw size={14}/> Reorder last</button>}
           <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300" title="Close"><X size={18}/></button>
         </div>
@@ -10754,6 +10789,33 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             </div>
             {/* Scrolling product area */}
             <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 pb-28 lg:pb-4">
+              {showBuyAgain && frequentItems.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-indigo-500/30 bg-indigo-600/5 p-3">
+                  <div className="flex items-center gap-2 mb-2"><Star size={14} className="text-indigo-300"/><span className="text-xs font-bold text-indigo-200 uppercase tracking-wide">Buy again — your usual items</span></div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-2">
+                    {frequentItems.slice(0, 15).map(i => {
+                      const qty = cart[i.id] || 0;
+                      return (
+                        <div key={i.id} className={`rounded-xl border p-2 flex items-center gap-2 ${qty>0?"border-indigo-500/60 bg-indigo-600/10":"border-slate-800 bg-slate-900"}`}>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-semibold text-white truncate">{cleanName(i.name)}</div>
+                            <div className="text-[10px] text-slate-500">{gbp(i.price)}</div>
+                          </div>
+                          {qty > 0 ? (
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <button onClick={() => bump(i.id, -1)} className="w-6 h-6 rounded bg-slate-800 text-white text-sm leading-none">−</button>
+                              <span className="w-5 text-center text-xs text-white">{qty}</span>
+                              <button onClick={() => bump(i.id, 1)} className="w-6 h-6 rounded bg-indigo-600 text-white text-sm leading-none">+</button>
+                            </div>
+                          ) : (
+                            <button onClick={() => bump(i.id, 1)} className="flex-shrink-0 w-7 h-7 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white flex items-center justify-center"><Plus size={14}/></button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {visible.length === 0 ? (
                 <div className="text-center text-sm text-slate-600 py-16">No products match. Try another {browseMode==="collection"?"collection":"category"} or clear the search.</div>
               ) : viewMode === "list" ? (
@@ -10876,6 +10938,16 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               ))}
             </div>
             <div className="flex justify-between text-sm font-bold"><span className="text-white">Total (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
+            <div className="grid sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Requested delivery date</label>
+                <input type="date" value={deliveryDate} min={new Date().toISOString().slice(0,10)} onChange={e => setDeliveryDate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Note (optional)</label>
+                <input value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="e.g. deliver before 10am" className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+              </div>
+            </div>
             {err && err !== "no-link" && <div className="text-xs text-red-400">{err}</div>}
             <div className="flex justify-end gap-2"><button onClick={() => setConfirmOpen(false)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Keep editing</button><button onClick={placeOrder} disabled={placing} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{placing?"Placing…":"Confirm & place order"}</button></div>
           </div>
