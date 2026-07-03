@@ -12144,7 +12144,12 @@ export async function fetchFlipdishPayoutStores() {
     id: s.id, payoutId: s.payout_id, storeId: s.store_id, storeName: s.store_name,
     revenue: Number(s.revenue) || 0, cashRevenue: Number(s.cash_revenue) || 0,
     fees: Number(s.fees) || 0, adjustments: Number(s.adjustments) || 0, totalPayout: Number(s.total_payout) || 0,
-    refundsTotal: Number(s.refunds_total) || 0, otherTotal: Number(s.other_total) || 0, adjRaw: s.adj_raw || null,
+    // Authoritative /properties data (per payout):
+    summaryTotal: s.summary_total != null ? Number(s.summary_total) : null,
+    openingBalance: Number(s.opening_balance) || 0, closingBalance: Number(s.closing_balance) || 0,
+    balanceRepaid: Number(s.balance_repaid) || 0, chargebacks: Number(s.chargebacks) || 0,
+    otherTransactions: Number(s.other_transactions) || 0, refundsCard: Number(s.refunds_card) || 0,
+    refundsCash: Number(s.refunds_cash) || 0,
   }));
 }
 
@@ -12156,56 +12161,58 @@ export async function runPayoutReconciliation({ createdBy } = {}) {
   if (!rows.length) return null;
   const bad = [];
   let checked = 0;
+  // Group store rows by payout. The /properties Summary is stored on every store
+  // row of a payout, so read it once per payout. Authoritative check: the sum of
+  // store payouts must equal Flipdish's own Summary.Total (which already includes
+  // balance carryover, chargebacks, refunds).
+  const byPayout = new Map();
   rows.forEach(r => {
+    const p = byPayout.get(r.payoutId) || { payoutId: r.payoutId, storePayoutSum: 0, summaryTotal: null,
+      opening: r.openingBalance, closing: r.closingBalance, repaid: r.balanceRepaid, chargebacks: r.chargebacks, names: new Set() };
+    p.storePayoutSum += r.totalPayout;
+    if (r.storeName) p.names.add(r.storeName);
+    if (p.summaryTotal == null && r.summaryTotal != null) p.summaryTotal = r.summaryTotal;
+    byPayout.set(r.payoutId, p);
+  });
+  byPayout.forEach(p => {
+    if (p.summaryTotal == null) return; // no /properties data yet — needs detail sync
     checked++;
-    // Base formula: payout should equal revenue + cash + fees + adjustments.
-    const baseExpected = +(r.revenue + r.cashRevenue + r.fees + r.adjustments).toFixed(2);
-    const baseResidual = +(r.totalPayout - baseExpected).toFixed(2);
-    // If the base doesn't reconcile, see if refunds/other-transactions explain it.
-    // These are payout-level totals, so only apply to the first store row we have
-    // for that payout (avoid double-counting across a payout's stores).
-    const adj = (r.refundsTotal || 0) + (r.otherTotal || 0);
-    const adjExpected = +(baseExpected - Math.abs(adj)).toFixed(2); // refunds/other reduce payout
-    const adjResidual = +(r.totalPayout - adjExpected).toFixed(2);
-    // Use whichever residual is smaller in magnitude — i.e. did adjustments help explain it?
-    const useAdj = Math.abs(adjResidual) < Math.abs(baseResidual) && adj !== 0;
-    const expected = useAdj ? adjExpected : baseExpected;
-    const residual = useAdj ? adjResidual : baseResidual;
-    // Flag only MATERIAL residuals that even adjustments don't explain.
-    if (Math.abs(residual) > 20 && Math.abs(residual) > r.totalPayout * 0.01) {
-      bad.push({ storeName: r.storeName || r.storeId, revenue: r.revenue, cash: r.cashRevenue, fees: r.fees, adj: r.adjustments, refunds: r.refundsTotal, other: r.otherTotal, payout: r.totalPayout, expected, residual, adjRaw: r.adjRaw });
+    const name = [...p.names][0] || p.payoutId;
+    const residual = +(p.storePayoutSum - p.summaryTotal).toFixed(2);
+    if (Math.abs(residual) > 1) {
+      bad.push({ storeName: name, expected: p.summaryTotal, payout: p.storePayoutSum, residual, repaid: p.repaid, chargebacks: p.chargebacks });
     }
   });
   try {
     const { data: dupes } = await supabase.from("agent_tasks").select("id").eq("agent", "reconciliation").eq("status", "pending");
     for (const d of (dupes || [])) await supabase.from("agent_tasks").update({ status: "superseded" }).eq("id", d.id);
   } catch (_) {}
-
+  if (!checked) return null; // nothing had authoritative data yet
   if (!bad.length) {
     return createAgentTask({
       agent: "reconciliation", kind: "brief",
-      title: `Payouts reconciled — ${checked} store-payouts all balance`,
-      body: `Checked ${checked} store-level payout breakdowns. Every one reconciles: revenue minus cash, fees and adjustments equals what Flipdish paid. No discrepancies.`,
+      title: `Payouts reconciled - ${checked} payout(s) all balance`,
+      body: `Checked ${checked} payouts against Flipdish's own authoritative totals (revenue, cash, fees, balance carryover, chargebacks all included). Every one reconciles. No discrepancies.`,
       severity: "info", payload: { reconciled: true, checked }, createdBy: createdBy || "agent",
     });
   }
   bad.sort((a, b) => Math.abs(b.residual) - Math.abs(a.residual));
   const totalResidual = +bad.reduce((s, b) => s + b.residual, 0).toFixed(2);
-  const detail = bad.slice(0, 8).map(b => `${b.storeName}: paid ${agentGbp(b.payout)}, formula expects ${agentGbp(b.expected)} — unexplained ${agentGbp(b.residual)}`).join("; ");
-  const fallback = `Payout reconciliation: ${bad.length} store-payout(s) don't add up, ${agentGbp(totalResidual)} unexplained. ${detail}.`;
+  const detail = bad.slice(0, 8).map(b => `${b.storeName}: stores sum ${agentGbp(b.payout)} vs Flipdish total ${agentGbp(b.expected)}, off ${agentGbp(b.residual)}`).join("; ");
+  const fallback = `Payout reconciliation: ${bad.length} payout(s) where the store breakdown doesn't match Flipdish's own total, ${agentGbp(totalResidual)} off. ${detail}.`;
   const body = await agentPhrase({
-    system: "You write a reconciliation brief for a restaurant owner. These payouts don't match Flipdish's own formula (revenue minus cash, fees, adjustments) — genuinely unexplained differences worth querying with Flipdish. Do NOT invent numbers.",
-    prompt: `Store-payouts that don't reconcile: ${detail}. Total unexplained ${agentGbp(totalResidual)}. Write 3-4 sentences on what to check.`,
+    system: "You write a reconciliation brief for a restaurant owner. These are payouts where the per-store breakdown doesn't sum to Flipdish's own authoritative payout total, a genuine data discrepancy worth querying. Do NOT invent numbers.",
+    prompt: `Payouts not reconciling: ${detail}. Total off ${agentGbp(totalResidual)}. Write 3-4 sentences on what to check.`,
     fallback,
   });
   const task = await createAgentTask({
     agent: "reconciliation", kind: "brief",
-    title: `Payout reconciliation — ${bad.length} don't balance, ${agentGbp(totalResidual)} unexplained`,
+    title: `Payout reconciliation - ${bad.length} payout(s) off, ${agentGbp(totalResidual)}`,
     body, severity: "action",
-    payload: { reconRows: bad.map(b => ({ account: b.storeName, revenue: b.revenue, fees: Math.abs(b.fees || 0), paid: b.payout, reasons: [`rev ${agentGbp(b.revenue)}, cash ${agentGbp(b.cash)}, fees ${agentGbp(b.fees)}${(b.refunds||b.other) ? `, refunds ${agentGbp(b.refunds)}, other ${agentGbp(b.other)}` : ""} → expected ${agentGbp(b.expected)}, still unexplained ${agentGbp(b.residual)}`] })) },
+    payload: { reconRows: bad.map(b => ({ account: b.storeName, revenue: b.expected, fees: 0, paid: b.payout, reasons: [`stores sum ${agentGbp(b.payout)} vs Flipdish total ${agentGbp(b.expected)}, off ${agentGbp(b.residual)}`] })) },
     savings: Math.abs(totalResidual), createdBy: createdBy || "agent",
   });
-  await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "unexplained_residual", value: totalResidual, note: `${bad.length}/${checked} store-payouts` }).catch(() => {});
+  await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "unexplained_residual", value: totalResidual, note: `${bad.length}/${checked} payouts` }).catch(() => {});
   return task;
 }
 
