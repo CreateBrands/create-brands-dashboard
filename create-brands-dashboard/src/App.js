@@ -10694,9 +10694,26 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
   const set = (agent, patch) => setCfg(c => ({ ...c, [agent]: { ...c[agent], ...patch } }));
   const [targets, setTargets] = useState({ labourPct: 30, byStore: {} });
   const [savingT, setSavingT] = useState(false);
+  const [actuals, setActuals] = useState({}); // storeId -> latest actual labour %
   useEffect(() => { fetchProfitTargets().then(t => setTargets({ labourPct: t.labourPct ?? 30, byStore: t.byStore || {} })).catch(() => {}); }, []);
+  useEffect(() => {
+    // Pull the last two settled weeks of labour% and keep the most recent per store,
+    // so the owner can set targets against where each site actually sits.
+    const to = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
+    const from = new Date(Date.now() - 16 * 864e5).toISOString().slice(0, 10);
+    fetchLabourVsRevenue({ from, to }).then(rows => {
+      const latest = {};
+      (rows || []).forEach(r => {
+        if (!r.storeId || r.labourPct == null) return;
+        if (!latest[r.storeId] || r.date > latest[r.storeId].date) latest[r.storeId] = { pct: r.labourPct, date: r.date };
+      });
+      const out = {}; Object.keys(latest).forEach(k => { out[k] = latest[k].pct; });
+      setActuals(out);
+    }).catch(() => {});
+  }, []);
   const setStoreTarget = (id, v) => setTargets(t => ({ ...t, byStore: { ...t.byStore, [id]: v === "" ? "" : Number(v) } }));
-  const activeStores = (stores || []).filter(s => !s.archivedAt);
+  // Only retail shops get labour targets — CK, distribution, and non-shop entities excluded.
+  const activeStores = (stores || []).filter(s => !s.archivedAt && (s.siteType || "shop") === "shop");
   const saveTargets = async () => { setSavingT(true); try { await saveProfitTargets(targets); } catch (_) {} setSavingT(false); };
 
   return (
@@ -10727,17 +10744,24 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
           </div>
           <div className="text-[10px] uppercase tracking-wide font-bold mb-1.5" style={{ color: "#9A8770" }}>Per-site override (leave blank to use default)</div>
           <div className="space-y-1 max-h-64 overflow-y-auto">
-            {activeStores.map(s => (
+            {activeStores.map(s => {
+              const actual = actuals[s.id];
+              return (
               <div key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg" style={{ backgroundColor: "#FDF2E0" }}>
-                <span className="text-sm truncate" style={{ color: "#3A2E26" }}>{s.shortName || s.name}</span>
+                <span className="text-sm truncate flex-1" style={{ color: "#3A2E26" }}>{s.shortName || s.name}</span>
+                {actual != null && (
+                  <button onClick={() => setStoreTarget(s.id, Math.round(actual))} title="Use this as the target" className="text-[11px] px-1.5 py-0.5 rounded flex-shrink-0" style={{ backgroundColor: "#E4EFD9", color: "#3B6D11" }}>now {actual.toFixed(1)}%</button>
+                )}
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <input type="number" placeholder={String(targets.labourPct)} value={targets.byStore[s.id] ?? ""} onChange={e => setStoreTarget(s.id, e.target.value)} className="w-16 text-center px-2 py-1 rounded text-sm" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
                   <span className="text-xs" style={{ color: "#9A8770" }}>%</span>
                 </div>
               </div>
-            ))}
+              );
+            })}
             {activeStores.length === 0 && <div className="text-xs text-center py-4" style={{ color: "#9A8770" }}>No sites loaded.</div>}
           </div>
+          <div className="text-[11px] mt-2" style={{ color: "#9A8770" }}>"now" = this site's actual labour % on its last settled day. Tap it to use as the target.</div>
         </div>
       </div>
       <div className="flex justify-end gap-2 mt-4">
