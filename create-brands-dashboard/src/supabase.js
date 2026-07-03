@@ -12034,6 +12034,15 @@ export async function runProfitWatch({ date, createdBy } = {}) {
     prompt: `Date ${day}. Sites off target (variance in percentage points vs target): ${detail}. Write a short brief (3-5 sentences) highlighting the biggest issues and a suggested action for each.`,
     fallback,
   });
+  // Supersede any earlier PENDING Profit Watch card for the SAME day, so re-runs
+  // replace rather than pile up duplicates in the inbox.
+  try {
+    const { data: dupes } = await supabase.from("agent_tasks").select("id, payload")
+      .eq("agent", "profit_watch").eq("status", "pending");
+    for (const d of (dupes || [])) {
+      if (d.payload && d.payload.date === day) await supabase.from("agent_tasks").update({ status: "superseded" }).eq("id", d.id);
+    }
+  } catch (_) {}
   const task = await createAgentTask({
     agent: "profit_watch", kind: "brief",
     title: `Profit Watch ${day} — ${flagged.length} site(s) off target`,
@@ -12109,9 +12118,11 @@ export async function syncFlipdishPayouts({ from, to } = {}) {
   return invokePayoutFn({ from, to });
 }
 export async function fetchFlipdishPayouts({ from, to } = {}) {
-  let q = supabase.from("flipdish_payouts").select("*").order("period_end", { ascending: false });
-  if (from) q = q.gte("period_end", from);
-  if (to) q = q.lte("period_end", to);
+  // Filter by paid_on (CreatedDate) — period_end comes back as a 1970 placeholder
+  // from Flipdish's list view, so filtering on it would exclude everything.
+  let q = supabase.from("flipdish_payouts").select("*").order("paid_on", { ascending: false });
+  if (from) q = q.gte("paid_on", from);
+  if (to) q = q.lte("paid_on", to);
   const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(p => ({
@@ -12139,6 +12150,11 @@ export async function runReconciliationAssistant_v2({ from, to, createdBy } = {}
   const start = from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
   const payouts = await fetchFlipdishPayouts({ from: start, to: end }).catch(() => []);
   if (!payouts.length) return null;
+  // Supersede any earlier pending reconciliation card — it's a rolling summary.
+  try {
+    const { data: dupes } = await supabase.from("agent_tasks").select("id").eq("agent", "reconciliation").eq("status", "pending");
+    for (const d of (dupes || [])) await supabase.from("agent_tasks").update({ status: "superseded" }).eq("id", d.id);
+  } catch (_) {}
 
   const flags = [];
   payouts.forEach(p => {
