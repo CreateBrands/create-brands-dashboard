@@ -12087,20 +12087,26 @@ export async function runReconciliationAssistant({ from, to, createdBy } = {}) {
 
 // ── FLIPDISH PAYOUT SYNC + PROBE ─────────────────────────────────────────────
 // Probe: answers "do my credentials have payout permissions?" without writing.
-export async function probeFlipdishPayouts({ from, to } = {}) {
-  const headers = {};
+// Reads the function's JSON body even on non-2xx, so the real error shows.
+async function invokePayoutFn(payload) {
+  const url = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1/flipdish-payout-sync`;
+  const anon = process.env.REACT_APP_SUPABASE_ANON_KEY;
+  const headers = { "content-type": "application/json", authorization: `Bearer ${anon}`, apikey: anon };
   if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
-  const { data, error } = await supabase.functions.invoke("flipdish-payout-sync", { body: { probe: true, from, to }, headers });
-  if (error) throw error;
-  return data; // { ok, probe, endpoint, payoutCount, sample } or { ok:false, error }
+  let resp;
+  try { resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) }); }
+  catch (e) { return { ok: false, error: `network: ${e.message}` }; }
+  let data = null;
+  try { data = await resp.json(); } catch { data = { ok: false, error: `HTTP ${resp.status} (no JSON body)` }; }
+  if (!resp.ok && data && data.ok === undefined) data = { ok: false, error: data.error || `HTTP ${resp.status}` };
+  return data;
+}
+export async function probeFlipdishPayouts({ from, to } = {}) {
+  return invokePayoutFn({ probe: true, from, to });
 }
 // Sync: pulls payouts into flipdish_payouts.
 export async function syncFlipdishPayouts({ from, to } = {}) {
-  const headers = {};
-  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
-  const { data, error } = await supabase.functions.invoke("flipdish-payout-sync", { body: { from, to }, headers });
-  if (error) throw error;
-  return data;
+  return invokePayoutFn({ from, to });
 }
 export async function fetchFlipdishPayouts({ from, to } = {}) {
   let q = supabase.from("flipdish_payouts").select("*").order("period_end", { ascending: false });
