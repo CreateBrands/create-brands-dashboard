@@ -10694,20 +10694,24 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
   const set = (agent, patch) => setCfg(c => ({ ...c, [agent]: { ...c[agent], ...patch } }));
   const [targets, setTargets] = useState({ labourPct: 30, byStore: {} });
   const [savingT, setSavingT] = useState(false);
-  const [actuals, setActuals] = useState({}); // storeId -> latest actual labour %
+  const [actuals, setActuals] = useState({}); // storeId -> { last, avg }
   useEffect(() => { fetchProfitTargets().then(t => setTargets({ labourPct: t.labourPct ?? 30, byStore: t.byStore || {} })).catch(() => {}); }, []);
   useEffect(() => {
-    // Pull the last two settled weeks of labour% and keep the most recent per store,
-    // so the owner can set targets against where each site actually sits.
+    // Last two settled weeks of labour%: keep the most recent day per store AND
+    // a 2-week average, so a single quiet/busy day doesn't skew the target choice.
     const to = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
     const from = new Date(Date.now() - 16 * 864e5).toISOString().slice(0, 10);
     fetchLabourVsRevenue({ from, to }).then(rows => {
-      const latest = {};
+      const byStore = {}; // id -> { lastDate, lastPct, sum, n }
       (rows || []).forEach(r => {
         if (!r.storeId || r.labourPct == null) return;
-        if (!latest[r.storeId] || r.date > latest[r.storeId].date) latest[r.storeId] = { pct: r.labourPct, date: r.date };
+        const cur = byStore[r.storeId] || { lastDate: "", lastPct: null, sum: 0, n: 0 };
+        cur.sum += r.labourPct; cur.n += 1;
+        if (r.date > cur.lastDate) { cur.lastDate = r.date; cur.lastPct = r.labourPct; }
+        byStore[r.storeId] = cur;
       });
-      const out = {}; Object.keys(latest).forEach(k => { out[k] = latest[k].pct; });
+      const out = {};
+      Object.keys(byStore).forEach(k => { const b = byStore[k]; out[k] = { last: b.lastPct, avg: b.n ? b.sum / b.n : null }; });
       setActuals(out);
     }).catch(() => {});
   }, []);
@@ -10745,12 +10749,15 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
           <div className="text-[10px] uppercase tracking-wide font-bold mb-1.5" style={{ color: "#9A8770" }}>Per-site override (leave blank to use default)</div>
           <div className="space-y-1 max-h-64 overflow-y-auto">
             {activeStores.map(s => {
-              const actual = actuals[s.id];
+              const a = actuals[s.id];
               return (
               <div key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg" style={{ backgroundColor: "#FDF2E0" }}>
                 <span className="text-sm truncate flex-1" style={{ color: "#3A2E26" }}>{s.shortName || s.name}</span>
-                {actual != null && (
-                  <button onClick={() => setStoreTarget(s.id, Math.round(actual))} title="Use this as the target" className="text-[11px] px-1.5 py-0.5 rounded flex-shrink-0" style={{ backgroundColor: "#E4EFD9", color: "#3B6D11" }}>now {actual.toFixed(1)}%</button>
+                {a && a.avg != null && (
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button onClick={() => setStoreTarget(s.id, Math.round(a.avg))} title="Use 2-week average as the target" className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: "#E4EFD9", color: "#3B6D11" }}>avg {a.avg.toFixed(1)}%</button>
+                    {a.last != null && <span className="text-[11px] px-1.5 py-0.5 rounded" title="Last settled day" style={{ backgroundColor: "#FBF6EC", color: "#9A8770", border: "1px solid #E8DCC6" }}>day {a.last.toFixed(1)}%</span>}
+                  </div>
                 )}
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <input type="number" placeholder={String(targets.labourPct)} value={targets.byStore[s.id] ?? ""} onChange={e => setStoreTarget(s.id, e.target.value)} className="w-16 text-center px-2 py-1 rounded text-sm" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
@@ -10761,7 +10768,7 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
             })}
             {activeStores.length === 0 && <div className="text-xs text-center py-4" style={{ color: "#9A8770" }}>No sites loaded.</div>}
           </div>
-          <div className="text-[11px] mt-2" style={{ color: "#9A8770" }}>"now" = this site's actual labour % on its last settled day. Tap it to use as the target.</div>
+          <div className="text-[11px] mt-2" style={{ color: "#9A8770" }}>"avg" = 2-week average labour %. "day" = last settled day. Tap "avg" to use it as the target. Sites with no chip aren't recording labour yet.</div>
         </div>
       </div>
       <div className="flex justify-end gap-2 mt-4">
