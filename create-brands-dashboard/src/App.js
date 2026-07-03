@@ -161,6 +161,7 @@ import {
   fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
   runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends,
   runReconciliationAssistant_v2, probeFlipdishPayouts, syncFlipdishPayouts, fetchFlipdishPayouts,
+  runPayoutReconciliation, fetchFlipdishPayoutStores,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -10564,9 +10565,10 @@ function AgentInboxView({ currentUser, onNavigate }) {
       // Profit Watch: the date the owner picked.
       const pw = await runProfitWatch({ date: pwDate, createdBy: currentUser?.id }).catch(() => null);
       if (pw) made++;
-      // Reconciliation v2: real payout data (gross vs net formula). Only produces
-      // a card if payouts have been synced and something doesn't reconcile.
-      const rec = await runReconciliationAssistant_v2({ createdBy: currentUser?.id }).catch(() => null);
+      // Reconciliation: prefer true gross-to-net (needs detail synced), else the
+      // lighter anomaly review on the payout list.
+      let rec = await runPayoutReconciliation({ createdBy: currentUser?.id }).catch(() => null);
+      if (!rec) rec = await runReconciliationAssistant_v2({ createdBy: currentUser?.id }).catch(() => null);
       if (rec) made++;
       setMsg(made ? `${made} new suggestion${made !== 1 ? "s" : ""} ready.` : "No new suggestions — everything looks on track.");
       await load();
@@ -10807,7 +10809,7 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
           <p className="text-xs mb-2" style={{ color: "#9A8770" }}>Pull real Flipdish payouts to reconcile gross orders against what actually hit the bank. First, check your API can read payouts.</p>
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={async () => { setProbeMsg("Checking…"); try { const r = await probeFlipdishPayouts({}); setProbeMsg(r?.ok ? `✓ Payouts readable — found ${r.totalRecords ?? r.count ?? 0} in range.` : `✗ ${r?.error || "no access"}`); } catch (e) { setProbeMsg("✗ " + e.message); } }} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Check payout access</button>
-            <button onClick={async () => { setProbeMsg("Syncing…"); try { const r = await syncFlipdishPayouts({}); setProbeMsg(r?.ok ? `✓ Synced ${r.upserted || 0} payout(s).` : `✗ ${r?.error || "sync failed"}`); } catch (e) { setProbeMsg("✗ " + e.message); } }} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Sync payouts now</button>
+            <button onClick={async () => { setProbeMsg("Syncing (with breakdown — may take a minute)…"); try { const r = await syncFlipdishPayouts({ withDetail: true, maxDetail: 200 }); setProbeMsg(r?.ok ? `✓ Synced ${r.upserted || 0} payout(s), ${r.detailRows || 0} store breakdowns.` : `✗ ${r?.error || "sync failed"}`); } catch (e) { setProbeMsg("✗ " + e.message); } }} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Sync payouts now</button>
           </div>
           {probeMsg && <div className="text-xs mt-2" style={{ color: probeMsg.startsWith("✓") ? "#3B6D11" : probeMsg.startsWith("✗") ? "#A32D2D" : "#9A8770" }}>{probeMsg}</div>}
         </div>
