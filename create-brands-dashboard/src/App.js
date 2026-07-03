@@ -159,7 +159,7 @@ import {
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
-  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets,
+  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -10536,7 +10536,9 @@ function AgentInboxView({ currentUser, onNavigate }) {
   const [showSettings, setShowSettings] = useState(false);
   const [pwDate, setPwDate] = useState(() => new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10)); // default: 2 days ago (settled)
   const [stores, setStores] = useState([]);
+  const [trends, setTrends] = useState({});
   useEffect(() => { fetchStores().then(setStores).catch(() => {}); }, []);
+  useEffect(() => { fetchProfitWatchTrends({ days: 14 }).then(setTrends).catch(() => {}); }, []);
 
   const load = async () => {
     setLoading(true);
@@ -10635,6 +10637,15 @@ function AgentInboxView({ currentUser, onNavigate }) {
                     </div>
                     <div className="font-bold mt-1.5" style={{ color: "#3A2E26" }}>{t.title}</div>
                     {t.body && <div className="text-sm mt-1 leading-relaxed" style={{ color: "#5F5E5A" }}>{t.body}</div>}
+                    {t.agent === "profit_watch" && t.payload?.flagged && Object.keys(trends).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {t.payload.flagged.filter(f => trends[f.storeId] && trends[f.storeId].overCount >= 2).slice(0, 6).map(f => (
+                          <span key={f.storeId} className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "#FCEBD8", color: "#854F0B", border: "1px solid #E8DCC6" }}>
+                            {f.storeName || f.storeId}: over target {trends[f.storeId].overCount} of last {trends[f.storeId].days} days
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {t.agent === "ordering" && t.payload?.lines && (
                       <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid #E8DCC6" }}>
                         {t.payload.lines.slice(0, 8).map((l, i) => (

@@ -12007,33 +12007,69 @@ export async function runProfitWatch({ date, createdBy } = {}) {
     const hasLabour = r.labourPct != null;
     const hasCogs = r.cogsPct != null;
     // Guard: a very low labour% almost always means punches aren't fully recorded
-    // yet for that day, not a real efficiency win. Treat <8% as incomplete data
-    // and don't flag it, to avoid misleading "20pts under target" briefs.
+    // yet for that day, not a real efficiency win. Treat <8% as incomplete data.
     const labourLooksComplete = hasLabour && Number(r.labourPct) >= 8;
     const labourVar = labourLooksComplete ? (Number(r.labourPct) - (Number(r.labourTarget) || 0)) : null;
     const cogsVar = hasCogs ? (Number(r.cogsPct) - (Number(r.cogsTarget) || 0)) : null;
-    // "worst" only considers metrics we actually have trustworthy data for.
-    const worst = Math.max(labourVar != null ? Math.abs(labourVar) : 0, cogsVar != null ? Math.abs(cogsVar) : 0);
-    return { ...r, labourVar, cogsVar, worst };
-  }).filter(r => r.worst >= 3) // only material variances (>=3 pts)
+    // Asymmetric thresholds: overspend costs money so flag early (>= +3pts);
+    // running under target is rarely a problem, so only flag a BIG under (<= -8pts),
+    // which usually signals incomplete data worth checking rather than a real win.
+    const OVER = 3, UNDER = 8;
+    const labourFlagged = labourVar != null && (labourVar >= OVER || labourVar <= -UNDER);
+    const cogsFlagged = cogsVar != null && (cogsVar >= OVER || cogsVar <= -UNDER);
+    const worst = Math.max(labourFlagged ? Math.abs(labourVar) : 0, cogsFlagged ? Math.abs(cogsVar) : 0);
+    return { ...r, labourVar, cogsVar, worst, labourFlagged, cogsFlagged };
+  }).filter(r => r.labourFlagged || r.cogsFlagged)
     .sort((a, b) => b.worst - a.worst);
   if (!flagged.length) return null;
-  const detail = flagged.slice(0, 6).map(r => {
+  const detail = flagged.slice(0, 8).map(r => {
     const bits = [];
-    if (r.labourVar != null && Math.abs(r.labourVar) >= 2) bits.push(`labour ${r.labourVar > 0 ? "+" : ""}${r.labourVar.toFixed(1)}pts`);
-    if (r.cogsVar != null && Math.abs(r.cogsVar) >= 2) bits.push(`COGS ${r.cogsVar > 0 ? "+" : ""}${r.cogsVar.toFixed(1)}pts`);
+    if (r.labourFlagged) bits.push(`labour ${r.labourVar > 0 ? "+" : ""}${r.labourVar.toFixed(1)}pts`);
+    if (r.cogsFlagged) bits.push(`COGS ${r.cogsVar > 0 ? "+" : ""}${r.cogsVar.toFixed(1)}pts`);
     return `${r.storeName || r.storeId}: ${bits.join(", ")}`;
   }).join("; ");
   const fallback = `Profit Watch for ${day}: ${flagged.length} site(s) off target. ${detail}.`;
   const body = await agentPhrase({
-    system: "You are a restaurant profit analyst writing a short morning brief for the owner. Be specific and practical, name the sites and the fix. Do NOT invent numbers — use only those given.",
+    system: "You are a restaurant profit analyst writing a short morning brief for the owner. Be specific and practical, name the sites and the fix. Note that labour OVER target means overspending on staff; a big UNDER may mean incomplete timekeeping data. Do NOT invent numbers — use only those given.",
     prompt: `Date ${day}. Sites off target (variance in percentage points vs target): ${detail}. Write a short brief (3-5 sentences) highlighting the biggest issues and a suggested action for each.`,
     fallback,
   });
-  return createAgentTask({
-    agent: "profit_watch", kind: "brief", date: day,
+  const task = await createAgentTask({
+    agent: "profit_watch", kind: "brief",
     title: `Profit Watch ${day} — ${flagged.length} site(s) off target`,
     body, severity: "warn", payload: { date: day, flagged },
     createdBy: createdBy || "agent",
   });
+  // MEASUREMENT LOOP: log each flagged site's variance so trends build over time
+  // (e.g. "London Road over target 4 of last 7 days"). Best-effort; never blocks.
+  for (const r of flagged) {
+    if (r.labourFlagged) {
+      await logAgentMetric({
+        agent: "profit_watch", taskId: task?.id, storeId: r.storeId, metric: "labour_variance",
+        forecast: Number(r.labourTarget) || 0, actual: Number(r.labourPct) || 0, value: r.labourVar,
+        note: `${day} ${r.storeName || r.storeId} labour ${r.labourVar > 0 ? "+" : ""}${r.labourVar.toFixed(1)}pts`,
+      }).catch(() => {});
+    }
+  }
+  return task;
+}
+
+// Trend helper: how often has each site been flagged over target recently?
+// Reads agent_metrics for the labour_variance metric over the last N days.
+export async function fetchProfitWatchTrends({ days = 14 } = {}) {
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const { data, error } = await supabase.from("agent_metrics")
+    .select("store_id, value, actual, forecast, created_at, note")
+    .eq("agent", "profit_watch").eq("metric", "labour_variance")
+    .gte("created_at", since).order("created_at", { ascending: false });
+  if (error) throw error;
+  const byStore = {}; // store_id -> { overCount, underCount, days, lastValue }
+  (data || []).forEach(m => {
+    const s = byStore[m.store_id] || { overCount: 0, underCount: 0, days: 0, lastValue: null };
+    s.days += 1;
+    if (Number(m.value) > 0) s.overCount += 1; else s.underCount += 1;
+    if (s.lastValue == null) s.lastValue = Number(m.value);
+    byStore[m.store_id] = s;
+  });
+  return byStore;
 }
