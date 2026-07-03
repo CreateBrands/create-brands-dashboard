@@ -12159,8 +12159,12 @@ export async function runPayoutReconciliation({ createdBy } = {}) {
     checked++;
     const expected = +(r.revenue + r.cashRevenue + r.fees + r.adjustments).toFixed(2);
     const residual = +(r.totalPayout - expected).toFixed(2);
-    if (Math.abs(residual) > 0.5) {
-      bad.push({ storeName: r.storeName || r.storeId, revenue: r.revenue, payout: r.totalPayout, expected, residual });
+    // Flag only MATERIAL residuals. Small ones (a few pounds) are almost always
+    // refunds/chargebacks/adjustments that Flipdish records in separate detail
+    // (refunded-orders, other-transactions) not in the stores summary — not lost
+    // money. Require > £20 AND > 1% of the payout to call it worth chasing.
+    if (Math.abs(residual) > 20 && Math.abs(residual) > r.totalPayout * 0.01) {
+      bad.push({ storeName: r.storeName || r.storeId, revenue: r.revenue, cash: r.cashRevenue, fees: r.fees, adj: r.adjustments, payout: r.totalPayout, expected, residual });
     }
   });
   try {
@@ -12189,7 +12193,7 @@ export async function runPayoutReconciliation({ createdBy } = {}) {
     agent: "reconciliation", kind: "brief",
     title: `Payout reconciliation — ${bad.length} don't balance, ${agentGbp(totalResidual)} unexplained`,
     body, severity: "action",
-    payload: { reconRows: bad.map(b => ({ account: b.storeName, revenue: b.revenue, fees: 0, paid: b.payout, reasons: [`expected ${agentGbp(b.expected)}, unexplained ${agentGbp(b.residual)}`] })) },
+    payload: { reconRows: bad.map(b => ({ account: b.storeName, revenue: b.revenue, fees: Math.abs(b.fees || 0), paid: b.payout, reasons: [`rev ${agentGbp(b.revenue)}, cash ${agentGbp(b.cash)}, fees ${agentGbp(b.fees)} → expected ${agentGbp(b.expected)}, unexplained ${agentGbp(b.residual)}`] })) },
     savings: Math.abs(totalResidual), createdBy: createdBy || "agent",
   });
   await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "unexplained_residual", value: totalResidual, note: `${bad.length}/${checked} store-payouts` }).catch(() => {});
