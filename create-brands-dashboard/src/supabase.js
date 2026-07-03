@@ -12115,53 +12115,72 @@ export async function fetchFlipdishPayouts({ from, to } = {}) {
   const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(p => ({
-    id: p.id, flipdishId: p.flipdish_id, storeId: p.store_id, periodStart: p.period_start, periodEnd: p.period_end,
-    paidOn: p.paid_on, currency: p.currency, totalRevenue: Number(p.total_revenue) || 0, cashCollected: Number(p.cash_collected) || 0,
-    fees: Number(p.fees) || 0, adjustments: Number(p.adjustments) || 0, openingBalance: Number(p.opening_balance) || 0,
-    closingBalance: Number(p.closing_balance) || 0, payoutAmount: Number(p.payout_amount) || 0, orderCount: p.order_count || 0,
+    id: p.id, flipdishId: p.flipdish_id, storeId: p.store_id, accountName: p.account_name, destinationBank: p.destination_bank,
+    status: p.status, periodStart: p.period_start, periodEnd: p.period_end, paidOn: p.paid_on, currency: p.currency, payoutType: p.payout_type,
+    totalRevenue: Number(p.total_revenue) || 0, onlineSales: Number(p.online_sales) || 0, posSales: Number(p.pos_sales) || 0,
+    cashCollected: Number(p.cash_collected) || 0, fees: Number(p.fees) || 0, onlineFees: Number(p.online_fees) || 0, posFees: Number(p.pos_fees) || 0,
+    adjustments: Number(p.adjustments) || 0, chargebacks: Number(p.chargebacks) || 0, otherCharges: Number(p.other_charges) || 0,
+    openingBalance: Number(p.opening_balance) || 0, closingBalance: Number(p.closing_balance) || 0,
+    payoutAmount: Number(p.payout_amount) || 0, orderCount: p.order_count || 0,
   }));
 }
 
-// ── RECONCILIATION ASSISTANT v2 (uses REAL payout data) ──────────────────────
-// For each payout, verify Flipdish's own formula reconciles:
-//   payout ≈ total_revenue − cash_collected − fees − adjustments (+ opening − closing)
-// Flag any payout where the residual is material — that's the genuinely
-// unexplained money to chase. All maths in code; Claude only phrases.
+// ── RECONCILIATION ASSISTANT v2 (real Flipdish payout data) ──────────────────
+// The payout list gives net Amount + revenue/fee components per legal entity.
+// We do NOT assert Flipdish's full internal formula (it involves VAT/tax
+// remittance not fully exposed in the list view — asserting it would produce
+// false "gaps"). Instead we flag only CLEAR anomalies worth a human look:
+//   • unusually high effective fee rate (possible overcharge)
+//   • negative closing balance (you owed Flipdish — money comes off next payout)
+//   • chargebacks present
+// This surfaces real things to check without inventing reconciliation errors.
 export async function runReconciliationAssistant_v2({ from, to, createdBy } = {}) {
   const end = to || new Date().toISOString().slice(0, 10);
-  const start = from || new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
-  const [payouts, stores] = await Promise.all([
-    fetchFlipdishPayouts({ from: start, to: end }).catch(() => []),
-    fetchStores().catch(() => []),
-  ]);
-  if (!payouts.length) return null; // nothing synced yet
-  const storeName = new Map((stores || []).map(s => [s.id, s.shortName || s.name]));
-  const flagged = [];
+  const start = from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const payouts = await fetchFlipdishPayouts({ from: start, to: end }).catch(() => []);
+  if (!payouts.length) return null;
+
+  const flags = [];
   payouts.forEach(p => {
-    // Expected net per Flipdish's formula, incl. balance carry.
-    const expected = +(p.totalRevenue - p.cashCollected - p.fees - p.adjustments + p.openingBalance - p.closingBalance).toFixed(2);
-    const residual = +(p.payoutAmount - expected).toFixed(2); // should be ~0
-    if (Math.abs(residual) > 5) {
-      flagged.push({ storeId: p.storeId, storeName: storeName.get(p.storeId) || p.storeId || "Group", period: `${p.periodStart || "?"}..${p.periodEnd || "?"}`, payout: p.payoutAmount, expected, residual });
-    }
+    const revenue = p.totalRevenue || 0;
+    const feeAbs = Math.abs(p.fees || 0);
+    const feeRate = revenue > 0 ? (feeAbs / revenue) * 100 : 0;
+    const reasons = [];
+    if (feeRate > 8) reasons.push(`fee rate ${feeRate.toFixed(1)}% (high)`);
+    if ((p.closingBalance || 0) < -1) reasons.push(`negative closing balance ${agentGbp(p.closingBalance)}`);
+    if (Math.abs(p.chargebacks || 0) > 1) reasons.push(`chargebacks ${agentGbp(Math.abs(p.chargebacks))}`);
+    if ((p.payoutAmount || 0) < 0) reasons.push(`negative payout ${agentGbp(p.payoutAmount)}`);
+    if (reasons.length) flags.push({ account: p.accountName, payout: p.payoutAmount, revenue, fees: p.fees, reasons });
   });
-  if (!flagged.length) return null;
-  flagged.sort((a, b) => Math.abs(b.residual) - Math.abs(a.residual));
-  const totalResidual = +flagged.reduce((s, f) => s + f.residual, 0).toFixed(2);
-  const detail = flagged.slice(0, 8).map(f => `${f.storeName} ${f.period}: paid ${agentGbp(f.payout)}, expected ${agentGbp(f.expected)}, unexplained ${agentGbp(f.residual)}`).join("; ");
-  const fallback = `Payout reconciliation: ${flagged.length} payout(s) don't match Flipdish's own formula, unexplained total ${agentGbp(totalResidual)}. ${detail}.`;
+
+  const totalPaid = +payouts.reduce((s, p) => s + (p.payoutAmount || 0), 0).toFixed(2);
+  const totalFees = +payouts.reduce((s, p) => s + Math.abs(p.fees || 0), 0).toFixed(2);
+  if (!flags.length) {
+    // Nothing anomalous — post a light summary so you still see payouts landed.
+    return createAgentTask({
+      agent: "reconciliation", kind: "brief",
+      title: `Payouts synced — ${payouts.length} payout(s), ${agentGbp(totalPaid)} net`,
+      body: `${payouts.length} Flipdish payouts from ${start} to ${end}: ${agentGbp(totalPaid)} net paid, ${agentGbp(totalFees)} total fees. Nothing looks anomalous. Tap through to review by entity.`,
+      severity: "info", payload: { summary: true, count: payouts.length, totalPaid, totalFees },
+      createdBy: createdBy || "agent",
+    });
+  }
+  flags.sort((a, b) => (b.reasons.length - a.reasons.length));
+  const detail = flags.slice(0, 8).map(f => `${f.account}: ${f.reasons.join(", ")} (paid ${agentGbp(f.payout)})`).join("; ");
+  const fallback = `Payout review ${start} to ${end}: ${flags.length} payout(s) worth a look. ${detail}.`;
   const body = await agentPhrase({
-    system: "You write a reconciliation brief for a restaurant owner. These are Flipdish payouts where the amount received doesn't match revenue minus cash, fees and adjustments — i.e. genuinely unexplained differences worth querying with Flipdish. Do NOT invent numbers.",
-    prompt: `Payouts that don't reconcile: ${detail}. Total unexplained ${agentGbp(totalResidual)}. Write 3-5 sentences on what to check and query with Flipdish.`,
+    system: "You write a short payout-review brief for a restaurant owner. These are Flipdish payouts with something worth checking (high fees, negative balances, chargebacks). Do NOT claim money is missing — just flag what to review. Do NOT invent numbers.",
+    prompt: `Flipdish payouts worth reviewing: ${detail}. Total net paid across all payouts ${agentGbp(totalPaid)}, total fees ${agentGbp(totalFees)}. Write 3-4 sentences on what to check.`,
     fallback,
   });
   const task = await createAgentTask({
     agent: "reconciliation", kind: "brief",
-    title: `Payout reconciliation — ${flagged.length} payout(s), ${agentGbp(totalResidual)} unexplained`,
-    body, severity: "action", payload: { gaps: flagged.map(f => ({ storeName: f.storeName, date: f.period, sold: f.expected, settled: f.payout, gap: f.residual })), totalGap: totalResidual },
-    savings: Math.abs(totalResidual), createdBy: createdBy || "agent",
+    title: `Payout review — ${flags.length} payout(s) to check`,
+    body, severity: "action",
+    payload: { gaps: flags.map(f => ({ storeName: f.account, date: "", sold: f.revenue, settled: f.payout, gap: f.fees })), flags, totalPaid, totalFees },
+    createdBy: createdBy || "agent",
   });
-  await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "unexplained_residual", value: totalResidual, note: `${start}..${end}` }).catch(() => {});
+  await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "payouts_reviewed", value: totalPaid, note: `${payouts.length} payouts, ${flags.length} flagged` }).catch(() => {});
   return task;
 }
 export async function runReconciliationAssistant_DISABLED({ from, to, createdBy } = {}) {
