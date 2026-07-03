@@ -12074,11 +12074,17 @@ export async function fetchProfitWatchTrends({ days = 14 } = {}) {
   return byStore;
 }
 
-// ── RECONCILIATION ASSISTANT (Flipdish/delivery: ordered vs settled) ─────────
-// Loop/Samantha-style: compares what was SOLD (Flipdish sales) against what was
-// SETTLED (card/online payouts) per store per day, flags material gaps — money
-// ordered but not paid out. All figures computed in code; Claude only phrases.
+// ── RECONCILIATION ASSISTANT — DISABLED ──────────────────────────────────────
+// NOTE: disabled deliberately. A true delivery reconciliation needs the actual
+// Flipdish PAYOUT feed (what Flipdish deposited, net of commission). The only
+// "settlement" data in the app (store_day_payments) is IN-STORE EOD card takings,
+// which is a different revenue stream from flipdish_sales (online delivery) — so
+// comparing them produced a large, meaningless "gap" (really commission + stream
+// mismatch). Re-enable only once a real payout/settlement source is wired.
 export async function runReconciliationAssistant({ from, to, createdBy } = {}) {
+  return null; // no comparable payout data available yet
+}
+export async function runReconciliationAssistant_DISABLED({ from, to, createdBy } = {}) {
   const end = to || new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
   const start = from || new Date(Date.now() - 9 * 864e5).toISOString().slice(0, 10); // ~1 week window
   const [sales, payouts, stores] = await Promise.all([
