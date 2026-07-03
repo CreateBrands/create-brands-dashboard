@@ -12082,7 +12082,81 @@ export async function fetchProfitWatchTrends({ days = 14 } = {}) {
 // comparing them produced a large, meaningless "gap" (really commission + stream
 // mismatch). Re-enable only once a real payout/settlement source is wired.
 export async function runReconciliationAssistant({ from, to, createdBy } = {}) {
-  return null; // no comparable payout data available yet
+  return null; // no comparable payout data available yet — see runReconciliationAssistant_v2
+}
+
+// ── FLIPDISH PAYOUT SYNC + PROBE ─────────────────────────────────────────────
+// Probe: answers "do my credentials have payout permissions?" without writing.
+export async function probeFlipdishPayouts({ from, to } = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("flipdish-payout-sync", { body: { probe: true, from, to }, headers });
+  if (error) throw error;
+  return data; // { ok, probe, endpoint, payoutCount, sample } or { ok:false, error }
+}
+// Sync: pulls payouts into flipdish_payouts.
+export async function syncFlipdishPayouts({ from, to } = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("flipdish-payout-sync", { body: { from, to }, headers });
+  if (error) throw error;
+  return data;
+}
+export async function fetchFlipdishPayouts({ from, to } = {}) {
+  let q = supabase.from("flipdish_payouts").select("*").order("period_end", { ascending: false });
+  if (from) q = q.gte("period_end", from);
+  if (to) q = q.lte("period_end", to);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(p => ({
+    id: p.id, flipdishId: p.flipdish_id, storeId: p.store_id, periodStart: p.period_start, periodEnd: p.period_end,
+    paidOn: p.paid_on, currency: p.currency, totalRevenue: Number(p.total_revenue) || 0, cashCollected: Number(p.cash_collected) || 0,
+    fees: Number(p.fees) || 0, adjustments: Number(p.adjustments) || 0, openingBalance: Number(p.opening_balance) || 0,
+    closingBalance: Number(p.closing_balance) || 0, payoutAmount: Number(p.payout_amount) || 0, orderCount: p.order_count || 0,
+  }));
+}
+
+// ── RECONCILIATION ASSISTANT v2 (uses REAL payout data) ──────────────────────
+// For each payout, verify Flipdish's own formula reconciles:
+//   payout ≈ total_revenue − cash_collected − fees − adjustments (+ opening − closing)
+// Flag any payout where the residual is material — that's the genuinely
+// unexplained money to chase. All maths in code; Claude only phrases.
+export async function runReconciliationAssistant_v2({ from, to, createdBy } = {}) {
+  const end = to || new Date().toISOString().slice(0, 10);
+  const start = from || new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+  const [payouts, stores] = await Promise.all([
+    fetchFlipdishPayouts({ from: start, to: end }).catch(() => []),
+    fetchStores().catch(() => []),
+  ]);
+  if (!payouts.length) return null; // nothing synced yet
+  const storeName = new Map((stores || []).map(s => [s.id, s.shortName || s.name]));
+  const flagged = [];
+  payouts.forEach(p => {
+    // Expected net per Flipdish's formula, incl. balance carry.
+    const expected = +(p.totalRevenue - p.cashCollected - p.fees - p.adjustments + p.openingBalance - p.closingBalance).toFixed(2);
+    const residual = +(p.payoutAmount - expected).toFixed(2); // should be ~0
+    if (Math.abs(residual) > 5) {
+      flagged.push({ storeId: p.storeId, storeName: storeName.get(p.storeId) || p.storeId || "Group", period: `${p.periodStart || "?"}..${p.periodEnd || "?"}`, payout: p.payoutAmount, expected, residual });
+    }
+  });
+  if (!flagged.length) return null;
+  flagged.sort((a, b) => Math.abs(b.residual) - Math.abs(a.residual));
+  const totalResidual = +flagged.reduce((s, f) => s + f.residual, 0).toFixed(2);
+  const detail = flagged.slice(0, 8).map(f => `${f.storeName} ${f.period}: paid ${agentGbp(f.payout)}, expected ${agentGbp(f.expected)}, unexplained ${agentGbp(f.residual)}`).join("; ");
+  const fallback = `Payout reconciliation: ${flagged.length} payout(s) don't match Flipdish's own formula, unexplained total ${agentGbp(totalResidual)}. ${detail}.`;
+  const body = await agentPhrase({
+    system: "You write a reconciliation brief for a restaurant owner. These are Flipdish payouts where the amount received doesn't match revenue minus cash, fees and adjustments — i.e. genuinely unexplained differences worth querying with Flipdish. Do NOT invent numbers.",
+    prompt: `Payouts that don't reconcile: ${detail}. Total unexplained ${agentGbp(totalResidual)}. Write 3-5 sentences on what to check and query with Flipdish.`,
+    fallback,
+  });
+  const task = await createAgentTask({
+    agent: "reconciliation", kind: "brief",
+    title: `Payout reconciliation — ${flagged.length} payout(s), ${agentGbp(totalResidual)} unexplained`,
+    body, severity: "action", payload: { gaps: flagged.map(f => ({ storeName: f.storeName, date: f.period, sold: f.expected, settled: f.payout, gap: f.residual })), totalGap: totalResidual },
+    savings: Math.abs(totalResidual), createdBy: createdBy || "agent",
+  });
+  await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "unexplained_residual", value: totalResidual, note: `${start}..${end}` }).catch(() => {});
+  return task;
 }
 export async function runReconciliationAssistant_DISABLED({ from, to, createdBy } = {}) {
   const end = to || new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);

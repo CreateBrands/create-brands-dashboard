@@ -159,7 +159,8 @@ import {
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
-  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends, runReconciliationAssistant,
+  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends,
+  runReconciliationAssistant_v2, probeFlipdishPayouts, syncFlipdishPayouts, fetchFlipdishPayouts,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -10563,8 +10564,9 @@ function AgentInboxView({ currentUser, onNavigate }) {
       // Profit Watch: the date the owner picked.
       const pw = await runProfitWatch({ date: pwDate, createdBy: currentUser?.id }).catch(() => null);
       if (pw) made++;
-      // Reconciliation: last ~week of Flipdish sales vs settlement.
-      const rec = await runReconciliationAssistant({ createdBy: currentUser?.id }).catch(() => null);
+      // Reconciliation v2: real payout data (gross vs net formula). Only produces
+      // a card if payouts have been synced and something doesn't reconcile.
+      const rec = await runReconciliationAssistant_v2({ createdBy: currentUser?.id }).catch(() => null);
       if (rec) made++;
       setMsg(made ? `${made} new suggestion${made !== 1 ? "s" : ""} ready.` : "No new suggestions — everything looks on track.");
       await load();
@@ -10719,6 +10721,7 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
   const set = (agent, patch) => setCfg(c => ({ ...c, [agent]: { ...c[agent], ...patch } }));
   const [targets, setTargets] = useState({ labourPct: 30, byStore: {} });
   const [savingT, setSavingT] = useState(false);
+  const [probeMsg, setProbeMsg] = useState("");
   const [actuals, setActuals] = useState({}); // storeId -> { last, avg }
   useEffect(() => { fetchProfitTargets().then(t => setTargets({ labourPct: t.labourPct ?? 30, byStore: t.byStore || {} })).catch(() => {}); }, []);
   useEffect(() => {
@@ -10794,6 +10797,16 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
             {activeStores.length === 0 && <div className="text-xs text-center py-4" style={{ color: "#9A8770" }}>No sites loaded.</div>}
           </div>
           <div className="text-[11px] mt-2" style={{ color: "#9A8770" }}>"avg" = 2-week average labour %. "day" = last settled day. Tap "avg" to use it as the target. Sites with no chip aren't recording labour yet.</div>
+        </div>
+
+        <div className="rounded-xl p-3" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+          <div className="font-bold mb-1" style={{ color: "#3A2E26" }}>Flipdish payout reconciliation</div>
+          <p className="text-xs mb-2" style={{ color: "#9A8770" }}>Pull real Flipdish payouts to reconcile gross orders against what actually hit the bank. First, check your API can read payouts.</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={async () => { setProbeMsg("Checking…"); try { const r = await probeFlipdishPayouts({}); setProbeMsg(r?.ok ? `✓ Payouts readable — found ${r.payoutCount} in range.` : `✗ ${r?.error || "no access"}`); } catch (e) { setProbeMsg("✗ " + e.message); } }} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Check payout access</button>
+            <button onClick={async () => { setProbeMsg("Syncing…"); try { const r = await syncFlipdishPayouts({}); setProbeMsg(r?.ok ? `✓ Synced ${r.upserted || 0} payout(s).` : `✗ ${r?.error || "sync failed"}`); } catch (e) { setProbeMsg("✗ " + e.message); } }} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Sync payouts now</button>
+          </div>
+          {probeMsg && <div className="text-xs mt-2" style={{ color: probeMsg.startsWith("✓") ? "#3B6D11" : probeMsg.startsWith("✗") ? "#A32D2D" : "#9A8770" }}>{probeMsg}</div>}
         </div>
       </div>
       <div className="flex justify-end gap-2 mt-4">
