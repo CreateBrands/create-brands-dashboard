@@ -12163,7 +12163,7 @@ export async function runReconciliationAssistant_v2({ from, to, createdBy } = {}
     const feeRate = revenue > 0 ? (feeAbs / revenue) * 100 : 0;
     const reasons = [];
     if (feeRate > 8) reasons.push(`fee rate ${feeRate.toFixed(1)}% (high)`);
-    if ((p.closingBalance || 0) < -1) reasons.push(`negative closing balance ${agentGbp(p.closingBalance)}`);
+    if ((p.closingBalance || 0) < -10) reasons.push(`owed Flipdish ${agentGbp(Math.abs(p.closingBalance))} (deducted next payout)`);
     if (Math.abs(p.chargebacks || 0) > 1) reasons.push(`chargebacks ${agentGbp(Math.abs(p.chargebacks))}`);
     if ((p.payoutAmount || 0) < 0) reasons.push(`negative payout ${agentGbp(p.payoutAmount)}`);
     if (reasons.length) flags.push({ account: p.accountName, payout: p.payoutAmount, revenue, fees: p.fees, reasons });
@@ -12193,7 +12193,7 @@ export async function runReconciliationAssistant_v2({ from, to, createdBy } = {}
     agent: "reconciliation", kind: "brief",
     title: `Payout review — ${flags.length} payout(s) to check`,
     body, severity: "action",
-    payload: { gaps: flags.map(f => ({ storeName: f.account, date: "", sold: f.revenue, settled: f.payout, gap: f.fees })), flags, totalPaid, totalFees },
+    payload: { reconRows: flags.map(f => ({ account: f.account, revenue: f.revenue, fees: f.fees, paid: f.payout, reasons: f.reasons })), flags, totalPaid, totalFees },
     createdBy: createdBy || "agent",
   });
   await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "payouts_reviewed", value: totalPaid, note: `${payouts.length} payouts, ${flags.length} flagged` }).catch(() => {});

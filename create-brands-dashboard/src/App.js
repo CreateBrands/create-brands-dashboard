@@ -10663,15 +10663,18 @@ function AgentInboxView({ currentUser, onNavigate }) {
                         {t.payload.lines.length > 8 && <div className="px-3 py-1.5 text-xs" style={{ color: "#9A8770", backgroundColor: "#FBF6EC" }}>+{t.payload.lines.length - 8} more</div>}
                       </div>
                     )}
-                    {t.agent === "reconciliation" && t.payload?.gaps && (
+                    {t.agent === "reconciliation" && t.payload?.reconRows && (
                       <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid #E8DCC6" }}>
-                        {t.payload.gaps.slice(0, 8).map((g, i) => (
-                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm" style={{ backgroundColor: i % 2 ? "#FDF2E0" : "#FBF6EC" }}>
-                            <span style={{ color: "#3A2E26" }}>{g.storeName} · {g.date}</span>
-                            <span style={{ color: "#9A8770" }}>sold £{g.sold} · settled £{g.settled} · <b style={{ color: "#A32D2D" }}>gap £{g.gap}</b></span>
+                        {t.payload.reconRows.slice(0, 10).map((g, i) => (
+                          <div key={i} className="px-3 py-1.5 text-sm" style={{ backgroundColor: i % 2 ? "#FDF2E0" : "#FBF6EC" }}>
+                            <div className="font-semibold" style={{ color: "#3A2E26" }}>{g.account}</div>
+                            <div className="text-[11px]" style={{ color: "#9A8770" }}>revenue £{(g.revenue||0).toFixed(2)} · fees £{Math.abs(g.fees||0).toFixed(2)} · paid £{(g.paid||0).toFixed(2)}{g.reasons && g.reasons.length ? ` — ${g.reasons.join(", ")}` : ""}</div>
                           </div>
                         ))}
                       </div>
+                    )}
+                    {t.agent === "reconciliation" && t.payload?.summary && (
+                      <div className="mt-2 text-sm" style={{ color: "#9A8770" }}>{t.payload.count} payouts · £{(t.payload.totalPaid||0).toFixed(2)} net paid · £{(t.payload.totalFees||0).toFixed(2)} fees</div>
                     )}
                     <div className="flex items-center gap-2 mt-3">
                       <button onClick={() => approve(t)} className="px-4 py-1.5 rounded-lg text-sm font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{t.agent === "ordering" ? "Approve & create order" : "Mark done"}</button>
