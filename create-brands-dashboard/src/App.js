@@ -159,7 +159,7 @@ import {
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
   fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
-  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends,
+  runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends, runReconciliationAssistant,
   confirmDistGoodsReceipt,
   fetchDistStockValuation, fetchDistExpiryReport, fetchDistAgedCreditors, fetchDistAgedDebtors, fetchDistPnL, fetchDistReorderReport,
   fetchDistDashboard,
@@ -187,7 +187,7 @@ import {
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
-  ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera, Sparkles,
+  ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera, Sparkles, Scale,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Paperclip, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
@@ -10563,6 +10563,9 @@ function AgentInboxView({ currentUser, onNavigate }) {
       // Profit Watch: the date the owner picked.
       const pw = await runProfitWatch({ date: pwDate, createdBy: currentUser?.id }).catch(() => null);
       if (pw) made++;
+      // Reconciliation: last ~week of Flipdish sales vs settlement.
+      const rec = await runReconciliationAssistant({ createdBy: currentUser?.id }).catch(() => null);
+      if (rec) made++;
       setMsg(made ? `${made} new suggestion${made !== 1 ? "s" : ""} ready.` : "No new suggestions — everything looks on track.");
       await load();
     } catch (e) { setErr(e.message); }
@@ -10590,6 +10593,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
   const agentMeta = {
     ordering: { label: "Ordering", color: "#844429", icon: ShoppingCart },
     profit_watch: { label: "Profit Watch", color: "#C9854F", icon: TrendingUp },
+    reconciliation: { label: "Reconciliation", color: "#5C7A9C", icon: Scale },
     compliance: { label: "Compliance", color: "#A32D2D", icon: Shield },
   };
 
@@ -10655,6 +10659,16 @@ function AgentInboxView({ currentUser, onNavigate }) {
                           </div>
                         ))}
                         {t.payload.lines.length > 8 && <div className="px-3 py-1.5 text-xs" style={{ color: "#9A8770", backgroundColor: "#FBF6EC" }}>+{t.payload.lines.length - 8} more</div>}
+                      </div>
+                    )}
+                    {t.agent === "reconciliation" && t.payload?.gaps && (
+                      <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid #E8DCC6" }}>
+                        {t.payload.gaps.slice(0, 8).map((g, i) => (
+                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm" style={{ backgroundColor: i % 2 ? "#FDF2E0" : "#FBF6EC" }}>
+                            <span style={{ color: "#3A2E26" }}>{g.storeName} · {g.date}</span>
+                            <span style={{ color: "#9A8770" }}>sold £{g.sold} · settled £{g.settled} · <b style={{ color: "#A32D2D" }}>gap £{g.gap}</b></span>
+                          </div>
+                        ))}
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-3">

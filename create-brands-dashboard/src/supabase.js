@@ -12073,3 +12073,64 @@ export async function fetchProfitWatchTrends({ days = 14 } = {}) {
   });
   return byStore;
 }
+
+// ── RECONCILIATION ASSISTANT (Flipdish/delivery: ordered vs settled) ─────────
+// Loop/Samantha-style: compares what was SOLD (Flipdish sales) against what was
+// SETTLED (card/online payouts) per store per day, flags material gaps — money
+// ordered but not paid out. All figures computed in code; Claude only phrases.
+export async function runReconciliationAssistant({ from, to, createdBy } = {}) {
+  const end = to || new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
+  const start = from || new Date(Date.now() - 9 * 864e5).toISOString().slice(0, 10); // ~1 week window
+  const [sales, payouts, stores] = await Promise.all([
+    fetchFlipdishSales({ from: start, to: end }).catch(() => []),
+    fetchPayoutsForRecon({ from: start, to: end }).catch(() => []),
+    fetchStores().catch(() => []),
+  ]);
+  const storeName = new Map((stores || []).map(s => [s.id, s.shortName || s.name]));
+
+  // Aggregate SOLD per store/day (card/online only — exclude cash; count paid sales).
+  const soldByKey = new Map();
+  (sales || []).forEach(s => {
+    const ch = String(s.channel || s.storefrontType || "").toLowerCase();
+    if (ch.includes("cash")) return;
+    const date = (s.businessDate || s.business_date || "").slice(0, 10);
+    const storeId = s.storeId || s.store_id;
+    if (!date || !storeId) return;
+    const key = `${storeId}|${date}`;
+    soldByKey.set(key, (soldByKey.get(key) || 0) + (Number(s.amountPaid ?? s.amount_paid ?? s.amountTotal ?? s.amount_total) || 0));
+  });
+  // Settled per store/day.
+  const settledByKey = new Map();
+  (payouts || []).forEach(p => { settledByKey.set(`${p.storeId || p.brandId}|${p.date}`, (settledByKey.get(`${p.storeId || p.brandId}|${p.date}`) || 0) + (Number(p.amount) || 0)); });
+
+  // Gap per key. Flag where sold materially exceeds settled (money owed/missing).
+  // Threshold: gap over £5 AND over 3% of the day's sales, to skip rounding noise.
+  const gaps = [];
+  soldByKey.forEach((sold, key) => {
+    const settled = settledByKey.get(key) || 0;
+    const gap = +(sold - settled).toFixed(2);
+    if (gap > 5 && gap > sold * 0.03) {
+      const [storeId, date] = key.split("|");
+      gaps.push({ storeId, storeName: storeName.get(storeId) || storeId, date, sold: +sold.toFixed(2), settled: +settled.toFixed(2), gap });
+    }
+  });
+  if (!gaps.length) return null;
+  gaps.sort((a, b) => b.gap - a.gap);
+  const totalGap = +gaps.reduce((s, g) => s + g.gap, 0).toFixed(2);
+  const detail = gaps.slice(0, 8).map(g => `${g.storeName} ${g.date}: sold ${agentGbp(g.sold)}, settled ${agentGbp(g.settled)}, gap ${agentGbp(g.gap)}`).join("; ");
+  const fallback = `Reconciliation ${start} to ${end}: ${gaps.length} day(s) where sales exceed settlement by more than expected, totalling ${agentGbp(totalGap)}. ${detail}.`;
+  const body = await agentPhrase({
+    system: "You write a short reconciliation brief for a restaurant owner. Explain that these are days where card/online sales exceed what was settled to the bank, which may mean delayed payouts, chargebacks, or missing money to chase. Do NOT invent numbers — use only those given.",
+    prompt: `Reconciliation window ${start} to ${end}. Days where sales exceed settlement: ${detail}. Total gap ${agentGbp(totalGap)}. Write 3-5 sentences explaining what to check and prioritise.`,
+    fallback,
+  });
+  const task = await createAgentTask({
+    agent: "reconciliation", kind: "brief",
+    title: `Reconciliation — ${gaps.length} day(s), ${agentGbp(totalGap)} to check`,
+    body, severity: "action", payload: { from: start, to: end, gaps, totalGap },
+    savings: totalGap, createdBy: createdBy || "agent",
+  });
+  // Measurement loop: log the total gap surfaced, so recovered money is trackable.
+  await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "gap_surfaced", value: totalGap, note: `${start}..${end} ${gaps.length} days` }).catch(() => {});
+  return task;
+}
