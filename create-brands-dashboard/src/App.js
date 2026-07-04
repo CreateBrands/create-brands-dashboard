@@ -10194,7 +10194,10 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
 
       {/* ITEMS × STAGES with on-hand + projected + status */}
       {dash.items.length > 0 && (
-        <AnalysisBlock title="Items across stages — live stock & projected on-hand">
+        <AnalysisBlock title="Stock on hand & reorder — per item" action={(() => {
+          const need = dash.items.filter(r => r.reorderStatus === "order_now").length;
+          return need > 0 ? <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1" style={{background:sevColor("red").bg,color:sevColor("red").fg,border:`1px solid ${sevColor("red").ln}`}}><AlertCircle size={11}/>{need} to reorder</span> : <span className="px-2.5 py-1 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1" style={{background:sevColor("green").bg,color:sevColor("green").fg,border:`1px solid ${sevColor("green").ln}`}}><CheckCircle size={11}/>stock levels ok</span>;
+        })()}>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -10208,6 +10211,8 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
                   <th className="px-3 py-2 text-right" style={th}>Incoming</th>
                   <th className="px-3 py-2 text-right" style={th}>Projected</th>
                   <th className="px-3 py-2 text-right" style={th}>Value</th>
+                  <th className="px-3 py-2 text-right" style={th}>Reorder pt</th>
+                  <th className="px-3 py-2 text-center" style={th}>Reorder</th>
                   <th className="px-3 py-2 text-center" style={th}>Status</th>
                 </tr>
               </thead>
@@ -10231,6 +10236,14 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
                       <td className="px-3 py-2.5 text-right font-mono font-bold" style={{color:T.blue}}>{fmt(r.incoming)}</td>
                       <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{r.projected==null?"—":fmt(r.projected)}</td>
                       <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{gbp(r.value)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkFaint}}>{r.reorderPoint>0?fmt(r.reorderPoint):"—"}</td>
+                      <td className="px-3 py-2.5 text-center">{(() => {
+                        const rb = r.reorderStatus==="order_now" ? {t:"Order now",c:sevColor("red"),Ic:AlertCircle}
+                          : r.reorderStatus==="inbound_ok" ? {t:"Covered",c:{fg:T.blue,bg:T.blueBg,ln:T.blueLine},Ic:Ship}
+                          : r.reorderStatus==="ok" ? {t:"OK",c:sevColor("green"),Ic:CheckCircle}
+                          : null;
+                        return rb ? <span className="px-2 py-0.5 rounded-md text-[10px] font-bold inline-flex items-center gap-1" style={{background:rb.c.bg,color:rb.c.fg,border:`1px solid ${rb.c.ln}`}}><rb.Ic size={10}/>{rb.t}</span> : <span className="text-[10px]" style={{color:T.inkFaint}} title="Set a reorder point on this item to get a signal">no threshold</span>;
+                      })()}</td>
                       <td className="px-3 py-2.5 text-center">{badge ? <span className="px-2 py-0.5 rounded-md text-[10px] font-bold inline-flex items-center gap-1" style={{background:badge.c.bg,color:badge.c.fg,border:`1px solid ${badge.c.ln}`}}><badge.Ic size={10}/>{badge.t}</span> : <span className="text-[10px]" style={{color:T.inkFaint}}>—</span>}</td>
                     </tr>
                   );
@@ -10238,7 +10251,7 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
               </tbody>
             </table>
           </div>
-          <div className="text-[10px] mt-2" style={{color:T.inkFaint}}>On hand = live distribution stock · Incoming = at supplier + in transit + not shipped · Projected = on hand once everything lands.</div>
+          <div className="text-[10px] mt-2" style={{color:T.inkFaint}}>On hand = live distribution stock · Incoming = at supplier + in transit + not shipped · Projected = on hand once everything lands · Reorder: "Order now" = on hand at/below reorder point with nothing inbound; "Covered" = low but incoming will cover it. Set reorder points on distribution items to enable this.</div>
         </AnalysisBlock>
       )}
 

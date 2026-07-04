@@ -12916,6 +12916,7 @@ export async function fetchPackagingDashboard({ includeClosed = false } = {}) {
   const [onHand, distItems] = await Promise.all([computeDistOnHand(), fetchDistItems().catch(() => [])]);
   const details = await Promise.all(active.map(o => fetchPackagingOrderDetail(o.id).catch(() => null)));
   const itemName = new Map(distItems.map(i => [i.id, i.name]));
+  const itemReorder = new Map(distItems.map(i => [i.id, i.reorderPoint != null ? Number(i.reorderPoint) : 0]));
   const inTransitStages = new Set(["shipped_sea", "shipped_air", "at_destination"]);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -12981,11 +12982,29 @@ export async function fetchPackagingDashboard({ includeClosed = false } = {}) {
   const items = [...byItem.values()].map(r => {
     const oh = r.distItemId ? (onHand.get(r.distItemId) || 0) : null;
     const incoming = r.atSupplier + r.inTransit + r.notYetShipped;
+    const reorderPoint = r.distItemId ? (itemReorder.get(r.distItemId) || 0) : 0;
+    // Reorder signal: compare stock to the reorder point, but credit what's
+    // already on the way — you only need to place a NEW order if neither on-hand
+    // nor incoming covers the reorder point.
+    //   order_now  : at/below reorder point AND nothing inbound to cover it
+    //   inbound_ok : at/below reorder point but incoming will cover it
+    //   ok         : above reorder point
+    //   no_threshold: reorder point not set (can't advise)
+    let reorderStatus = "no_threshold";
+    if (oh != null && reorderPoint > 0) {
+      if (oh > reorderPoint) reorderStatus = "ok";
+      else if (oh + incoming > reorderPoint) reorderStatus = "inbound_ok";
+      else reorderStatus = "order_now";
+    }
     return {
-      ...r, orderRefs: [...r.orderRefs], onHand: oh, incoming,
+      ...r, orderRefs: [...r.orderRefs], onHand: oh, incoming, reorderPoint, reorderStatus,
       projected: oh == null ? null : oh + incoming, // stock once everything lands
     };
-  }).sort((a, b) => (b.incoming - a.incoming) || a.name.localeCompare(b.name));
+  }).sort((a, b) => {
+    // Reorder-critical items float to the top, then by incoming volume.
+    const rank = { order_now: 0, inbound_ok: 1, ok: 2, no_threshold: 3 };
+    return (rank[a.reorderStatus] - rank[b.reorderStatus]) || (b.incoming - a.incoming) || a.name.localeCompare(b.name);
+  });
 
   const totals = items.reduce((t, r) => ({
     ordered: t.ordered + r.ordered, atSupplier: t.atSupplier + r.atSupplier,
@@ -13034,6 +13053,13 @@ export async function fetchPackagingDashboard({ includeClosed = false } = {}) {
     title: `${r.name}: out of stock, ${r.incoming.toLocaleString()} incoming`,
     detail: r.inTransit > 0 ? `${r.inTransit.toLocaleString()} in transit — watch coverage` : `nothing in transit — ${(r.atSupplier + r.notYetShipped).toLocaleString()} still at supplier/unshipped`,
     weight: r.value }));
+  // Item-level: reorder needed — at/below reorder point with nothing inbound to
+  // cover it (and not already caught by the stock-out rule above).
+  items.filter(r => r.reorderStatus === "order_now" && r.onHand > 0).forEach(r => exceptions.push({
+    level: "amber", kind: "reorder_now", itemId: r.distItemId,
+    title: `${r.name}: time to reorder`,
+    detail: `${r.onHand.toLocaleString()} on hand · reorder point ${r.reorderPoint.toLocaleString()} · nothing inbound`,
+    weight: r.reorderPoint }));
   // Payment: large outstanding balance on orders already received.
   orderRows.filter(o => o.outstanding > 0.01 && ["received","partially_received"].includes(o.stage)).forEach(o => exceptions.push({
     level: "amber", kind: "payment_due", orderId: o.id,
