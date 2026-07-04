@@ -154,6 +154,9 @@ import {
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchDistBatches, createDistBatch,
+  PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
+  upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
+  addPackagingPayment, deletePackagingPayment, computePackLineStatus,
   fetchDistMovements, addDistMovement, seedDistOpeningStock,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
   fetchDistPurchaseOrders, createDistPurchaseOrder, setDistPurchaseOrderStatus,
@@ -9892,6 +9895,395 @@ function AttentionCard({ title, count, sub, accent = "slate", onSeeAll, icon: Ic
     </div>
   );
 }
+
+// ─── Packaging Order Fulfilment (PACKORDER_V1) ───────────────────────────────
+// Long-lead packaging procurement: orders move through Design → … → Received,
+// with partial shipments (split between supplier facility, in transit, and
+// destination), staged payments vs quote, and auto-posting to distribution
+// inventory on receipt. List → detail with Items / Shipments / Payments tabs.
+const packStageColor = (stage) => ({
+  design:"bg-slate-700 text-slate-200", design_approval:"bg-slate-600 text-white",
+  quotation:"bg-sky-700 text-white", order_placed:"bg-indigo-700 text-white",
+  in_production:"bg-indigo-600 text-white", ready:"bg-violet-700 text-white",
+  partially_shipped:"bg-amber-600 text-white", shipped:"bg-amber-500 text-amber-950",
+  partially_received:"bg-emerald-700 text-white", received:"bg-emerald-600 text-white",
+  closed:"bg-slate-600 text-white", cancelled:"bg-red-800 text-white",
+}[stage] || "bg-slate-700 text-slate-200");
+const packStageLabel = (stage) => (PACKORDER_STAGES.find(s=>s.key===stage)?.label) || stage;
+const shipStageLabel = (stage) => (PACKSHIP_STAGES.find(s=>s.key===stage)?.label) || stage;
+
+function PackagingOrdersView({ currentUser }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try { setOrders(await fetchPackagingOrders()); }
+    catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (openId) return <PackagingOrderDetail orderId={openId} currentUser={currentUser} onBack={()=>{ setOpenId(null); load(); }} />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <h2 className="text-lg font-black text-white">Packaging Orders</h2>
+        <button onClick={()=>setNewOpen(true)} className="ml-auto px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New order</button>
+      </div>
+      {err && <div className="text-sm text-red-400">{err}</div>}
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> :
+        orders.length === 0 ? <div className="text-center py-16 text-sm text-slate-600">No packaging orders yet. Create one to track a supplier order from design to receipt.</div> : (
+        <div className="space-y-2">
+          {orders.map(o => (
+            <button key={o.id} onClick={()=>setOpenId(o.id)} className="w-full text-left bg-slate-900 border border-slate-800 rounded-2xl p-4 hover:border-slate-600 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white">{o.ref || "Untitled order"}</span>
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(o.stage)}`}>{packStageLabel(o.stage)}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">{o.supplier || "No supplier"}{o.orderDate?` · ordered ${o.orderDate}`:""}{o.expectedDate?` · expected ${o.expectedDate}`:""}</div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-sm font-bold text-white">{gbp(o.quotedTotal)}</div>
+                  <div className="text-[10px] text-slate-600">quoted</div>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {newOpen && <PackagingOrderEditModal onClose={()=>setNewOpen(false)} onSaved={(o)=>{ setNewOpen(false); load(); setOpenId(o.id); }} />}
+    </div>
+  );
+}
+
+function PackagingOrderEditModal({ order, onClose, onSaved }) {
+  const isNew = !order;
+  const [f, setF] = useState({
+    ref: order?.ref || "", supplier: order?.supplier || "", stage: order?.stage || "design",
+    quotedTotal: order?.quotedTotal != null ? String(order.quotedTotal) : "", currency: order?.currency || "GBP",
+    orderDate: order?.orderDate || "", expectedDate: order?.expectedDate || "", notes: order?.notes || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const set = (k,v)=>setF(s=>({...s,[k]:v}));
+  const save = async () => {
+    if (!f.supplier.trim() && !f.ref.trim()) { alert("Add a reference or supplier."); return; }
+    setBusy(true);
+    try {
+      const saved = await upsertPackagingOrder({
+        id: order?.id, ref: f.ref.trim(), supplier: f.supplier.trim(), stage: f.stage,
+        quotedTotal: Number(f.quotedTotal)||0, currency: f.currency,
+        orderDate: f.orderDate||null, expectedDate: f.expectedDate||null, notes: f.notes,
+      });
+      onSaved(saved);
+    } catch(e){ alert(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal title={isNew ? "New packaging order" : "Edit order"} onClose={onClose} footer={<>
+      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      <button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button>
+    </>}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Reference</label><input value={f.ref} onChange={e=>set("ref",e.target.value)} placeholder="e.g. PKG-2026-014" className={inputCls}/></div>
+          <div><label className={labelCls}>Stage</label><select value={f.stage} onChange={e=>set("stage",e.target.value)} className={selCls}>{PACKORDER_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
+        </div>
+        <div><label className={labelCls}>Supplier</label><input value={f.supplier} onChange={e=>set("supplier",e.target.value)} placeholder="Supplier name" className={inputCls}/></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Quoted total</label><input type="number" step="0.01" value={f.quotedTotal} onChange={e=>set("quotedTotal",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Currency</label><input value={f.currency} onChange={e=>set("currency",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Order date</label><input type="date" value={f.orderDate} onChange={e=>set("orderDate",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Expected date</label><input type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Notes</label><textarea value={f.notes} onChange={e=>set("notes",e.target.value)} rows={2} className={`${inputCls} resize-none`}/></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Detail: header + tabs (Overview / Items / Shipments / Payments). Loads its
+// own detail bundle; every mutation reloads so the per-line rollup stays exact.
+function PackagingOrderDetail({ orderId, currentUser, onBack }) {
+  const [d, setD] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("overview");
+  const [distItems, setDistItems] = useState([]);
+  const [editOrder, setEditOrder] = useState(false);
+  const [lineModal, setLineModal] = useState(null);
+  const [shipModal, setShipModal] = useState(null);
+  const [payModal, setPayModal] = useState(false);
+  const [toast, setToast] = useState(null);
+  const flash = (m,t="ok") => { setToast({m,t}); setTimeout(()=>setToast(null),2500); };
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [detail, di] = await Promise.all([fetchPackagingOrderDetail(orderId), fetchDistItems().catch(()=>[])]);
+      setD(detail); setDistItems(di);
+    } catch(e){ flash(e.message,"error"); } finally { setLoading(false); }
+  }, [orderId]);
+  useEffect(()=>{ load(); }, [load]);
+
+  if (loading || !d) return <div className="text-center py-12 text-sm text-slate-500">Loading…</div>;
+  const { order, lines, shipments, payments } = d;
+  const lineStatus = computePackLineStatus(lines, shipments);
+  const linesTotal = lines.reduce((a,l)=>a + (l.qty * l.unitPrice), 0);
+  const paidTotal = payments.reduce((a,p)=>a + p.amount, 0);
+  const outstanding = order.quotedTotal - paidTotal;
+  const distItemName = (id) => distItems.find(i=>i.id===id)?.name || "—";
+
+  return (
+    <div className="space-y-4">
+      {toast && <div className={`fixed bottom-6 right-6 z-[60] px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl ${toast.t==="error"?"bg-red-600":"bg-emerald-600"} text-white`}>{toast.m}</div>}
+      <button onClick={onBack} className="text-xs text-slate-400 hover:text-white flex items-center gap-1"><ChevronLeft size={14}/> All packaging orders</button>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xl font-black text-white">{order.ref || "Untitled order"}</span>
+              <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${packStageColor(order.stage)}`}>{packStageLabel(order.stage)}</span>
+            </div>
+            <div className="text-sm text-slate-500 mt-1">{order.supplier || "No supplier"}{order.orderDate?` · ordered ${order.orderDate}`:""}{order.expectedDate?` · expected ${order.expectedDate}`:""}</div>
+            {order.notes && <div className="text-xs text-slate-600 mt-1">{order.notes}</div>}
+          </div>
+          <button onClick={()=>setEditOrder(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex-shrink-0">Edit</button>
+        </div>
+        <div className="grid grid-cols-3 gap-3 mt-4">
+          <div className="bg-slate-950 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-600 font-bold">Quoted</div><div className="text-lg font-bold text-white">{gbp(order.quotedTotal)}</div></div>
+          <div className="bg-slate-950 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-600 font-bold">Paid</div><div className="text-lg font-bold text-emerald-400">{gbp(paidTotal)}</div></div>
+          <div className="bg-slate-950 rounded-xl p-3"><div className="text-[10px] uppercase text-slate-600 font-bold">Outstanding</div><div className={`text-lg font-bold ${outstanding>0?"text-amber-400":"text-slate-400"}`}>{gbp(outstanding)}</div></div>
+        </div>
+        {Math.abs(linesTotal - order.quotedTotal) > 0.01 && lines.length > 0 && (
+          <div className="text-[11px] text-slate-600 mt-2">Line items total {gbp(linesTotal)} — differs from the quoted total above.</div>
+        )}
+      </div>
+
+      <div className="flex gap-1">
+        {[["overview","Overview"],["items",`Items (${lines.length})`],["shipments",`Shipments (${shipments.length})`],["payments",`Payments (${payments.length})`]].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+        ))}
+      </div>
+
+      {/* OVERVIEW — per-item quantities across every stage */}
+      {tab==="overview" && (
+        lineStatus.length === 0 ? <div className="text-center py-10 text-sm text-slate-600">Add line items to see the stage breakdown.</div> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="text-slate-600 border-b border-slate-800">
+                {["Item","Ordered","At supplier","In transit","Received","Not shipped"].map((h,i)=><th key={h} className={`px-3 py-2 ${i===0?"text-left":"text-right"} font-semibold`}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {lineStatus.map(({line,ordered,atSupplier,inTransit,received,notYetShipped})=>(
+                  <tr key={line.id} className="border-b border-slate-800/60">
+                    <td className="px-3 py-2.5"><div className="text-white font-medium">{line.name}</div>{line.spec && <div className="text-[10px] text-slate-600">{line.spec}</div>}</td>
+                    <td className="px-3 py-2.5 text-right text-slate-300 font-mono">{ordered.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{atSupplier.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-amber-400">{inTransit.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{received.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-500">{notYetShipped.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+
+      {/* ITEMS */}
+      {tab==="items" && (
+        <div className="space-y-2">
+          <button onClick={()=>setLineModal({new:true})} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add item</button>
+          {lines.length===0 ? <div className="text-center py-8 text-sm text-slate-600">No items yet.</div> :
+            lines.map(l=>(
+              <div key={l.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-white">{l.name}</div>
+                  {l.spec && <div className="text-[11px] text-slate-500">{l.spec}</div>}
+                  <div className="text-[11px] text-slate-600 mt-0.5">→ inventory: {distItemName(l.distItemId)}</div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-sm text-white font-mono">{l.qty.toLocaleString()} × {gbp(l.unitPrice)}</div>
+                  <div className="text-[10px] text-slate-600">= {gbp(l.qty*l.unitPrice)}</div>
+                </div>
+                <button onClick={()=>setLineModal(l)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 flex-shrink-0">Edit</button>
+              </div>
+            ))
+          }
+        </div>
+      )}
+
+      {/* SHIPMENTS */}
+      {tab==="shipments" && (
+        <div className="space-y-2">
+          <button onClick={()=>setShipModal({new:true})} disabled={lines.length===0} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add shipment</button>
+          {lines.length===0 && <div className="text-[11px] text-slate-600">Add line items first — shipments carry quantities of those items.</div>}
+          {shipments.map(sh=>{
+            const totalUnits = Object.values(sh.qtyByLine||{}).reduce((a,q)=>a+(Number(q)||0),0);
+            return (
+              <div key={sh.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-white text-sm">{sh.ref || "Shipment"}</span>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-700 text-slate-200">{shipStageLabel(sh.stage)}</span>
+                  {sh.method && <span className="text-[10px] text-slate-500">{sh.method==="air"?"✈ Air":"🚢 Sea"}</span>}
+                  <span className="text-[11px] text-slate-600 ml-auto">{totalUnits.toLocaleString()} units</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap gap-x-3">
+                  {lines.filter(l=>Number(sh.qtyByLine?.[l.id])>0).map(l=><span key={l.id}>{l.name}: <span className="text-slate-300 font-mono">{Number(sh.qtyByLine[l.id]).toLocaleString()}</span></span>)}
+                </div>
+                <div className="text-[10px] text-slate-600 mt-1">{sh.shippedDate?`shipped ${sh.shippedDate}`:""}{sh.etaDate?` · ETA ${sh.etaDate}`:""}{sh.receivedDate?` · received ${sh.receivedDate}`:""}</div>
+                <div className="flex gap-2 mt-2.5">
+                  {sh.stage!=="received" && <button onClick={async()=>{ if(!window.confirm("Mark this shipment received? This adds its quantities to distribution inventory.")) return; try { const r = await receivePackagingShipment({ shipmentId: sh.id, receivedBy: currentUser?.name }); flash(`Received — ${r.posted.length} item line(s) added to inventory`); load(); } catch(e){ flash(e.message,"error"); } }} className="flex-1 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">✓ Mark received (adds to inventory)</button>}
+                  <button onClick={()=>setShipModal(sh)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Edit</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* PAYMENTS */}
+      {tab==="payments" && (
+        <div className="space-y-2">
+          <button onClick={()=>setPayModal(true)} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Record payment</button>
+          <div className="bg-slate-950 rounded-xl p-3 flex items-center justify-between text-sm">
+            <span className="text-slate-400">Paid {gbp(paidTotal)} of {gbp(order.quotedTotal)}</span>
+            <span className={`font-bold ${outstanding>0?"text-amber-400":"text-emerald-400"}`}>{outstanding>0?`${gbp(outstanding)} outstanding`:"Fully paid ✓"}</span>
+          </div>
+          {payments.map(p=>(
+            <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-white">{gbp(p.amount)}{p.method?` · ${p.method}`:""}</div>
+                <div className="text-[11px] text-slate-500">{p.paidDate}{p.reference?` · ref ${p.reference}`:""}{p.notes?` · ${p.notes}`:""}</div>
+              </div>
+              <button onClick={async()=>{ if(!window.confirm("Delete this payment?")) return; try { await deletePackagingPayment(p.id); flash("Deleted"); load(); } catch(e){ flash(e.message,"error"); } }} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={14}/></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editOrder && <PackagingOrderEditModal order={order} onClose={()=>setEditOrder(false)} onSaved={()=>{ setEditOrder(false); load(); }} />}
+      {lineModal && <PackagingLineModal line={lineModal} orderId={orderId} distItems={distItems} onClose={()=>setLineModal(null)} onSaved={()=>{ setLineModal(null); load(); }} onDelete={async(id)=>{ try{ await deletePackagingLine(id); setLineModal(null); load(); }catch(e){ flash(e.message,"error"); } }} />}
+      {shipModal && <PackagingShipmentModal ship={shipModal} orderId={orderId} lines={lines} onClose={()=>setShipModal(null)} onSaved={()=>{ setShipModal(null); load(); }} onDelete={async(id)=>{ try{ await deletePackagingShipment(id); setShipModal(null); load(); }catch(e){ flash(e.message,"error"); } }} />}
+      {payModal && <PackagingPaymentModal orderId={orderId} currency={order.currency} onClose={()=>setPayModal(false)} onSaved={()=>{ setPayModal(false); load(); }} />}
+    </div>
+  );
+}
+
+function PackagingLineModal({ line, orderId, distItems, onClose, onSaved, onDelete }) {
+  const isNew = !!line.new;
+  const [f, setF] = useState({
+    name: line.name||"", spec: line.spec||"", qty: line.qty!=null?String(line.qty):"",
+    unitPrice: line.unitPrice!=null?String(line.unitPrice):"", distItemId: line.distItemId||"", notes: line.notes||"",
+  });
+  const [busy,setBusy]=useState(false); const [confirmDel,setConfirmDel]=useState(false);
+  const set=(k,v)=>setF(s=>({...s,[k]:v}));
+  const save=async()=>{ if(!f.name.trim()){alert("Item name required");return;} setBusy(true);
+    try{ await upsertPackagingLine({ id:isNew?undefined:line.id, orderId, name:f.name.trim(), spec:f.spec.trim(), qty:Math.max(0,Math.round(Number(f.qty)||0)), unitPrice:Number(f.unitPrice)||0, distItemId:f.distItemId||null, notes:f.notes }); onSaved(); }
+    catch(e){alert(e.message);} finally{setBusy(false);} };
+  return (
+    <Modal title={isNew?"Add item":"Edit item"} onClose={onClose} footer={<>
+      {!isNew && (confirmDel
+        ? <><span className="flex-1 text-xs text-red-400 self-center font-semibold">Delete?</span><button onClick={()=>setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">No</button><button onClick={()=>onDelete(line.id)} className="px-3 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold">Delete</button></>
+        : <button onClick={()=>setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-950/20 border border-red-500/30 text-red-400"><Trash2 size={15}/></button>)}
+      {!confirmDel && <><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button><button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button></>}
+    </>}>
+      <div className="space-y-3">
+        <div><label className={labelCls}>Item name *</label><input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Kraft box 12oz" className={inputCls}/></div>
+        <div><label className={labelCls}>Spec</label><input value={f.spec} onChange={e=>set("spec",e.target.value)} placeholder="e.g. double-wall, printed 2 colour" className={inputCls}/></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Quantity</label><input type="number" min="0" value={f.qty} onChange={e=>set("qty",e.target.value)} placeholder="10000" className={inputCls}/></div>
+          <div><label className={labelCls}>Unit price ({line.currency||"GBP"})</label><input type="number" step="0.0001" value={f.unitPrice} onChange={e=>set("unitPrice",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Lands into inventory item</label>
+          <select value={f.distItemId} onChange={e=>set("distItemId",e.target.value)} className={selCls}>
+            <option value="">— not linked (won't update inventory) —</option>
+            {distItems.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+          <div className="text-[10px] text-slate-600 mt-1">On receipt, this line's quantity is added to the chosen distribution item.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PackagingShipmentModal({ ship, orderId, lines, onClose, onSaved, onDelete }) {
+  const isNew = !!ship.new;
+  const [f, setF] = useState({
+    ref: ship.ref||"", method: ship.method||"sea", stage: ship.stage||"at_supplier",
+    shippedDate: ship.shippedDate||"", etaDate: ship.etaDate||"", notes: ship.notes||"",
+  });
+  const [qty, setQty] = useState(() => { const q={}; lines.forEach(l=>{ q[l.id] = ship.qtyByLine?.[l.id]!=null?String(ship.qtyByLine[l.id]):""; }); return q; });
+  const [busy,setBusy]=useState(false); const [confirmDel,setConfirmDel]=useState(false);
+  const set=(k,v)=>setF(s=>({...s,[k]:v}));
+  const save=async()=>{ setBusy(true);
+    const qtyByLine={}; Object.entries(qty).forEach(([id,v])=>{ const n=Math.round(Number(v)||0); if(n>0) qtyByLine[id]=n; });
+    try{ await upsertPackagingShipment({ id:isNew?undefined:ship.id, orderId, ref:f.ref.trim(), method:f.method, stage:f.stage, qtyByLine, shippedDate:f.shippedDate||null, etaDate:f.etaDate||null, notes:f.notes }); onSaved(); }
+    catch(e){alert(e.message);} finally{setBusy(false);} };
+  return (
+    <Modal title={isNew?"Add shipment":"Edit shipment"} onClose={onClose} maxW="max-w-lg" footer={<>
+      {!isNew && (confirmDel
+        ? <><span className="flex-1 text-xs text-red-400 self-center font-semibold">Delete?</span><button onClick={()=>setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">No</button><button onClick={()=>onDelete(ship.id)} className="px-3 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold">Delete</button></>
+        : <button onClick={()=>setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-950/20 border border-red-500/30 text-red-400"><Trash2 size={15}/></button>)}
+      {!confirmDel && <><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button><button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button></>}
+    </>}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Reference</label><input value={f.ref} onChange={e=>set("ref",e.target.value)} placeholder="e.g. SHIP-1" className={inputCls}/></div>
+          <div><label className={labelCls}>Method</label><select value={f.method} onChange={e=>set("method",e.target.value)} className={selCls}><option value="sea">Sea</option><option value="air">Air</option></select></div>
+        </div>
+        <div><label className={labelCls}>Stage</label><select value={f.stage} onChange={e=>set("stage",e.target.value)} className={selCls}>{PACKSHIP_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
+          <div className="text-[10px] text-slate-600 mt-1">Tip: use "Mark received" on the shipment to auto-add to inventory — that also sets this to Received.</div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Shipped date</label><input type="date" value={f.shippedDate} onChange={e=>set("shippedDate",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>ETA</label><input type="date" value={f.etaDate} onChange={e=>set("etaDate",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div>
+          <label className={labelCls}>Quantities in this shipment</label>
+          <div className="space-y-1.5">
+            {lines.map(l=>(
+              <div key={l.id} className="flex items-center gap-2">
+                <span className="text-sm text-slate-300 flex-1 truncate">{l.name} <span className="text-[10px] text-slate-600">of {l.qty.toLocaleString()}</span></span>
+                <input type="number" min="0" value={qty[l.id]||""} onChange={e=>setQty(s=>({...s,[l.id]:e.target.value}))} placeholder="0" className="w-24 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-center"/>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PackagingPaymentModal({ orderId, currency, onClose, onSaved }) {
+  const [f, setF] = useState({ amount:"", paidDate:new Date().toISOString().slice(0,10), method:"", reference:"", notes:"" });
+  const [busy,setBusy]=useState(false); const set=(k,v)=>setF(s=>({...s,[k]:v}));
+  const save=async()=>{ if(!(Number(f.amount)>0)){alert("Enter an amount");return;} setBusy(true);
+    try{ await addPackagingPayment({ orderId, amount:Number(f.amount), currency, paidDate:f.paidDate, method:f.method, reference:f.reference, notes:f.notes }); onSaved(); }
+    catch(e){alert(e.message);} finally{setBusy(false);} };
+  return (
+    <Modal title="Record payment" onClose={onClose} footer={<>
+      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      <button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button>
+    </>}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Amount ({currency||"GBP"})</label><input type="number" step="0.01" value={f.amount} onChange={e=>set("amount",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Date</label><input type="date" value={f.paidDate} onChange={e=>set("paidDate",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Method</label><input value={f.method} onChange={e=>set("method",e.target.value)} placeholder="e.g. Bank transfer, 30% deposit" className={inputCls}/></div>
+        <div><label className={labelCls}>Reference</label><input value={f.reference} onChange={e=>set("reference",e.target.value)} placeholder="Transaction ref" className={inputCls}/></div>
+        <div><label className={labelCls}>Notes</label><input value={f.notes} onChange={e=>set("notes",e.target.value)} className={inputCls}/></div>
+      </div>
+    </Modal>
+  );
+}
+
 
 function DistReportsView() {
   const [tab, setTab] = useState("valuation");
@@ -51644,6 +52036,7 @@ export default function App() {
         { key: "dist-grn",     label: "Goods In", icon: ClipboardList },
         { key: "dist-bills",   label: "Bills", icon: Receipt },
         { key: "dist-pay",     label: "Payments", icon: PoundSterling },
+        { key: "dist-packaging", label: "Packaging Orders", icon: Package },
       ]},
       { key: "dist-sell", label: "Sales", icon: ShoppingCart, requiresEntity: "brand-distribution", children: [
         { key: "dist-customers",  label: "Customers", icon: Users },
@@ -52144,6 +52537,7 @@ export default function App() {
             {effectiveActiveView === "dist-invoices" && <DistInvoicesView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-receipts" && <DistReceiptsView currentUser={currentUser} pendingConvert={pendingConvert} setPendingConvert={setPendingConvert}/>}
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
+            {effectiveActiveView === "dist-packaging" && <PackagingOrdersView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
             {effectiveActiveView === "setup" && setupPanel === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}

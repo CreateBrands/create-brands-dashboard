@@ -12691,3 +12691,207 @@ export async function recountSmallwareItem({ itemId, storeId, newCount, countedB
   }
   return n;
 }
+
+// ── PACKAGING ORDER FULFILMENT (PACKORDER_V1) ────────────────────────────────
+// Long-lead procurement of packaging from Distribution. An order has:
+//   • line items  — product + quantity + quoted unit price, linked to a
+//                    dist_items row so receipts land in distribution inventory.
+//   • shipments   — partial or full dispatches; each carries specific line
+//                    quantities and its own stage (sea/air/received…), so stock
+//                    can sit split between supplier facility and destination.
+//   • payments    — many per order, tracked against the quoted total.
+// Marking a shipment "received" posts an idempotent receipt movement per line
+// into dist_stock_movements, updating distribution inventory automatically.
+//
+//   packaging_orders(id, ref, supplier, brand_id, stage, quoted_total,
+//                    currency, notes, order_date, expected_date, created_at)
+//   packaging_order_lines(id, order_id, dist_item_id, name, spec, qty,
+//                         unit_price, notes)
+//   packaging_shipments(id, order_id, ref, method, stage, qty_json,
+//                       shipped_date, eta_date, received_date, received_at,
+//                       notes, created_at)   -- qty_json: {lineId: qty}
+//   packaging_payments(id, order_id, amount, currency, paid_date, method,
+//                      reference, notes, created_at)
+//
+// ORDER stages: design | design_approval | quotation | order_placed |
+//               in_production | ready | partially_shipped | shipped |
+//               partially_received | received | closed | cancelled
+// SHIPMENT stages: at_supplier | shipped_sea | shipped_air | at_destination |
+//                  received
+
+export const PACKORDER_STAGES = [
+  { key: "design",           label: "Design" },
+  { key: "design_approval",  label: "Design Approval" },
+  { key: "quotation",        label: "Quotation" },
+  { key: "order_placed",     label: "Order Placed" },
+  { key: "in_production",    label: "In Production" },
+  { key: "ready",            label: "Order Ready" },
+  { key: "partially_shipped",label: "Partially Shipped" },
+  { key: "shipped",          label: "Shipped" },
+  { key: "partially_received",label: "Partially Received" },
+  { key: "received",         label: "Received" },
+  { key: "closed",           label: "Closed" },
+  { key: "cancelled",        label: "Cancelled" },
+];
+export const PACKSHIP_STAGES = [
+  { key: "at_supplier",    label: "At Supplier Facility" },
+  { key: "shipped_sea",    label: "Shipped (Sea)" },
+  { key: "shipped_air",    label: "Shipped (Air)" },
+  { key: "at_destination", label: "At Destination" },
+  { key: "received",       label: "Received at Facility" },
+];
+
+const mapPackOrder = (r) => ({
+  id: r.id, ref: r.ref, supplier: r.supplier, brandId: r.brand_id, stage: r.stage,
+  quotedTotal: Number(r.quoted_total) || 0, currency: r.currency || "GBP", notes: r.notes,
+  orderDate: r.order_date, expectedDate: r.expected_date, createdAt: r.created_at,
+});
+const mapPackLine = (r) => ({
+  id: r.id, orderId: r.order_id, distItemId: r.dist_item_id, name: r.name, spec: r.spec,
+  qty: Number(r.qty) || 0, unitPrice: Number(r.unit_price) || 0, notes: r.notes,
+});
+const mapPackShipment = (r) => ({
+  id: r.id, orderId: r.order_id, ref: r.ref, method: r.method, stage: r.stage,
+  qtyByLine: r.qty_json || {}, shippedDate: r.shipped_date, etaDate: r.eta_date,
+  receivedDate: r.received_date, receivedAt: r.received_at, notes: r.notes, createdAt: r.created_at,
+});
+const mapPackPayment = (r) => ({
+  id: r.id, orderId: r.order_id, amount: Number(r.amount) || 0, currency: r.currency || "GBP",
+  paidDate: r.paid_date, method: r.method, reference: r.reference, notes: r.notes, createdAt: r.created_at,
+});
+
+export async function fetchPackagingOrders({ brandId } = {}) {
+  let q = supabase.from("packaging_orders").select("*").order("created_at", { ascending: false });
+  if (brandId) q = q.eq("brand_id", brandId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapPackOrder);
+}
+export async function fetchPackagingOrderDetail(orderId) {
+  const [o, lines, ships, pays] = await Promise.all([
+    supabase.from("packaging_orders").select("*").eq("id", orderId).single(),
+    supabase.from("packaging_order_lines").select("*").eq("order_id", orderId).order("created_at"),
+    supabase.from("packaging_shipments").select("*").eq("order_id", orderId).order("created_at"),
+    supabase.from("packaging_payments").select("*").eq("order_id", orderId).order("paid_date"),
+  ]);
+  if (o.error) throw o.error;
+  return {
+    order: mapPackOrder(o.data),
+    lines: (lines.data || []).map(mapPackLine),
+    shipments: (ships.data || []).map(mapPackShipment),
+    payments: (pays.data || []).map(mapPackPayment),
+  };
+}
+export async function upsertPackagingOrder(order) {
+  const row = {
+    id: order.id || `po-${Date.now()}`, ref: order.ref || null, supplier: order.supplier || "",
+    brand_id: order.brandId || null, stage: order.stage || "design",
+    quoted_total: order.quotedTotal ?? 0, currency: order.currency || "GBP", notes: order.notes || "",
+    order_date: order.orderDate || null, expected_date: order.expectedDate || null,
+  };
+  const { data, error } = await supabase.from("packaging_orders").upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return mapPackOrder(data);
+}
+export async function deletePackagingOrder(orderId) {
+  // Cascade children first (no FK cascade assumed).
+  await supabase.from("packaging_payments").delete().eq("order_id", orderId);
+  await supabase.from("packaging_shipments").delete().eq("order_id", orderId);
+  await supabase.from("packaging_order_lines").delete().eq("order_id", orderId);
+  const { error } = await supabase.from("packaging_orders").delete().eq("id", orderId);
+  if (error) throw error;
+}
+
+export async function upsertPackagingLine(line) {
+  const row = {
+    id: line.id || `pol-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+    order_id: line.orderId, dist_item_id: line.distItemId || null, name: line.name || "",
+    spec: line.spec || "", qty: line.qty ?? 0, unit_price: line.unitPrice ?? 0, notes: line.notes || "",
+  };
+  const { data, error } = await supabase.from("packaging_order_lines").upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return mapPackLine(data);
+}
+export async function deletePackagingLine(id) {
+  const { error } = await supabase.from("packaging_order_lines").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function upsertPackagingShipment(ship) {
+  const row = {
+    id: ship.id || `pos-${Date.now()}`, order_id: ship.orderId, ref: ship.ref || null,
+    method: ship.method || "sea", stage: ship.stage || "at_supplier",
+    qty_json: ship.qtyByLine || {}, shipped_date: ship.shippedDate || null,
+    eta_date: ship.etaDate || null, received_date: ship.receivedDate || null,
+    received_at: ship.receivedAt || null, notes: ship.notes || "",
+  };
+  const { data, error } = await supabase.from("packaging_shipments").upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return mapPackShipment(data);
+}
+export async function deletePackagingShipment(id) {
+  const { error } = await supabase.from("packaging_shipments").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Mark a shipment received: set its stage/received_date, then post an idempotent
+// receipt movement per line into distribution inventory. Idempotency via
+// source_ref = packorder:{shipmentId}:{lineId}, so re-marking never doubles stock.
+export async function receivePackagingShipment({ shipmentId, receivedBy }) {
+  const { data: sh, error: e1 } = await supabase.from("packaging_shipments").select("*").eq("id", shipmentId).single();
+  if (e1) throw e1;
+  const { data: lines, error: e2 } = await supabase.from("packaging_order_lines").select("*").eq("order_id", sh.order_id);
+  if (e2) throw e2;
+  const qtyByLine = sh.qty_json || {};
+  const posted = [];
+  for (const line of (lines || [])) {
+    const qty = Number(qtyByLine[line.id]) || 0;
+    if (qty > 0 && line.dist_item_id) {
+      try {
+        const mv = await addDistMovement({
+          itemId: line.dist_item_id, qty, type: "receipt", sourceKind: "packaging_order",
+          sourceRef: `packorder:${shipmentId}:${line.id}`, createdBy: receivedBy || "System",
+        });
+        if (mv) posted.push({ lineId: line.id, itemId: line.dist_item_id, qty });
+      } catch (e) { /* one line failing shouldn't block the rest */ }
+    }
+  }
+  const { data, error } = await supabase.from("packaging_shipments")
+    .update({ stage: "received", received_date: new Date().toISOString().slice(0,10), received_at: new Date().toISOString() })
+    .eq("id", shipmentId).select().single();
+  if (error) throw error;
+  return { shipment: mapPackShipment(data), posted };
+}
+
+export async function addPackagingPayment(pay) {
+  const row = {
+    id: pay.id || `pop-${Date.now()}`, order_id: pay.orderId, amount: pay.amount ?? 0,
+    currency: pay.currency || "GBP", paid_date: pay.paidDate || new Date().toISOString().slice(0,10),
+    method: pay.method || "", reference: pay.reference || "", notes: pay.notes || "",
+  };
+  const { data, error } = await supabase.from("packaging_payments").insert(row).select().single();
+  if (error) throw error;
+  return mapPackPayment(data);
+}
+export async function deletePackagingPayment(id) {
+  const { error } = await supabase.from("packaging_payments").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Per-line stage rollup: for each line, how much is ordered vs allocated to
+// shipments in each stage bucket (at supplier / in transit / received).
+export function computePackLineStatus(lines, shipments) {
+  const inTransitStages = new Set(["shipped_sea", "shipped_air", "at_destination"]);
+  return (lines || []).map(line => {
+    let received = 0, inTransit = 0, atSupplier = 0, shippedTotal = 0;
+    (shipments || []).forEach(sh => {
+      const q = Number((sh.qtyByLine || {})[line.id]) || 0;
+      if (q <= 0) return;
+      if (sh.stage === "received") { received += q; shippedTotal += q; }
+      else if (inTransitStages.has(sh.stage)) { inTransit += q; shippedTotal += q; }
+      else if (sh.stage === "at_supplier") { atSupplier += q; }
+    });
+    const notYetShipped = Math.max(0, (Number(line.qty) || 0) - shippedTotal - atSupplier);
+    return { line, ordered: Number(line.qty) || 0, received, inTransit, atSupplier, notYetShipped };
+  });
+}
