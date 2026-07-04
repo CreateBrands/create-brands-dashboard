@@ -12548,3 +12548,146 @@ export async function getOrderRecordingUrl(path) {
   if (error) throw error;
   return data?.signedUrl;
 }
+
+// ── SMALLWARE / ASSET INVENTORY (SMALLWARE_V1) ───────────────────────────────
+// Per-store counted assets (crockery, cutlery, glassware, tablets, headsets…).
+// Items belong to a category and a store, carry a current + minimum stock and an
+// optional photo. Staff REPORT breakages (pending); a manager APPROVES, which
+// atomically reduces the count and logs the movement. Managers also do counts
+// (recount sets an absolute figure, logged as an adjustment).
+//   smallware_categories(id, name, sort)
+//   smallware_items(id, store_id, brand_id, category_id, name, description,
+//                   current_stock, min_stock, photo_url, archived_at)
+//   smallware_movements(id, item_id, store_id, kind, qty_delta, reason,
+//                       status, reported_by, approved_by, created_at, resolved_at)
+//     kind: "breakage" | "count" | "add" | "adjust"
+//     status: "pending" | "approved" | "rejected" (counts/adds are auto-approved)
+
+const mapSwCategory = (r) => ({ id: r.id, name: r.name, sort: r.sort ?? 0 });
+const mapSwItem = (r) => ({
+  id: r.id, storeId: r.store_id, brandId: r.brand_id, categoryId: r.category_id,
+  name: r.name, description: r.description, currentStock: Number(r.current_stock) || 0,
+  minStock: Number(r.min_stock) || 0, photoUrl: r.photo_url, archivedAt: r.archived_at,
+});
+const mapSwMovement = (r) => ({
+  id: r.id, itemId: r.item_id, storeId: r.store_id, kind: r.kind,
+  qtyDelta: Number(r.qty_delta) || 0, reason: r.reason, status: r.status,
+  reportedBy: r.reported_by, approvedBy: r.approved_by,
+  createdAt: r.created_at, resolvedAt: r.resolved_at,
+});
+
+export async function fetchSmallwareCategories() {
+  const { data, error } = await supabase.from("smallware_categories").select("*").order("sort").order("name");
+  if (error) throw error;
+  return (data || []).map(mapSwCategory);
+}
+export async function upsertSmallwareCategory(cat) {
+  const row = { id: cat.id || `swc-${Date.now()}`, name: cat.name, sort: cat.sort ?? 0 };
+  const { data, error } = await supabase.from("smallware_categories").upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return mapSwCategory(data);
+}
+export async function deleteSmallwareCategory(id) {
+  const { error } = await supabase.from("smallware_categories").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function fetchSmallwareItems(storeIds = null) {
+  let q = supabase.from("smallware_items").select("*").is("archived_at", null).order("name");
+  if (storeIds && storeIds.length) q = q.in("store_id", storeIds);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapSwItem);
+}
+export async function upsertSmallwareItem(item) {
+  const row = {
+    id: item.id || `swi-${Date.now()}`,
+    store_id: item.storeId, brand_id: item.brandId || null, category_id: item.categoryId || null,
+    name: item.name, description: item.description || "",
+    current_stock: item.currentStock ?? 0, min_stock: item.minStock ?? 0,
+    photo_url: item.photoUrl || null, archived_at: item.archivedAt || null,
+  };
+  const { data, error } = await supabase.from("smallware_items").upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return mapSwItem(data);
+}
+export async function archiveSmallwareItem(id) {
+  const { error } = await supabase.from("smallware_items").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+}
+export async function uploadSmallwarePhoto(file) {
+  const ext = (file.name && file.name.includes(".")) ? file.name.split(".").pop().toLowerCase() : "jpg";
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const { error } = await supabase.storage.from("smallware-photos").upload(filename, file, { upsert: false });
+  if (error) throw error;
+  const { data } = supabase.storage.from("smallware-photos").getPublicUrl(filename);
+  return data.publicUrl;
+}
+
+export async function fetchSmallwareMovements({ storeIds = null, status = null, itemId = null, limit = 200 } = {}) {
+  let q = supabase.from("smallware_movements").select("*").order("created_at", { ascending: false }).limit(limit);
+  if (storeIds && storeIds.length) q = q.in("store_id", storeIds);
+  if (status) q = q.eq("status", status);
+  if (itemId) q = q.eq("item_id", itemId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapSwMovement);
+}
+
+// Staff report a breakage — logged as PENDING, count unchanged until approved.
+export async function reportSmallwareBreakage({ itemId, storeId, qty, reason, reportedBy }) {
+  const n = Math.abs(Math.round(Number(qty) || 0));
+  if (!(n > 0)) throw new Error("Breakage quantity must be at least 1.");
+  const row = {
+    id: `swm-${Date.now()}`, item_id: itemId, store_id: storeId, kind: "breakage",
+    qty_delta: -n, reason: reason || "", status: "pending", reported_by: reportedBy || "Staff",
+  };
+  const { data, error } = await supabase.from("smallware_movements").insert(row).select().single();
+  if (error) throw error;
+  return mapSwMovement(data);
+}
+
+// Manager approves a pending breakage — atomically reduce the item count (never
+// below 0) and mark the movement approved. Re-reads the item to avoid races.
+export async function approveSmallwareBreakage(movementId, approvedBy) {
+  const { data: mv, error: e1 } = await supabase.from("smallware_movements").select("*").eq("id", movementId).single();
+  if (e1) throw e1;
+  if (!mv || mv.status !== "pending") throw new Error("This breakage has already been resolved.");
+  const { data: item, error: e2 } = await supabase.from("smallware_items").select("current_stock").eq("id", mv.item_id).single();
+  if (e2) throw e2;
+  const newStock = Math.max(0, (Number(item.current_stock) || 0) + Number(mv.qty_delta));
+  const { error: e3 } = await supabase.from("smallware_items").update({ current_stock: newStock }).eq("id", mv.item_id);
+  if (e3) throw e3;
+  const { data, error: e4 } = await supabase.from("smallware_movements")
+    .update({ status: "approved", approved_by: approvedBy || "Manager", resolved_at: new Date().toISOString() })
+    .eq("id", movementId).select().single();
+  if (e4) throw e4;
+  return mapSwMovement(data);
+}
+export async function rejectSmallwareBreakage(movementId, approvedBy) {
+  const { data, error } = await supabase.from("smallware_movements")
+    .update({ status: "rejected", approved_by: approvedBy || "Manager", resolved_at: new Date().toISOString() })
+    .eq("id", movementId).eq("status", "pending").select().single();
+  if (error) throw error;
+  return mapSwMovement(data);
+}
+
+// Manager sets an absolute counted figure — logs the delta as an approved
+// "count" movement and writes the new stock. This is the periodic recount.
+export async function recountSmallwareItem({ itemId, storeId, newCount, countedBy }) {
+  const n = Math.max(0, Math.round(Number(newCount) || 0));
+  const { data: item, error: e1 } = await supabase.from("smallware_items").select("current_stock").eq("id", itemId).single();
+  if (e1) throw e1;
+  const delta = n - (Number(item.current_stock) || 0);
+  const { error: e2 } = await supabase.from("smallware_items").update({ current_stock: n }).eq("id", itemId);
+  if (e2) throw e2;
+  if (delta !== 0) {
+    await supabase.from("smallware_movements").insert({
+      id: `swm-${Date.now()}`, item_id: itemId, store_id: storeId, kind: "count",
+      qty_delta: delta, reason: "Recount", status: "approved",
+      reported_by: countedBy || "Manager", approved_by: countedBy || "Manager",
+      resolved_at: new Date().toISOString(),
+    });
+  }
+  return n;
+}

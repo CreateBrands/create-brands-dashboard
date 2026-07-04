@@ -32,6 +32,9 @@ import {
   fetchMemberExpenseStores, setMemberExpenseStores,
   fetchTempLogs, insertTempLog,
   fetchDeliveries, insertDelivery,
+  fetchSmallwareCategories, upsertSmallwareCategory, deleteSmallwareCategory,
+  fetchSmallwareItems, upsertSmallwareItem, archiveSmallwareItem, uploadSmallwarePhoto,
+  fetchSmallwareMovements, reportSmallwareBreakage, approveSmallwareBreakage, rejectSmallwareBreakage, recountSmallwareItem,
   fetchChecklistStates, upsertChecklistState,
   fetchAuditTrail, insertAuditEntry, clearAuditTrail,
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
@@ -16138,6 +16141,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
     { key: "issues",         label: "Report an Issue", icon: Wrench },
+    { key: "smallware",      label: "Smallware",       icon: Package },
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Hours",        icon: Clock },
@@ -16374,6 +16378,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           {activeView === "ops-deliveries" && (
             <DeliveriesView
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} deliveries={deliveries} onAdd={onDeliveryAdd}
+            />
+          )}
+          {activeView === "smallware" && (
+            <SmallwareView
+              brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
+              opsTeam={opsTeam} currentUser={currentUser} isManagerView={false}
             />
           )}
           {activeView === "ops-network" && (
@@ -26300,6 +26310,7 @@ function checkTemp(u, v) {
 // ─── Ops shared helpers ───────────────────────────────────────────────────────
 const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none transition-colors";
 const labelCls = "text-xs text-slate-600 font-semibold mb-1.5 block";
+const selCls = inputCls; // module-level select styling (used by SmallwareView modals)
 
 function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
   return (
@@ -26331,6 +26342,308 @@ function OpsConfirmModal({ message, onConfirm, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── Smallware / Asset Inventory (SMALLWARE_V1) ───────────────────────────────
+// Per-store counted assets by category, with photos, min-stock alerts, manager
+// recounts, and a staff-report -> manager-approve breakage workflow. Loads its
+// own data on mount (like ChainPerformance) to avoid slowing the initial app load.
+function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, isManagerView }) {
+  const { user } = useAuth();
+  const allVisibleStores = useMemo(
+    () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
+    [stores, visibleStoreIds]);
+  const isHQ = isHqOrAbove(user.role);
+  const storeOpts = useMemo(() => [...allVisibleStores].sort((a,b)=>(a.shortName||a.name||"").localeCompare(b.shortName||b.name||"")), [allVisibleStores]);
+  const [storeId, setStoreId] = useState(storeOpts[0]?.id || "");
+  useEffect(() => { if (!storeId && storeOpts[0]) setStoreId(storeOpts[0].id); }, [storeOpts, storeId]);
+
+  const [cats, setCats] = useState([]);
+  const [items, setItems] = useState([]);
+  const [movements, setMovements] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState(isManagerView ? "items" : "report"); // manager: items | pending | log ; staff: report
+  const [toast, setToast] = useState(null);
+  const flash = (msg, type="ok") => { setToast({ msg, type }); setTimeout(()=>setToast(null), 2500); };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const ids = storeId ? [storeId] : storeOpts.map(s=>s.id);
+      const [c, it, mv] = await Promise.all([
+        fetchSmallwareCategories().catch(()=>[]),
+        fetchSmallwareItems(ids).catch(()=>[]),
+        fetchSmallwareMovements({ storeIds: ids, limit: 300 }).catch(()=>[]),
+      ]);
+      setCats(c); setItems(it); setMovements(mv);
+    } finally { setLoading(false); }
+  }, [storeId, storeOpts]);
+  useEffect(() => { if (storeId) load(); }, [storeId, load]);
+
+  const catName = (id) => cats.find(c=>c.id===id)?.name || "Uncategorised";
+  const pending = movements.filter(m => m.status === "pending");
+  const storeItems = items.filter(i => i.storeId === storeId);
+  const itemsByCat = useMemo(() => {
+    const map = new Map();
+    storeItems.forEach(i => { const k = i.categoryId || "_none"; if (!map.has(k)) map.set(k, []); map.get(k).push(i); });
+    return [...map.entries()].sort((a,b) => catName(a[0]).localeCompare(catName(b[0])));
+  }, [storeItems, cats]);
+
+  // ── Modals ──
+  const [itemModal, setItemModal] = useState(null);   // item being edited or {new:true}
+  const [breakModal, setBreakModal] = useState(null);  // item to report breakage on
+  const [countModal, setCountModal] = useState(null);  // item to recount
+  const [catModal, setCatModal] = useState(false);
+
+  const lowStock = storeItems.filter(i => i.currentStock <= i.minStock);
+
+  if (allVisibleStores.length === 0) {
+    return <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Package size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No stores assigned to your account.</div></div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {toast && <div className={`fixed bottom-6 right-6 z-[60] px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl ${toast.type==="error"?"bg-red-600":"bg-emerald-600"} text-white`}>{toast.msg}</div>}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <select value={storeId} onChange={e=>setStoreId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white">
+          {storeOpts.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        {isManagerView && (
+          <>
+            <div className="flex gap-1 ml-auto">
+              {[["items","Items"],["pending",`Breakages${pending.length?` (${pending.length})`:""}`],["log","Log"]].map(([k,l]) => (
+                <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+              ))}
+            </div>
+            <button onClick={()=>setCatModal(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Categories</button>
+            <button onClick={()=>setItemModal({ new:true })} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1"><Plus size={13}/> Add item</button>
+          </>
+        )}
+      </div>
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
+        <>
+          {/* Low-stock banner */}
+          {isManagerView && tab==="items" && lowStock.length > 0 && (
+            <div className="bg-amber-950/20 border border-amber-500/30 rounded-2xl p-3 text-sm text-amber-300">
+              ⚠ {lowStock.length} item{lowStock.length>1?"s":""} at or below minimum stock.
+            </div>
+          )}
+
+          {/* STAFF: report breakage (also the manager "items" grid, shared card) */}
+          {(!isManagerView || tab==="items") && (
+            itemsByCat.length === 0 ? (
+              <div className="text-center py-12 text-sm text-slate-600">{isManagerView ? 'No items yet — tap "Add item".' : "No items to report for this store yet."}</div>
+            ) : itemsByCat.map(([catId, list]) => (
+              <div key={catId}>
+                <div className="text-[11px] uppercase tracking-wider text-slate-500 font-bold mb-2">{catName(catId)}</div>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+                  {list.map(it => {
+                    const low = it.currentStock <= it.minStock;
+                    return (
+                      <div key={it.id} className={`rounded-2xl border p-3 ${low?"border-amber-500/40 bg-amber-950/10":"border-slate-800 bg-slate-900"}`}>
+                        <div className="flex gap-3">
+                          {it.photoUrl
+                            ? <img src={it.photoUrl} alt={it.name} className="w-14 h-14 rounded-xl object-cover flex-shrink-0 bg-slate-800"/>
+                            : <div className="w-14 h-14 rounded-xl bg-slate-800 flex items-center justify-center flex-shrink-0"><Package size={20} className="text-slate-600"/></div>}
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-white text-sm truncate">{it.name}</div>
+                            {it.description && <div className="text-[11px] text-slate-500 truncate">{it.description}</div>}
+                            <div className="flex items-baseline gap-2 mt-1">
+                              <span className={`text-lg font-bold ${low?"text-amber-400":"text-white"}`}>{it.currentStock}</span>
+                              <span className="text-[10px] text-slate-600">in stock · min {it.minStock}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 mt-2.5">
+                          <button onClick={()=>setBreakModal(it)} className="flex-1 py-1.5 rounded-lg bg-red-950/30 border border-red-500/30 text-red-300 text-xs font-semibold hover:bg-red-950/50">⚠ Report breakage</button>
+                          {isManagerView && <>
+                            <button onClick={()=>setCountModal(it)} className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Count</button>
+                            <button onClick={()=>setItemModal(it)} className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Edit</button>
+                          </>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+
+          {/* MANAGER: pending breakages */}
+          {isManagerView && tab==="pending" && (
+            pending.length === 0 ? <div className="text-center py-12 text-sm text-slate-600">No breakages awaiting approval.</div> : (
+              <div className="space-y-2">
+                {pending.map(m => {
+                  const it = items.find(i => i.id === m.itemId);
+                  return (
+                    <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold text-white">{it?.name || "Item"} <span className="text-red-400">{m.qtyDelta}</span></div>
+                        <div className="text-[11px] text-slate-500">{m.reason || "No reason given"} · reported by {m.reportedBy} · {new Date(m.createdAt).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                        {it && <div className="text-[10px] text-slate-600">Current {it.currentStock} → {Math.max(0, it.currentStock + m.qtyDelta)} if approved</div>}
+                      </div>
+                      <button onClick={async()=>{ try { await approveSmallwareBreakage(m.id, currentUser?.name); flash("Approved — count reduced"); load(); } catch(e){ flash(e.message,"error"); } }} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Approve</button>
+                      <button onClick={async()=>{ try { await rejectSmallwareBreakage(m.id, currentUser?.name); flash("Rejected"); load(); } catch(e){ flash(e.message,"error"); } }} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Reject</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+
+          {/* MANAGER: movement log */}
+          {isManagerView && tab==="log" && (
+            movements.length === 0 ? <div className="text-center py-12 text-sm text-slate-600">No movements recorded yet.</div> : (
+              <div className="space-y-1">
+                {movements.map(m => {
+                  const it = items.find(i => i.id === m.itemId);
+                  const kindLabel = { breakage:"Breakage", count:"Recount", add:"Added", adjust:"Adjustment" }[m.kind] || m.kind;
+                  const kindColor = m.kind==="breakage" ? "text-red-400" : m.kind==="count" ? "text-sky-400" : "text-slate-400";
+                  return (
+                    <div key={m.id} className="bg-slate-950 rounded-xl px-3 py-2 flex items-center gap-3 text-xs">
+                      <span className="font-mono text-slate-500 w-24 flex-shrink-0">{new Date(m.createdAt).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                      <span className={`font-semibold w-16 flex-shrink-0 ${kindColor}`}>{kindLabel}</span>
+                      <span className="text-slate-300 flex-1 truncate">{it?.name || "Item"}{m.reason?` · ${m.reason}`:""}</span>
+                      <span className={`font-mono font-bold flex-shrink-0 ${m.qtyDelta<0?"text-red-400":"text-emerald-400"}`}>{m.qtyDelta>0?"+":""}{m.qtyDelta}</span>
+                      <span className="text-slate-600 flex-shrink-0">{m.status==="pending"?"⏳":m.status==="approved"?"✓":"✗"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </>
+      )}
+
+      {/* ── Modals ── */}
+      {breakModal && <SmallwareBreakageModal item={breakModal} onClose={()=>setBreakModal(null)} onSubmit={async(qty,reason)=>{ try { await reportSmallwareBreakage({ itemId: breakModal.id, storeId: breakModal.storeId, qty, reason, reportedBy: currentUser?.name || "Staff" }); flash("Breakage reported — pending manager approval"); setBreakModal(null); load(); } catch(e){ flash(e.message,"error"); } }} />}
+      {countModal && <SmallwareCountModal item={countModal} onClose={()=>setCountModal(null)} onSubmit={async(n)=>{ try { await recountSmallwareItem({ itemId: countModal.id, storeId: countModal.storeId, newCount: n, countedBy: currentUser?.name }); flash("Count updated"); setCountModal(null); load(); } catch(e){ flash(e.message,"error"); } }} />}
+      {itemModal && <SmallwareItemModal item={itemModal} cats={cats} storeId={storeId} store={storeOpts.find(s=>s.id===storeId)} onClose={()=>setItemModal(null)} onSaved={()=>{ setItemModal(null); load(); flash("Saved"); }} onArchive={async(id)=>{ try { await archiveSmallwareItem(id); flash("Item removed"); setItemModal(null); load(); } catch(e){ flash(e.message,"error"); } }} />}
+      {catModal && <SmallwareCategoryModal cats={cats} onClose={()=>setCatModal(false)} onChanged={()=>{ load(); }} />}
+    </div>
+  );
+}
+
+function SmallwareBreakageModal({ item, onClose, onSubmit }) {
+  const [qty, setQty] = useState("1");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title={`Report breakage — ${item.name}`} onClose={onClose} footer={<>
+      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      <button disabled={busy || !(Number(qty)>0)} onClick={async()=>{ setBusy(true); await onSubmit(qty, reason); setBusy(false); }} className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-semibold">Report</button>
+    </>}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Current stock: <span className="text-white font-semibold">{item.currentStock}</span>. This is logged for a manager to approve — the count won't change until they do.</div>
+        <div><label className={labelCls}>How many broke?</label><input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} className={inputCls}/></div>
+        <div><label className={labelCls}>What happened? (optional)</label><textarea value={reason} onChange={e=>setReason(e.target.value)} rows={2} placeholder="e.g. dropped while clearing table 4" className={`${inputCls} resize-none`}/></div>
+      </div>
+    </Modal>
+  );
+}
+
+function SmallwareCountModal({ item, onClose, onSubmit }) {
+  const [n, setN] = useState(String(item.currentStock));
+  const [busy, setBusy] = useState(false);
+  const delta = Number(n) - item.currentStock;
+  return (
+    <Modal title={`Count — ${item.name}`} onClose={onClose} footer={<>
+      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      <button disabled={busy || n===""} onClick={async()=>{ setBusy(true); await onSubmit(n); setBusy(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save count</button>
+    </>}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Enter the actual counted quantity. This sets the stock directly and logs the difference.</div>
+        <div><label className={labelCls}>Counted quantity</label><input type="number" min="0" value={n} onChange={e=>setN(e.target.value)} className={`${inputCls} text-lg`}/></div>
+        {delta !== 0 && <div className={`text-xs font-semibold ${delta<0?"text-red-400":"text-emerald-400"}`}>{delta>0?"+":""}{delta} vs current ({item.currentStock})</div>}
+      </div>
+    </Modal>
+  );
+}
+
+function SmallwareItemModal({ item, cats, storeId, store, onClose, onSaved, onArchive }) {
+  const isNew = !!item.new;
+  const [f, setF] = useState({
+    name: item.name || "", description: item.description || "", categoryId: item.categoryId || (cats[0]?.id || ""),
+    currentStock: item.currentStock != null ? String(item.currentStock) : "0",
+    minStock: item.minStock != null ? String(item.minStock) : "0",
+    photoUrl: item.photoUrl || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const set = (k,v) => setF(s=>({...s,[k]:v}));
+  const save = async () => {
+    if (!f.name.trim()) return;
+    setBusy(true);
+    try {
+      await upsertSmallwareItem({
+        id: isNew ? undefined : item.id, storeId, brandId: store?.brandId || null,
+        categoryId: f.categoryId || null, name: f.name.trim(), description: f.description.trim(),
+        currentStock: Math.max(0, Math.round(Number(f.currentStock)||0)),
+        minStock: Math.max(0, Math.round(Number(f.minStock)||0)), photoUrl: f.photoUrl || null,
+      });
+      onSaved();
+    } catch(e) { alert(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal title={isNew ? "Add item" : `Edit — ${item.name}`} onClose={onClose} footer={<>
+      {!isNew && (confirmDel
+        ? <><span className="flex-1 text-xs text-red-400 self-center font-semibold">Remove this item?</span><button onClick={()=>setConfirmDel(false)} className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">No</button><button onClick={()=>onArchive(item.id)} className="px-3 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold">Remove</button></>
+        : <button onClick={()=>setConfirmDel(true)} className="p-2.5 rounded-xl bg-red-950/20 border border-red-500/30 text-red-400" title="Remove item"><Trash2 size={15}/></button>)}
+      {!confirmDel && <><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      <button disabled={busy || !f.name.trim()} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button></>}
+    </>}>
+      <div className="space-y-3">
+        <div className="flex gap-3 items-start">
+          {f.photoUrl ? <img src={f.photoUrl} alt="" className="w-20 h-20 rounded-xl object-cover bg-slate-800"/> : <div className="w-20 h-20 rounded-xl bg-slate-800 flex items-center justify-center"><Package size={22} className="text-slate-600"/></div>}
+          <div className="flex-1">
+            <label className={labelCls}>Photo</label>
+            <input type="file" accept="image/*" disabled={uploading} onChange={async e=>{ const file=e.target.files?.[0]; if(!file) return; setUploading(true); try { const url = await uploadSmallwarePhoto(file); set("photoUrl", url); } catch(err){ alert(err.message); } finally { setUploading(false); } }} className="text-xs text-slate-400"/>
+            {uploading && <div className="text-[10px] text-slate-500 mt-1">Uploading…</div>}
+          </div>
+        </div>
+        <div><label className={labelCls}>Item name *</label><input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Dinner plate, White" className={inputCls}/></div>
+        <div><label className={labelCls}>Description</label><input value={f.description} onChange={e=>set("description",e.target.value)} placeholder="e.g. 27cm, Churchill brand" className={inputCls}/></div>
+        <div><label className={labelCls}>Category</label>
+          <select value={f.categoryId} onChange={e=>set("categoryId",e.target.value)} className={selCls}>
+            <option value="">Uncategorised</option>
+            {cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Current stock</label><input type="number" min="0" value={f.currentStock} onChange={e=>set("currentStock",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Minimum stock</label><input type="number" min="0" value={f.minStock} onChange={e=>set("minStock",e.target.value)} className={inputCls}/></div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SmallwareCategoryModal({ cats, onClose, onChanged }) {
+  const [local, setLocal] = useState(cats);
+  const [newName, setNewName] = useState("");
+  useEffect(()=>setLocal(cats), [cats]);
+  const add = async () => { if(!newName.trim()) return; try { await upsertSmallwareCategory({ name: newName.trim(), sort: local.length }); setNewName(""); onChanged(); } catch(e){ alert(e.message); } };
+  const del = async (id) => { if(!window.confirm("Delete this category? Items keep their data but become uncategorised.")) return; try { await deleteSmallwareCategory(id); onChanged(); } catch(e){ alert(e.message); } };
+  return (
+    <Modal title="Categories" onClose={onClose} footer={<button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Done</button>}>
+      <div className="space-y-2">
+        <div className="text-xs text-slate-500">Group smallware — e.g. Crockery, Cutlery, Glassware, Tablets, Headsets.</div>
+        {local.map(c => (
+          <div key={c.id} className="flex items-center gap-2 bg-slate-950 rounded-lg px-3 py-2">
+            <span className="text-sm text-white flex-1">{c.name}</span>
+            <button onClick={()=>del(c.id)} className="text-red-400 hover:text-red-300"><Trash2 size={14}/></button>
+          </div>
+        ))}
+        <div className="flex gap-2 pt-1">
+          <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New category" className={`${inputCls} flex-1`}/>
+          <button onClick={add} className="px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">Add</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -49785,7 +50098,7 @@ export default function App() {
   // Tasks, Temperatures, Deliveries, Issues, Assignments. The old per-item nav
   // keys still work and redirect into the matching tab.
   const [opsTab, setOpsTab] = useState("ops-network");
-  const OPS_TAB_KEYS = ["ops-network", "ops-tasks", "ops-temps", "ops-deliveries", "issues", "ops-assigns"];
+  const OPS_TAB_KEYS = ["ops-network", "ops-tasks", "ops-temps", "ops-deliveries", "issues", "ops-assigns", "smallware"];
   useEffect(() => {
     if (OPS_TAB_KEYS.includes(activeView)) setOpsTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -51216,6 +51529,7 @@ export default function App() {
         { key: "operations:ops-deliveries", view: "operations", tab: "ops-deliveries", label: "Deliveries",    icon: Truck },
         { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
         { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
+        { key: "operations:smallware",      view: "operations", tab: "smallware",      label: "Smallware",     icon: Package },
       ]},
       { key: "dist-order",     label: "Order", icon: ShoppingCart, hideForCK: true },
       { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null },
@@ -51378,7 +51692,7 @@ export default function App() {
 
   const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
-    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments",
+    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments", "smallware":"Smallware",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
     admin:"Admin", comms:"Communication", announcements:"Announcements", "time-attend":"Time & Attendance",
     "employee-profile":"Employee Profile", hiring:"Hiring", team:"Team" };
@@ -51509,6 +51823,7 @@ export default function App() {
                   {effOpsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
                   {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} checklistStates={checklistStates}/>}
                   {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
+                  {effOpsTab === "smallware" && <SmallwareView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} currentUser={currentUser} isManagerView={isHqOrAbove(currentUser.role) || currentUser.role === "manager"}/>}
                 </div>
               );
             })()}
