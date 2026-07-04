@@ -11056,19 +11056,32 @@ function DistReorderReport() {
 //   • department order                  → cfg.departments order
 // Uses native HTML5 DnD (no libraries), matching the existing codebase pattern.
 // ============================================================================
+// ============================================================================
+// ORDER PAGE BUILDER — one-screen arrangement of the whole distribution order
+// page: departments → collections → items. Uses a POINTER-EVENT drag system
+// (not native HTML5 drag) so it works reliably inside scrollable panels.
+// Persists to the same model the order page reads:
+//   • item order within a collection  → dist_collection_items.sort_order
+//   • item moved between collections   → collection membership + order
+//   • collection order within a dept   → cfg.departments[].collectionIds order
+//   • department order                  → cfg.departments order
+// ============================================================================
 function DistOrderBuilderView() {
   const [collections, setCollections] = useState([]);
   const [itemsByColl, setItemsByColl] = useState({}); // collId -> [itemId] (ordered)
-  const [items, setItems] = useState([]);             // full item objects
+  const [items, setItems] = useState([]);
   const [cfg, setCfg] = useState({ departments: [], collectionOrder: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [dirty, setDirty] = useState(false);
-  // Drag state: { type: "item"|"collection"|"department", id, from }
-  const [drag, setDrag] = useState(null);
-  const [armed, setArmed] = useState(null); // "item:ID" | "coll:ID" | "dept:ID" — which handle is held
-  const [collapsed, setCollapsed] = useState({}); // collId -> true when collapsed
+  const [collapsed, setCollapsed] = useState({});
+  // Pointer-drag state.
+  const [dragging, setDragging] = useState(null); // { type, id, from, label }
+  const [dropHint, setDropHint] = useState(null);  // key of the current drop target
+  const dragRef = useRef(null);                     // live drag payload during a gesture
+  const ghostRef = useRef(null);                    // floating label element
+  const [pointer, setPointer] = useState({ x: 0, y: 0 });
 
   const itemById = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
   const collById = useMemo(() => new Map(collections.map(c => [c.id, c])), [collections]);
@@ -11085,12 +11098,10 @@ function DistOrderBuilderView() {
       setItems(data.items);
       let c = {};
       try { c = settings?.dist_order_display ? JSON.parse(settings.dist_order_display) : {}; } catch { c = {}; }
-      // Ensure every department has a collectionIds array; ensure a global order.
       const depts = (c.departments || []).map(d => ({ ...d, collectionIds: d.collectionIds || [] }));
       const globalOrder = c.collectionOrder && c.collectionOrder.length
         ? c.collectionOrder.filter(id => data.collections.some(x => x.id === id))
         : data.collections.map(x => x.id);
-      // Append any collections missing from the order.
       data.collections.forEach(x => { if (!globalOrder.includes(x.id)) globalOrder.push(x.id); });
       setCfg({ ...c, departments: depts, collectionOrder: globalOrder });
       setDirty(false);
@@ -11100,8 +11111,8 @@ function DistOrderBuilderView() {
   useEffect(() => { reload(); }, []);
 
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const markDirty = () => setDirty(true);
 
-  // ── Ordered department list; collections not in any department form a pool ──
   const deptList = cfg.departments || [];
   const assignedCollIds = useMemo(() => {
     const s = new Set();
@@ -11114,16 +11125,11 @@ function DistOrderBuilderView() {
     [cfg.collectionOrder, assignedCollIds, collById]
   );
 
-  // ── Mutators (all set dirty) ────────────────────────────────────────────────
-  const markDirty = () => setDirty(true);
-
-  // Reorder / move an ITEM. from/to are collection ids; if same, reorder.
+  // ── Mutators ────────────────────────────────────────────────────────────────
   const moveItem = (itemId, fromColl, toColl, beforeItemId) => {
     setItemsByColl(prev => {
       const next = { ...prev };
-      // remove from source
       next[fromColl] = (next[fromColl] || []).filter(x => x !== itemId);
-      // insert into target
       const target = [...(next[toColl] || [])].filter(x => x !== itemId);
       const idx = beforeItemId ? target.indexOf(beforeItemId) : target.length;
       target.splice(idx < 0 ? target.length : idx, 0, itemId);
@@ -11132,16 +11138,12 @@ function DistOrderBuilderView() {
     });
     markDirty();
   };
-
-  // Reorder a COLLECTION within a department (or the unassigned pool).
   const moveCollection = (collId, deptId, beforeCollId) => {
     setCfg(prev => {
       const next = { ...prev, departments: prev.departments.map(d => ({ ...d, collectionIds: [...(d.collectionIds || [])] })) };
-      // remove from wherever it currently is (any dept)
       next.departments.forEach(d => { d.collectionIds = d.collectionIds.filter(x => x !== collId); });
       let pool = [...(next.collectionOrder || [])];
       if (deptId === "__pool") {
-        // dropping into unassigned pool: just ensure it's in global order near target
         pool = pool.filter(x => x !== collId);
         const idx = beforeCollId ? pool.indexOf(beforeCollId) : pool.length;
         pool.splice(idx < 0 ? pool.length : idx, 0, collId);
@@ -11159,8 +11161,6 @@ function DistOrderBuilderView() {
     });
     markDirty();
   };
-
-  // Reorder a DEPARTMENT.
   const moveDepartment = (deptId, beforeDeptId) => {
     setCfg(prev => {
       const arr = [...prev.departments];
@@ -11174,51 +11174,69 @@ function DistOrderBuilderView() {
     markDirty();
   };
 
-  // ── Persist everything ──────────────────────────────────────────────────────
-  const saveAll = async () => {
-    setSaving(true); setMsg("");
-    try {
-      // 1. Item order per collection.
-      await Promise.all(Object.entries(itemsByColl).map(([collId, ids]) => setDistCollectionItems(collId, ids)));
-      // 2. Department + collection order config.
-      const globalOrder = [];
-      cfg.departments.forEach(d => (d.collectionIds || []).forEach(id => { if (!globalOrder.includes(id)) globalOrder.push(id); }));
-      (cfg.collectionOrder || []).forEach(id => { if (!globalOrder.includes(id)) globalOrder.push(id); });
-      const next = { ...cfg, collectionOrder: globalOrder };
-      await upsertAppSetting("dist_order_display", JSON.stringify(next));
-      setMsg("Saved — the order page now reflects this layout.");
-      setDirty(false);
-      setTimeout(() => setMsg(""), 3000);
-    } catch (e) { setMsg("Save failed: " + e.message); }
-    setSaving(false);
-  };
+  // ── Pointer-based drag engine ───────────────────────────────────────────────
+  // Handles set dragRef on pointerdown; a window listener tracks move/up and uses
+  // elementFromPoint to find the [data-drop] target under the cursor.
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e) => {
+      setPointer({ x: e.clientX, y: e.clientY });
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const zone = el && el.closest ? el.closest("[data-drop]") : null;
+      setDropHint(zone ? zone.getAttribute("data-drop") : null);
+    };
+    const onUp = (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const zone = el && el.closest ? el.closest("[data-drop]") : null;
+      const d = dragRef.current;
+      if (zone && d) {
+        const kind = zone.getAttribute("data-kind");     // "item" | "collection" | "department"
+        const targetId = zone.getAttribute("data-id");    // before-id or container id
+        const containerId = zone.getAttribute("data-container"); // collId or deptId or "__pool"
+        if (d.type === "item" && kind === "item") moveItem(d.id, d.from, containerId, targetId || null);
+        else if (d.type === "item" && kind === "collection-body") moveItem(d.id, d.from, containerId, null);
+        else if (d.type === "collection" && kind === "collection") moveCollection(d.id, containerId, targetId || null);
+        else if (d.type === "collection" && kind === "department-body") moveCollection(d.id, containerId, null);
+        else if (d.type === "department" && kind === "department") moveDepartment(d.id, targetId || null);
+      }
+      dragRef.current = null;
+      setDragging(null);
+      setDropHint(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+  }, [dragging]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── DnD helpers ─────────────────────────────────────────────────────────────
-  const onItemDragStart = (itemId, fromColl) => setDrag({ type: "item", id: itemId, from: fromColl });
-  const onCollDragStart = (collId) => setDrag({ type: "collection", id: collId });
-  const onDeptDragStart = (deptId) => setDrag({ type: "department", id: deptId });
-  const allowDrop = (accept) => (e) => { if (drag && drag.type === accept) e.preventDefault(); };
+  const startDrag = (payload, e) => {
+    e.preventDefault();
+    dragRef.current = payload;
+    setPointer({ x: e.clientX, y: e.clientY });
+    setDragging(payload);
+  };
 
   const C = {
-    surface: "#FBF6EC", surfaceAlt: "#F3EADA", line: "#E8DCC6",
+    surface: "#FBF6EC", surfaceAlt: "#F3EADA", line: "#E8DCC6", dropLine: "#C9854F",
     ink: "#3A2E26", inkSoft: "#6B5D4F", inkFaint: "#8A7B68", accent: "#844429", accentSoft: "#C9854F",
   };
+  const Handle = ({ onDown, size = 15, color }) => (
+    <span onPointerDown={onDown} className="flex-shrink-0 touch-none select-none" style={{ cursor: "grab" }} title="Drag to reorder">
+      <GripVertical size={size} style={{ color: color || C.inkFaint }}/>
+    </span>
+  );
 
   const ItemRow = ({ itemId, collId }) => {
     const it = itemById.get(itemId);
     if (!it) return null;
-    const isDragging = drag && drag.type === "item" && drag.id === itemId;
+    const isDragging = dragging && dragging.type === "item" && dragging.id === itemId;
+    const isHint = dropHint === `item:${collId}:${itemId}`;
     return (
       <div
-        draggable={armed === `item:${itemId}`}
-        onDragStart={(e) => { e.stopPropagation(); onItemDragStart(itemId, collId); }}
-        onDragEnd={() => { setDrag(null); setArmed(null); }}
-        onDragOver={allowDrop("item")}
-        onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "item" && drag.id !== itemId) moveItem(drag.id, drag.from, collId, itemId); setDrag(null); setArmed(null); }}
+        data-drop={`item:${collId}:${itemId}`} data-kind="item" data-id={itemId} data-container={collId}
         className="flex items-center gap-3 px-3 py-2 rounded-lg"
-        style={{ background: isDragging ? C.surfaceAlt : "transparent", border: `1px solid ${isDragging ? C.accentSoft : "transparent"}`, opacity: isDragging ? 0.5 : 1 }}
+        style={{ background: isDragging ? C.surfaceAlt : "transparent", borderTop: isHint ? `2px solid ${C.dropLine}` : "2px solid transparent", opacity: isDragging ? 0.4 : 1 }}
       >
-        <span onMouseDown={() => setArmed(`item:${itemId}`)} onMouseUp={() => setArmed(null)} className="flex-shrink-0 cursor-grab active:cursor-grabbing" title="Drag to reorder"><GripVertical size={14} style={{ color: C.inkFaint }}/></span>
+        <Handle size={14} onDown={(e) => startDrag({ type: "item", id: itemId, from: collId, label: cleanName(it.name) }, e)}/>
         <div className="w-8 h-8 rounded-md overflow-hidden flex-shrink-0 flex items-center justify-center" style={{ background: C.surfaceAlt }}>
           {it.imageUrl ? <img src={it.imageUrl} alt="" className="h-full w-full object-contain p-0.5" onError={e => { e.target.style.display = "none"; }}/> : <Package size={14} style={{ color: C.inkFaint }}/>}
         </div>
@@ -11233,20 +11251,18 @@ function DistOrderBuilderView() {
 
   const CollectionCard = ({ coll, deptId }) => {
     const ids = itemsByColl[coll.id] || [];
-    const isDragging = drag && drag.type === "collection" && drag.id === coll.id;
+    const isDragging = dragging && dragging.type === "collection" && dragging.id === coll.id;
     const isCollapsed = collapsed[coll.id];
+    const isHint = dropHint === `collection:${deptId}:${coll.id}`;
+    const bodyHint = dropHint === `collection-body:${coll.id}`;
     return (
       <div
-        draggable={armed === `coll:${coll.id}`}
-        onDragStart={(e) => { e.stopPropagation(); onCollDragStart(coll.id); }}
-        onDragEnd={() => { setDrag(null); setArmed(null); }}
-        onDragOver={allowDrop("collection")}
-        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (drag && drag.type === "collection" && drag.id !== coll.id) moveCollection(drag.id, deptId, coll.id); setDrag(null); setArmed(null); }}
+        data-drop={`collection:${deptId}:${coll.id}`} data-kind="collection" data-id={coll.id} data-container={deptId}
         className="rounded-xl"
-        style={{ background: C.surface, border: `1px solid ${isDragging ? C.accentSoft : C.line}`, opacity: isDragging ? 0.5 : 1 }}
+        style={{ background: C.surface, border: `1px solid ${isDragging ? C.accentSoft : C.line}`, borderTop: isHint ? `2px solid ${C.dropLine}` : undefined, opacity: isDragging ? 0.4 : 1 }}
       >
         <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: isCollapsed ? "none" : `1px solid ${C.line}` }}>
-          <span onMouseDown={() => setArmed(`coll:${coll.id}`)} onMouseUp={() => setArmed(null)} className="cursor-grab active:cursor-grabbing flex-shrink-0" title="Drag to reorder"><GripVertical size={15} style={{ color: C.inkFaint }}/></span>
+          <Handle size={15} onDown={(e) => startDrag({ type: "collection", id: coll.id, label: coll.name }, e)}/>
           <button onClick={() => setCollapsed(p => ({ ...p, [coll.id]: !p[coll.id] }))} className="flex-shrink-0" style={{ color: C.inkFaint }}>
             {isCollapsed ? <ChevronRight size={15}/> : <ChevronDown size={15}/>}
           </button>
@@ -11254,11 +11270,8 @@ function DistOrderBuilderView() {
           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: C.surfaceAlt, color: C.inkSoft }}>{ids.length} item{ids.length===1?"":"s"}</span>
         </div>
         {!isCollapsed && (
-          <div
-            className="p-2 space-y-0.5 min-h-[44px]"
-            onDragOver={allowDrop("item")}
-            onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "item") moveItem(drag.id, drag.from, coll.id, null); setDrag(null); }}
-          >
+          <div data-drop={`collection-body:${coll.id}`} data-kind="collection-body" data-container={coll.id}
+            className="p-2 space-y-0.5 min-h-[44px]" style={{ outline: bodyHint ? `2px dashed ${C.dropLine}` : "none", outlineOffset: "-4px", borderRadius: "10px" }}>
             {ids.length === 0 && <div className="text-[11px] text-center py-3" style={{ color: C.inkFaint }}>Drop items here</div>}
             {ids.map(id => <ItemRow key={id} itemId={id} collId={coll.id}/>)}
           </div>
@@ -11269,29 +11282,22 @@ function DistOrderBuilderView() {
 
   const DepartmentBlock = ({ dept }) => {
     const colls = orderedColls(dept.collectionIds);
-    const isDragging = drag && drag.type === "department" && drag.id === dept.id;
+    const isDragging = dragging && dragging.type === "department" && dragging.id === dept.id;
+    const isHint = dropHint === `department:${dept.id}`;
+    const bodyHint = dropHint === `department-body:${dept.id}`;
     return (
       <div
-        onDragOver={allowDrop("department")}
-        onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "department" && drag.id !== dept.id) moveDepartment(drag.id, dept.id); setDrag(null); }}
+        data-drop={`department:${dept.id}`} data-kind="department" data-id={dept.id}
         className="rounded-2xl p-3"
-        style={{ background: C.surfaceAlt, border: `1px solid ${isDragging ? C.accentSoft : C.line}`, opacity: isDragging ? 0.6 : 1 }}
+        style={{ background: C.surfaceAlt, border: `1px solid ${isDragging ? C.accentSoft : C.line}`, borderTop: isHint ? `3px solid ${C.dropLine}` : undefined, opacity: isDragging ? 0.5 : 1 }}
       >
-        <div
-          draggable={armed === `dept:${dept.id}`}
-          onDragStart={(e) => { e.stopPropagation(); onDeptDragStart(dept.id); }}
-          onDragEnd={() => { setDrag(null); setArmed(null); }}
-          className="flex items-center gap-2 mb-2.5 px-1"
-        >
-          <span onMouseDown={() => setArmed(`dept:${dept.id}`)} onMouseUp={() => setArmed(null)} className="cursor-grab active:cursor-grabbing flex-shrink-0" title="Drag to reorder department"><GripVertical size={16} style={{ color: C.accent }}/></span>
+        <div className="flex items-center gap-2 mb-2.5 px-1">
+          <Handle size={16} color={C.accent} onDown={(e) => startDrag({ type: "department", id: dept.id, label: dept.name }, e)}/>
           <span className="text-base font-black" style={{ color: C.ink }}>{dept.name}</span>
           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ background: C.surface, color: C.inkSoft, border: `1px solid ${C.line}` }}>{colls.length} collection{colls.length===1?"":"s"}</span>
         </div>
-        <div
-          className="space-y-2 min-h-[52px]"
-          onDragOver={allowDrop("collection")}
-          onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "collection") moveCollection(drag.id, dept.id, null); setDrag(null); }}
-        >
+        <div data-drop={`department-body:${dept.id}`} data-kind="department-body" data-container={dept.id}
+          className="space-y-2 min-h-[52px]" style={{ outline: bodyHint ? `2px dashed ${C.dropLine}` : "none", outlineOffset: "-4px", borderRadius: "12px" }}>
           {colls.length === 0 && <div className="text-[11px] text-center py-4 rounded-xl" style={{ color: C.inkFaint, border: `1px dashed ${C.line}` }}>Drag collections here</div>}
           {colls.map(c => <CollectionCard key={c.id} coll={c} deptId={dept.id}/>)}
         </div>
@@ -11299,10 +11305,33 @@ function DistOrderBuilderView() {
     );
   };
 
+  const saveAll = async () => {
+    setSaving(true); setMsg("");
+    try {
+      await Promise.all(Object.entries(itemsByColl).map(([collId, ids]) => setDistCollectionItems(collId, ids)));
+      const globalOrder = [];
+      cfg.departments.forEach(d => (d.collectionIds || []).forEach(id => { if (!globalOrder.includes(id)) globalOrder.push(id); }));
+      (cfg.collectionOrder || []).forEach(id => { if (!globalOrder.includes(id)) globalOrder.push(id); });
+      const next = { ...cfg, collectionOrder: globalOrder };
+      await upsertAppSetting("dist_order_display", JSON.stringify(next));
+      setMsg("Saved — the order page now reflects this layout.");
+      setDirty(false);
+      setTimeout(() => setMsg(""), 3000);
+    } catch (e) { setMsg("Save failed: " + e.message); }
+    setSaving(false);
+  };
+
   if (loading) return <div className="p-8 text-center text-sm" style={{ color: C.inkFaint }}>Loading builder…</div>;
 
   return (
-    <div className="min-h-screen" style={{ background: "#F4E9DD" }}>
+    <div className="min-h-screen" style={{ background: "#F4E9DD", userSelect: dragging ? "none" : "auto" }}>
+      {/* Floating drag ghost */}
+      {dragging && (
+        <div className="fixed z-50 pointer-events-none px-3 py-1.5 rounded-lg text-xs font-bold shadow-lg" ref={ghostRef}
+          style={{ left: pointer.x + 12, top: pointer.y + 8, background: C.accent, color: "#fff" }}>
+          {dragging.label}
+        </div>
+      )}
       {/* Header */}
       <div className="sticky top-0 z-20 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 flex-wrap" style={{ background: C.surface, borderBottom: `1px solid ${C.line}` }}>
         <div>
@@ -11318,22 +11347,16 @@ function DistOrderBuilderView() {
       </div>
 
       <div className="p-4 sm:p-6 space-y-4 pb-24">
-        <div className="text-xs" style={{ color: C.inkSoft }}>Drag the grip handles to rearrange. Items move within or between collections; collections move within or between departments; departments reorder against each other. Changes apply to the store order page after you save.</div>
+        <div className="text-xs" style={{ color: C.inkSoft }}>Press a grip handle (⋮⋮) and drag. Items move within or between collections; collections move within or between departments; departments reorder against each other. A caramel line shows where it'll drop. Save to apply to the store order page.</div>
 
-        {/* Departments */}
         <div className="space-y-4">
           {deptList.length === 0 && <div className="text-sm text-center py-8" style={{ color: C.inkFaint }}>No departments configured yet. Add them in Order Setup, then arrange here.</div>}
           {deptList.map(d => <DepartmentBlock key={d.id} dept={d}/>)}
         </div>
 
-        {/* Unassigned collections pool */}
         {unassignedColls.length > 0 && (
-          <div
-            className="rounded-2xl p-3"
-            style={{ background: "#F0E9DB", border: `1px dashed ${C.line}` }}
-            onDragOver={allowDrop("collection")}
-            onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "collection") moveCollection(drag.id, "__pool", null); setDrag(null); }}
-          >
+          <div data-drop="department-body:__pool" data-kind="department-body" data-container="__pool"
+            className="rounded-2xl p-3" style={{ background: "#F0E9DB", border: `1px dashed ${C.line}`, outline: dropHint === "department-body:__pool" ? `2px dashed ${C.dropLine}` : "none", outlineOffset: "-4px" }}>
             <div className="flex items-center gap-2 mb-2.5 px-1">
               <span className="text-base font-black" style={{ color: C.inkSoft }}>Unassigned collections</span>
               <span className="text-[11px]" style={{ color: C.inkFaint }}>not shown under any department — drag into one above</span>
@@ -11348,11 +11371,6 @@ function DistOrderBuilderView() {
   );
 }
 
-// ============================================================================
-// DISTRIBUTION — STORE ORDERING PORTAL (blind). Store users order from the
-// warehouse at their own price-list prices. No stock is ever shown.
-// Owner setup for the Distribution order page: how items are displayed
-// (default browse mode + view), plus managing Collections (curated groups).
 function DistOrderSetupView() {
   const [cfg, setCfg] = useState({ defaultBrowse: "category", defaultView: "card", categoryOrder: [], collectionOrder: [] });
   const [collections, setCollections] = useState([]);
