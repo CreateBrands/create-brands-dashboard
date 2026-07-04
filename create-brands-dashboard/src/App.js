@@ -10214,6 +10214,52 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
   );
 }
 
+function PackagingOrderEditModal({ order, onClose, onSaved }) {
+  const isNew = !order;
+  const [f, setF] = useState({
+    ref: order?.ref || "", supplier: order?.supplier || "", stage: order?.stage || "design",
+    quotedTotal: order?.quotedTotal != null ? String(order.quotedTotal) : "", currency: order?.currency || "GBP",
+    orderDate: order?.orderDate || "", expectedDate: order?.expectedDate || "", notes: order?.notes || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const set = (k,v)=>setF(s=>({...s,[k]:v}));
+  const save = async () => {
+    if (!f.supplier.trim() && !f.ref.trim()) { alert("Add a reference or supplier."); return; }
+    setBusy(true);
+    try {
+      const saved = await upsertPackagingOrder({
+        id: order?.id, ref: f.ref.trim(), supplier: f.supplier.trim(), stage: f.stage,
+        quotedTotal: Number(f.quotedTotal)||0, currency: f.currency,
+        orderDate: f.orderDate||null, expectedDate: f.expectedDate||null, notes: f.notes,
+      });
+      onSaved(saved);
+    } catch(e){ alert(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal title={isNew ? "New packaging order" : "Edit order"} onClose={onClose} footer={<>
+      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      <button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button>
+    </>}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Reference</label><input value={f.ref} onChange={e=>set("ref",e.target.value)} placeholder="e.g. PKG-2026-014" className={inputCls}/></div>
+          <div><label className={labelCls}>Stage</label><select value={f.stage} onChange={e=>set("stage",e.target.value)} className={selCls}>{PACKORDER_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
+        </div>
+        <div><label className={labelCls}>Supplier</label><input value={f.supplier} onChange={e=>set("supplier",e.target.value)} placeholder="Supplier name" className={inputCls}/></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Quoted total</label><input type="number" step="0.01" value={f.quotedTotal} onChange={e=>set("quotedTotal",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Currency</label><input value={f.currency} onChange={e=>set("currency",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Order date</label><input type="date" value={f.orderDate} onChange={e=>set("orderDate",e.target.value)} className={inputCls}/></div>
+          <div><label className={labelCls}>Expected date</label><input type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)} className={inputCls}/></div>
+        </div>
+        <div><label className={labelCls}>Notes</label><textarea value={f.notes} onChange={e=>set("notes",e.target.value)} rows={2} className={`${inputCls} resize-none`}/></div>
+      </div>
+    </Modal>
+  );
+}
+
 function PackagingOrderDetail({ orderId, currentUser, onBack }) {
   const [d, setD] = useState(null);
   const [loading, setLoading] = useState(true);
