@@ -12526,13 +12526,20 @@ function RecipeBuilder({ mode }) {
       if (c.kind === "prep" && c.subPrepId) {
         const sub = rec.preps.find(p => p.id === c.subPrepId);
         const subBatch = sub ? prepBatchCost(sub, seen) : null; // full batch cost of the sub-prep
-        const batches = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty); // default 1 whole batch
-        if (subBatch == null || isNaN(batches)) ok = false; else total += subBatch * batches;
+        const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+        // unit "batch" (or blank) = qty whole batches; any other unit (g/ml/ea) = qty in the
+        // sub-prep's yield units, costed at batchCost / yieldQty. So "250 g of waffle batter"
+        // = 250 x per-gram cost, provided waffle batter's yield is entered in g.
+        const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+        const unitCost = subBatch == null ? null
+          : (useBatch ? subBatch : (sub && sub.yieldQty ? subBatch / Number(sub.yieldQty) : null));
+        if (unitCost == null || isNaN(qty)) ok = false; else total += unitCost * qty;
       } else {
         const u = itemCost(c.itemScope, c.itemId);
         if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
       }
     });
+    seen.delete(prep.id); // path-based guard: only a true cycle (ancestor) bails, reuse across branches is fine
     return ok ? total : null;
   };
   const prepCost = (prep) => {
@@ -12872,10 +12879,15 @@ function PrepCompRow({ c, inv, preps = [], prepBatchCostById, reload }) {
   const m = new Map(); inv.store.forEach(x=>m.set("store:"+x.id,x)); inv.ck.forEach(x=>m.set("ck:"+x.id,x));
   const it = (!isPrep && c.itemScope) ? m.get(c.itemScope+":"+c.itemId) : null;
   const unit = it && it.costPerBaseUnit!=null ? Number(it.costPerBaseUnit) : null;
-  // For a sub-prep: cost = whole batch cost × number of batches (portionQty).
+  // Sub-prep cost: unit "batch"/blank = whole batches; any other unit = qty in the
+  // sub-prep's yield units at batchCost / yieldQty (matches prepBatchCost above).
+  const subPrep = isPrep && c.subPrepId ? preps.find(p => p.id === c.subPrepId) : null;
   const subBatch = isPrep && c.subPrepId && prepBatchCostById ? prepBatchCostById(c.subPrepId) : null;
+  const subUseBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+  const subUnitCost = subBatch == null ? null
+    : (subUseBatch ? subBatch : (subPrep && subPrep.yieldQty ? subBatch / Number(subPrep.yieldQty) : null));
   const cost = isPrep
-    ? (subBatch!=null ? subBatch * (c.portionQty==null||c.portionQty===""?1:Number(c.portionQty)) : null)
+    ? (subUnitCost!=null ? subUnitCost * (c.portionQty==null||c.portionQty===""?1:Number(c.portionQty)) : null)
     : ((unit!=null && c.portionQty!=null) ? unit*Number(c.portionQty) : null);
   const [f, setF] = useState({ portionQty:c.portionQty??"", unit:c.unit||"" });
   const incomplete = isPrep ? !c.subPrepId : !c.itemId;

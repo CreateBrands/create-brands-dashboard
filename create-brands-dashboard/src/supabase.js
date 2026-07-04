@@ -8988,13 +8988,35 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
   (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
   const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
   const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
-  const prepCost = (prep) => {
+  const prepCost = (prep, _seen) => {
     if (!prep) return null;
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return null; // circular reference guard
+    seen.add(prep.id);
     const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
-    if (!comps.length || !prep.yieldQty) return null;
-    let total = 0, ok = true;
-    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
-    return ok ? total / Number(prep.yieldQty) : null;
+    let out = null;
+    if (comps.length && prep.yieldQty) {
+      let total = 0, ok = true;
+      comps.forEach(c => {
+        if (c.kind === "prep" && c.subPrepId) {
+          // Nested prep: unit "batch"/blank = qty whole batches; other units (g/ml/ea) =
+          // qty in the sub-prep's yield units at its per-unit cost.
+          const sub = prepById.get(c.subPrepId);
+          const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+          const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+          const subPerUnit = sub ? prepCost(sub, seen) : null;
+          const unitCost = subPerUnit == null ? null
+            : (useBatch ? (sub.yieldQty ? subPerUnit * Number(sub.yieldQty) : null) : subPerUnit);
+          if (unitCost == null || isNaN(qty)) ok = false; else total += unitCost * qty;
+        } else {
+          const u = itemCost(c.itemScope, c.itemId);
+          if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
+        }
+      });
+      out = ok ? total / Number(prep.yieldQty) : null;
+    }
+    seen.delete(prep.id); // path-based: reuse of the same sub-prep in sibling branches is fine
+    return out;
   };
   const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
   const productCost = (productId) => {
@@ -9107,13 +9129,35 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
   (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
   const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
   const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
-  const prepCost = (prep) => {
+  const prepCost = (prep, _seen) => {
     if (!prep) return null;
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return null; // circular reference guard
+    seen.add(prep.id);
     const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
-    if (!comps.length || !prep.yieldQty) return null;
-    let total = 0, ok = true;
-    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
-    return ok ? total / Number(prep.yieldQty) : null;
+    let out = null;
+    if (comps.length && prep.yieldQty) {
+      let total = 0, ok = true;
+      comps.forEach(c => {
+        if (c.kind === "prep" && c.subPrepId) {
+          // Nested prep: unit "batch"/blank = qty whole batches; other units (g/ml/ea) =
+          // qty in the sub-prep's yield units at its per-unit cost.
+          const sub = prepById.get(c.subPrepId);
+          const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+          const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+          const subPerUnit = sub ? prepCost(sub, seen) : null;
+          const unitCost = subPerUnit == null ? null
+            : (useBatch ? (sub.yieldQty ? subPerUnit * Number(sub.yieldQty) : null) : subPerUnit);
+          if (unitCost == null || isNaN(qty)) ok = false; else total += unitCost * qty;
+        } else {
+          const u = itemCost(c.itemScope, c.itemId);
+          if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
+        }
+      });
+      out = ok ? total / Number(prep.yieldQty) : null;
+    }
+    seen.delete(prep.id); // path-based: reuse of the same sub-prep in sibling branches is fine
+    return out;
   };
   const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
   const productBaseCost = (productId) => {
@@ -9258,13 +9302,18 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
       if (c.kind === "prep" && c.subPrepId) {
         const sub = prepById.get(c.subPrepId);
         const subBatch = sub ? prepBatchCost(sub, seen) : null;
-        const batches = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
-        if (subBatch == null || isNaN(batches)) ok = false; else total += subBatch * batches;
+        const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+        // unit "batch"/blank = qty whole batches; other units = qty in yield units at batchCost/yieldQty
+        const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+        const unitCost = subBatch == null ? null
+          : (useBatch ? subBatch : (sub && sub.yieldQty ? subBatch / Number(sub.yieldQty) : null));
+        if (unitCost == null || isNaN(qty)) ok = false; else total += unitCost * qty;
       } else {
         const u = itemCost(c.itemScope, c.itemId);
         if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
       }
     });
+    seen.delete(prep.id); // path-based cycle guard: sibling reuse of a sub-prep is fine
     return ok ? total : null;
   };
   const prepCost = (prep) => {
@@ -9416,13 +9465,35 @@ export async function simulateFlipdishOrders({ storeId, from, to, limit = 1000 }
   (inv.ck || []).forEach(x => itemById.set("ck:" + x.id, x));
   const itemCost = (scope, id) => { const it = itemById.get(scope + ":" + id); return it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null; };
   const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
-  const prepCost = (prep) => {
+  const prepCost = (prep, _seen) => {
     if (!prep) return null;
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return null; // circular reference guard
+    seen.add(prep.id);
     const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
-    if (!comps.length || !prep.yieldQty) return null;
-    let total = 0, ok = true;
-    comps.forEach(c => { const u = itemCost(c.itemScope, c.itemId); if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty); });
-    return ok ? total / Number(prep.yieldQty) : null;
+    let out = null;
+    if (comps.length && prep.yieldQty) {
+      let total = 0, ok = true;
+      comps.forEach(c => {
+        if (c.kind === "prep" && c.subPrepId) {
+          // Nested prep: unit "batch"/blank = qty whole batches; other units (g/ml/ea) =
+          // qty in the sub-prep's yield units at its per-unit cost.
+          const sub = prepById.get(c.subPrepId);
+          const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+          const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+          const subPerUnit = sub ? prepCost(sub, seen) : null;
+          const unitCost = subPerUnit == null ? null
+            : (useBatch ? (sub.yieldQty ? subPerUnit * Number(sub.yieldQty) : null) : subPerUnit);
+          if (unitCost == null || isNaN(qty)) ok = false; else total += unitCost * qty;
+        } else {
+          const u = itemCost(c.itemScope, c.itemId);
+          if (u == null || c.portionQty == null) ok = false; else total += u * Number(c.portionQty);
+        }
+      });
+      out = ok ? total / Number(prep.yieldQty) : null;
+    }
+    seen.delete(prep.id); // path-based: reuse of the same sub-prep in sibling branches is fine
+    return out;
   };
   const prepCostPerUnit = (prepId) => prepCost(prepById.get(prepId));
   const productCost = (productId) => {
