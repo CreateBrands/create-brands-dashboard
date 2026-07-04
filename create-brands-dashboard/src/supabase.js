@@ -12419,3 +12419,87 @@ export async function runReconciliationAssistant_DISABLED({ from, to, createdBy 
   await logAgentMetric({ agent: "reconciliation", taskId: task?.id, metric: "gap_surfaced", value: totalGap, note: `${start}..${end} ${gaps.length} days` }).catch(() => {});
   return task;
 }
+
+// ── PRESENCE CHECKS (PRESENCE_V1) — mid-shift location verification ──────────
+// The presence-check-sweep pg_cron job randomly asks on-shift mobile staff
+// (max 2 per shift, >=90 min apart, only staff with a push subscription) to
+// confirm their location. The staff app polls fetchPendingPresenceCheck while
+// a punch is open, captures GPS once on response, and records distance to the
+// store. Results render on the punch's pay-breakdown timeline in T&A.
+const mapPresenceCheck = (r) => ({
+  id: r.id, punchId: r.punch_id, employeeId: r.employee_id, storeId: r.store_id,
+  requestedAt: r.requested_at, expiresAt: r.expires_at, respondedAt: r.responded_at,
+  latitude: r.latitude, longitude: r.longitude, accuracyM: r.accuracy_m,
+  distanceM: r.distance_m, status: r.status,
+});
+export async function fetchPendingPresenceCheck(employeeId) {
+  if (!employeeId) return null;
+  const { data, error } = await supabase.from("presence_checks").select("*")
+    .eq("employee_id", employeeId).eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .order("requested_at", { ascending: false }).limit(1);
+  if (error) throw error;
+  const r = (data || [])[0];
+  return r ? mapPresenceCheck(r) : null;
+}
+export async function fetchPresenceChecks(punchId) {
+  if (!punchId) return [];
+  const { data, error } = await supabase.from("presence_checks").select("*")
+    .eq("punch_id", punchId).order("requested_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(mapPresenceCheck);
+}
+export async function respondPresenceCheck({ id, latitude, longitude, accuracyM, distanceM, status }) {
+  const { error } = await supabase.from("presence_checks").update({
+    responded_at: new Date().toISOString(),
+    latitude: latitude ?? null, longitude: longitude ?? null,
+    accuracy_m: accuracyM ?? null, distance_m: distanceM ?? null,
+    status: status || "ok",
+  }).eq("id", id).eq("status", "pending");
+  if (error) throw error;
+}
+
+// Manager-triggered location check (on-demand "where are you now?"). Inserts a
+// pending check + a notification row — the notification webhook pushes it to
+// the employee's phone; their response lands on the same presence_checks row.
+export async function requestPresenceCheck({ punchId, employeeId, storeId }) {
+  if (!punchId || !employeeId) throw new Error("Missing punch or employee.");
+  const { error } = await supabase.from("presence_checks").insert({
+    punch_id: punchId, employee_id: employeeId, store_id: storeId || null,
+    expires_at: new Date(Date.now() + 10 * 60000).toISOString(),
+  });
+  if (error) throw error;
+  await insertNotifications([{
+    recipientType: "ops", recipientId: employeeId, kind: "presence",
+    title: "Location check 📍",
+    body: "Please open the app and confirm your location within 10 minutes.",
+    linkView: "ops-tasks",
+  }]);
+}
+
+// ── VEHICLE TRACKING (DRIVER_TRACK_V1) — shift-bounded breadcrumbs ────────────
+// Company-device Driver Mode streams positions ONLY while a punch is open
+// (contractual, disclosed tracking of company vehicles). Rows carry the punch
+// id so the trail is auditable per shift; a nightly cron purges old rows
+// (data minimisation). Drivers are identified by department containing
+// "driver" or "delivery".
+const mapVehiclePos = (r) => ({
+  id: r.id, punchId: r.punch_id, employeeId: r.employee_id, storeId: r.store_id,
+  latitude: r.latitude, longitude: r.longitude, accuracyM: r.accuracy_m,
+  speedMps: r.speed_mps, recordedAt: r.recorded_at,
+});
+export async function insertVehiclePosition({ punchId, employeeId, storeId, latitude, longitude, accuracyM, speedMps }) {
+  if (!punchId || latitude == null || longitude == null) return;
+  const { error } = await supabase.from("vehicle_positions").insert({
+    punch_id: punchId, employee_id: employeeId || null, store_id: storeId || null,
+    latitude, longitude, accuracy_m: accuracyM ?? null, speed_mps: speedMps ?? null,
+  });
+  if (error) throw error;
+}
+export async function fetchVehicleTrail(punchId, { limit = 500 } = {}) {
+  if (!punchId) return [];
+  const { data, error } = await supabase.from("vehicle_positions").select("*")
+    .eq("punch_id", punchId).order("recorded_at", { ascending: true }).limit(limit);
+  if (error) throw error;
+  return (data || []).map(mapVehiclePos);
+}
