@@ -16141,7 +16141,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
     { key: "issues",         label: "Report an Issue", icon: Wrench },
-    { key: "smallware",      label: "Smallware",       icon: Package },
+    { key: "smallware",      label: "Assets",          icon: Package },
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Hours",        icon: Clock },
@@ -26345,16 +26345,16 @@ function OpsConfirmModal({ message, onConfirm, onClose }) {
   );
 }
 
-// ─── Smallware / Asset Inventory (SMALLWARE_V1) ───────────────────────────────
-// Per-store counted assets by category, with photos, min-stock alerts, manager
-// recounts, and a staff-report -> manager-approve breakage workflow. Loads its
-// own data on mount (like ChainPerformance) to avoid slowing the initial app load.
+// ─── Assets / Smallware Inventory (ASSETS_V2) ─────────────────────────────────
+// Per-store counted assets in a 2-level taxonomy: Category (e.g. Smallware) ->
+// Subcategory (e.g. Crockery) -> Item (e.g. Dinner plate). Photos, min-stock
+// alerts, a bulk weekly-count screen, and a staff-report -> manager-approve
+// breakage workflow. Loads its own data on mount.
 function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, isManagerView }) {
   const { user } = useAuth();
   const allVisibleStores = useMemo(
     () => (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt),
     [stores, visibleStoreIds]);
-  const isHQ = isHqOrAbove(user.role);
   const storeOpts = useMemo(() => [...allVisibleStores].sort((a,b)=>(a.shortName||a.name||"").localeCompare(b.shortName||b.name||"")), [allVisibleStores]);
   const [storeId, setStoreId] = useState(storeOpts[0]?.id || "");
   useEffect(() => { if (!storeId && storeOpts[0]) setStoreId(storeOpts[0].id); }, [storeOpts, storeId]);
@@ -26363,7 +26363,8 @@ function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, 
   const [items, setItems] = useState([]);
   const [movements, setMovements] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState(isManagerView ? "items" : "report"); // manager: items | pending | log ; staff: report
+  // Manager tabs: items | count | pending | log. Staff only ever see the item grid.
+  const [tab, setTab] = useState("items");
   const [toast, setToast] = useState(null);
   const flash = (msg, type="ok") => { setToast({ msg, type }); setTimeout(()=>setToast(null), 2500); };
 
@@ -26381,26 +26382,70 @@ function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, 
   }, [storeId, storeOpts]);
   useEffect(() => { if (storeId) load(); }, [storeId, load]);
 
-  const catName = (id) => cats.find(c=>c.id===id)?.name || "Uncategorised";
+  // Taxonomy helpers. A category with no parent is a top-level Category; one
+  // with a parentId is a Subcategory. Items reference a subcategory (categoryId).
+  const topCats = useMemo(() => cats.filter(c => !c.parentId).sort((a,b)=>a.sort-b.sort || a.name.localeCompare(b.name)), [cats]);
+  const subsOf = (parentId) => cats.filter(c => c.parentId === parentId).sort((a,b)=>a.sort-b.sort || a.name.localeCompare(b.name));
+  const catById = (id) => cats.find(c => c.id === id) || null;
+  const subLabel = (subId) => { const sub = catById(subId); if (!sub) return "Uncategorised"; const parent = sub.parentId ? catById(sub.parentId) : null; return parent ? `${parent.name} · ${sub.name}` : sub.name; };
+
   const pending = movements.filter(m => m.status === "pending");
   const storeItems = items.filter(i => i.storeId === storeId);
-  const itemsByCat = useMemo(() => {
-    const map = new Map();
-    storeItems.forEach(i => { const k = i.categoryId || "_none"; if (!map.has(k)) map.set(k, []); map.get(k).push(i); });
-    return [...map.entries()].sort((a,b) => catName(a[0]).localeCompare(catName(b[0])));
-  }, [storeItems, cats]);
-
-  // ── Modals ──
-  const [itemModal, setItemModal] = useState(null);   // item being edited or {new:true}
-  const [breakModal, setBreakModal] = useState(null);  // item to report breakage on
-  const [countModal, setCountModal] = useState(null);  // item to recount
-  const [catModal, setCatModal] = useState(false);
-
   const lowStock = storeItems.filter(i => i.currentStock <= i.minStock);
+
+  // Group store items under Category -> Subcategory for the grid.
+  const grouped = useMemo(() => {
+    const out = [];
+    topCats.forEach(top => {
+      const subs = subsOf(top.id);
+      const subGroups = [];
+      subs.forEach(sub => {
+        const list = storeItems.filter(i => i.categoryId === sub.id);
+        if (list.length) subGroups.push({ sub, list });
+      });
+      if (subGroups.length) out.push({ top, subGroups });
+    });
+    // Items whose subcategory is missing/orphaned.
+    const known = new Set(cats.map(c=>c.id));
+    const orphan = storeItems.filter(i => !i.categoryId || !known.has(i.categoryId));
+    if (orphan.length) out.push({ top: { id:"_none", name:"Uncategorised" }, subGroups:[{ sub:{ id:"_none", name:"" }, list: orphan }] });
+    return out;
+  }, [topCats, cats, storeItems]);
+
+  const [itemModal, setItemModal] = useState(null);
+  const [breakModal, setBreakModal] = useState(null);
+  const [catModal, setCatModal] = useState(false);
 
   if (allVisibleStores.length === 0) {
     return <div className="flex flex-col items-center justify-center py-16 text-slate-500"><Package size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No stores assigned to your account.</div></div>;
   }
+
+  const ItemCard = ({ it }) => {
+    const low = it.currentStock <= it.minStock;
+    return (
+      <div className={`rounded-2xl border p-3 ${low?"border-amber-500/40 bg-amber-950/10":"border-slate-800 bg-slate-900"}`}>
+        <div className="flex gap-3">
+          {it.photoUrl
+            ? <img src={it.photoUrl} alt={it.name} className="w-14 h-14 rounded-xl object-cover flex-shrink-0 bg-slate-800"/>
+            : <div className="w-14 h-14 rounded-xl bg-slate-800 flex items-center justify-center flex-shrink-0"><Package size={20} className="text-slate-600"/></div>}
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-white text-sm truncate">{it.name}</div>
+            {it.description && <div className="text-[11px] text-slate-500 truncate">{it.description}</div>}
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className={`text-lg font-bold ${low?"text-amber-400":"text-white"}`}>{it.currentStock}</span>
+              <span className="text-[10px] text-slate-600">in stock · min {it.minStock}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-2.5">
+          <button onClick={()=>setBreakModal(it)} className="flex-1 py-1.5 rounded-lg bg-red-950/30 border border-red-500/30 text-red-300 text-xs font-semibold hover:bg-red-950/50">⚠ Report breakage</button>
+          {isManagerView && <button onClick={()=>setItemModal(it)} className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Edit</button>}
+        </div>
+      </div>
+    );
+  };
+
+  const showGrid = !isManagerView || tab === "items";
 
   return (
     <div className="space-y-4">
@@ -26412,8 +26457,8 @@ function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, 
         </select>
         {isManagerView && (
           <>
-            <div className="flex gap-1 ml-auto">
-              {[["items","Items"],["pending",`Breakages${pending.length?` (${pending.length})`:""}`],["log","Log"]].map(([k,l]) => (
+            <div className="flex gap-1 ml-auto flex-wrap">
+              {[["items","Items"],["count","Weekly Count"],["pending",`Breakages${pending.length?` (${pending.length})`:""}`],["log","Log"]].map(([k,l]) => (
                 <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
               ))}
             </div>
@@ -26423,56 +26468,41 @@ function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, 
         )}
       </div>
 
+      {!isManagerView && <div className="text-xs text-slate-500">Tap <span className="text-red-300 font-semibold">Report breakage</span> on any item. A manager approves it before the count changes.</div>}
+
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : (
         <>
-          {/* Low-stock banner */}
           {isManagerView && tab==="items" && lowStock.length > 0 && (
-            <div className="bg-amber-950/20 border border-amber-500/30 rounded-2xl p-3 text-sm text-amber-300">
-              ⚠ {lowStock.length} item{lowStock.length>1?"s":""} at or below minimum stock.
-            </div>
+            <div className="bg-amber-950/20 border border-amber-500/30 rounded-2xl p-3 text-sm text-amber-300">⚠ {lowStock.length} item{lowStock.length>1?"s":""} at or below minimum stock.</div>
           )}
 
-          {/* STAFF: report breakage (also the manager "items" grid, shared card) */}
-          {(!isManagerView || tab==="items") && (
-            itemsByCat.length === 0 ? (
+          {/* ITEM GRID (staff always; manager on Items tab) — Category -> Subcategory */}
+          {showGrid && (
+            grouped.length === 0 ? (
               <div className="text-center py-12 text-sm text-slate-600">{isManagerView ? 'No items yet — tap "Add item".' : "No items to report for this store yet."}</div>
-            ) : itemsByCat.map(([catId, list]) => (
-              <div key={catId}>
-                <div className="text-[11px] uppercase tracking-wider text-slate-500 font-bold mb-2">{catName(catId)}</div>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-                  {list.map(it => {
-                    const low = it.currentStock <= it.minStock;
-                    return (
-                      <div key={it.id} className={`rounded-2xl border p-3 ${low?"border-amber-500/40 bg-amber-950/10":"border-slate-800 bg-slate-900"}`}>
-                        <div className="flex gap-3">
-                          {it.photoUrl
-                            ? <img src={it.photoUrl} alt={it.name} className="w-14 h-14 rounded-xl object-cover flex-shrink-0 bg-slate-800"/>
-                            : <div className="w-14 h-14 rounded-xl bg-slate-800 flex items-center justify-center flex-shrink-0"><Package size={20} className="text-slate-600"/></div>}
-                          <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-white text-sm truncate">{it.name}</div>
-                            {it.description && <div className="text-[11px] text-slate-500 truncate">{it.description}</div>}
-                            <div className="flex items-baseline gap-2 mt-1">
-                              <span className={`text-lg font-bold ${low?"text-amber-400":"text-white"}`}>{it.currentStock}</span>
-                              <span className="text-[10px] text-slate-600">in stock · min {it.minStock}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex gap-2 mt-2.5">
-                          <button onClick={()=>setBreakModal(it)} className="flex-1 py-1.5 rounded-lg bg-red-950/30 border border-red-500/30 text-red-300 text-xs font-semibold hover:bg-red-950/50">⚠ Report breakage</button>
-                          {isManagerView && <>
-                            <button onClick={()=>setCountModal(it)} className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Count</button>
-                            <button onClick={()=>setItemModal(it)} className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Edit</button>
-                          </>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+            ) : grouped.map(({ top, subGroups }) => (
+              <div key={top.id} className="space-y-3">
+                <div className="text-sm font-black text-white border-b border-slate-800 pb-1">{top.name}</div>
+                {subGroups.map(({ sub, list }) => (
+                  <div key={sub.id}>
+                    {sub.name && <div className="text-[11px] uppercase tracking-wider text-slate-500 font-bold mb-2">{sub.name}</div>}
+                    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
+                      {list.map(it => <ItemCard key={it.id} it={it}/>)}
+                    </div>
+                  </div>
+                ))}
               </div>
             ))
           )}
 
-          {/* MANAGER: pending breakages */}
+          {/* WEEKLY COUNT — bulk edit every item's count in one screen */}
+          {isManagerView && tab==="count" && (
+            <SmallwareBulkCount items={storeItems} subLabel={subLabel} storeId={storeId}
+              countedBy={currentUser?.name}
+              onDone={(n)=>{ flash(`Count saved — ${n} item${n===1?"":"s"} updated`); load(); }} />
+          )}
+
+          {/* PENDING BREAKAGES */}
           {isManagerView && tab==="pending" && (
             pending.length === 0 ? <div className="text-center py-12 text-sm text-slate-600">No breakages awaiting approval.</div> : (
               <div className="space-y-2">
@@ -26494,7 +26524,7 @@ function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, 
             )
           )}
 
-          {/* MANAGER: movement log */}
+          {/* MOVEMENT LOG */}
           {isManagerView && tab==="log" && (
             movements.length === 0 ? <div className="text-center py-12 text-sm text-slate-600">No movements recorded yet.</div> : (
               <div className="space-y-1">
@@ -26518,11 +26548,66 @@ function SmallwareView({ brands, stores, visibleStoreIds, opsTeam, currentUser, 
         </>
       )}
 
-      {/* ── Modals ── */}
       {breakModal && <SmallwareBreakageModal item={breakModal} onClose={()=>setBreakModal(null)} onSubmit={async(qty,reason)=>{ try { await reportSmallwareBreakage({ itemId: breakModal.id, storeId: breakModal.storeId, qty, reason, reportedBy: currentUser?.name || "Staff" }); flash("Breakage reported — pending manager approval"); setBreakModal(null); load(); } catch(e){ flash(e.message,"error"); } }} />}
-      {countModal && <SmallwareCountModal item={countModal} onClose={()=>setCountModal(null)} onSubmit={async(n)=>{ try { await recountSmallwareItem({ itemId: countModal.id, storeId: countModal.storeId, newCount: n, countedBy: currentUser?.name }); flash("Count updated"); setCountModal(null); load(); } catch(e){ flash(e.message,"error"); } }} />}
       {itemModal && <SmallwareItemModal item={itemModal} cats={cats} storeId={storeId} store={storeOpts.find(s=>s.id===storeId)} onClose={()=>setItemModal(null)} onSaved={()=>{ setItemModal(null); load(); flash("Saved"); }} onArchive={async(id)=>{ try { await archiveSmallwareItem(id); flash("Item removed"); setItemModal(null); load(); } catch(e){ flash(e.message,"error"); } }} />}
       {catModal && <SmallwareCategoryModal cats={cats} onClose={()=>setCatModal(false)} onChanged={()=>{ load(); }} />}
+    </div>
+  );
+}
+
+// Bulk weekly count — every item in one list with an inline number field; one
+// Save writes all changed counts (each logged as a "count" movement).
+function SmallwareBulkCount({ items, subLabel, storeId, countedBy, onDone }) {
+  const [vals, setVals] = useState(() => Object.fromEntries(items.map(i => [i.id, String(i.currentStock)])));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setVals(Object.fromEntries(items.map(i => [i.id, String(i.currentStock)]))); }, [items]);
+  const changed = items.filter(i => { const v = vals[i.id]; return v !== "" && Math.round(Number(v)) !== i.currentStock; });
+  const saveAll = async () => {
+    setBusy(true);
+    let n = 0;
+    try {
+      for (const i of changed) {
+        await recountSmallwareItem({ itemId: i.id, storeId, newCount: vals[i.id], countedBy });
+        n++;
+      }
+      onDone(n);
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  // Group by subcategory label for readability.
+  const groups = useMemo(() => {
+    const m = new Map();
+    items.forEach(i => { const k = subLabel(i.categoryId); if (!m.has(k)) m.set(k, []); m.get(k).push(i); });
+    return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
+  }, [items, subLabel]);
+  if (!items.length) return <div className="text-center py-12 text-sm text-slate-600">No items to count for this store.</div>;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3">
+        <div className="text-sm text-slate-400">Enter the counted quantity for each item, then save once. Blank rows are skipped.</div>
+        <button disabled={busy || changed.length===0} onClick={saveAll} className="ml-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-semibold flex-shrink-0">{busy ? "Saving…" : `Save ${changed.length||""} count${changed.length===1?"":"s"}`}</button>
+      </div>
+      {groups.map(([label, list]) => (
+        <div key={label}>
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">{label}</div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl divide-y divide-slate-800/60 overflow-hidden">
+            {list.map(i => {
+              const v = vals[i.id];
+              const diff = v !== "" ? Math.round(Number(v)) - i.currentStock : 0;
+              return (
+                <div key={i.id} className="flex items-center gap-3 px-3 py-2">
+                  {i.photoUrl ? <img src={i.photoUrl} alt="" className="w-9 h-9 rounded-lg object-cover bg-slate-800 flex-shrink-0"/> : <div className="w-9 h-9 rounded-lg bg-slate-800 flex items-center justify-center flex-shrink-0"><Package size={14} className="text-slate-600"/></div>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm text-white truncate">{i.name}</div>
+                    <div className="text-[10px] text-slate-600">was {i.currentStock} · min {i.minStock}</div>
+                  </div>
+                  {diff !== 0 && <span className={`text-xs font-mono font-bold flex-shrink-0 ${diff<0?"text-red-400":"text-emerald-400"}`}>{diff>0?"+":""}{diff}</span>}
+                  <input type="number" min="0" value={v} onChange={e=>setVals(s=>({...s,[i.id]:e.target.value}))} className="w-20 px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-center flex-shrink-0"/>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -26545,28 +26630,15 @@ function SmallwareBreakageModal({ item, onClose, onSubmit }) {
   );
 }
 
-function SmallwareCountModal({ item, onClose, onSubmit }) {
-  const [n, setN] = useState(String(item.currentStock));
-  const [busy, setBusy] = useState(false);
-  const delta = Number(n) - item.currentStock;
-  return (
-    <Modal title={`Count — ${item.name}`} onClose={onClose} footer={<>
-      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
-      <button disabled={busy || n===""} onClick={async()=>{ setBusy(true); await onSubmit(n); setBusy(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save count</button>
-    </>}>
-      <div className="space-y-3">
-        <div className="text-xs text-slate-500">Enter the actual counted quantity. This sets the stock directly and logs the difference.</div>
-        <div><label className={labelCls}>Counted quantity</label><input type="number" min="0" value={n} onChange={e=>setN(e.target.value)} className={`${inputCls} text-lg`}/></div>
-        {delta !== 0 && <div className={`text-xs font-semibold ${delta<0?"text-red-400":"text-emerald-400"}`}>{delta>0?"+":""}{delta} vs current ({item.currentStock})</div>}
-      </div>
-    </Modal>
-  );
-}
-
 function SmallwareItemModal({ item, cats, storeId, store, onClose, onSaved, onArchive }) {
   const isNew = !!item.new;
+  const tops = cats.filter(c => !c.parentId);
+  const subsOf = (pid) => cats.filter(c => c.parentId === pid);
+  // Resolve the current subcategory's parent so both selects preselect correctly.
+  const curSub = cats.find(c => c.id === item.categoryId);
+  const [topId, setTopId] = useState(curSub?.parentId || tops[0]?.id || "");
   const [f, setF] = useState({
-    name: item.name || "", description: item.description || "", categoryId: item.categoryId || (cats[0]?.id || ""),
+    name: item.name || "", description: item.description || "", categoryId: item.categoryId || "",
     currentStock: item.currentStock != null ? String(item.currentStock) : "0",
     minStock: item.minStock != null ? String(item.minStock) : "0",
     photoUrl: item.photoUrl || "",
@@ -26575,6 +26647,9 @@ function SmallwareItemModal({ item, cats, storeId, store, onClose, onSaved, onAr
   const [uploading, setUploading] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k,v) => setF(s=>({...s,[k]:v}));
+  const subs = subsOf(topId);
+  // Keep the subcategory valid when the top category changes.
+  useEffect(() => { if (f.categoryId && !subs.some(s=>s.id===f.categoryId)) set("categoryId", subs[0]?.id || ""); }, [topId]); // eslint-disable-line
   const save = async () => {
     if (!f.name.trim()) return;
     setBusy(true);
@@ -26607,11 +26682,19 @@ function SmallwareItemModal({ item, cats, storeId, store, onClose, onSaved, onAr
         </div>
         <div><label className={labelCls}>Item name *</label><input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Dinner plate, White" className={inputCls}/></div>
         <div><label className={labelCls}>Description</label><input value={f.description} onChange={e=>set("description",e.target.value)} placeholder="e.g. 27cm, Churchill brand" className={inputCls}/></div>
-        <div><label className={labelCls}>Category</label>
-          <select value={f.categoryId} onChange={e=>set("categoryId",e.target.value)} className={selCls}>
-            <option value="">Uncategorised</option>
-            {cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={labelCls}>Category</label>
+            <select value={topId} onChange={e=>setTopId(e.target.value)} className={selCls}>
+              {tops.length===0 && <option value="">— none —</option>}
+              {tops.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div><label className={labelCls}>Subcategory</label>
+            <select value={f.categoryId} onChange={e=>set("categoryId",e.target.value)} className={selCls}>
+              <option value="">— none —</option>
+              {subs.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className={labelCls}>Current stock</label><input type="number" min="0" value={f.currentStock} onChange={e=>set("currentStock",e.target.value)} className={inputCls}/></div>
@@ -26622,25 +26705,42 @@ function SmallwareItemModal({ item, cats, storeId, store, onClose, onSaved, onAr
   );
 }
 
+// Two-level category manager: top-level Categories, each with Subcategories.
 function SmallwareCategoryModal({ cats, onClose, onChanged }) {
-  const [local, setLocal] = useState(cats);
-  const [newName, setNewName] = useState("");
-  useEffect(()=>setLocal(cats), [cats]);
-  const add = async () => { if(!newName.trim()) return; try { await upsertSmallwareCategory({ name: newName.trim(), sort: local.length }); setNewName(""); onChanged(); } catch(e){ alert(e.message); } };
-  const del = async (id) => { if(!window.confirm("Delete this category? Items keep their data but become uncategorised.")) return; try { await deleteSmallwareCategory(id); onChanged(); } catch(e){ alert(e.message); } };
+  const [newTop, setNewTop] = useState("");
+  const [newSub, setNewSub] = useState({}); // parentId -> name
+  const tops = cats.filter(c => !c.parentId).sort((a,b)=>a.sort-b.sort||a.name.localeCompare(b.name));
+  const subsOf = (pid) => cats.filter(c => c.parentId === pid).sort((a,b)=>a.sort-b.sort||a.name.localeCompare(b.name));
+  const addTop = async () => { if(!newTop.trim()) return; try { await upsertSmallwareCategory({ name:newTop.trim(), sort:tops.length, parentId:null }); setNewTop(""); onChanged(); } catch(e){ alert(e.message); } };
+  const addSub = async (pid) => { const nm=(newSub[pid]||"").trim(); if(!nm) return; try { await upsertSmallwareCategory({ name:nm, sort:subsOf(pid).length, parentId:pid }); setNewSub(s=>({...s,[pid]:""})); onChanged(); } catch(e){ alert(e.message); } };
+  const del = async (c) => { const kids = subsOf(c.id).length; if(!window.confirm(kids?`Delete "${c.name}" and detach its ${kids} subcategor${kids===1?"y":"ies"}? Items become uncategorised.`:`Delete "${c.name}"? Items in it become uncategorised.`)) return; try { await deleteSmallwareCategory(c.id); onChanged(); } catch(e){ alert(e.message); } };
   return (
-    <Modal title="Categories" onClose={onClose} footer={<button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Done</button>}>
-      <div className="space-y-2">
-        <div className="text-xs text-slate-500">Group smallware — e.g. Crockery, Cutlery, Glassware, Tablets, Headsets.</div>
-        {local.map(c => (
-          <div key={c.id} className="flex items-center gap-2 bg-slate-950 rounded-lg px-3 py-2">
-            <span className="text-sm text-white flex-1">{c.name}</span>
-            <button onClick={()=>del(c.id)} className="text-red-400 hover:text-red-300"><Trash2 size={14}/></button>
+    <Modal title="Categories" onClose={onClose} maxW="max-w-xl" footer={<button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold">Done</button>}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Two levels: a <span className="text-white">Category</span> (e.g. Smallware) holds <span className="text-white">Subcategories</span> (e.g. Crockery, Cutlery), and items sit under a subcategory.</div>
+        {tops.map(top => (
+          <div key={top.id} className="bg-slate-950 rounded-xl p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-white flex-1">{top.name}</span>
+              <button onClick={()=>del(top)} className="text-red-400 hover:text-red-300"><Trash2 size={14}/></button>
+            </div>
+            <div className="pl-3 space-y-1">
+              {subsOf(top.id).map(sub => (
+                <div key={sub.id} className="flex items-center gap-2">
+                  <span className="text-sm text-slate-300 flex-1">{sub.name}</span>
+                  <button onClick={()=>del(sub)} className="text-red-400/70 hover:text-red-300"><Trash2 size={12}/></button>
+                </div>
+              ))}
+              <div className="flex gap-2 pt-1">
+                <input value={newSub[top.id]||""} onChange={e=>setNewSub(s=>({...s,[top.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSub(top.id)} placeholder="Add subcategory" className={`${inputCls} flex-1 text-sm`}/>
+                <button onClick={()=>addSub(top.id)} className="px-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold">Add</button>
+              </div>
+            </div>
           </div>
         ))}
         <div className="flex gap-2 pt-1">
-          <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New category" className={`${inputCls} flex-1`}/>
-          <button onClick={add} className="px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">Add</button>
+          <input value={newTop} onChange={e=>setNewTop(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTop()} placeholder="New category (e.g. Smallware, Electronics)" className={`${inputCls} flex-1`}/>
+          <button onClick={addTop} className="px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">Add</button>
         </div>
       </div>
     </Modal>
@@ -51529,7 +51629,7 @@ export default function App() {
         { key: "operations:ops-deliveries", view: "operations", tab: "ops-deliveries", label: "Deliveries",    icon: Truck },
         { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
         { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
-        { key: "operations:smallware",      view: "operations", tab: "smallware",      label: "Smallware",     icon: Package },
+        { key: "operations:smallware",      view: "operations", tab: "smallware",      label: "Assets",        icon: Package },
       ]},
       { key: "dist-order",     label: "Order", icon: ShoppingCart, hideForCK: true },
       { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null },
@@ -51692,7 +51792,7 @@ export default function App() {
 
   const titles = { dashboard:"Executive Dashboard", chain:"Chain Performance", tactical:"Performance", eod:"EOD Report",
     issues:"Issues", "ops-network":"Ops Overview", "ops-tasks":"Today's Tasks",
-    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments", "smallware":"Smallware",
+    "ops-temps":"Temperature Log", "ops-deliveries":"Deliveries", "ops-assigns":"Assignments", "smallware":"Assets",
     "ops-compliance":"Compliance", "ops-audit":"Audit Trail", "ops-settings":"Ops Setup",
     admin:"Admin", comms:"Communication", announcements:"Announcements", "time-attend":"Time & Attendance",
     "employee-profile":"Employee Profile", hiring:"Hiring", team:"Team" };

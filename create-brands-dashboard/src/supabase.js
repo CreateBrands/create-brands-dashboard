@@ -12563,7 +12563,7 @@ export async function getOrderRecordingUrl(path) {
 //     kind: "breakage" | "count" | "add" | "adjust"
 //     status: "pending" | "approved" | "rejected" (counts/adds are auto-approved)
 
-const mapSwCategory = (r) => ({ id: r.id, name: r.name, sort: r.sort ?? 0 });
+const mapSwCategory = (r) => ({ id: r.id, name: r.name, sort: r.sort ?? 0, parentId: r.parent_id || null });
 const mapSwItem = (r) => ({
   id: r.id, storeId: r.store_id, brandId: r.brand_id, categoryId: r.category_id,
   name: r.name, description: r.description, currentStock: Number(r.current_stock) || 0,
@@ -12582,7 +12582,7 @@ export async function fetchSmallwareCategories() {
   return (data || []).map(mapSwCategory);
 }
 export async function upsertSmallwareCategory(cat) {
-  const row = { id: cat.id || `swc-${Date.now()}`, name: cat.name, sort: cat.sort ?? 0 };
+  const row = { id: cat.id || `swc-${Date.now()}`, name: cat.name, sort: cat.sort ?? 0, parent_id: cat.parentId || null };
   const { data, error } = await supabase.from("smallware_categories").upsert(row, { onConflict: "id" }).select().single();
   if (error) throw error;
   return mapSwCategory(data);
