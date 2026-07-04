@@ -538,8 +538,19 @@ function managersAsRoster(users, opsTeam = []) {
 function fmtDateLocal(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
+// ── Business day ──────────────────────────────────────────────────────────────
+// Chocoberry/Tove trade past midnight: late-night sales carry the PREVIOUS
+// business date (flipdish_sales.business_date) and punches already store the
+// business `date`. The dashboard's "today" must therefore roll over at
+// BUSINESS_DAY_START, not midnight — otherwise between 00:00 and open, "Today"
+// is an unopened business day and every vs-last-week comparison shows -100%.
+const BUSINESS_DAY_START_MIN = 5 * 60; // 05:00 — after last close (~01:00), before first open (~07:30)
+// A Date shifted back by the day-start offset: its calendar date IS the current
+// business date, so all existing date arithmetic works on it unchanged.
+function businessNow() { return new Date(Date.now() - BUSINESS_DAY_START_MIN * 60000); }
+
 function resolvePeriod(preset, customFrom, customTo) {
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = businessNow(); today.setHours(0,0,0,0);
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
   const mon = getMonday(today);
   const lastMon = new Date(mon); lastMon.setDate(lastMon.getDate()-7);
@@ -555,7 +566,7 @@ function resolvePeriod(preset, customFrom, customTo) {
 }
 
 function resolvePrevPeriod(preset, customFrom, customTo) {
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = businessNow(); today.setHours(0,0,0,0); // business-day "today" (see above)
   const yest = new Date(today); yest.setDate(yest.getDate()-1);
   // Like-for-like: a single day compares to the SAME WEEKDAY last week, not the
   // adjacent day (Mon vs Sun is misleading — trading patterns differ by weekday).
@@ -21496,7 +21507,11 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   // running totals: today-so-far vs the comparison day up to the SAME time of day.
   const todayStrLocal = fmtDateLocal(new Date());
   const inProgress = period.to >= todayStrLocal;       // period runs up to/through today
-  const nowCutoffMin = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
+  // Minutes on the BUSINESS clock: between midnight and BUSINESS_DAY_START we
+  // are still inside the previous business day, so the cutoff continues past
+  // 1440 (03:49 -> 1669). The comparison RPC applies the same shift to sale
+  // times, so late-night trade clips like-for-like.
+  const nowCutoffMin = (() => { const n = new Date(); const m = n.getHours() * 60 + n.getMinutes(); return m < BUSINESS_DAY_START_MIN ? m + 1440 : m; })();
 
   useEffect(() => {
     let cancelled = false;
@@ -22047,7 +22062,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         {inProgress && prevPeriod && !loading && (
           <span className="inline-flex items-center gap-1.5 text-[11px] text-[#9A8770] bg-[#F3E9D6] border border-[#E8DCC6] rounded-lg px-2.5 py-1.5">
             <Clock size={11} className="text-[#C9854F]"/>
-            Partial {period.label.toLowerCase()} · vs {prevPeriod.label.toLowerCase()} to {String(Math.floor(nowCutoffMin/60)).padStart(2,"0")}:{String(nowCutoffMin%60).padStart(2,"0")}
+            Partial {period.label.toLowerCase()} · vs {prevPeriod.label.toLowerCase()} to {String(Math.floor((nowCutoffMin % 1440)/60)).padStart(2,"0")}:{String(nowCutoffMin%60).padStart(2,"0")}
           </span>
         )}
         {isHqOrAbove(user.role) && (
