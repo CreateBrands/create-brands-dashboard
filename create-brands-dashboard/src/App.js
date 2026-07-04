@@ -9976,157 +9976,244 @@ function PackagingOrdersView({ currentUser }) {
 // Rich pipeline dashboard: KPI cards, an order-stage pipeline strip, and a
 // per-item table showing quantities at each stage next to live on-hand stock.
 function PackagingDashboard({ dash, orders, onOpenOrder }) {
-  if (!dash || dash.items.length === 0) {
-    return (
-      <div className="space-y-4">
-        <PackagingPipelineStrip orders={orders} onOpenOrder={onOpenOrder}/>
-        <div className="text-center py-12 text-sm text-slate-600">No items in active orders yet. Add line items linked to inventory to see the stage pipeline.</div>
-      </div>
-    );
+  const [drill, setDrill] = useState(null); // { title, items:[...] } for stage/metric drill
+  const fmt = (n) => (n || 0).toLocaleString();
+
+  if (!dash) return <div className="text-center py-12 text-sm text-slate-500">Loading…</div>;
+  const t = dash.totals, fin = dash.finance, risk = dash.risk;
+  const hasData = dash.orderCount > 0;
+
+  if (!hasData) {
+    return <div className="text-center py-16 text-sm text-slate-600">No active packaging orders. Create one to see the pipeline, stock position and finance roll up here.</div>;
   }
-  const t = dash.totals;
-  const fmt = (n) => (n||0).toLocaleString();
-  const cards = [
-    { label:"Active orders", value: dash.orderCount, sub:"in progress", color:"text-white" },
-    { label:"On order", value: fmt(t.ordered), sub:"units total", color:"text-indigo-300" },
-    { label:"At supplier", value: fmt(t.atSupplier), sub:"awaiting shipment", color:"text-slate-300" },
-    { label:"In transit", value: fmt(t.inTransit), sub:"sea / air", color:"text-amber-300" },
-    { label:"Received", value: fmt(t.received), sub:"landed via orders", color:"text-emerald-300" },
+
+  // KPI hero cards
+  const kpis = [
+    { label:"Active orders", value: dash.orderCount, sub:`${dash.suppliers.length} supplier${dash.suppliers.length===1?"":"s"}`, tone:"indigo" },
+    { label:"Quoted value", value: gbp(fin.quotedTotal), sub:`${gbp(fin.paidTotal)} paid`, tone:"sky" },
+    { label:"Outstanding", value: gbp(fin.outstanding), sub: risk.unpaidOrders?`${risk.unpaidOrders} order${risk.unpaidOrders===1?"":"s"} owing`:"all settled", tone: fin.outstanding>0?"amber":"emerald" },
+    { label:"Units incoming", value: fmt(t.atSupplier+t.inTransit+t.notYetShipped), sub:`${fmt(t.received)} received`, tone:"violet" },
+    { label:"In transit", value: fmt(t.inTransit), sub:"sea / air now", tone:"amber" },
+    { label:"Overdue", value: risk.overdue, sub: risk.overdue?"past expected date":"on schedule", tone: risk.overdue?"red":"emerald" },
   ];
+  const toneMap = {
+    indigo:"text-indigo-300", sky:"text-sky-300", amber:"text-amber-300",
+    emerald:"text-emerald-300", violet:"text-violet-300", red:"text-red-400",
+  };
+
+  // Pipeline funnel: order stages with count + value; width scaled to max value.
+  const funnelStages = PACKORDER_STAGES.filter(s => s.key !== "cancelled");
+  const maxStageVal = Math.max(1, ...funnelStages.map(s => dash.stageValue[s.key] || 0));
+
+  // Stage bar (units) for the flow visual.
+  const flowTotal = Math.max(1, t.notYetShipped + t.atSupplier + t.inTransit + t.received);
+  const flowSegs = [
+    { label:"Not shipped", val:t.notYetShipped, cls:"bg-slate-600" },
+    { label:"At supplier", val:t.atSupplier, cls:"bg-indigo-500" },
+    { label:"In transit", val:t.inTransit, cls:"bg-amber-500" },
+    { label:"Received", val:t.received, cls:"bg-emerald-500" },
+  ];
+
+  const openStageDrill = (stageKey, label) => {
+    const list = dash.orders.filter(o => o.stage === stageKey);
+    setDrill({ title: `${label} · ${list.length} order${list.length===1?"":"s"}`, orders: list });
+  };
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {cards.map(c => (
-          <div key={c.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
-            <div className="text-[10px] uppercase tracking-wider text-slate-600 font-bold">{c.label}</div>
-            <div className={`text-2xl font-bold ${c.color} mt-1`}>{c.value}</div>
-            <div className="text-[10px] text-slate-600">{c.sub}</div>
+      {/* KPI HERO */}
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+        {kpis.map(k => (
+          <div key={k.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
+            <div className="text-[10px] uppercase tracking-wider text-slate-600 font-bold">{k.label}</div>
+            <div className={`text-xl font-bold ${toneMap[k.tone]} mt-1 leading-tight`}>{k.value}</div>
+            <div className="text-[10px] text-slate-600 mt-0.5">{k.sub}</div>
           </div>
         ))}
       </div>
 
-      <PackagingPipelineStrip orders={orders} onOpenOrder={onOpenOrder}/>
+      {/* RISK STRIP */}
+      {(risk.overdue > 0 || risk.unlinkedLines > 0 || risk.unpaidOrders > 0) && (
+        <div className="flex flex-wrap gap-2">
+          {risk.overdue > 0 && <div className="px-3 py-2 rounded-xl bg-red-950/20 border border-red-500/30 text-red-300 text-xs font-semibold">⏰ {risk.overdue} overdue order{risk.overdue===1?"":"s"}</div>}
+          {risk.unpaidOrders > 0 && <div className="px-3 py-2 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-300 text-xs font-semibold">£ {risk.unpaidOrders} order{risk.unpaidOrders===1?"":"s"} with balance owing</div>}
+          {risk.unlinkedLines > 0 && <div className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold">⚠ {risk.unlinkedLines} line{risk.unlinkedLines===1?"":"s"} not linked to inventory</div>}
+        </div>
+      )}
 
-      {/* Per-item stage board with on-hand stock */}
-      <AnalysisBlock title="Items across stages — with live stock on hand">
+      {/* UNIT FLOW BAR */}
+      <AnalysisBlock title="Where the units are">
+        <div className="space-y-2">
+          <div className="flex h-8 rounded-lg overflow-hidden">
+            {flowSegs.map(s => s.val > 0 && (
+              <div key={s.label} className={`${s.cls} flex items-center justify-center`} style={{ width:`${(s.val/flowTotal)*100}%` }} title={`${s.label}: ${fmt(s.val)}`}>
+                {(s.val/flowTotal) > 0.08 && <span className="text-[10px] font-bold text-white px-1 truncate">{fmt(s.val)}</span>}
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {flowSegs.map(s => (
+              <div key={s.label} className="flex items-center gap-1.5 text-[11px]">
+                <span className={`w-2.5 h-2.5 rounded-sm ${s.cls}`}/>
+                <span className="text-slate-400">{s.label}</span>
+                <span className="text-white font-mono font-semibold">{fmt(s.val)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </AnalysisBlock>
+
+      {/* ORDER PIPELINE FUNNEL (count + value, clickable) */}
+      <AnalysisBlock title="Order pipeline — count & value by stage">
+        <div className="space-y-1.5">
+          {funnelStages.map(s => {
+            const cnt = dash.stageCounts[s.key] || 0;
+            const val = dash.stageValue[s.key] || 0;
+            if (cnt === 0) return null;
+            return (
+              <button key={s.key} onClick={()=>openStageDrill(s.key, s.label)} className="w-full flex items-center gap-3 group">
+                <div className="w-32 text-right flex-shrink-0"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(s.key)}`}>{s.label}</span></div>
+                <div className="flex-1 h-7 bg-slate-950 rounded-lg overflow-hidden relative">
+                  <div className={`h-full ${packStageColor(s.key)} opacity-40 group-hover:opacity-60 transition-opacity`} style={{ width:`${Math.max(4,(val/maxStageVal)*100)}%` }}/>
+                  <div className="absolute inset-0 flex items-center px-3 gap-2">
+                    <span className="text-xs font-bold text-white">{cnt} order{cnt===1?"":"s"}</span>
+                    <span className="text-[11px] text-slate-400 ml-auto font-mono">{gbp(val)}</span>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+          {funnelStages.every(s => (dash.stageCounts[s.key]||0)===0) && <div className="text-center py-4 text-xs text-slate-600">No orders in the pipeline.</div>}
+        </div>
+      </AnalysisBlock>
+
+      {/* ITEMS × STAGES with on-hand + projected stock */}
+      {dash.items.length > 0 && (
+        <AnalysisBlock title="Items across stages — with live stock & projected on-hand">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-700 text-slate-600">
+                  <th className="px-3 py-2 text-left font-semibold">Item</th>
+                  <th className="px-3 py-2 text-right font-semibold">On hand</th>
+                  <th className="px-3 py-2 text-right font-semibold">Not shipped</th>
+                  <th className="px-3 py-2 text-right font-semibold">At supplier</th>
+                  <th className="px-3 py-2 text-right font-semibold">In transit</th>
+                  <th className="px-3 py-2 text-right font-semibold">Received</th>
+                  <th className="px-3 py-2 text-right font-semibold">Incoming</th>
+                  <th className="px-3 py-2 text-right font-semibold">Projected</th>
+                  <th className="px-3 py-2 text-right font-semibold">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dash.items.map((r,i) => (
+                  <tr key={i} className="border-b border-slate-800/60 hover:bg-slate-800/30">
+                    <td className="px-3 py-2.5"><div className="text-white font-medium">{r.name}</div><div className="text-[10px] text-slate-600">{r.linked ? r.orderRefs.join(", ") : <span className="text-amber-500">not linked</span>}</div></td>
+                    <td className="px-3 py-2.5 text-right font-mono font-bold text-white">{r.onHand==null?"—":fmt(r.onHand)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-500">{fmt(r.notYetShipped)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-indigo-300">{fmt(r.atSupplier)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-amber-400">{fmt(r.inTransit)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{fmt(r.receivedViaOrders)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono font-bold text-sky-300">{fmt(r.incoming)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-300">{r.projected==null?"—":fmt(r.projected)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{gbp(r.value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[10px] text-slate-600 mt-2">On hand = live distribution stock · Incoming = at supplier + in transit + not shipped · Projected = on hand once everything lands.</div>
+        </AnalysisBlock>
+      )}
+
+      {/* ORDERS TABLE — sortable-ish, overdue first, progress + payment */}
+      <AnalysisBlock title="All active orders">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-slate-700 text-slate-600">
-                <th className="px-3 py-2 text-left font-semibold">Item</th>
-                <th className="px-3 py-2 text-right font-semibold">On hand</th>
-                <th className="px-3 py-2 text-right font-semibold">On order</th>
-                <th className="px-3 py-2 text-right font-semibold">Not shipped</th>
-                <th className="px-3 py-2 text-right font-semibold">At supplier</th>
-                <th className="px-3 py-2 text-right font-semibold">In transit</th>
-                <th className="px-3 py-2 text-right font-semibold">Received</th>
-                <th className="px-3 py-2 text-right font-semibold">Incoming</th>
-              </tr>
-            </thead>
+            <thead><tr className="border-b border-slate-700 text-slate-600">
+              <th className="px-3 py-2 text-left font-semibold">Order</th>
+              <th className="px-3 py-2 text-left font-semibold">Stage</th>
+              <th className="px-3 py-2 text-right font-semibold">Units</th>
+              <th className="px-3 py-2 text-left font-semibold">Progress</th>
+              <th className="px-3 py-2 text-right font-semibold">Quoted</th>
+              <th className="px-3 py-2 text-right font-semibold">Outstanding</th>
+              <th className="px-3 py-2 text-left font-semibold">Expected</th>
+            </tr></thead>
             <tbody>
-              {dash.items.map((r,i) => (
-                <tr key={i} className="border-b border-slate-800/60 hover:bg-slate-800/30">
+              {dash.orders.map(o => (
+                <tr key={o.id} onClick={()=>onOpenOrder(o.id)} className="border-b border-slate-800/60 hover:bg-slate-800/30 cursor-pointer">
+                  <td className="px-3 py-2.5"><div className="text-white font-semibold">{o.ref || "Untitled"}</div><div className="text-[10px] text-slate-600">{o.supplier || "—"}</div></td>
+                  <td className="px-3 py-2.5"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(o.stage)}`}>{packStageLabel(o.stage)}</span></td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-300">{fmt(o.units)}</td>
                   <td className="px-3 py-2.5">
-                    <div className="text-white font-medium">{r.name}</div>
-                    <div className="text-[10px] text-slate-600">{r.linked ? r.orderRefs.join(", ") : <span className="text-amber-500">not linked to inventory</span>}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:`${o.pctReceived}%`}}/></div>
+                      <span className="text-[10px] text-slate-500 font-mono">{o.pctReceived}%</span>
+                    </div>
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono font-bold text-white">{r.onHand==null ? "—" : fmt(r.onHand)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-400">{fmt(r.ordered)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-500">{fmt(r.notYetShipped)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-300">{fmt(r.atSupplier)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-amber-400">{fmt(r.inTransit)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{fmt(r.receivedViaOrders)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono font-bold text-sky-300">{fmt(r.incoming)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-300">{gbp(o.quotedTotal)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono"><span className={o.outstanding>0.01?"text-amber-400":"text-slate-600"}>{o.outstanding>0.01?gbp(o.outstanding):"—"}</span></td>
+                  <td className="px-3 py-2.5"><span className={o.overdue?"text-red-400 font-semibold":"text-slate-500"}>{o.expectedDate || "—"}{o.overdue?" ⏰":""}</span></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="text-[10px] text-slate-600 mt-2">On hand = current distribution stock. Incoming = at supplier + in transit + not-yet-shipped (still to arrive). Received here counts units landed via these orders.</div>
       </AnalysisBlock>
+
+      {/* SUPPLIER ROLLUP */}
+      {dash.suppliers.length > 0 && (
+        <AnalysisBlock title="By supplier">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="border-b border-slate-700 text-slate-600">
+                <th className="px-3 py-2 text-left font-semibold">Supplier</th>
+                <th className="px-3 py-2 text-right font-semibold">Orders</th>
+                <th className="px-3 py-2 text-right font-semibold">Units</th>
+                <th className="px-3 py-2 text-right font-semibold">Received</th>
+                <th className="px-3 py-2 text-right font-semibold">Quoted</th>
+                <th className="px-3 py-2 text-right font-semibold">Paid</th>
+              </tr></thead>
+              <tbody>
+                {dash.suppliers.map((s,i) => (
+                  <tr key={i} className="border-b border-slate-800/60">
+                    <td className="px-3 py-2.5 text-white font-medium">{s.supplier}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-300">{s.orders}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{fmt(s.units)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{fmt(s.received)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-300">{gbp(s.quoted)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{gbp(s.paid)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AnalysisBlock>
+      )}
+
+      {/* STAGE DRILL MODAL */}
+      {drill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={()=>setDrill(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 sticky top-0 bg-slate-900">
+              <h3 className="text-sm font-bold text-white">{drill.title}</h3>
+              <button onClick={()=>setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800">✕</button>
+            </div>
+            <div className="p-3 space-y-2">
+              {drill.orders.map(o => (
+                <button key={o.id} onClick={()=>{ setDrill(null); onOpenOrder(o.id); }} className="w-full text-left bg-slate-950 rounded-xl p-3 hover:bg-slate-800">
+                  <div className="flex items-center gap-2"><span className="font-semibold text-white text-sm">{o.ref||"Untitled"}</span><span className="text-[11px] text-slate-500 ml-auto">{gbp(o.quotedTotal)}</span></div>
+                  <div className="text-[11px] text-slate-500">{o.supplier||"—"} · {fmt(o.units)} units · {o.pctReceived}% received{o.overdue?" · ⏰ overdue":""}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Order-stage pipeline: a horizontal strip of the procurement stages with a
-// count of orders currently sitting at each, and the orders listed under each.
-function PackagingPipelineStrip({ orders, onOpenOrder }) {
-  const active = (orders||[]).filter(o => o.stage !== "cancelled");
-  const stages = PACKORDER_STAGES.filter(s => s.key !== "cancelled" && s.key !== "closed");
-  const byStage = (k) => active.filter(o => o.stage === k);
-  return (
-    <AnalysisBlock title="Order pipeline">
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {stages.map(s => {
-          const list = byStage(s.key);
-          return (
-            <div key={s.key} className="flex-shrink-0 w-40">
-              <div className={`rounded-t-xl px-2.5 py-1.5 text-[10px] font-bold ${packStageColor(s.key)}`}>{s.label} · {list.length}</div>
-              <div className="bg-slate-950 rounded-b-xl border border-slate-800 border-t-0 p-1.5 space-y-1 min-h-[44px]">
-                {list.map(o => (
-                  <button key={o.id} onClick={()=>onOpenOrder(o.id)} className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 transition-colors">
-                    <div className="text-[11px] font-semibold text-white truncate">{o.ref || "Untitled"}</div>
-                    <div className="text-[9px] text-slate-600 truncate">{o.supplier || "—"}</div>
-                  </button>
-                ))}
-                {list.length === 0 && <div className="text-[9px] text-slate-700 text-center py-2">—</div>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </AnalysisBlock>
-  );
-}
-
-function PackagingOrderEditModal({ order, onClose, onSaved }) {
-  const isNew = !order;
-  const [f, setF] = useState({
-    ref: order?.ref || "", supplier: order?.supplier || "", stage: order?.stage || "design",
-    quotedTotal: order?.quotedTotal != null ? String(order.quotedTotal) : "", currency: order?.currency || "GBP",
-    orderDate: order?.orderDate || "", expectedDate: order?.expectedDate || "", notes: order?.notes || "",
-  });
-  const [busy, setBusy] = useState(false);
-  const set = (k,v)=>setF(s=>({...s,[k]:v}));
-  const save = async () => {
-    if (!f.supplier.trim() && !f.ref.trim()) { alert("Add a reference or supplier."); return; }
-    setBusy(true);
-    try {
-      const saved = await upsertPackagingOrder({
-        id: order?.id, ref: f.ref.trim(), supplier: f.supplier.trim(), stage: f.stage,
-        quotedTotal: Number(f.quotedTotal)||0, currency: f.currency,
-        orderDate: f.orderDate||null, expectedDate: f.expectedDate||null, notes: f.notes,
-      });
-      onSaved(saved);
-    } catch(e){ alert(e.message); } finally { setBusy(false); }
-  };
-  return (
-    <Modal title={isNew ? "New packaging order" : "Edit order"} onClose={onClose} footer={<>
-      <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
-      <button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button>
-    </>}>
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={labelCls}>Reference</label><input value={f.ref} onChange={e=>set("ref",e.target.value)} placeholder="e.g. PKG-2026-014" className={inputCls}/></div>
-          <div><label className={labelCls}>Stage</label><select value={f.stage} onChange={e=>set("stage",e.target.value)} className={selCls}>{PACKORDER_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
-        </div>
-        <div><label className={labelCls}>Supplier</label><input value={f.supplier} onChange={e=>set("supplier",e.target.value)} placeholder="Supplier name" className={inputCls}/></div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={labelCls}>Quoted total</label><input type="number" step="0.01" value={f.quotedTotal} onChange={e=>set("quotedTotal",e.target.value)} className={inputCls}/></div>
-          <div><label className={labelCls}>Currency</label><input value={f.currency} onChange={e=>set("currency",e.target.value)} className={inputCls}/></div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={labelCls}>Order date</label><input type="date" value={f.orderDate} onChange={e=>set("orderDate",e.target.value)} className={inputCls}/></div>
-          <div><label className={labelCls}>Expected date</label><input type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)} className={inputCls}/></div>
-        </div>
-        <div><label className={labelCls}>Notes</label><textarea value={f.notes} onChange={e=>set("notes",e.target.value)} rows={2} className={`${inputCls} resize-none`}/></div>
-      </div>
-    </Modal>
-  );
-}
-
-// Detail: header + tabs (Overview / Items / Shipments / Payments). Loads its
-// own detail bundle; every mutation reloads so the per-line rollup stays exact.
 function PackagingOrderDetail({ orderId, currentUser, onBack }) {
   const [d, setD] = useState(null);
   const [loading, setLoading] = useState(true);
