@@ -45006,6 +45006,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                   </div>
                 </div>
 
+                {/* Pay breakdown + shift event timeline */}
+                <PayBreakdown r={r} member={opsTeam.find(m => m.id === r.employeeId)} />
+
                 {/* Overtime section */}
                 {hasOT && (
                   <div className={`rounded-xl p-3 border space-y-3 ${r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" : "bg-red-950/20 border-red-500/20"}`}>
@@ -45035,20 +45038,6 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {(r.overtimeReason || (r.overtimeComments?.length || 0) > 0) && onAddComment && (
                       <OvertimeConversation record={r} currentUser={currentUser} isEmployee={false} onAddComment={onAddComment} compact/>
                     )}
-                    {/* Gross pay with/without OT — hourly staff only; salaried
-                        cost is a fixed daily slice shown in the summary. Uses the
-                        employee's current profile rate (falls back to snapshot). */}
-                    {(() => {
-                      const member = opsTeam.find(m => m.id === r.employeeId);
-                      const rate = (member?.hourlyRate != null ? member.hourlyRate : r.hourlyRate) || 0;
-                      if (!(rate > 0 && r.punchOut && !isSalaried(member))) return null;
-                      return (
-                      <div className="mt-2 pt-2 border-t border-white/10 flex gap-4 text-xs">
-                        <span className="text-slate-600">Scheduled pay: <span className="text-white font-bold">£{(r.scheduledStart && r.scheduledEnd ? (((new Date("2000-01-01T"+r.scheduledEnd) - new Date("2000-01-01T"+r.scheduledStart))/3600000)*rate) : 0).toFixed(2)}</span></span>
-                        {r.overtimeApproved && <span className="text-emerald-400">+OT: <span className="font-bold">£{(r.overtimeHrs * rate).toFixed(2)}</span></span>}
-                      </div>
-                      );
-                    })()}
                   </div>
                 )}
 
@@ -45284,6 +45273,189 @@ function PunchHistory({ punchId }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── PayBreakdown — per-shift pay detail + event timeline (T&A expanded row) ──
+// Left: every event during the punch window in order — scheduled start, clock
+// in (late/early/grace), break start/end, scheduled end, clock out (over/early/
+// grace). Right: the pay maths — scheduled pay, worked/break/payable split, and
+// regular vs overtime pay using the SAME model as the employee summary:
+// OT = hours beyond the scheduled shift; approved OT paid at rate ×
+// OT_RULES.multiplier; pending OT is HELD out of the total until approved.
+function PayBreakdown({ r, member }) {
+  if (!r || !r.punchIn || !r.punchOut) return null;
+  const salaried = isSalaried(member);
+  const rate = (member?.hourlyRate != null ? member.hourlyRate : r.hourlyRate) || 0;
+  const mult = OT_RULES.multiplier || 1;
+
+  const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
+  const fmtMin = (mins) => { const m = Math.round(Math.abs(mins)); const h = Math.floor(m/60); return h > 0 ? `${h}h ${String(m%60).padStart(2,"0")}m` : `${m}m`; };
+  const money = (n) => "£" + (Math.round((n || 0) * 100) / 100).toFixed(2);
+
+  // Schedule window (overnight-aware, same construction as the grace logic).
+  let ssMs = null, seMs = null;
+  if (r.scheduledStart && r.scheduledEnd) {
+    ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
+    seMs = new Date(r.date + "T" + r.scheduledEnd + ":00").getTime();
+    if (seMs <= ssMs) seMs += 86400000;
+  }
+  const schedHours = ssMs != null ? (seMs - ssMs) / 3600000 : 0;
+
+  // Graced times drive pay; raw punches drive the timeline annotations.
+  const inIso  = r.gracedIn  ?? r.punchIn;
+  const outIso = r.gracedOut ?? r.punchOut;
+  const rawInMs = new Date(r.punchIn).getTime();
+  let rawOutMs = new Date(r.punchOut).getTime();
+  if (rawOutMs < rawInMs) rawOutMs += 86400000; // overnight
+
+  // Canonical worked / break / payable split (single source of truth).
+  const split = computePunchHours({
+    punchIn: inIso, punchOut: outIso,
+    breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
+    breakPaid: r.breakPaid,
+  });
+  if (split.payableHours == null) return null;
+
+  // Per-shift pay — mirrors the summary model exactly.
+  const ot = Math.max(0, r.overtimeHrs || 0);
+  const regular = Math.max(0, (split.payableHours || 0) - ot);
+  const regularPay = regular * rate;
+  const otPay = ot * rate * mult;
+  const schedPay = schedHours * rate;
+  const otState = ot <= 0 ? "none" : (r.overtimeApproved ? "approved" : (r.overtimeRejectedReason ? "rejected" : "pending"));
+  const totalPay = salaried ? salariedDailyCost(member) : (regularPay + (otState === "approved" ? otPay : 0));
+
+  // ── Event timeline ──
+  const events = [];
+  if (ssMs != null) events.push({ t: ssMs, icon: "📋", label: "Scheduled start", time: fmtT(new Date(ssMs).toISOString()) });
+  {
+    const graced = r.gracedIn && r.gracedIn !== r.punchIn;
+    let note = null, tone = "text-slate-500";
+    if (ssMs != null) {
+      const d = Math.round((rawInMs - ssMs) / 60000);
+      if (graced)      { note = `${fmtMin(d)} late — within grace, paid from ${fmtT(inIso)}`; tone = "text-slate-500"; }
+      else if (d > 0)  { note = `${fmtMin(d)} late`; tone = "text-red-400"; }
+      else if (d < 0)  { note = `${fmtMin(d)} early`; tone = "text-sky-400"; }
+      else             { note = "on time"; tone = "text-emerald-400"; }
+    }
+    events.push({ t: rawInMs, icon: "🟢", label: "Clocked in", time: fmtT(r.punchIn), note, tone, photo: !!r.photoUrlIn });
+  }
+  if (r.breakStart) {
+    const bsMs = new Date(r.breakStart).getTime();
+    events.push({ t: bsMs, icon: "☕", label: "Break started", time: fmtT(r.breakStart) });
+    if (r.breakEnd) {
+      const beMs = new Date(r.breakEnd).getTime();
+      const thisBreak = Math.max(0, Math.round((beMs - bsMs) / 60000));
+      const earlier = Math.max(0, (split.punchedBreakMins || 0) - thisBreak);
+      events.push({ t: beMs, icon: "☕", label: "Break ended", time: fmtT(r.breakEnd),
+        note: fmtMin(thisBreak) + (earlier > 0 ? ` · earlier breaks +${fmtMin(earlier)}` : ""), tone: "text-slate-500" });
+    } else {
+      events.push({ t: rawOutMs - 1, icon: "☕", label: "Break auto-ended at clock-out", time: fmtT(outIso), tone: "text-amber-400" });
+    }
+  } else if ((split.punchedBreakMins || 0) > 0) {
+    events.push({ t: rawInMs + 1, icon: "☕", label: "Break logged (manual)", time: "—", note: fmtMin(split.punchedBreakMins), tone: "text-slate-500" });
+  }
+  if (seMs != null) events.push({ t: seMs, icon: "📋", label: "Scheduled end", time: fmtT(new Date(seMs).toISOString()) });
+  {
+    const graced = r.gracedOut && r.gracedOut !== r.punchOut;
+    let note = null, tone = "text-slate-500";
+    if (seMs != null) {
+      const d = Math.round((rawOutMs - seMs) / 60000);
+      if (graced)      { note = `${fmtMin(d)} over — within grace, paid to ${fmtT(outIso)}`; tone = "text-slate-500"; }
+      else if (d > 0)  { note = `${fmtMin(d)} past schedule`; tone = "text-red-400"; }
+      else if (d < 0)  { note = `${fmtMin(d)} early finish`; tone = "text-amber-400"; }
+      else             { note = "on time"; tone = "text-emerald-400"; }
+    }
+    events.push({ t: rawOutMs, icon: "🔴", label: "Clocked out", time: fmtT(r.punchOut), note, tone, photo: !!r.photoUrlOut });
+  }
+  events.sort((a, b) => a.t - b.t);
+
+  const breakNote = split.breakPaid
+    ? "paid break — not deducted"
+    : (split.breakEnforced
+        ? `minimum ${split.requiredBreakMins}m enforced (punched ${fmtMin(split.punchedBreakMins)})`
+        : ((split.punchedBreakMins || 0) > 0 ? "as punched" : "no break"));
+
+  return (
+    <div className="bg-slate-950 rounded-xl p-3">
+      <div className="text-xs font-semibold text-slate-600 mb-2">💷 Pay breakdown</div>
+      <div className="grid md:grid-cols-2 gap-3">
+
+        {/* Shift events, in order */}
+        <div className="space-y-1">
+          {events.map((e, i) => (
+            <div key={i} className="flex items-baseline gap-2 text-xs">
+              <span className="w-4 text-center flex-shrink-0">{e.icon}</span>
+              <span className="font-mono text-slate-300 w-11 flex-shrink-0">{e.time}</span>
+              <span className="text-slate-400">{e.label}</span>
+              {e.photo && <span title="Photo captured">📷</span>}
+              {e.note && <span className={`${e.tone} text-[10px]`}>{e.note}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* Pay maths */}
+        <div className="space-y-1 text-xs">
+          <div className="flex justify-between">
+            <span className="text-slate-500">Scheduled shift{ssMs != null ? ` (${fmtHM(schedHours)})` : ""}</span>
+            <span className="text-slate-400 font-mono">{ssMs != null ? (salaried ? fmtHM(schedHours) : money(schedPay)) : "no schedule"}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Worked (after grace)</span>
+            <span className="text-slate-300 font-mono">{fmtHM(split.workedHours)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Break <span className="text-slate-600 text-[10px]">({breakNote})</span></span>
+            <span className={`font-mono ${split.deductedBreakMins > 0 ? "text-amber-400" : "text-slate-500"}`}>{split.deductedBreakMins > 0 ? `−${fmtMin(split.deductedBreakMins)}` : "—"}</span>
+          </div>
+          <div className="flex justify-between border-t border-white/10 pt-1">
+            <span className="text-slate-400 font-semibold">Payable hours</span>
+            <span className="text-white font-mono font-bold">{fmtHM(split.payableHours)}</span>
+          </div>
+          {salaried ? (
+            <div className="flex justify-between border-t border-white/10 pt-1">
+              <span className="text-slate-400 font-semibold">Daily cost (salaried)</span>
+              <span className="text-white font-mono font-bold">{money(totalPay)}</span>
+            </div>
+          ) : rate > 0 ? (
+            <>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Regular · {fmtHM(regular)} × {money(rate)}/h</span>
+                <span className="text-slate-300 font-mono">{money(regularPay)}</span>
+              </div>
+              {otState === "approved" && (
+                <div className="flex justify-between">
+                  <span className="text-emerald-400">Overtime · {fmtHM(ot)} × {money(rate)}{mult !== 1 ? ` × ${mult}` : ""} <span className="text-[10px]">✓ approved</span></span>
+                  <span className="text-emerald-400 font-mono">+{money(otPay)}</span>
+                </div>
+              )}
+              {otState === "pending" && (
+                <div className="flex justify-between">
+                  <span className="text-amber-400">Overtime · {fmtHM(ot)}{mult !== 1 ? ` × ${mult}` : ""} <span className="text-[10px]">held — awaiting approval</span></span>
+                  <span className="text-amber-400 font-mono">{money(otPay)}</span>
+                </div>
+              )}
+              {otState === "rejected" && (
+                <div className="flex justify-between">
+                  <span className="text-red-400 line-through">Overtime · {fmtHM(ot)}</span>
+                  <span className="text-red-400 font-mono text-[10px]">not paid</span>
+                </div>
+              )}
+              <div className="flex justify-between border-t border-white/10 pt-1">
+                <span className="text-slate-300 font-bold">Estimated pay{otState === "pending" ? " (excl. held OT)" : ""}</span>
+                <span className="text-white font-mono font-bold">{money(totalPay)}</span>
+              </div>
+              {otState === "pending" && (
+                <div className="text-[10px] text-slate-600 text-right">+{money(otPay)} if overtime approved</div>
+              )}
+            </>
+          ) : (
+            <div className="text-[10px] text-slate-600">No hourly rate on profile — pay not estimated.</div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
