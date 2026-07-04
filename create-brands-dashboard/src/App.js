@@ -21961,7 +21961,8 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         totHours += h;
         const rowCost = salaried ? salariedDailyCost(member) : (open ? punchCost(p) : (p.grossPay || 0));
         totCost += rowCost;
-        const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`;
+        const implausible = !open && (p.hoursWorked || 0) > 16;
+        const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h${implausible ? " ⚠ check punch" : ""}`;
         // Salaried: cost is the fixed daily slice, not hours×rate.
         const costCell = salaried
           ? `${fmtCurrency(salariedDailyCost(member))} /day (salaried)`

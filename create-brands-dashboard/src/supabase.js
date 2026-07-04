@@ -1254,10 +1254,18 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
     .select("break_start, break_end, break_minutes")
     .eq("id", id).single();
 
+  // SANITY GUARD — a single café shift over 16h is physically implausible
+  // (real cause is a forgotten punch, a clock anomaly, or a kiosk retry writing
+  // junk — see the 4-second punches that recorded 23h). Record the hours but
+  // WITHHOLD pay and flag for manager review instead of silently paying it.
+  const implausible = Number(hoursWorked) > 16;
   const patch = {
-    punch_out: punchOut, hours_worked: hoursWorked, gross_pay: grossPay,
-    status: "closed", updated_at: new Date().toISOString(),
+    punch_out: punchOut, hours_worked: hoursWorked,
+    gross_pay: implausible ? null : grossPay,
+    status: implausible ? "auto_closed" : "closed",
+    updated_at: new Date().toISOString(),
   };
+  if (implausible) patch.notes = `Implausible duration (${Number(hoursWorked).toFixed(2)}h) — pay withheld, needs review`;
 
   if (existing && existing.break_start && !existing.break_end) {
     const startMs = new Date(existing.break_start).getTime();
