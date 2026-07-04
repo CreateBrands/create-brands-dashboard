@@ -9936,35 +9936,35 @@ function PackagingOrdersView({ currentUser }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <h2 className="text-lg font-black text-white">Packaging</h2>
-        <div className="flex gap-1 bg-slate-900 rounded-xl p-1">
+        <h2 className="text-lg font-black text-[#3A2E26]">Branded Packaging</h2>
+        <div className="flex gap-1 rounded-xl p-1" style={{background:"#F3EADA"}}>
           {[["dashboard","Dashboard"],["orders","Orders"]].map(([k,l])=>(
-            <button key={k} onClick={()=>setScreen(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${screen===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+            <button key={k} onClick={()=>setScreen(k)} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={screen===k?{background:"#B4622E",color:"#fff"}:{color:"#6B5D4F"}}>{l}</button>
           ))}
         </div>
-        <button onClick={()=>setImportOpen(true)} className="ml-auto px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1"><FileText size={14}/> Import Excel</button>
+        <button onClick={()=>setImportOpen(true)} className="ml-auto px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1" style={{background:"#F3EADA",color:"#3A2E26"}}><FileText size={14}/> Import Excel</button>
         <button onClick={()=>setNewOpen(true)} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New order</button>
       </div>
-      {err && <div className="text-sm text-red-400">{err}</div>}
+      {err && <div className="text-sm" style={{color:"#A23B2E"}}>{err}</div>}
 
-      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : screen === "dashboard" ? (
+      {loading ? <div className="text-center py-12 text-sm" style={{color:"#8A7B68"}}>Loading…</div> : screen === "dashboard" ? (
         <PackagingDashboard dash={dash} orders={orders} onOpenOrder={setOpenId}/>
       ) : (
-        orders.length === 0 ? <div className="text-center py-16 text-sm text-slate-600">No packaging orders yet. Create one to track a supplier order from design to receipt.</div> : (
+        orders.length === 0 ? <div className="text-center py-16 text-sm" style={{color:"#8A7B68"}}>No packaging orders yet. Create one to track a supplier order from design to receipt.</div> : (
         <div className="space-y-2">
           {orders.map(o => (
-            <button key={o.id} onClick={()=>setOpenId(o.id)} className="w-full text-left bg-slate-900 border border-slate-800 rounded-2xl p-4 hover:border-slate-600 transition-colors">
+            <button key={o.id} onClick={()=>setOpenId(o.id)} className="w-full text-left rounded-2xl p-4 transition-colors" style={{background:"#FBF6EC", border:"1px solid #E8DCC6"}}>
               <div className="flex items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-white">{o.ref || "Untitled order"}</span>
+                    <span className="font-bold" style={{color:"#3A2E26"}}>{o.ref || "Untitled order"}</span>
                     <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(o.stage)}`}>{packStageLabel(o.stage)}</span>
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">{o.supplier || "No supplier"}{o.orderDate?` · ordered ${o.orderDate}`:""}{o.expectedDate?` · expected ${o.expectedDate}`:""}</div>
+                  <div className="text-xs mt-0.5" style={{color:"#8A7B68"}}>{o.supplier || "No supplier"}{o.orderDate?` · ordered ${o.orderDate}`:""}{o.expectedDate?` · expected ${o.expectedDate}`:""}</div>
                 </div>
                 <div className="text-right flex-shrink-0">
-                  <div className="text-sm font-bold text-white">{gbp(o.quotedTotal)}</div>
-                  <div className="text-[10px] text-slate-600">quoted</div>
+                  <div className="text-sm font-bold" style={{color:"#3A2E26"}}>{gbp(o.quotedTotal)}</div>
+                  <div className="text-[10px]" style={{color:"#8A7B68"}}>quoted</div>
                 </div>
               </div>
             </button>
@@ -10012,14 +10012,25 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
 
   const sevColor = (lvl) => lvl==="red" ? {fg:T.red,bg:T.redBg,ln:T.redLine} : lvl==="amber" ? {fg:T.amber,bg:T.amberBg,ln:T.amberLine} : {fg:T.green,bg:T.greenBg,ln:T.greenLine};
 
-  // ── KPI hero ───────────────────────────────────────────────────────────────
+  // ── KPI hero — framed around decisions, not raw aggregates ─────────────────
+  // Derived signals that tell you what to DO, from the full order structure.
+  const reorderNeeded = dash.items.filter(r => r.reorderStatus === "order_now").length;
+  const outOfStock = dash.items.filter(r => r.onHand != null && r.onHand <= 0).length;
+  const arrivingSoon = (dash.shipments || []).filter(s => s.etaRisk && (s.etaRisk.level === "amber" || s.etaRisk.level === "red"));
+  const arrivingUnits = arrivingSoon.reduce((a, s) => a + (s.units || 0), 0);
+  // Next expected arrival across in-transit shipments with an ETA.
+  const etaDated = (dash.shipments || []).filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage) && s.etaDate);
+  const nextArrival = etaDated.sort((a,b) => (a.etaDate||"").localeCompare(b.etaDate||""))[0] || null;
+  const activeShipments = (dash.shipments || []).filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage)).length;
+  const pctPaid = fin.quotedTotal > 0 ? Math.round((fin.paidTotal / fin.quotedTotal) * 100) : 0;
+
   const kpis = [
-    { label:"Active orders", value: dash.orderCount, sub:`${dash.suppliers.length} supplier${dash.suppliers.length===1?"":"s"}`, color:T.ink },
-    { label:"Quoted value", value: gbp(fin.quotedTotal), sub:`${gbp(fin.paidTotal)} paid`, color:T.ink },
-    { label:"Outstanding", value: gbp(fin.outstanding), sub: risk.unpaidOrders?`${risk.unpaidOrders} owing`:"all settled", color: fin.outstanding>0?T.amber:T.green },
-    { label:"Units incoming", value: fmt(t.atSupplier+t.inTransit+t.notYetShipped), sub:`${fmt(t.received)} received`, color:T.ink },
-    { label:"In transit", value: fmt(t.inTransit), sub:"sea / air now", color: t.inTransit>0?T.blue:T.inkFaint },
-    { label:"Alerts", value: (risk.redCount||0)+(risk.amberCount||0), sub: (risk.redCount||0)?`${risk.redCount} critical`:"all clear", color: (risk.redCount||0)?T.red:(risk.amberCount||0)?T.amber:T.green },
+    { label:"Needs action", value: (risk.redCount||0)+(risk.amberCount||0), sub: (risk.redCount||0)?`${risk.redCount} critical · ${risk.amberCount} at risk`:(risk.amberCount||0)?`${risk.amberCount} at risk`:"all clear", color: (risk.redCount||0)?T.red:(risk.amberCount||0)?T.amber:T.green },
+    { label:"To reorder", value: reorderNeeded, sub: outOfStock>0?`${outOfStock} out of stock`:reorderNeeded?"below reorder point":"stock levels ok", color: reorderNeeded?T.red:T.green },
+    { label:"In transit", value: fmt(t.inTransit), sub: activeShipments?`${activeShipments} shipment${activeShipments===1?"":"s"} moving`:"nothing shipping", color: t.inTransit>0?T.blue:T.inkFaint },
+    { label:"Next arrival", value: nextArrival ? nextArrival.etaDate : "—", sub: nextArrival ? `${fmt(nextArrival.units)} units · ${nextArrival.orderRef||"order"}` : "no dated ETAs", color: T.ink, small:true },
+    { label:"Committed spend", value: gbp(fin.quotedTotal), sub:`${pctPaid}% paid · ${gbp(fin.outstanding)} owing`, color: T.ink },
+    { label:"Active orders", value: dash.orderCount, sub:`${dash.suppliers.length} supplier${dash.suppliers.length===1?"":"s"} · ${fmt(t.received)} received`, color:T.ink },
   ];
 
   const funnelStages = PACKORDER_STAGES.filter(s => s.key !== "cancelled");
@@ -10046,7 +10057,7 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
         {kpis.map(k => (
           <div key={k.label} className="rounded-2xl p-3.5" style={{background:T.surface, border:`1px solid ${T.line}`}}>
             <div className="text-[10px] uppercase tracking-wider font-bold" style={{color:T.inkFaint}}>{k.label}</div>
-            <div className="text-xl font-bold mt-1 leading-tight" style={{color:k.color}}>{k.value}</div>
+            <div className={`${k.small?"text-base":"text-xl"} font-bold mt-1 leading-tight`} style={{color:k.color}}>{k.value}</div>
             <div className="text-[10px] mt-0.5" style={{color:T.inkFaint}}>{k.sub}</div>
           </div>
         ))}
@@ -52578,13 +52589,13 @@ export default function App() {
     { group: "WAREHOUSE", items: [
       { key: "dist-dashboard", label: "Dashboard", icon: BarChart2, requiresEntity: "brand-distribution" },
       { key: "dist-items",  label: "Items",  icon: Tag, requiresEntity: "brand-distribution" },
+      { key: "dist-packaging", label: "Branded Packaging", icon: Package, requiresEntity: "brand-distribution" },
       { key: "dist-buy", label: "Purchasing", icon: Truck, requiresEntity: "brand-distribution", children: [
         { key: "dist-vendors", label: "Vendors", icon: Users },
         { key: "dist-pos",     label: "Purchase Orders", icon: FileText },
         { key: "dist-grn",     label: "Goods In", icon: ClipboardList },
         { key: "dist-bills",   label: "Bills", icon: Receipt },
         { key: "dist-pay",     label: "Payments", icon: PoundSterling },
-        { key: "dist-packaging", label: "Packaging Orders", icon: Package },
       ]},
       { key: "dist-sell", label: "Sales", icon: ShoppingCart, requiresEntity: "brand-distribution", children: [
         { key: "dist-customers",  label: "Customers", icon: Users },
