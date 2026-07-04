@@ -13088,3 +13088,19 @@ export async function fetchPackagingDashboard({ includeClosed = false } = {}) {
     },
   };
 }
+
+// ORDER PAGE BUILDER: fetch every collection with its ordered item ids, so the
+// builder can render department → collection → items and drag to reorder.
+export async function fetchDistCollectionsWithItems() {
+  const [collections, links, items] = await Promise.all([
+    fetchDistCollections({ includeInactive: true }).catch(() => []),
+    supabase.from("dist_collection_items").select("collection_id, item_id, sort_order").then(r => r.data || []),
+    fetchDistItems().catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const byColl = new Map(collections.map(c => [c.id, []]));
+  links.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).forEach(l => {
+    if (byColl.has(l.collection_id) && itemById.has(l.item_id)) byColl.get(l.collection_id).push(l.item_id);
+  });
+  return { collections, itemsByCollection: Object.fromEntries(byColl), items };
+}
