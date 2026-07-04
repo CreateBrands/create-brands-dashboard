@@ -1138,8 +1138,13 @@ export function requiredBreakMins(rawHours) {
 export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null, applyBreakRule = true, breakPaid = false } = {}) {
   const EMPTY = { hours: null, payableHours: null, workedHours: null, breakHours: null, breakMins: 0, punchedBreakMins: 0, requiredBreakMins: 0, breakEnforced: false, rawHours: null, overnight: false, breakPaid: false };
   if (!punchIn || !punchOut) return EMPTY;
-  const inMs = new Date(punchIn).getTime();
-  let outMs = new Date(punchOut).getTime();
+  // Truncate both punches to the MINUTE before diffing. The UI shows HH:MM, so
+  // in 19:00:48 -> out 23:00:15 reads as "19:00-23:00" but full-precision maths
+  // gives 3h59m27s -> 3.99h -> "3h 59m": staff who punched on time lose a
+  // minute. Computing on the clock-face minutes makes maths match display.
+  const floorMin = (ms) => Math.floor(ms / 60000) * 60000;
+  const inMs = floorMin(new Date(punchIn).getTime());
+  let outMs = floorMin(new Date(punchOut).getTime());
   if (isNaN(inMs) || isNaN(outMs)) return EMPTY;
   let overnight = false;
   // Overnight ONLY when the clock-out is strictly BEFORE the clock-in (e.g. in
