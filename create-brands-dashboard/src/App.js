@@ -10009,7 +10009,6 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
   const maxStageVal = Math.max(1, ...funnelStages.map(s => dash.stageValue[s.key] || 0));
 
   // Stage bar (units) for the flow visual.
-  const flowTotal = Math.max(1, t.notYetShipped + t.atSupplier + t.inTransit + t.received);
   const flowSegs = [
     { label:"Not shipped", val:t.notYetShipped, cls:"bg-slate-600" },
     { label:"At supplier", val:t.atSupplier, cls:"bg-indigo-500" },
@@ -10045,23 +10044,45 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
       )}
 
       {/* UNIT FLOW BAR */}
-      <AnalysisBlock title="Where the units are">
-        <div className="space-y-2">
-          <div className="flex h-8 rounded-lg overflow-hidden">
-            {flowSegs.map(s => s.val > 0 && (
-              <div key={s.label} className={`${s.cls} flex items-center justify-center`} style={{ width:`${(s.val/flowTotal)*100}%` }} title={`${s.label}: ${fmt(s.val)}`}>
-                {(s.val/flowTotal) > 0.08 && <span className="text-[10px] font-bold text-white px-1 truncate">{fmt(s.val)}</span>}
-              </div>
-            ))}
-          </div>
+      <AnalysisBlock title="Where the units are — by item">
+        <div className="space-y-3">
+          {/* Shared legend */}
           <div className="flex flex-wrap gap-3">
             {flowSegs.map(s => (
               <div key={s.label} className="flex items-center gap-1.5 text-[11px]">
                 <span className={`w-2.5 h-2.5 rounded-sm ${s.cls}`}/>
                 <span className="text-slate-400">{s.label}</span>
-                <span className="text-white font-mono font-semibold">{fmt(s.val)}</span>
               </div>
             ))}
+          </div>
+          {/* One strip per item */}
+          <div className="space-y-2.5">
+            {dash.items.map((it, idx) => {
+              const segs = [
+                { label:"Not shipped", val: it.notYetShipped, cls:"bg-slate-600" },
+                { label:"At supplier", val: it.atSupplier,    cls:"bg-indigo-500" },
+                { label:"In transit",  val: it.inTransit,     cls:"bg-amber-500" },
+                { label:"Received",    val: it.receivedViaOrders, cls:"bg-emerald-500" },
+              ];
+              const total = Math.max(1, segs.reduce((a,s)=>a+s.val,0));
+              return (
+                <div key={idx}>
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-xs font-semibold text-white truncate">{it.name}</span>
+                    <span className="text-[10px] text-slate-500 font-mono ml-2 flex-shrink-0">
+                      {fmt(it.ordered)} ordered{it.onHand!=null?` · ${fmt(it.onHand)} on hand`:""}
+                    </span>
+                  </div>
+                  <div className="flex h-6 rounded-lg overflow-hidden bg-slate-950">
+                    {segs.map(s => s.val > 0 && (
+                      <div key={s.label} className={`${s.cls} flex items-center justify-center`} style={{ width:`${(s.val/total)*100}%` }} title={`${s.label}: ${fmt(s.val)}`}>
+                        {(s.val/total) > 0.12 && <span className="text-[10px] font-bold text-white px-1 truncate">{fmt(s.val)}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </AnalysisBlock>
