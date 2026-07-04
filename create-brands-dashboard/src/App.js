@@ -26389,6 +26389,60 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedStores, assignments, auditTrail, checklistStates]);
 
+  // ── DRILL_V1 — click any metric to see the underlying assignments ──────────
+  // drill = { title, rows:[{name,type,store,target,window,state}] } | null
+  const [drill, setDrill] = useState(null);
+  const drillTaskName = (a) => {
+    if (a.type === "checklist") return (checklists || []).find(c => c.id === a.taskId)?.name || a.taskName || a.taskId;
+    if (a.type === "temp")      return (tempUnits || []).find(t => t.id === a.taskId)?.name || "Temperature check";
+    if (a.type === "cleaning")  return (cleaningTasks || []).find(t => t.id === a.taskId)?.name || "Cleaning task";
+    return a.taskName || a.checklistName || "Delivery check";
+  };
+  const drillTarget = (a) => {
+    const to = a.assignTo || (a.personId ? "employee" : (a.department ? "department" : "role"));
+    if (to === "employee") { const m = (opsTeam || []).find(p => p.id === a.personId); return m ? `${m.firstName} ${m.lastName || ""}`.trim() : "Employee"; }
+    if (to === "department") return a.department || "Department";
+    return a.role || "Any role";
+  };
+  const drillWindow = (a) => a.winStart || a.winEnd ? `${a.winStart || "—"}–${a.winEnd || "—"}` : "Anytime";
+  const drillState = (a) => {
+    if (isAssignmentDoneToday(a, checklistStates, todayStr)) return { label: "✓ Done", color: "emerald" };
+    if (isOverdue(a)) return { label: "⚠ Overdue", color: "red" };
+    if (isWindowOpen(a)) return { label: "Due", color: "amber" };
+    return { label: "Upcoming", color: "slate" };
+  };
+  // Active assignments for a store (direct + this store's slice of legacy brand rows).
+  const activeForStore = (store) => assignments.filter(a =>
+    isActiveToday(a) && (a.storeId === store.id || (!a.storeId && a.brandId === store.brandId)));
+  // Build a drill for a given store + metric ("scheduled"|"overdue"|"done"|"rate"|"all").
+  const openDrill = (store, metric) => {
+    let list = activeForStore(store);
+    let title = `${store.shortName || store.name}`;
+    if (metric === "overdue") { list = list.filter(a => isOpenOverdue(a, checklistStates, todayStr)); title += " · Overdue"; }
+    else if (metric === "done") { list = list.filter(a => isAssignmentDoneToday(a, checklistStates, todayStr)); title += " · Completed today"; }
+    else { title += metric === "rate" ? " · All tasks (completion rate)" : " · Scheduled today"; }
+    const rows = list.map(a => ({
+      name: drillTaskName(a), type: a.type || "checklist", icon: ({checklist:"📋",cleaning:"🧹",temp:"🌡️",delivery:"🚚"})[a.type] || "📋",
+      target: drillTarget(a), window: drillWindow(a), state: drillState(a),
+    }));
+    setDrill({ title, rows });
+  };
+  // Aggregate drill across ALL scoped stores for the top stat cards.
+  const openAggDrill = (metric) => {
+    const rows = [];
+    scopedStores.forEach(store => {
+      let list = activeForStore(store);
+      if (metric === "overdue") list = list.filter(a => isOpenOverdue(a, checklistStates, todayStr));
+      else if (metric === "done") list = list.filter(a => isAssignmentDoneToday(a, checklistStates, todayStr));
+      list.forEach(a => rows.push({
+        name: drillTaskName(a), type: a.type || "checklist", icon: ({checklist:"📋",cleaning:"🧹",temp:"🌡️",delivery:"🚚"})[a.type] || "📋",
+        store: store.shortName || store.name, target: drillTarget(a), window: drillWindow(a), state: drillState(a),
+      }));
+    });
+    const titles = { scheduled: "All scheduled today", overdue: "All overdue", done: "All completed today" };
+    setDrill({ title: titles[metric] || "Tasks", rows, showStore: true });
+  };
+
   if (allVisibleStores.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-slate-500">
@@ -26416,9 +26470,15 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Stores" value={scopedStores.length} sub="In view" icon={MapPin} accent="indigo"/>
-        <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub={scopedStores.length === 1 ? "This store" : `${scopedStores.length} stores in view`} icon={ClipboardList} accent="indigo"/>
-        <StatCard label="Overdue" value={aggregates.totalOverdue} sub={aggregates.totalOverdue ? "Action needed" : "All on time"} icon={Clock} accent={aggregates.totalOverdue ? "red" : "emerald"} alert={aggregates.totalOverdue > 0}/>
-        <StatCard label="Completed Today" value={aggregates.totalCompleted} sub="Sign-offs" icon={CheckCircle} accent="emerald"/>
+        <button type="button" onClick={() => openAggDrill("scheduled")} className="text-left cursor-pointer transition-transform hover:scale-[1.01] focus:outline-none">
+          <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub={scopedStores.length === 1 ? "This store · tap to view" : `${scopedStores.length} stores · tap to view`} icon={ClipboardList} accent="indigo"/>
+        </button>
+        <button type="button" onClick={() => openAggDrill("overdue")} className="text-left cursor-pointer transition-transform hover:scale-[1.01] focus:outline-none">
+          <StatCard label="Overdue" value={aggregates.totalOverdue} sub={aggregates.totalOverdue ? "Action needed · tap" : "All on time"} icon={Clock} accent={aggregates.totalOverdue ? "red" : "emerald"} alert={aggregates.totalOverdue > 0}/>
+        </button>
+        <button type="button" onClick={() => openAggDrill("done")} className="text-left cursor-pointer transition-transform hover:scale-[1.01] focus:outline-none">
+          <StatCard label="Completed Today" value={aggregates.totalCompleted} sub="Sign-offs · tap to view" icon={CheckCircle} accent="emerald"/>
+        </button>
       </div>
 
       <AnalysisBlock title="All Stores — Live Status">
@@ -26447,10 +26507,10 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
                       </div>
                     </td>
                     <td className="px-3 py-3 text-slate-500">{brand?.name || store.brandId}</td>
-                    <td className="px-3 py-3 text-slate-700 font-semibold">{la}</td>
-                    <td className="px-3 py-3">{od ? <Badge label={`⚠ ${od}`} color="red"/> : <Badge label="✓ On time" color="green"/>}</td>
-                    <td className="px-3 py-3 text-slate-700">{done}</td>
-                    <td className="px-3 py-3"><span className={`font-bold font-mono ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"}`}>{la ? rate+"%" : "—"}</span></td>
+                    <td className="px-3 py-3"><button type="button" onClick={() => openDrill(store, "scheduled")} className="text-slate-700 font-semibold hover:text-indigo-400 hover:underline disabled:no-underline disabled:hover:text-slate-700" disabled={!la}>{la}</button></td>
+                    <td className="px-3 py-3">{od ? <button type="button" onClick={() => openDrill(store, "overdue")} className="hover:opacity-80"><Badge label={`⚠ ${od}`} color="red"/></button> : <Badge label="✓ On time" color="green"/>}</td>
+                    <td className="px-3 py-3"><button type="button" onClick={() => openDrill(store, "done")} className="text-slate-700 hover:text-emerald-400 hover:underline disabled:no-underline disabled:hover:text-slate-700" disabled={!done}>{done}</button></td>
+                    <td className="px-3 py-3"><button type="button" onClick={() => openDrill(store, "rate")} className={`font-bold font-mono hover:underline ${rate>=80?"text-emerald-400":rate>=50?"text-amber-400":"text-red-400"} disabled:no-underline`} disabled={!la}>{la ? rate+"%" : "—"}</button></td>
                     <td className="px-3 py-3"><Badge label={rag === "red" ? "Red" : rag === "green" ? "Green" : "Amber"} color={ragColors[rag]}/></td>
                   </tr>
                 );
@@ -26459,6 +26519,42 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
           </table>
         </div>
       </AnalysisBlock>
+
+      {/* DRILL_V1 — underlying-assignments modal */}
+      {drill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setDrill(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+              <h3 className="text-sm font-bold text-white">{drill.title} <span className="text-slate-500 font-normal">· {drill.rows.length} task{drill.rows.length === 1 ? "" : "s"}</span></h3>
+              <button onClick={() => setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800">✕</button>
+            </div>
+            {drill.rows.length === 0 ? (
+              <div className="px-5 py-10 text-center text-sm text-slate-500">No tasks in this view.</div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead><tr className="text-slate-600 border-b border-slate-800 bg-slate-950/50">
+                  <th className="px-4 py-2 text-left font-semibold">Task</th>
+                  {drill.showStore && <th className="px-4 py-2 text-left font-semibold">Store</th>}
+                  <th className="px-4 py-2 text-left font-semibold">Assigned to</th>
+                  <th className="px-4 py-2 text-left font-semibold">Window</th>
+                  <th className="px-4 py-2 text-right font-semibold">Status</th>
+                </tr></thead>
+                <tbody>
+                  {drill.rows.map((r, i) => (
+                    <tr key={i} className="border-b border-slate-800/60 hover:bg-slate-800/30">
+                      <td className="px-4 py-2.5 text-slate-200"><span className="mr-1.5">{r.icon}</span>{r.name}</td>
+                      {drill.showStore && <td className="px-4 py-2.5 text-slate-400">{r.store}</td>}
+                      <td className="px-4 py-2.5 text-slate-400">{r.target}</td>
+                      <td className="px-4 py-2.5 text-slate-500 font-mono">{r.window}</td>
+                      <td className="px-4 py-2.5 text-right"><Badge label={r.state.label} color={r.state.color}/></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
