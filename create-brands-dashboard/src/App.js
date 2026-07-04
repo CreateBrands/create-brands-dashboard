@@ -21948,12 +21948,20 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     catch { return "—"; }
   };
   const openLabourDrill = (mode) => {
-    // mode: "hours" | "cost"
+    // mode: "hours" | "cost" — both grouped by DEPARTMENT (member profile
+    // department; staff without one fall under "No department"), with a
+    // subtotal header row per department, ordered by cost/hours descending.
     const punches = data.curPunch.filter(r => scopedStoreIds.has(r.storeId))
       .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (a.employeeName||"").localeCompare(b.employeeName||""));
+    const deptOf = (member) => (member && member.department) ? member.department : "No department";
     if (mode === "cost") {
       let totHours = 0, totCost = 0;
-      const rows = punches.map(p => {
+      const groups = new Map(); // dept -> { hours, cost, rows }
+      const addTo = (dept, row, h, c) => {
+        if (!groups.has(dept)) groups.set(dept, { hours: 0, cost: 0, rows: [] });
+        const g = groups.get(dept); g.hours += h; g.cost += c; g.rows.push(row);
+      };
+      punches.forEach(p => {
         const open = (p.status === "open" || !p.punchOut);
         const member = (opsTeam || []).find(m => m.id === p.employeeId);
         const salaried = isSalaried(member);
@@ -21967,24 +21975,27 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         const costCell = salaried
           ? `${fmtCurrency(salariedDailyCost(member))} /day (salaried)`
           : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
-        return [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ];
+        addTo(deptOf(member), [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ], h, rowCost);
       });
-      // Add salaried staff who didn't punch — the dashboard wage total includes
-      // their fixed daily cost, so the breakdown must show it too, or the popup
-      // total won't reconcile with the wage-cost tile. (Salaried staff who DID
-      // punch are already shown above via their punch row.)
+      // Salaried staff who didn't punch — included so the popup total reconciles
+      // with the wage-cost tile; grouped into their own department too.
       const shownIds = new Set(punches.map(p => p.employeeId));
       scopedSalaried.forEach(m => {
         if (shownIds.has(m.id)) return;
         const dayCost = salariedDailyCost(m) * daysInPeriod(period.from, period.to);
         totCost += dayCost;
-        rows.push([
+        addTo(deptOf(m), [
           `${m.firstName} ${m.lastName || ""}`.trim(),
           (m.storeIds || []).map(nameOfStore).filter(Boolean)[0] || "—",
           period.label,
           "salaried",
           `${fmtCurrency(dayCost)} (salaried)`,
-        ]);
+        ], 0, dayCost);
+      });
+      const rows = [];
+      [...groups.entries()].sort((a, b) => b[1].cost - a[1].cost).forEach(([dept, g]) => {
+        rows.push({ group: true, cells: [dept, "", "", `${g.hours.toFixed(2)}h`, fmtCurrency(g.cost)] });
+        g.rows.forEach(r => rows.push(r));
       });
       setDrill({
         title: `Labour cost breakdown · ${period.label}`,
@@ -21993,17 +22004,29 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         footer: ["Total", "", "", `${totHours.toFixed(2)}h`, fmtCurrency(totCost)],
       });
     } else {
-      // hours: Name, Start, End, Worked hours, Overtime
+      // hours: Name, Start, End, Worked hours, Overtime — same department grouping
       const totOt = punches.reduce((a, p) => a + (p.overtimeHours || 0), 0);
-      const rows = punches.map(p => {
+      const groups = new Map(); // dept -> { hours, ot, rows }
+      punches.forEach(p => {
         const open = (p.status === "open" || !p.punchOut);
-        return [
+        const member = (opsTeam || []).find(m => m.id === p.employeeId);
+        const dept = deptOf(member);
+        const h = open ? punchHours(p) : (p.hoursWorked || 0);
+        if (!groups.has(dept)) groups.set(dept, { hours: 0, ot: 0, rows: [] });
+        const g = groups.get(dept);
+        g.hours += h; g.ot += p.overtimeHours || 0;
+        g.rows.push([
           p.employeeName || "—",
           fmtTime(p.punchIn),
           open ? "on shift" : fmtTime(p.punchOut),
           open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h`,
           p.overtimeHours ? `${p.overtimeHours.toFixed(2)}h` : "—",
-        ];
+        ]);
+      });
+      const rows = [];
+      [...groups.entries()].sort((a, b) => b[1].hours - a[1].hours).forEach(([dept, g]) => {
+        rows.push({ group: true, cells: [dept, "", "", `${g.hours.toFixed(2)}h`, g.ot ? `${g.ot.toFixed(2)}h` : "—"] });
+        g.rows.forEach(r => rows.push(r));
       });
       setDrill({
         title: `Labour hours breakdown · ${period.label}`,
@@ -22050,11 +22073,20 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
               </tr></thead>
               <tbody>
                 {drill.rows.length === 0 && <tr><td colSpan={drill.columns.length} className="px-4 py-8 text-center text-[#B7A688]">No data for this period</td></tr>}
-                {drill.rows.map((r,ri) => (
+                {drill.rows.map((r,ri) => {
+                  const cells = Array.isArray(r) ? r : r.cells;
+                  const grp = !Array.isArray(r) && r.group;
+                  if (grp) return (
+                    <tr key={ri} className="border-b border-[#EADFCB] bg-[#F3E9D6]">
+                      {cells.map((cell,ci) => <td key={ci} className={`px-4 py-2 font-bold text-[#844429] ${ci===0?"text-left":"text-right tabular-nums"}`}>{cell}</td>)}
+                    </tr>
+                  );
+                  return (
                   <tr key={ri} className="border-b border-[#F0E6D5] hover:bg-[#F6EEDF]/60 transition-colors">
-                    {r.map((cell,ci) => <td key={ci} className={`px-4 py-2.5 ${ci===0?"text-left font-medium text-[#3A2E26]":"text-right text-[#6B5D4F] tabular-nums"}`}>{cell}</td>)}
+                    {cells.map((cell,ci) => <td key={ci} className={`px-4 py-2.5 ${ci===0?"text-left font-medium text-[#3A2E26]":"text-right text-[#6B5D4F] tabular-nums"}`}>{cell}</td>)}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               {drill.footer && <tfoot><tr className="border-t-2 border-[#E0D0B5] font-bold text-[#3A2E26] bg-[#F6EEDF]">
                 {drill.footer.map((c,i) => <td key={i} className={`px-4 py-3 ${i===0?"text-left":"text-right tabular-nums"}`}>{c}</td>)}
