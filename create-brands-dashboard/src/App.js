@@ -45589,18 +45589,21 @@ function PresenceCheckPanel({ r }) {
 // is HELD out of the total until approved. Grace comparisons are numeric —
 // ISO strings from different sources differ textually even at the same time.
 function PayBreakdown({ r, member }) {
-  if (!r || !r.punchIn || !r.punchOut) return null;
+  // Hooks FIRST (rules of hooks — no hook may follow an early return).
+  // PRESENCE_CHECK_V1 — lazy-load this punch's location checks for the timeline.
+  const punchId = r ? r.id : null;
+  const isClosed = !!(r && r.punchIn && r.punchOut);
+  const [presence, setPresence] = useState([]);
+  useEffect(() => {
+    if (!punchId || !isClosed) return;
+    let stop = false;
+    fetchPresenceChecks(punchId).then(cs => { if (!stop) setPresence(cs || []); }).catch(() => {});
+    return () => { stop = true; };
+  }, [punchId, isClosed]);
+  if (!isClosed) return null;
   const salaried = isSalaried(member);
   const rate = (member?.hourlyRate != null ? member.hourlyRate : r.hourlyRate) || 0;
   const mult = OT_RULES.multiplier || 1;
-
-  // PRESENCE_CHECK_V1 — lazy-load this punch's location checks for the timeline.
-  const [presence, setPresence] = useState([]);
-  useEffect(() => {
-    let stop = false;
-    fetchPresenceChecks(r.id).then(cs => { if (!stop) setPresence(cs || []); }).catch(() => {});
-    return () => { stop = true; };
-  }, [r.id]);
 
   const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
   const fmtMin = (mins) => { const m = Math.round(Math.abs(mins)); const h = Math.floor(m/60); return h > 0 ? `${h}h ${String(m%60).padStart(2,"0")}m` : `${m}m`; };
