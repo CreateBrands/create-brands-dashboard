@@ -11067,6 +11067,7 @@ function DistOrderBuilderView() {
   const [dirty, setDirty] = useState(false);
   // Drag state: { type: "item"|"collection"|"department", id, from }
   const [drag, setDrag] = useState(null);
+  const [armed, setArmed] = useState(null); // "item:ID" | "coll:ID" | "dept:ID" — which handle is held
   const [collapsed, setCollapsed] = useState({}); // collId -> true when collapsed
 
   const itemById = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
@@ -11209,15 +11210,15 @@ function DistOrderBuilderView() {
     const isDragging = drag && drag.type === "item" && drag.id === itemId;
     return (
       <div
-        draggable
-        onDragStart={() => onItemDragStart(itemId, collId)}
-        onDragEnd={() => setDrag(null)}
+        draggable={armed === `item:${itemId}`}
+        onDragStart={(e) => { e.stopPropagation(); onItemDragStart(itemId, collId); }}
+        onDragEnd={() => { setDrag(null); setArmed(null); }}
         onDragOver={allowDrop("item")}
-        onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "item" && drag.id !== itemId) moveItem(drag.id, drag.from, collId, itemId); setDrag(null); }}
-        className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-grab active:cursor-grabbing"
+        onDrop={(e) => { e.preventDefault(); if (drag && drag.type === "item" && drag.id !== itemId) moveItem(drag.id, drag.from, collId, itemId); setDrag(null); setArmed(null); }}
+        className="flex items-center gap-3 px-3 py-2 rounded-lg"
         style={{ background: isDragging ? C.surfaceAlt : "transparent", border: `1px solid ${isDragging ? C.accentSoft : "transparent"}`, opacity: isDragging ? 0.5 : 1 }}
       >
-        <GripVertical size={14} style={{ color: C.inkFaint }} className="flex-shrink-0"/>
+        <span onMouseDown={() => setArmed(`item:${itemId}`)} onMouseUp={() => setArmed(null)} className="flex-shrink-0 cursor-grab active:cursor-grabbing" title="Drag to reorder"><GripVertical size={14} style={{ color: C.inkFaint }}/></span>
         <div className="w-8 h-8 rounded-md overflow-hidden flex-shrink-0 flex items-center justify-center" style={{ background: C.surfaceAlt }}>
           {it.imageUrl ? <img src={it.imageUrl} alt="" className="h-full w-full object-contain p-0.5" onError={e => { e.target.style.display = "none"; }}/> : <Package size={14} style={{ color: C.inkFaint }}/>}
         </div>
@@ -11236,16 +11237,16 @@ function DistOrderBuilderView() {
     const isCollapsed = collapsed[coll.id];
     return (
       <div
-        draggable
+        draggable={armed === `coll:${coll.id}`}
         onDragStart={(e) => { e.stopPropagation(); onCollDragStart(coll.id); }}
-        onDragEnd={() => setDrag(null)}
+        onDragEnd={() => { setDrag(null); setArmed(null); }}
         onDragOver={allowDrop("collection")}
-        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (drag && drag.type === "collection" && drag.id !== coll.id) moveCollection(drag.id, deptId, coll.id); setDrag(null); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (drag && drag.type === "collection" && drag.id !== coll.id) moveCollection(drag.id, deptId, coll.id); setDrag(null); setArmed(null); }}
         className="rounded-xl"
         style={{ background: C.surface, border: `1px solid ${isDragging ? C.accentSoft : C.line}`, opacity: isDragging ? 0.5 : 1 }}
       >
         <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: isCollapsed ? "none" : `1px solid ${C.line}` }}>
-          <GripVertical size={15} style={{ color: C.inkFaint }} className="cursor-grab flex-shrink-0"/>
+          <span onMouseDown={() => setArmed(`coll:${coll.id}`)} onMouseUp={() => setArmed(null)} className="cursor-grab active:cursor-grabbing flex-shrink-0" title="Drag to reorder"><GripVertical size={15} style={{ color: C.inkFaint }}/></span>
           <button onClick={() => setCollapsed(p => ({ ...p, [coll.id]: !p[coll.id] }))} className="flex-shrink-0" style={{ color: C.inkFaint }}>
             {isCollapsed ? <ChevronRight size={15}/> : <ChevronDown size={15}/>}
           </button>
@@ -11277,12 +11278,12 @@ function DistOrderBuilderView() {
         style={{ background: C.surfaceAlt, border: `1px solid ${isDragging ? C.accentSoft : C.line}`, opacity: isDragging ? 0.6 : 1 }}
       >
         <div
-          draggable
-          onDragStart={() => onDeptDragStart(dept.id)}
-          onDragEnd={() => setDrag(null)}
-          className="flex items-center gap-2 mb-2.5 px-1 cursor-grab"
+          draggable={armed === `dept:${dept.id}`}
+          onDragStart={(e) => { e.stopPropagation(); onDeptDragStart(dept.id); }}
+          onDragEnd={() => { setDrag(null); setArmed(null); }}
+          className="flex items-center gap-2 mb-2.5 px-1"
         >
-          <GripVertical size={16} style={{ color: C.accent }} className="flex-shrink-0"/>
+          <span onMouseDown={() => setArmed(`dept:${dept.id}`)} onMouseUp={() => setArmed(null)} className="cursor-grab active:cursor-grabbing flex-shrink-0" title="Drag to reorder department"><GripVertical size={16} style={{ color: C.accent }}/></span>
           <span className="text-base font-black" style={{ color: C.ink }}>{dept.name}</span>
           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ background: C.surface, color: C.inkSoft, border: `1px solid ${C.line}` }}>{colls.length} collection{colls.length===1?"":"s"}</span>
         </div>
