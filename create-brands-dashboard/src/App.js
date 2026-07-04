@@ -11925,6 +11925,27 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     });
   }, [catalogue, cat, search, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // When browsing a whole department ("All" collections), group the visible
+  // products by collection so the page shows every collection stacked with a
+  // heading — Cakes, then Cheesecakes, then Milk Cakes — rather than one tab at
+  // a time. A product can sit in multiple collections; it appears under each.
+  // Anything with no collection falls into a trailing "Other" group.
+  const groupedVisible = useMemo(() => {
+    if (cat !== "All") return null; // a specific collection is selected → flat grid
+    if (!activeCollections.length) return null; // no collections → flat grid
+    const groups = activeCollections.map(c => ({ id: c.id, name: c.name, items: [] }));
+    const byId = new Map(groups.map(g => [g.id, g]));
+    const other = { id: "__other", name: "Other", items: [] };
+    visible.forEach(i => {
+      const ids = (i.collectionIds || []).filter(id => byId.has(id));
+      if (ids.length === 0) { other.items.push(i); return; }
+      ids.forEach(id => byId.get(id).items.push(i));
+    });
+    const result = groups.filter(g => g.items.length > 0);
+    if (other.items.length > 0) result.push(other);
+    return result;
+  }, [visible, cat, activeCollections]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // "Buy again": items this customer has ordered before, ranked by how many
   // separate orders they appear in (frequency), then most-recent. Mapped to the
   // CURRENT catalogue so prices/availability are live. Powers the quick panel.
@@ -11957,6 +11978,65 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const cleanName = (name) => name.replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || name;
 
   const cartLines = useMemo(() => Object.entries(cart).map(([itemId, qty]) => { const it = catalogue.find(c => c.id === itemId); return it ? { ...it, qty } : null; }).filter(Boolean), [cart, catalogue]);
+
+  // Reusable single-item renderers so the catalogue can render either as one
+  // flat grid (a collection is selected) or grouped under collection headings.
+  const ItemCard = (i) => {
+    const qty = cart[i.id] || 0;
+    return (
+      <div key={i.id} className="group rounded-2xl p-3 flex flex-col transition-all" style={qty>0 ? { backgroundColor: "#FBF6EC", border: "2px solid #5C9442" } : { backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+        <div className="relative">
+          <ProductImage i={i}/>
+          {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full text-xs font-bold flex items-center justify-center shadow-lg" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{qty}</span>}
+        </div>
+        <div className="mt-3 flex-1">
+          <div className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+          <div className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#9A8770" }}><Package size={11}/> {unitLabel(i)}</div>
+        </div>
+        <div className="mt-2.5 flex items-end justify-between gap-2">
+          <div className="text-lg font-bold" style={{ color: "#844429" }}>{gbp(i.price)}</div>
+          {qty > 0 ? (
+            <div className="flex items-center gap-1">
+              <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
+              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+              <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
+            </div>
+          ) : (
+            <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/> Add</button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const ItemRow = (i) => {
+    const qty = cart[i.id] || 0;
+    return (
+      <div key={i.id} className="flex items-center gap-3 px-3 py-2.5" style={qty>0 ? { backgroundColor: "#E4EFD9", borderBottom: "1px solid #F0E4D2" } : { borderBottom: "1px solid #F0E4D2" }}>
+        <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0" style={{ backgroundColor: "#F0E4D2" }}><ProductImage i={i} size="h-10"/></div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+          <div className="text-[11px] flex items-center gap-2" style={{ color: "#9A8770" }}><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span style={{ color: "#A8835C" }}>{i.sku}</span>}</div>
+        </div>
+        <div className="text-sm font-bold w-16 text-right flex-shrink-0" style={{ color: "#844429" }}>{gbp(i.price)}</div>
+        <div className="flex-shrink-0 w-[104px] flex justify-end">
+          {qty > 0 ? (
+            <div className="flex items-center gap-1">
+              <button onClick={() => bump(i.id, -1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
+              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-8 text-center py-1 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+              <button onClick={() => bump(i.id, 1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
+            </div>
+          ) : (
+            <button onClick={() => bump(i.id, 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={13}/> Add</button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderGrid = (items) => viewMode === "list"
+    ? <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", backgroundColor: "#FBF6EC" }}>{items.map(ItemRow)}</div>
+    : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-4">{items.map(ItemCard)}</div>;
   const cartTotal = useMemo(() => cartLines.reduce((s, l) => s + l.qty * (Number(l.price) || 0), 0), [cartLines]);
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
 
@@ -12106,65 +12186,23 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               )}
               {visible.length === 0 ? (
                 <div className="text-center text-sm py-16" style={{ color: "#9A8770" }}>No products match. Try another collection or clear the search.</div>
-              ) : viewMode === "list" ? (
-                /* ── LIST VIEW — dense rows, best for 500+ items ── */
-                <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", backgroundColor: "#FBF6EC" }}>
-                  {visible.map(i => {
-                    const qty = cart[i.id] || 0;
-                    return (
-                      <div key={i.id} className="flex items-center gap-3 px-3 py-2.5" style={qty>0 ? { backgroundColor: "#E4EFD9", borderBottom: "1px solid #F0E4D2" } : { borderBottom: "1px solid #F0E4D2" }}>
-                        <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0" style={{ backgroundColor: "#F0E4D2" }}><ProductImage i={i} size="h-10"/></div>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
-                          <div className="text-[11px] flex items-center gap-2" style={{ color: "#9A8770" }}><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span style={{ color: "#A8835C" }}>{i.sku}</span>}</div>
-                        </div>
-                        <div className="text-sm font-bold w-16 text-right flex-shrink-0" style={{ color: "#844429" }}>{gbp(i.price)}</div>
-                        <div className="flex-shrink-0 w-[104px] flex justify-end">
-                          {qty > 0 ? (
-                            <div className="flex items-center gap-1">
-                              <button onClick={() => bump(i.id, -1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
-                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-8 text-center py-1 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
-                              <button onClick={() => bump(i.id, 1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
-                            </div>
-                          ) : (
-                            <button onClick={() => bump(i.id, 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={13}/> Add</button>
-                          )}
-                        </div>
+              ) : groupedVisible ? (
+                /* ── GROUPED VIEW — every collection stacked under its heading ── */
+                <div className="space-y-7">
+                  {groupedVisible.map(g => (
+                    <div key={g.id}>
+                      <div className="flex items-center gap-2 mb-3 sticky top-0 z-10 py-1" style={{ backgroundColor: "#F4E9DD" }}>
+                        <h3 className="text-base font-bold" style={{ color: "#3A2E26" }}>{g.name}</h3>
+                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#9A8770" }}>{g.items.length}</span>
+                        <div className="flex-1 h-px" style={{ backgroundColor: "#E8DCC6" }}/>
                       </div>
-                    );
-                  })}
+                      {renderGrid(g.items)}
+                    </div>
+                  ))}
                 </div>
               ) : (
-                /* ── CARD VIEW ── */
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-4">
-                  {visible.map(i => {
-                    const qty = cart[i.id] || 0;
-                    return (
-                      <div key={i.id} className="group rounded-2xl p-3 flex flex-col transition-all" style={qty>0 ? { backgroundColor: "#FBF6EC", border: "2px solid #5C9442" } : { backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
-                        <div className="relative">
-                          <ProductImage i={i}/>
-                          {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full text-xs font-bold flex items-center justify-center shadow-lg" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{qty}</span>}
-                        </div>
-                        <div className="mt-3 flex-1">
-                          <div className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
-                          <div className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#9A8770" }}><Package size={11}/> {unitLabel(i)}</div>
-                        </div>
-                        <div className="mt-2.5 flex items-end justify-between gap-2">
-                          <div className="text-lg font-bold" style={{ color: "#844429" }}>{gbp(i.price)}</div>
-                          {qty > 0 ? (
-                            <div className="flex items-center gap-1">
-                              <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
-                              <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
-                              <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
-                            </div>
-                          ) : (
-                            <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/> Add</button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                /* ── FLAT VIEW — a single collection is selected ── */
+                renderGrid(visible)
               )}
             </div>
           </div>
