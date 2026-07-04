@@ -156,7 +156,7 @@ import {
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
   upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
-  addPackagingPayment, deletePackagingPayment, computePackLineStatus,
+  addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
   fetchDistMovements, addDistMovement, seedDistOpeningStock,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
   fetchDistPurchaseOrders, createDistPurchaseOrder, setDistPurchaseOrderStatus,
@@ -9914,14 +9914,18 @@ const shipStageLabel = (stage) => (PACKSHIP_STAGES.find(s=>s.key===stage)?.label
 
 function PackagingOrdersView({ currentUser }) {
   const [orders, setOrders] = useState([]);
+  const [dash, setDash] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [screen, setScreen] = useState("dashboard"); // dashboard | orders
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
-    try { setOrders(await fetchPackagingOrders()); }
-    catch (e) { setErr(e.message); } finally { setLoading(false); }
+    try {
+      const [o, dsh] = await Promise.all([fetchPackagingOrders(), fetchPackagingDashboard().catch(()=>null)]);
+      setOrders(o); setDash(dsh);
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -9929,12 +9933,20 @@ function PackagingOrdersView({ currentUser }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <h2 className="text-lg font-black text-white">Packaging Orders</h2>
+      <div className="flex items-center gap-2 flex-wrap">
+        <h2 className="text-lg font-black text-white">Packaging</h2>
+        <div className="flex gap-1 bg-slate-900 rounded-xl p-1">
+          {[["dashboard","Dashboard"],["orders","Orders"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setScreen(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${screen===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
+          ))}
+        </div>
         <button onClick={()=>setNewOpen(true)} className="ml-auto px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New order</button>
       </div>
       {err && <div className="text-sm text-red-400">{err}</div>}
-      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> :
+
+      {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading…</div> : screen === "dashboard" ? (
+        <PackagingDashboard dash={dash} orders={orders} onOpenOrder={setOpenId}/>
+      ) : (
         orders.length === 0 ? <div className="text-center py-16 text-sm text-slate-600">No packaging orders yet. Create one to track a supplier order from design to receipt.</div> : (
         <div className="space-y-2">
           {orders.map(o => (
@@ -9955,9 +9967,115 @@ function PackagingOrdersView({ currentUser }) {
             </button>
           ))}
         </div>
-      )}
+      ))}
       {newOpen && <PackagingOrderEditModal onClose={()=>setNewOpen(false)} onSaved={(o)=>{ setNewOpen(false); load(); setOpenId(o.id); }} />}
     </div>
+  );
+}
+
+// Rich pipeline dashboard: KPI cards, an order-stage pipeline strip, and a
+// per-item table showing quantities at each stage next to live on-hand stock.
+function PackagingDashboard({ dash, orders, onOpenOrder }) {
+  if (!dash || dash.items.length === 0) {
+    return (
+      <div className="space-y-4">
+        <PackagingPipelineStrip orders={orders} onOpenOrder={onOpenOrder}/>
+        <div className="text-center py-12 text-sm text-slate-600">No items in active orders yet. Add line items linked to inventory to see the stage pipeline.</div>
+      </div>
+    );
+  }
+  const t = dash.totals;
+  const fmt = (n) => (n||0).toLocaleString();
+  const cards = [
+    { label:"Active orders", value: dash.orderCount, sub:"in progress", color:"text-white" },
+    { label:"On order", value: fmt(t.ordered), sub:"units total", color:"text-indigo-300" },
+    { label:"At supplier", value: fmt(t.atSupplier), sub:"awaiting shipment", color:"text-slate-300" },
+    { label:"In transit", value: fmt(t.inTransit), sub:"sea / air", color:"text-amber-300" },
+    { label:"Received", value: fmt(t.received), sub:"landed via orders", color:"text-emerald-300" },
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {cards.map(c => (
+          <div key={c.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
+            <div className="text-[10px] uppercase tracking-wider text-slate-600 font-bold">{c.label}</div>
+            <div className={`text-2xl font-bold ${c.color} mt-1`}>{c.value}</div>
+            <div className="text-[10px] text-slate-600">{c.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <PackagingPipelineStrip orders={orders} onOpenOrder={onOpenOrder}/>
+
+      {/* Per-item stage board with on-hand stock */}
+      <AnalysisBlock title="Items across stages — with live stock on hand">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-700 text-slate-600">
+                <th className="px-3 py-2 text-left font-semibold">Item</th>
+                <th className="px-3 py-2 text-right font-semibold">On hand</th>
+                <th className="px-3 py-2 text-right font-semibold">On order</th>
+                <th className="px-3 py-2 text-right font-semibold">Not shipped</th>
+                <th className="px-3 py-2 text-right font-semibold">At supplier</th>
+                <th className="px-3 py-2 text-right font-semibold">In transit</th>
+                <th className="px-3 py-2 text-right font-semibold">Received</th>
+                <th className="px-3 py-2 text-right font-semibold">Incoming</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dash.items.map((r,i) => (
+                <tr key={i} className="border-b border-slate-800/60 hover:bg-slate-800/30">
+                  <td className="px-3 py-2.5">
+                    <div className="text-white font-medium">{r.name}</div>
+                    <div className="text-[10px] text-slate-600">{r.linked ? r.orderRefs.join(", ") : <span className="text-amber-500">not linked to inventory</span>}</div>
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold text-white">{r.onHand==null ? "—" : fmt(r.onHand)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-400">{fmt(r.ordered)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-500">{fmt(r.notYetShipped)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-300">{fmt(r.atSupplier)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-amber-400">{fmt(r.inTransit)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{fmt(r.receivedViaOrders)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold text-sky-300">{fmt(r.incoming)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="text-[10px] text-slate-600 mt-2">On hand = current distribution stock. Incoming = at supplier + in transit + not-yet-shipped (still to arrive). Received here counts units landed via these orders.</div>
+      </AnalysisBlock>
+    </div>
+  );
+}
+
+// Order-stage pipeline: a horizontal strip of the procurement stages with a
+// count of orders currently sitting at each, and the orders listed under each.
+function PackagingPipelineStrip({ orders, onOpenOrder }) {
+  const active = (orders||[]).filter(o => o.stage !== "cancelled");
+  const stages = PACKORDER_STAGES.filter(s => s.key !== "cancelled" && s.key !== "closed");
+  const byStage = (k) => active.filter(o => o.stage === k);
+  return (
+    <AnalysisBlock title="Order pipeline">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {stages.map(s => {
+          const list = byStage(s.key);
+          return (
+            <div key={s.key} className="flex-shrink-0 w-40">
+              <div className={`rounded-t-xl px-2.5 py-1.5 text-[10px] font-bold ${packStageColor(s.key)}`}>{s.label} · {list.length}</div>
+              <div className="bg-slate-950 rounded-b-xl border border-slate-800 border-t-0 p-1.5 space-y-1 min-h-[44px]">
+                {list.map(o => (
+                  <button key={o.id} onClick={()=>onOpenOrder(o.id)} className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 transition-colors">
+                    <div className="text-[11px] font-semibold text-white truncate">{o.ref || "Untitled"}</div>
+                    <div className="text-[9px] text-slate-600 truncate">{o.supplier || "—"}</div>
+                  </button>
+                ))}
+                {list.length === 0 && <div className="text-[9px] text-slate-700 text-center py-2">—</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </AnalysisBlock>
   );
 }
 
@@ -10182,6 +10300,7 @@ function PackagingLineModal({ line, orderId, distItems, onClose, onSaved, onDele
     unitPrice: line.unitPrice!=null?String(line.unitPrice):"", distItemId: line.distItemId||"", notes: line.notes||"",
   });
   const [busy,setBusy]=useState(false); const [confirmDel,setConfirmDel]=useState(false);
+  const prevItemName = useRef(line.name || "");
   const set=(k,v)=>setF(s=>({...s,[k]:v}));
   const save=async()=>{ if(!f.name.trim()){alert("Item name required");return;} setBusy(true);
     try{ await upsertPackagingLine({ id:isNew?undefined:line.id, orderId, name:f.name.trim(), spec:f.spec.trim(), qty:Math.max(0,Math.round(Number(f.qty)||0)), unitPrice:Number(f.unitPrice)||0, distItemId:f.distItemId||null, notes:f.notes }); onSaved(); }
@@ -10194,19 +10313,20 @@ function PackagingLineModal({ line, orderId, distItems, onClose, onSaved, onDele
       {!confirmDel && <><button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button><button disabled={busy} onClick={save} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold">Save</button></>}
     </>}>
       <div className="space-y-3">
-        <div><label className={labelCls}>Item name *</label><input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Kraft box 12oz" className={inputCls}/></div>
+        <div><label className={labelCls}>Inventory item *</label>
+          <select value={f.distItemId} onChange={e=>{ const id=e.target.value; const it=distItems.find(x=>x.id===id); set("distItemId",id); if(it && (!f.name.trim() || f.name===prevItemName.current)){ set("name", it.name); prevItemName.current = it.name; } }} className={selCls}>
+            <option value="">— select from inventory —</option>
+            {distItems.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+          <div className="text-[10px] text-slate-600 mt-1">Pulls the item from distribution inventory. Its quantity is added to on-hand stock when a shipment is received.</div>
+        </div>
+        <div><label className={labelCls}>Display name *</label><input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Auto-filled from inventory — edit if needed" className={inputCls}/></div>
         <div><label className={labelCls}>Spec</label><input value={f.spec} onChange={e=>set("spec",e.target.value)} placeholder="e.g. double-wall, printed 2 colour" className={inputCls}/></div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className={labelCls}>Quantity</label><input type="number" min="0" value={f.qty} onChange={e=>set("qty",e.target.value)} placeholder="10000" className={inputCls}/></div>
           <div><label className={labelCls}>Unit price ({line.currency||"GBP"})</label><input type="number" step="0.0001" value={f.unitPrice} onChange={e=>set("unitPrice",e.target.value)} className={inputCls}/></div>
         </div>
-        <div><label className={labelCls}>Lands into inventory item</label>
-          <select value={f.distItemId} onChange={e=>set("distItemId",e.target.value)} className={selCls}>
-            <option value="">— not linked (won't update inventory) —</option>
-            {distItems.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
-          </select>
-          <div className="text-[10px] text-slate-600 mt-1">On receipt, this line's quantity is added to the chosen distribution item.</div>
-        </div>
+
       </div>
     </Modal>
   );

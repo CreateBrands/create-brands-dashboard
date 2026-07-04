@@ -12895,3 +12895,65 @@ export function computePackLineStatus(lines, shipments) {
     return { line, ordered: Number(line.qty) || 0, received, inTransit, atSupplier, notYetShipped };
   });
 }
+
+// PACKORDER dashboard aggregate: across all (optionally open) packaging orders,
+// roll every line up by stage bucket and attach live distribution on-hand stock.
+// Returns { items: [...perDistItem], totals, orderCount }.
+export async function fetchPackagingDashboard({ includeClosed = false } = {}) {
+  const orders = await fetchPackagingOrders();
+  const active = includeClosed ? orders : orders.filter(o => o.stage !== "closed" && o.stage !== "cancelled");
+  const onHand = await computeDistOnHand();
+  // Pull lines + shipments for the active orders in parallel.
+  const details = await Promise.all(active.map(o => fetchPackagingOrderDetail(o.id).catch(() => null)));
+  const distItems = await fetchDistItems().catch(() => []);
+  const itemName = new Map(distItems.map(i => [i.id, i.name]));
+
+  // Per distribution item, accumulate quantities in each stage bucket.
+  const byItem = new Map(); // distItemId -> { name, ordered, atSupplier, inTransit, receivedViaOrders, onHand, orders:Set }
+  const inTransitStages = new Set(["shipped_sea", "shipped_air", "at_destination"]);
+  let ordersTracked = 0;
+
+  details.forEach((d, idx) => {
+    if (!d) return;
+    ordersTracked++;
+    const status = computePackLineStatus(d.lines, d.shipments);
+    status.forEach(st => {
+      const key = st.line.distItemId || `unlinked:${st.line.id}`;
+      if (!byItem.has(key)) byItem.set(key, {
+        distItemId: st.line.distItemId || null,
+        name: st.line.distItemId ? (itemName.get(st.line.distItemId) || st.line.name) : st.line.name,
+        linked: !!st.line.distItemId,
+        ordered: 0, atSupplier: 0, inTransit: 0, receivedViaOrders: 0, notYetShipped: 0,
+        orderRefs: new Set(),
+      });
+      const row = byItem.get(key);
+      row.ordered += st.ordered;
+      row.atSupplier += st.atSupplier;
+      row.inTransit += st.inTransit;
+      row.receivedViaOrders += st.received;
+      row.notYetShipped += st.notYetShipped;
+      row.orderRefs.add(active[idx].ref || active[idx].id);
+    });
+  });
+
+  const items = [...byItem.values()].map(r => ({
+    ...r,
+    orderRefs: [...r.orderRefs],
+    onHand: r.distItemId ? (onHand.get(r.distItemId) || 0) : null,
+    incoming: r.atSupplier + r.inTransit + r.notYetShipped, // still to arrive
+  })).sort((a, b) => (b.incoming - a.incoming) || a.name.localeCompare(b.name));
+
+  const totals = items.reduce((t, r) => ({
+    ordered: t.ordered + r.ordered,
+    atSupplier: t.atSupplier + r.atSupplier,
+    inTransit: t.inTransit + r.inTransit,
+    received: t.received + r.receivedViaOrders,
+    notYetShipped: t.notYetShipped + r.notYetShipped,
+  }), { ordered: 0, atSupplier: 0, inTransit: 0, received: 0, notYetShipped: 0 });
+
+  // Stage distribution of the ORDERS themselves (for the pipeline strip).
+  const stageCounts = {};
+  active.forEach(o => { stageCounts[o.stage] = (stageCounts[o.stage] || 0) + 1; });
+
+  return { items, totals, orderCount: active.length, ordersTracked, stageCounts };
+}
