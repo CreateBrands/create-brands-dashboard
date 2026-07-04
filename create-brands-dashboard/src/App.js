@@ -49049,16 +49049,46 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: t
   const derived = (() => {
     if (tabsOverride || !liveGroups || !liveGroups.length) return null;
     const flat = liveGroups.flatMap(g => g.items);
-    const dest = (it) => {
+    // Resolve a top-level item to a bottom-tab destination.
+    const destOf = (it, labelOverride) => {
       if (it.children && it.children.length) {
         const first = it.children[0];
         return first.tab && first.view
-          ? { key: it.key, label: it.label, icon: it.icon, view: first.view, tab: first.tab }
-          : { key: first.key, label: it.label, icon: it.icon };
+          ? { key: it.key, label: labelOverride || it.label, icon: it.icon, view: first.view, tab: first.tab }
+          : { key: first.key, label: labelOverride || it.label, icon: it.icon };
       }
-      return { key: it.key, label: it.label, icon: it.icon };
+      return { key: it.key, label: labelOverride || it.label, icon: it.icon };
     };
-    return flat.slice(0, 4).map(dest);
+    // Resolve a specific CHILD (sub-nav item) to a destination.
+    const findChild = (childKey, labelOverride) => {
+      for (const it of flat) {
+        const c = (it.children || []).find(ch => ch.key === childKey);
+        if (c) return c.tab && c.view
+          ? { key: c.key, label: labelOverride || c.label, icon: c.icon, view: c.view, tab: c.tab }
+          : { key: c.key, label: labelOverride || c.label, icon: c.icon };
+      }
+      return null;
+    };
+    const findItem = (itemKey, labelOverride) => {
+      const it = flat.find(i => i.key === itemKey);
+      return it ? destOf(it, labelOverride) : null;
+    };
+    // MOBILE_NAV_PRIORITY — the four tabs you want, in order. Each entry tries a
+    // child key first, then an item key. Missing/hidden ones are skipped.
+    const WANT = [
+      findChild("dashboard:overview", "Dashboard"),
+      findChild("dashboard:store-analytics", "Analytics"),
+      findChild("operations:ops-network", "Ops"),
+      findChild("comms:schedule", "Schedule"),
+    ].filter(Boolean);
+    // Top up to 4 from the front of the nav if any were unavailable, avoiding dupes.
+    const picked = [...WANT];
+    for (const it of flat) {
+      if (picked.length >= 4) break;
+      const d = destOf(it);
+      if (!picked.some(p => p.key === d.key)) picked.push(d);
+    }
+    return picked.slice(0, 4);
   })();
   const tabs = tabsOverride || derived || [
     { key: "store-analytics", label: "Home",     icon: LayoutDashboard },
