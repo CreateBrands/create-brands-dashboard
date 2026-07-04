@@ -26371,7 +26371,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
       totalCompleted: rows.reduce((a, r) => a + r.done, 0),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortedStores, assignments, auditTrail]);
+  }, [scopedStores, assignments, auditTrail]);
 
   if (allVisibleStores.length === 0) {
     return (
@@ -26400,7 +26400,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Stores" value={scopedStores.length} sub="In view" icon={MapPin} accent="indigo"/>
-        <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub="All stores" icon={ClipboardList} accent="indigo"/>
+        <StatCard label="Assignments Today" value={aggregates.totalScheduled} sub={scopedStores.length === 1 ? "This store" : `${scopedStores.length} stores in view`} icon={ClipboardList} accent="indigo"/>
         <StatCard label="Overdue" value={aggregates.totalOverdue} sub={aggregates.totalOverdue ? "Action needed" : "All on time"} icon={Clock} accent={aggregates.totalOverdue ? "red" : "emerald"} alert={aggregates.totalOverdue > 0}/>
         <StatCard label="Completed Today" value={aggregates.totalCompleted} sub="Sign-offs" icon={CheckCircle} accent="emerald"/>
       </div>
