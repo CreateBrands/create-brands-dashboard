@@ -44635,10 +44635,26 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   const pendingApproval = enriched.filter(r => !r.approved && r.status === "closed" && (r.overtimeHrs > 0 || r.isUnscheduled)).length;
   const pendingOT       = enriched.filter(r => r.overtimeHrs > 0 && !r.overtimeApproved && r.overtimeReason).length;
 
-  const handleApprove = (r) => onUpdate({ ...r,
-    approved: true, approvedBy: currentUser.name,
-    scheduledStart: r.scheduledStart, scheduledEnd: r.scheduledEnd,
-    overtimeHours: r.overtimeHrs, updatedAt: new Date().toISOString() });
+  const handleApprove = (r) => {
+    // If the shift carries undecided overtime, make the OT decision explicit —
+    // otherwise the shift gets approved while the OT silently stays held.
+    const otPending = (r.overtimeHrs || 0) > 0 && !r.overtimeApproved && !r.overtimeRejectedReason;
+    if (otPending && window.confirm(
+      `This shift includes ${fmtHM(r.overtimeHrs)} overtime awaiting a decision.\n\n` +
+      `OK — approve the shift AND the overtime\n` +
+      `Cancel — approve the shift only (overtime stays held for a separate decision)`)) {
+      return onUpdate({ ...r,
+        overtimeApproved: true, overtimeApprovedBy: currentUser.name,
+        overtimeHours: r.overtimeHrs,
+        approved: true, approvedBy: r.approvedBy || currentUser.name,
+        scheduledStart: r.scheduledStart, scheduledEnd: r.scheduledEnd,
+        updatedAt: new Date().toISOString() });
+    }
+    return onUpdate({ ...r,
+      approved: true, approvedBy: currentUser.name,
+      scheduledStart: r.scheduledStart, scheduledEnd: r.scheduledEnd,
+      overtimeHours: r.overtimeHrs, updatedAt: new Date().toISOString() });
+  };
 
   const handleApproveOT = (r) => onUpdate({ ...r,
     overtimeApproved: true, overtimeApprovedBy: currentUser.name,
@@ -44761,7 +44777,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
               const hasOT  = r.overtimeHrs > 0;
               const needsApproval = r.status === "closed" && !r.approved && (hasOT || r.isUnscheduled);
               const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
-              const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
+              const needsOTApproval = hasOT && !r.overtimeApproved && !isRejected; // manager can decide OT with or without an employee reason
               const locked = isPunchLocked && isPunchLocked(r);
               let pill = null;
               if (r.status === "open") pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Clocked in</span>;
@@ -44855,7 +44871,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             const hasOT  = r.overtimeHrs > 0;
             const needsApproval = r.status === "closed" && !r.approved && (hasOT || r.isUnscheduled);
             const isRejected = r.overtimeApproved === false && !!r.overtimeRejectedReason;
-            const needsOTApproval = hasOT && r.overtimeReason && !r.overtimeApproved && !isRejected;
+            const needsOTApproval = hasOT && !r.overtimeApproved && !isRejected; // manager can decide OT with or without an employee reason
             const otResolved = !hasOT || r.overtimeApproved || isRejected;
             const unschedResolved = !r.isUnscheduled || r.approved;
             const isSettled = otResolved && unschedResolved && r.status !== "open";
