@@ -12848,9 +12848,19 @@ export async function receivePackagingShipment({ shipmentId, receivedBy }) {
     const qty = Number(qtyByLine[line.id]) || 0;
     if (qty > 0 && line.dist_item_id) {
       try {
+        // Idempotency: skip if this line's receipt movement already exists.
+        const ref = `packorder:${shipmentId}:${line.id}`;
+        const { data: existing } = await supabase.from("dist_stock_movements").select("id").eq("source_ref", ref).limit(1);
+        if (existing && existing.length) { posted.push({ lineId: line.id, itemId: line.dist_item_id, qty, skipped: true }); continue; }
+        // Movements require a batch. Create one per received line, using the
+        // line's unit price as landed cost so packaging costing carries through.
+        const batch = await createDistBatch({
+          itemId: line.dist_item_id, batchNo: `PKG-${sh.ref || shipmentId}`,
+          landedCost: Number(line.unit_price) || 0, costMethod: "receipt", sourceKind: "packaging_order",
+        });
         const mv = await addDistMovement({
-          itemId: line.dist_item_id, qty, type: "receipt", sourceKind: "packaging_order",
-          sourceRef: `packorder:${shipmentId}:${line.id}`, createdBy: receivedBy || "System",
+          itemId: line.dist_item_id, batchId: batch ? batch.id : null, qty, type: "receipt",
+          sourceKind: "packaging_order", sourceRef: ref, createdBy: receivedBy || "System",
         });
         if (mv) posted.push({ lineId: line.id, itemId: line.dist_item_id, qty });
       } catch (e) { /* one line failing shouldn't block the rest */ }
