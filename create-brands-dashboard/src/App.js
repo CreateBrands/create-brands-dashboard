@@ -9919,6 +9919,7 @@ function PackagingOrdersView({ currentUser }) {
   const [err, setErr] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [screen, setScreen] = useState("dashboard"); // dashboard | orders
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -9940,7 +9941,8 @@ function PackagingOrdersView({ currentUser }) {
             <button key={k} onClick={()=>setScreen(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${screen===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
-        <button onClick={()=>setNewOpen(true)} className="ml-auto px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New order</button>
+        <button onClick={()=>setImportOpen(true)} className="ml-auto px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1"><FileText size={14}/> Import Excel</button>
+        <button onClick={()=>setNewOpen(true)} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-1"><Plus size={14}/> New order</button>
       </div>
       {err && <div className="text-sm text-red-400">{err}</div>}
 
@@ -9969,6 +9971,7 @@ function PackagingOrdersView({ currentUser }) {
         </div>
       ))}
       {newOpen && <PackagingOrderEditModal onClose={()=>setNewOpen(false)} onSaved={(o)=>{ setNewOpen(false); load(); setOpenId(o.id); }} />}
+      {importOpen && <PackagingImportModal onClose={()=>setImportOpen(false)} onImported={(id)=>{ setImportOpen(false); load(); if(id) setOpenId(id); }} />}
     </div>
   );
 }
@@ -10211,6 +10214,173 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Bulk import a packaging order from Excel. One file = one order: the first row
+// carries order-level fields (ref, supplier, dates, quote), every row is a line
+// item. Items are linked to distribution inventory by matching the item name
+// (case-insensitive) so receipts post to stock automatically.
+function PackagingImportModal({ onClose, onImported }) {
+  const XLSX = useXLSX();
+  const [distItems, setDistItems] = useState([]);
+  const [step, setStep] = useState("upload"); // upload | preview | done
+  const [parsed, setParsed] = useState(null);  // { order, lines:[...] }
+  const [errors, setErrors] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef();
+  useEffect(() => { fetchDistItems().then(setDistItems).catch(()=>{}); }, []);
+
+  const COLS = [
+    { key:"orderRef", label:"Order Ref", hint:"PKG-2026-014" },
+    { key:"supplier", label:"Supplier", hint:"Acme Packaging Co" },
+    { key:"stage", label:"Stage", hint:"order_placed" },
+    { key:"orderDate", label:"Order Date", hint:"2026-07-01" },
+    { key:"expectedDate", label:"Expected Date", hint:"2026-11-01" },
+    { key:"quotedTotal", label:"Quoted Total", hint:"12500" },
+    { key:"currency", label:"Currency", hint:"GBP" },
+    { key:"itemName", label:"Item Name", hint:"Kraft box 12oz" },
+    { key:"spec", label:"Spec", hint:"double-wall, printed" },
+    { key:"quantity", label:"Quantity", hint:"10000" },
+    { key:"unitPrice", label:"Unit Price", hint:"0.12" },
+  ];
+
+  const downloadTemplate = () => {
+    if (!XLSX) { alert("Excel library loading, try again in a second."); return; }
+    const headers = COLS.map(c => c.label);
+    const example1 = ["PKG-2026-014","Acme Packaging Co","order_placed","2026-07-01","2026-11-01","12500","GBP","Kraft box 12oz","double-wall, printed 2 colour","10000","0.12"];
+    const example2 = ["","","","","","","","Kraft lid 12oz","clear PET","10000","0.05"];
+    const guide = ["Stages:", PACKORDER_STAGES.map(s=>s.key).join(" | "), "", "", "", "", "", "Item Name should match a distribution inventory item to auto-link stock.", "", "", ""];
+    const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2, [], guide]);
+    ws["!cols"] = COLS.map(() => ({ wch: 20 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Packaging Order");
+    // Second sheet: the list of inventory item names to copy from.
+    if (distItems.length) {
+      const inv = XLSX.utils.aoa_to_sheet([["Inventory items (copy exact name into Item Name)"], ...distItems.map(i=>[i.name])]);
+      inv["!cols"] = [{ wch: 40 }];
+      XLSX.utils.book_append_sheet(wb, inv, "Inventory Items");
+    }
+    const buf = XLSX.write(wb, { bookType:"xlsx", type:"array" });
+    downloadBlob(new Blob([buf], { type:"application/octet-stream" }), "packaging-order-template.xlsx");
+  };
+
+  const handleFile = (f) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        if (!XLSX) throw new Error("Excel library not loaded yet.");
+        const wb = XLSX.read(e.target.result, { type:"array", cellDates:true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval:"" });
+        const errs = [];
+        const nameToId = new Map(distItems.map(i => [String(i.name||"").trim().toLowerCase(), i.id]));
+        // Order fields come from the first row that has a supplier or ref.
+        const headRow = rows.find(r => (r["Order Ref"]||r["Supplier"])) || rows[0] || {};
+        const stageRaw = String(headRow["Stage"]||"").trim();
+        const stage = PACKORDER_STAGES.some(s=>s.key===stageRaw) ? stageRaw : "design";
+        const toDate = (v) => { if(!v) return null; if (v instanceof Date) return v.toISOString().slice(0,10); const s=String(v).trim(); return s || null; };
+        const order = {
+          ref: String(headRow["Order Ref"]||"").trim(),
+          supplier: String(headRow["Supplier"]||"").trim(),
+          stage,
+          orderDate: toDate(headRow["Order Date"]),
+          expectedDate: toDate(headRow["Expected Date"]),
+          quotedTotal: Number(headRow["Quoted Total"]) || 0,
+          currency: String(headRow["Currency"]||"GBP").trim() || "GBP",
+        };
+        if (!order.ref && !order.supplier) errs.push("No Order Ref or Supplier found in the file.");
+        const lines = [];
+        rows.forEach((r, i) => {
+          const name = String(r["Item Name"]||"").trim();
+          if (!name) return; // skip rows without an item (e.g. the guide row)
+          const qty = Number(r["Quantity"]) || 0;
+          const unitPrice = Number(r["Unit Price"]) || 0;
+          const distItemId = nameToId.get(name.toLowerCase()) || null;
+          lines.push({ name, spec:String(r["Spec"]||"").trim(), qty, unitPrice, distItemId, matched: !!distItemId });
+          if (qty <= 0) errs.push(`Row ${i+2} ("${name}"): quantity is 0.`);
+        });
+        if (lines.length === 0) errs.push("No line items found (rows need an Item Name).");
+        setParsed({ order, lines });
+        setErrors(errs);
+        setStep("preview");
+      } catch (err) {
+        setErrors(["Could not read the file: " + err.message]);
+        setStep("preview");
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  };
+
+  const doImport = async () => {
+    if (!parsed) return;
+    setBusy(true);
+    try {
+      const savedOrder = await upsertPackagingOrder(parsed.order);
+      for (const l of parsed.lines) {
+        await upsertPackagingLine({ orderId: savedOrder.id, name: l.name, spec: l.spec, qty: l.qty, unitPrice: l.unitPrice, distItemId: l.distItemId });
+      }
+      setStep("done");
+      setTimeout(() => onImported(savedOrder.id), 900);
+    } catch (e) { setErrors([e.message]); } finally { setBusy(false); }
+  };
+
+  const matchedCount = parsed ? parsed.lines.filter(l=>l.matched).length : 0;
+
+  return (
+    <Modal title="Import packaging order from Excel" onClose={onClose} maxW="max-w-2xl" footer={
+      step==="preview" && parsed ? <>
+        <button onClick={()=>{ setStep("upload"); setParsed(null); setErrors([]); }} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Back</button>
+        <button disabled={busy || parsed.lines.length===0} onClick={doImport} className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-semibold">{busy?"Importing…":`Import order + ${parsed.lines.length} item${parsed.lines.length===1?"":"s"}`}</button>
+      </> : <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Close</button>
+    }>
+      {step==="upload" && (
+        <div className="space-y-4">
+          <div className="text-sm text-slate-400">Upload one Excel file per order. The first row holds the order details (ref, supplier, dates, quote); every row with an Item Name becomes a line item.</div>
+          <div className="bg-slate-950 rounded-xl p-4 space-y-3">
+            <div className="text-xs text-slate-500">1. Start from the template — it includes your inventory item names on a second sheet so names match and stock auto-links.</div>
+            <button onClick={downloadTemplate} className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold flex items-center justify-center gap-2"><FileText size={15}/> Download sample template (.xlsx)</button>
+          </div>
+          <div className="bg-slate-950 rounded-xl p-4 space-y-3">
+            <div className="text-xs text-slate-500">2. Fill it in, then upload it here.</div>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(f) handleFile(f); }}/>
+            <button onClick={()=>fileRef.current?.click()} disabled={!XLSX} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold flex items-center justify-center gap-2">{XLSX?"Choose Excel file":"Loading Excel…"}</button>
+          </div>
+        </div>
+      )}
+      {step==="preview" && parsed && (
+        <div className="space-y-3">
+          {errors.length>0 && (
+            <div className="bg-red-950/20 border border-red-500/30 rounded-xl p-3 space-y-1">
+              {errors.map((e,i)=><div key={i} className="text-xs text-red-300">{e}</div>)}
+            </div>
+          )}
+          <div className="bg-slate-950 rounded-xl p-3">
+            <div className="text-sm font-bold text-white">{parsed.order.ref || "(no ref)"} <span className={`ml-1 px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(parsed.order.stage)}`}>{packStageLabel(parsed.order.stage)}</span></div>
+            <div className="text-xs text-slate-500 mt-0.5">{parsed.order.supplier||"(no supplier)"} · quoted {gbp(parsed.order.quotedTotal)}{parsed.order.expectedDate?` · expected ${parsed.order.expectedDate}`:""}</div>
+          </div>
+          <div className="text-xs text-slate-500">{parsed.lines.length} line item{parsed.lines.length===1?"":"s"} · <span className="text-emerald-400">{matchedCount} linked to inventory</span>{parsed.lines.length-matchedCount>0?` · ${parsed.lines.length-matchedCount} unmatched (won't update stock)`:""}</div>
+          <div className="max-h-64 overflow-auto rounded-xl border border-slate-800">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-950 sticky top-0"><tr className="text-slate-600">
+                <th className="px-3 py-2 text-left font-semibold">Item</th><th className="px-3 py-2 text-right font-semibold">Qty</th><th className="px-3 py-2 text-right font-semibold">Price</th><th className="px-3 py-2 text-center font-semibold">Linked</th>
+              </tr></thead>
+              <tbody>
+                {parsed.lines.map((l,i)=>(
+                  <tr key={i} className="border-t border-slate-800/60">
+                    <td className="px-3 py-2 text-white">{l.name}{l.spec&&<span className="text-slate-600"> · {l.spec}</span>}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-300">{l.qty.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-400">{gbp(l.unitPrice)}</td>
+                    <td className="px-3 py-2 text-center">{l.matched?<span className="text-emerald-400">✓</span>:<span className="text-amber-500" title="No inventory item matches this name">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {step==="done" && <div className="text-center py-8 text-sm font-semibold text-emerald-400">✓ Order imported — opening…</div>}
+    </Modal>
   );
 }
 
