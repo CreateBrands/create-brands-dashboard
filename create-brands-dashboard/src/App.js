@@ -26261,6 +26261,26 @@ function tempLimitText(u) {
   if (b != null) return `Max ${b}°C`;
   return "No limit";
 }
+// A unit whose entire expected range sits below 0°C is a freezer. Staff on a
+// mobile keypad routinely omit the minus sign, so "20.5" gets stored as +20.5
+// and wrongly flagged as a breach. For a sub-zero unit we coerce a positive
+// entry to negative (and leave 0 and already-negative values alone).
+function isSubZeroUnit(u) {
+  if (!u) return false;
+  const a = u.min != null ? Number(u.min) : null;
+  const b = u.max != null ? Number(u.max) : null;
+  const vals = [a, b].filter(x => x != null && !isNaN(x));
+  return vals.length > 0 && vals.every(x => x < 0);
+}
+// Coerce a raw input string to the expected sign for freezer units. Returns a
+// number (or NaN). Only flips a POSITIVE value negative on a sub-zero unit —
+// never touches negatives, zero, or non-freezer units.
+function coerceTempSign(u, raw) {
+  const n = parseFloat(raw);
+  if (isNaN(n)) return n;
+  if (isSubZeroUnit(u) && n > 0) return -n;
+  return n;
+}
 function checkTemp(u, v) {
   const n = parseFloat(v);
   if (isNaN(n)) return true;
@@ -26741,7 +26761,8 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
               </div>
               {a.type === "temp" && isExp && (() => {
                 const unit = tempUnits.find(u => u.id === a.taskId);
-                const num = parseFloat(tempVal);
+                const num = coerceTempSign(unit, tempVal); // freezer sign-fix
+                const rawNum = parseFloat(tempVal);
                 const ok = unit && tempVal !== "" && !isNaN(num) ? checkTemp(unit, num) : null;
                 return (
                   <div className="border-t border-slate-700 p-4 space-y-3">
@@ -26750,6 +26771,9 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                       <input type="number" step="0.1" inputMode="decimal" value={tempVal} onChange={e=>setTempVal(e.target.value)} placeholder="e.g. 4.5" className="flex-1 px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-lg"/>
                       <span className="text-slate-500 text-sm">°C</span>
                     </div>
+                    {unit && isSubZeroUnit(unit) && !isNaN(rawNum) && rawNum > 0 && (
+                      <div className="rounded-xl border border-sky-500/30 bg-sky-950/20 p-2.5 text-xs text-sky-300">Freezer unit — recording as <span className="font-bold">{num}°C</span> (negative).</div>
+                    )}
                     {ok !== null && (
                       <div className={`rounded-xl border p-2.5 text-sm font-semibold ${ok ? "bg-emerald-950/20 border-emerald-500/30 text-emerald-300" : "bg-red-950/20 border-red-500/30 text-red-300"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>
                     )}
@@ -26884,11 +26908,11 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
       </div>
       {scopedLogs.length > 0 && <AnalysisBlock title="HACCP Log — Today"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-slate-700">{["Unit","Time","Reading","Limit","By","Status"].map(h => <th key={h} className="px-3 py-2 text-left text-slate-600 font-semibold">{h}</th>)}</tr></thead><tbody>{[...scopedLogs].sort((a,b) => b.time.localeCompare(a.time)).map(log => { const unit = tempUnits.find(u => u.id === log.unitId); const ok = unit ? checkTemp(unit, log.value) : true; return <tr key={log.id} className="border-b border-slate-800/60"><td className="px-3 py-2 text-slate-700">{unit?.name || log.unitId}</td><td className="px-3 py-2 text-slate-600 font-mono">{log.time}</td><td className="px-3 py-2"><span className={`font-bold font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{log.value}°C</span></td><td className="px-3 py-2 text-slate-500">{unit ? tempLimitText(unit) : "—"}</td><td className="px-3 py-2 text-slate-600">{log.loggedBy}</td><td className="px-3 py-2">{ok ? <Badge label="✓ OK" color="green"/> : <Badge label="⚠ Breach" color="red"/>}</td></tr>; })}</tbody></table></div></AnalysisBlock>}
       {showForm && (
-        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={async () => { if (!form.unitId || form.value === "") return; const unit = scopedUnits.find(u => u.id === form.unitId); const breach = unit ? !checkTemp(unit, form.value) : false; await onLog({ id: `tl-${Date.now()}`, brandId: unit?.brandId || writeBrandId, storeId: unit?.storeId || writeStoreId, unitId: form.unitId, value: parseFloat(form.value), isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); /* Also complete any temp task for this unit today, so logging here closes the check. */ const matches = (assignments || []).filter(a => a.type === "temp" && a.taskId === form.unitId && isActiveToday(a)); for (const a of matches) { try { await onSignOff?.(a); } catch { /* sign-off best-effort */ } } setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
+        <Modal title="Log Temperature Reading" onClose={() => setShowForm(false)} footer={<><button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button><button onClick={async () => { if (!form.unitId || form.value === "") return; const unit = scopedUnits.find(u => u.id === form.unitId); const effVal = coerceTempSign(unit, form.value); const breach = unit ? !checkTemp(unit, effVal) : false; await onLog({ id: `tl-${Date.now()}`, brandId: unit?.brandId || writeBrandId, storeId: unit?.storeId || writeStoreId, unitId: form.unitId, value: effVal, isBreach: breach, notes: form.notes, time: form.time, date: getTodayStr(), loggedBy: user.name || "Manager" }); /* Also complete any temp task for this unit today, so logging here closes the check. */ const matches = (assignments || []).filter(a => a.type === "temp" && a.taskId === form.unitId && isActiveToday(a)); for (const a of matches) { try { await onSignOff?.(a); } catch { /* sign-off best-effort */ } } setShowForm(false); }} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Save Reading</button></>}>
           <div className="space-y-4">
             <div><label className={labelCls}>Unit</label><select value={form.unitId} onChange={e => set("unitId", e.target.value)} className={inputCls}>{scopedUnits.map(u => { const sn = stores?.find(s => s.id === u.storeId)?.shortName; return <option key={u.id} value={u.id}>{u.name}{sn ? ` · ${sn}` : ""} ({u.type})</option>; })}</select></div>
             <div className="grid grid-cols-2 gap-4"><div><label className={labelCls}>Temperature (°C)</label><input type="number" step="0.1" value={form.value} onChange={e => set("value", e.target.value)} placeholder="e.g. 4.5" className={inputCls}/></div><div><label className={labelCls}>Time</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} className={inputCls}/></div></div>
-            {form.unitId && form.value !== "" && (() => { const unit = scopedUnits.find(u => u.id === form.unitId); const ok = unit ? checkTemp(unit, form.value) : true; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-red-950/20 border-red-500/30"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-400" : "text-red-400"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{unit && <div className="text-xs text-slate-600 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
+            {form.unitId && form.value !== "" && (() => { const unit = scopedUnits.find(u => u.id === form.unitId); const effVal = coerceTempSign(unit, form.value); const ok = unit ? checkTemp(unit, effVal) : true; const flipped = unit && isSubZeroUnit(unit) && parseFloat(form.value) > 0; return <div className={`rounded-xl border p-3 ${ok ? "bg-emerald-950/20 border-emerald-500/30" : "bg-red-950/20 border-red-500/30"}`}><div className={`text-sm font-bold ${ok ? "text-emerald-400" : "text-red-400"}`}>{ok ? "✓ Within safe range" : "⚠ BREACH — corrective action required"}</div>{flipped && <div className="text-xs text-sky-300 mt-0.5">Freezer — recording as {effVal}°C (negative).</div>}{unit && <div className="text-xs text-slate-600 mt-0.5">Limit: {tempLimitText(unit)}</div>}</div>; })()}
             <div><label className={labelCls}>Notes</label><input value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Any observations…" className={inputCls}/></div>
           </div>
         </Modal>
