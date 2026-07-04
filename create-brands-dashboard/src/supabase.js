@@ -12993,18 +12993,72 @@ export async function fetchPackagingDashboard({ includeClosed = false } = {}) {
     notYetShipped: t.notYetShipped + r.notYetShipped, value: t.value + r.value,
   }), { ordered: 0, atSupplier: 0, inTransit: 0, received: 0, notYetShipped: 0, value: 0 });
 
+  // ── EXCEPTIONS ("action list") — the prioritised things needing attention,
+  //    ranked by severity then financial impact. This is the top-of-dashboard
+  //    decision accelerator: red = breached, amber = at risk.
+  const exceptions = [];
+  const dayMs = 86400000;
+  const nowT = Date.now();
+  // Shipment-level ETA risk across all active orders.
+  const shipmentsFlat = [];
+  details.forEach((d, idx) => {
+    if (!d) return;
+    const o = active[idx];
+    d.shipments.forEach(sh => {
+      const units = Object.values(sh.qtyByLine || {}).reduce((a, q) => a + (Number(q) || 0), 0);
+      const inTransit = ["shipped_sea", "shipped_air", "at_destination"].includes(sh.stage);
+      let etaRisk = null;
+      if (inTransit && sh.etaDate) {
+        const daysToEta = Math.round((new Date(sh.etaDate).getTime() - nowT) / dayMs);
+        if (daysToEta < 0) etaRisk = { level: "red", label: `ETA passed ${Math.abs(daysToEta)}d ago`, days: daysToEta };
+        else if (daysToEta <= 7) etaRisk = { level: "amber", label: `arriving in ${daysToEta}d`, days: daysToEta };
+      }
+      shipmentsFlat.push({ orderId: o.id, orderRef: o.ref, supplier: o.supplier, stage: sh.stage, method: sh.method, ref: sh.ref, units, etaDate: sh.etaDate, etaRisk });
+      if (etaRisk && etaRisk.level === "red") {
+        exceptions.push({ level: "red", kind: "shipment_late", orderId: o.id,
+          title: `${sh.ref || "Shipment"} on ${o.ref || "order"} is overdue`,
+          detail: `${units.toLocaleString()} units · ETA was ${sh.etaDate} · ${o.supplier || "supplier"}`,
+          weight: units });
+      }
+    });
+  });
+  // Order-level: overdue expected date.
+  orderRows.filter(o => o.overdue).forEach(o => exceptions.push({
+    level: "red", kind: "order_overdue", orderId: o.id,
+    title: `${o.ref || "Order"} is past its expected date`,
+    detail: `expected ${o.expectedDate} · ${o.units.toLocaleString()} units · ${o.pctReceived}% received`,
+    weight: o.quotedTotal }));
+  // Item-level: stockout risk — 0 (or below) on hand while units still upstream.
+  items.filter(r => r.linked && r.onHand != null && r.onHand <= 0 && r.incoming > 0).forEach(r => exceptions.push({
+    level: r.inTransit > 0 ? "amber" : "red", kind: "stockout_risk", itemId: r.distItemId,
+    title: `${r.name}: out of stock, ${r.incoming.toLocaleString()} incoming`,
+    detail: r.inTransit > 0 ? `${r.inTransit.toLocaleString()} in transit — watch coverage` : `nothing in transit — ${(r.atSupplier + r.notYetShipped).toLocaleString()} still at supplier/unshipped`,
+    weight: r.value }));
+  // Payment: large outstanding balance on orders already received.
+  orderRows.filter(o => o.outstanding > 0.01 && ["received","partially_received"].includes(o.stage)).forEach(o => exceptions.push({
+    level: "amber", kind: "payment_due", orderId: o.id,
+    title: `${o.ref || "Order"}: ${o.pctReceived}% received but balance owing`,
+    detail: `outstanding ${(o.outstanding).toFixed(2)} to ${o.supplier || "supplier"}`,
+    weight: o.outstanding }));
+  const sevRank = { red: 0, amber: 1 };
+  exceptions.sort((a, b) => (sevRank[a.level] - sevRank[b.level]) || (b.weight - a.weight));
+
   return {
     items,
     totals,
     orders: orderRows.sort((a, b) => (b.overdue - a.overdue) || (a.expectedDate || "").localeCompare(b.expectedDate || "")),
+    shipments: shipmentsFlat,
     suppliers: [...bySupplier.values()].sort((a, b) => b.quoted - a.quoted),
     stageCounts, stageValue,
     orderCount: active.length,
+    exceptions,
     finance: { quotedTotal, paidTotal, outstanding: quotedTotal - paidTotal },
     risk: {
       overdue: orderRows.filter(o => o.overdue).length,
       unlinkedLines: orderRows.reduce((a, o) => a + o.unlinked, 0),
       unpaidOrders: orderRows.filter(o => o.outstanding > 0.01).length,
+      redCount: exceptions.filter(e => e.level === "red").length,
+      amberCount: exceptions.filter(e => e.level === "amber").length,
     },
   };
 }

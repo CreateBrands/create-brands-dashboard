@@ -9998,7 +9998,7 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
     { label:"Outstanding", value: gbp(fin.outstanding), sub: risk.unpaidOrders?`${risk.unpaidOrders} order${risk.unpaidOrders===1?"":"s"} owing`:"all settled", tone: fin.outstanding>0?"amber":"emerald" },
     { label:"Units incoming", value: fmt(t.atSupplier+t.inTransit+t.notYetShipped), sub:`${fmt(t.received)} received`, tone:"violet" },
     { label:"In transit", value: fmt(t.inTransit), sub:"sea / air now", tone:"amber" },
-    { label:"Overdue", value: risk.overdue, sub: risk.overdue?"past expected date":"on schedule", tone: risk.overdue?"red":"emerald" },
+    { label:"Alerts", value: (risk.redCount||0)+(risk.amberCount||0), sub: (risk.redCount||0)?`${risk.redCount} critical`:"all clear", tone: (risk.redCount||0)?"red":(risk.amberCount||0)?"amber":"emerald" },
   ];
   const toneMap = {
     indigo:"text-indigo-300", sky:"text-sky-300", amber:"text-amber-300",
@@ -10035,13 +10035,25 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
         ))}
       </div>
 
-      {/* RISK STRIP */}
-      {(risk.overdue > 0 || risk.unlinkedLines > 0 || risk.unpaidOrders > 0) && (
-        <div className="flex flex-wrap gap-2">
-          {risk.overdue > 0 && <div className="px-3 py-2 rounded-xl bg-red-950/20 border border-red-500/30 text-red-300 text-xs font-semibold">⏰ {risk.overdue} overdue order{risk.overdue===1?"":"s"}</div>}
-          {risk.unpaidOrders > 0 && <div className="px-3 py-2 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-300 text-xs font-semibold">£ {risk.unpaidOrders} order{risk.unpaidOrders===1?"":"s"} with balance owing</div>}
-          {risk.unlinkedLines > 0 && <div className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold">⚠ {risk.unlinkedLines} line{risk.unlinkedLines===1?"":"s"} not linked to inventory</div>}
-        </div>
+      {/* EXCEPTIONS — the action list, above the fold. Red = breached, amber = at risk. */}
+      {dash.exceptions && dash.exceptions.length > 0 ? (
+        <AnalysisBlock title={`Needs attention — ${risk.redCount} critical, ${risk.amberCount} at risk`}>
+          <div className="space-y-1.5">
+            {dash.exceptions.slice(0, 8).map((ex, i) => (
+              <button key={i} onClick={()=>ex.orderId && onOpenOrder(ex.orderId)} className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl border transition-colors ${ex.level==="red"?"bg-red-950/20 border-red-500/30 hover:bg-red-950/30":"bg-amber-950/15 border-amber-500/25 hover:bg-amber-950/25"}`}>
+                <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${ex.level==="red"?"bg-red-500":"bg-amber-500"}`}/>
+                <div className="min-w-0 flex-1">
+                  <div className={`text-xs font-semibold ${ex.level==="red"?"text-red-200":"text-amber-200"}`}>{ex.title}</div>
+                  <div className="text-[11px] text-slate-500">{ex.detail}</div>
+                </div>
+                {ex.orderId && <ChevronRight size={14} className="text-slate-600 flex-shrink-0 mt-0.5"/>}
+              </button>
+            ))}
+            {dash.exceptions.length > 8 && <div className="text-[11px] text-slate-600 text-center pt-1">+ {dash.exceptions.length - 8} more</div>}
+          </div>
+        </AnalysisBlock>
+      ) : (
+        <div className="px-4 py-3 rounded-2xl bg-emerald-950/15 border border-emerald-500/25 text-emerald-300 text-xs font-semibold">✓ All clear — no overdue orders, late shipments, or stock-out risks right now.</div>
       )}
 
       {/* UNIT FLOW BAR */}
@@ -10145,6 +10157,28 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
         </div>
       </AnalysisBlock>
 
+      {/* IN-TRANSIT SHIPMENT TRACKER — where are the containers, and are they on time */}
+      {dash.shipments && dash.shipments.filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage)).length > 0 && (
+        <AnalysisBlock title="In transit — live shipments">
+          <div className="space-y-2">
+            {dash.shipments.filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage))
+              .sort((a,b) => { const ar=a.etaRisk?(a.etaRisk.level==="red"?0:1):2; const br=b.etaRisk?(b.etaRisk.level==="red"?0:1):2; return ar-br || (a.etaDate||"").localeCompare(b.etaDate||""); })
+              .map((sh, i) => (
+              <button key={i} onClick={()=>onOpenOrder(sh.orderId)} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/60 transition-colors">
+                <span className="text-lg flex-shrink-0">{sh.method==="air"?"✈":"🚢"}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-white">{sh.orderRef || "Order"} · {sh.ref || "shipment"} <span className="text-slate-500 font-normal">— {sh.supplier || ""}</span></div>
+                  <div className="text-[11px] text-slate-500">{fmt(sh.units)} units · {sh.stage==="at_destination"?"at destination port":sh.method==="air"?"in the air":"on the water"}{sh.etaDate?` · ETA ${sh.etaDate}`:""}</div>
+                </div>
+                {sh.etaRisk
+                  ? <span className={`px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0 ${sh.etaRisk.level==="red"?"bg-red-600 text-white":"bg-amber-500 text-amber-950"}`}>{sh.etaRisk.label}</span>
+                  : <span className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-slate-800 text-slate-400 flex-shrink-0">on track</span>}
+              </button>
+            ))}
+          </div>
+        </AnalysisBlock>
+      )}
+
       {/* ITEMS × STAGES with on-hand + projected stock */}
       {dash.items.length > 0 && (
         <AnalysisBlock title="Items across stages — with live stock & projected on-hand">
@@ -10161,6 +10195,7 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
                   <th className="px-3 py-2 text-right font-semibold">Incoming</th>
                   <th className="px-3 py-2 text-right font-semibold">Projected</th>
                   <th className="px-3 py-2 text-right font-semibold">Value</th>
+                  <th className="px-3 py-2 text-center font-semibold">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -10175,6 +10210,13 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-sky-300">{fmt(r.incoming)}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-300">{r.projected==null?"—":fmt(r.projected)}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-400">{gbp(r.value)}</td>
+                    <td className="px-3 py-2.5 text-center">{(() => {
+                      if (r.onHand == null) return <span className="text-[10px] text-slate-600">—</span>;
+                      if (r.onHand <= 0 && r.inTransit > 0) return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500 text-amber-950">arriving</span>;
+                      if (r.onHand <= 0) return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-600 text-white">out</span>;
+                      if (r.incoming > 0) return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-700 text-white">inbound</span>;
+                      return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-700 text-white">in stock</span>;
+                    })()}</td>
                   </tr>
                 ))}
               </tbody>
