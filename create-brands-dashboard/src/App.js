@@ -43,6 +43,7 @@ import {
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   fetchPendingPresenceCheck, fetchPresenceChecks, respondPresenceCheck, requestPresenceCheck,
   insertVehiclePosition, fetchVehicleTrail,
+  uploadOrderRecording, fetchOrderRecordings, getOrderRecordingUrl,
   resolveAnnouncementAudience,
   notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
   subscribeTyping, uploadChatAttachment,
@@ -15681,6 +15682,106 @@ function PresenceCheckPrompt({ employeeId, stores, active }) {
   );
 }
 
+// ── ORDER_REC_V1 — record a customer's order at the table/till ────────────────
+// Staff tap the mic while taking an order; the clip (max 5 min) uploads to the
+// private order-recordings bucket tagged with a table/order ref. Managers play
+// clips back from Team -> Time & Attendance -> Recordings. Clips auto-delete
+// after 30 days. All hooks live at the top (rules of hooks).
+function OrderRecorderModal({ storeId, employeeId, employeeName, onClose }) {
+  const [tableRef, setTableRef] = useState("");
+  const [rec, setRec] = useState(null);
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [blob, setBlob] = useState(null);
+  const [mime, setMime] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [done, setDone] = useState(false);
+  const chunksRef = useRef([]);
+  const recRef = useRef(null);
+  useEffect(() => {
+    if (!recording) return;
+    const iv = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(iv);
+  }, [recording]);
+  useEffect(() => {
+    if (recording && elapsed >= 300) { // 5 min hard cap
+      try { recRef.current && recRef.current.state !== "inactive" && recRef.current.stop(); } catch {}
+      setRecording(false);
+    }
+  }, [recording, elapsed]);
+  useEffect(() => () => { // unmount: stop any live recorder + release mic
+    try { recRef.current && recRef.current.state !== "inactive" && recRef.current.stop(); } catch {}
+  }, []);
+  const start = async () => {
+    setErr(null); setBlob(null); setElapsed(0);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const supported = (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t);
+      const m = supported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : (supported("audio/mp4") ? "audio/mp4" : "");
+      const r = m ? new MediaRecorder(stream, { mimeType: m }) : new MediaRecorder(stream);
+      chunksRef.current = [];
+      r.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
+      r.onstop = () => {
+        const type = r.mimeType || m || "audio/webm";
+        setBlob(new Blob(chunksRef.current, { type }));
+        setMime(type);
+        stream.getTracks().forEach(t => t.stop());
+      };
+      r.start();
+      recRef.current = r; setRec(r); setRecording(true);
+    } catch (e) {
+      setErr(e && e.name === "NotAllowedError" ? "Microphone permission denied — allow the mic to record orders." : "Couldn't start the microphone on this device.");
+    }
+  };
+  const stop = () => { try { recRef.current && recRef.current.state !== "inactive" && recRef.current.stop(); } catch {} setRecording(false); };
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await uploadOrderRecording({ storeId, employeeId, employeeName, tableRef: tableRef.trim(), durationSecs: elapsed, blob, mimeType: mime });
+      setDone(true);
+      setTimeout(onClose, 1500);
+    } catch (e) { setErr(e.message || "Upload failed — try again."); }
+    finally { setBusy(false); }
+  };
+  const mmss = `${Math.floor(elapsed/60)}:${String(elapsed%60).padStart(2,"0")}`;
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-5">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-sm space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-white font-bold text-base">🎙 Record order</div>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white">✕</button>
+        </div>
+        <input value={tableRef} onChange={e => setTableRef(e.target.value)} placeholder="Table / order no. (e.g. T4)"
+          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500" />
+        {done ? (
+          <div className="text-sm font-semibold text-emerald-400 text-center py-4">Saved ✓ — clip kept for 30 days</div>
+        ) : (
+          <>
+            <div className="text-center">
+              <div className={`text-2xl font-mono ${recording ? "text-red-400" : "text-slate-500"}`}>{mmss}</div>
+              {recording && <div className="text-[10px] text-red-400 animate-pulse">● recording — max 5:00</div>}
+            </div>
+            {blob && !recording && <audio controls src={URL.createObjectURL(blob)} className="w-full" />}
+            {err && <div className="text-xs font-semibold rounded-lg px-3 py-2 bg-red-600 text-white">{err}</div>}
+            <div className="flex gap-2">
+              {!recording && !blob && <button onClick={start} className="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm">● Start recording</button>}
+              {recording && <button onClick={stop} className="flex-1 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-sm">■ Stop</button>}
+              {blob && !recording && (
+                <>
+                  <button onClick={() => { setBlob(null); setElapsed(0); }} disabled={busy} className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-sm">Discard</button>
+                  <button onClick={save} disabled={busy} className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm">{busy ? "Saving…" : "Save clip"}</button>
+                </>
+              )}
+            </div>
+            <div className="text-[10px] text-slate-600 text-center">Record while the customer states their order. Signage must say orders may be recorded.</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -15746,6 +15847,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const myClockStore = (stores || []).find(s => s.id === (myOpenPunch?.storeId || (myOpsMember?.storeIds && myOpsMember.storeIds[0]) || null)) || null;
   const [clockBusy, setClockBusy] = useState(false);
   const [clockMsg, setClockMsg] = useState(null); // {type, msg}
+  const [orderRecOpen, setOrderRecOpen] = useState(false); // ORDER_REC_V1
 
   // ── DRIVER_TRACK_V1 — shift-bounded vehicle tracking (company device) ──────
   // Active ONLY while: member's department marks them a driver AND a punch is
@@ -15950,6 +16052,17 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     <>
       {/* PRESENCE_CHECK_V1 — only polls while this member has an open punch */}
       <PresenceCheckPrompt employeeId={currentUser.opsTeamMemberId || currentUser.id} stores={stores} active={!!myOpenPunch} />
+      {/* ORDER_REC_V1 — floating mic while on shift */}
+      {!!myOpenPunch && !orderRecOpen && (
+        <button onClick={() => setOrderRecOpen(true)} title="Record an order"
+          className="fixed bottom-24 right-4 z-40 w-12 h-12 rounded-full bg-red-600 hover:bg-red-500 shadow-xl text-xl flex items-center justify-center">🎙</button>
+      )}
+      {orderRecOpen && myOpenPunch && (
+        <OrderRecorderModal storeId={myOpenPunch.storeId}
+          employeeId={currentUser.opsTeamMemberId || currentUser.id}
+          employeeName={myOpsMember ? `${myOpsMember.firstName} ${myOpsMember.lastName || ""}`.trim() : (currentUser.name || "")}
+          onClose={() => setOrderRecOpen(false)} />
+      )}
       {/* DRIVER_TRACK_V1 — visible while vehicle tracking is running */}
       {trackingActive && (
         <div className="fixed top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 bg-slate-900/90 border border-emerald-700/50 rounded-full px-3 py-1 text-[10px] font-semibold text-emerald-400 shadow-lg">
@@ -44513,6 +44626,77 @@ function PayPeriodsPanel({ payPeriods = [], stores = [], isHQ, onApprove, onReop
   );
 }
 
+// ── OrderRecordingsTab (ORDER_REC_V1) — manager playback of order clips ──────
+// Filter by day and store, play any clip via a short-lived signed URL. Clips
+// auto-purge after 30 days (cron), so this is a dispute-resolution window,
+// not an archive. Hooks first (rules of hooks).
+function OrderRecordingsTab({ stores = [], visibleStoreIds }) {
+  const todayStr = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
+  const [date, setDate] = useState(todayStr);
+  const [storeId, setStoreId] = useState("all");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(null); // { id, url } | null
+  const [err, setErr] = useState(null);
+  const visStores = (stores || []).filter(s => {
+    if (!visibleStoreIds) return true;
+    if (typeof visibleStoreIds.has === "function") return visibleStoreIds.has(s.id);
+    if (Array.isArray(visibleStoreIds)) return visibleStoreIds.includes(s.id);
+    return true;
+  });
+  useEffect(() => {
+    let stop = false;
+    setLoading(true); setErr(null); setPlaying(null);
+    const ids = storeId === "all" ? visStores.map(s => s.id) : [storeId];
+    fetchOrderRecordings({ date, storeIds: ids })
+      .then(rs => { if (!stop) setRows(rs || []); })
+      .catch(e => { if (!stop) setErr(e.message || "Couldn't load recordings."); })
+      .finally(() => { if (!stop) setLoading(false); });
+    return () => { stop = true; };
+  }, [date, storeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const play = async (r) => {
+    try { const url = await getOrderRecordingUrl(r.audioPath); setPlaying({ id: r.id, url }); }
+    catch (e) { setErr(e.message || "Couldn't open this clip."); }
+  };
+  const storeName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
+  const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
+  const mmss = (secs) => secs == null ? "—" : `${Math.floor(secs/60)}:${String(Math.round(secs)%60).padStart(2,"0")}`;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="date" value={date} onChange={e => setDate(e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
+        <select value={storeId} onChange={e => setStoreId(e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white">
+          <option value="all">All stores</option>
+          {visStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        <span className="text-[10px] text-slate-600 ml-auto">Clips auto-delete after 30 days</span>
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-center py-10 text-sm text-slate-500">Loading…</div> : rows.length === 0 ? (
+        <div className="text-center py-10 text-sm text-slate-600">No order recordings for this day.</div>
+      ) : (
+        <div className="space-y-1">
+          {rows.map(r => (
+            <div key={r.id} className="bg-slate-950 rounded-xl px-3 py-2.5">
+              <div className="flex items-center gap-3 text-xs">
+                <span className="font-mono text-slate-300 w-11 flex-shrink-0">{fmtT(r.createdAt)}</span>
+                <span className="text-slate-400 flex-shrink-0">{storeName(r.storeId)}</span>
+                <span className="text-white font-medium truncate">{r.employeeName || "—"}</span>
+                {r.tableRef && <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono text-[10px] flex-shrink-0">{r.tableRef}</span>}
+                <span className="text-slate-500 font-mono ml-auto flex-shrink-0">{mmss(r.durationSecs)}</span>
+                <button onClick={() => play(r)} className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold flex-shrink-0">▶ Play</button>
+              </div>
+              {playing && playing.id === r.id && <audio controls autoPlay src={playing.url} className="w-full mt-2" />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod }) {
   const { user } = useAuth();
 
@@ -44873,6 +45057,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Records</button>
             <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Summary</button>
             <button onClick={()=>setTab("periods")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="periods"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Pay Periods</button>
+            <button onClick={()=>setTab("recordings")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="recordings"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Recordings</button>
           </div>
         </div>
       </div>
@@ -44916,6 +45101,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       </div>
 
       {/* ── Records ── */}
+      {tab === "recordings" && <OrderRecordingsTab stores={stores} visibleStoreIds={visibleStoreIds} />}
+
       {tab === "records" && (() => {
         // Approval tab filter: needs = unapproved overtime/unscheduled; approved = the rest/settled.
         const isOpen = (r) => r.status === "open";

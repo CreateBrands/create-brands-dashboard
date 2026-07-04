@@ -12503,3 +12503,48 @@ export async function fetchVehicleTrail(punchId, { limit = 500 } = {}) {
   if (error) throw error;
   return (data || []).map(mapVehiclePos);
 }
+
+// ── ORDER RECORDINGS (ORDER_REC_V1) — voice record at table/till ─────────────
+// Staff record the customer stating their order; a dispute is resolved by
+// replaying the clip. Clips live in the PRIVATE order-recordings bucket
+// (played back via short-lived signed URLs) and auto-purge after 30 days via
+// cron — keep signage up: "orders may be recorded for accuracy".
+const mapOrderRec = (r) => ({
+  id: r.id, storeId: r.store_id, employeeId: r.employee_id, employeeName: r.employee_name,
+  tableRef: r.table_ref, durationSecs: r.duration_secs, audioPath: r.audio_path,
+  mimeType: r.mime_type, createdAt: r.created_at,
+});
+export async function uploadOrderRecording({ storeId, employeeId, employeeName, tableRef, durationSecs, blob, mimeType }) {
+  if (!blob || !storeId) throw new Error("Nothing to save.");
+  const ext = (mimeType || "").includes("mp4") ? "m4a" : "webm";
+  const d = new Date();
+  const day = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  const path = `${storeId}/${day}/or-${Date.now()}.${ext}`;
+  const { error: upErr } = await supabase.storage.from("order-recordings")
+    .upload(path, blob, { upsert: false, contentType: mimeType || "audio/webm" });
+  if (upErr) throw upErr;
+  const { error } = await supabase.from("order_recordings").insert({
+    store_id: storeId, employee_id: employeeId || null, employee_name: employeeName || null,
+    table_ref: tableRef || null, duration_secs: durationSecs ?? null,
+    audio_path: path, mime_type: mimeType || "audio/webm",
+  });
+  if (error) throw error;
+  return path;
+}
+export async function fetchOrderRecordings({ date, storeIds } = {}) {
+  let q = supabase.from("order_recordings").select("*").order("created_at", { ascending: false }).limit(300);
+  if (date) {
+    const next = new Date(date + "T00:00:00"); next.setDate(next.getDate() + 1);
+    const nextStr = `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}-${String(next.getDate()).padStart(2,"0")}`;
+    q = q.gte("created_at", date + "T00:00:00").lt("created_at", nextStr + "T00:00:00");
+  }
+  if (storeIds && storeIds.length) q = q.in("store_id", storeIds);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(mapOrderRec);
+}
+export async function getOrderRecordingUrl(path) {
+  const { data, error } = await supabase.storage.from("order-recordings").createSignedUrl(path, 3600);
+  if (error) throw error;
+  return data?.signedUrl;
+}
