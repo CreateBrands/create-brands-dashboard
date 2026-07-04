@@ -15687,8 +15687,16 @@ function PresenceCheckPrompt({ employeeId, stores, active }) {
 // private order-recordings bucket tagged with a table/order ref. Managers play
 // clips back from Team -> Time & Attendance -> Recordings. Clips auto-delete
 // after 30 days. All hooks live at the top (rules of hooks).
-function OrderRecorderModal({ storeId, employeeId, employeeName, onClose }) {
+function OrderRecorderModal({ storeId, employeeId, employeeName, onClose, autoStart = false }) {
   const [tableRef, setTableRef] = useState("");
+  // ORDER_REC_V2 — external mic + hardware trigger button.
+  // micId: chosen audio input (persisted per device). triggerKey: the key code
+  // a hardware HID button/pedal emits (persisted); pressing it toggles
+  // start/stop, both globally (opens this modal) and while the modal is open.
+  const [mics, setMics] = useState([]);
+  const [micId, setMicId] = useState(() => { try { return localStorage.getItem("orderRecMicId") || ""; } catch { return ""; } });
+  const [settingTrigger, setSettingTrigger] = useState(false);
+  const [triggerKey, setTriggerKey] = useState(() => { try { return localStorage.getItem("orderRecTriggerKey") || ""; } catch { return ""; } });
   const [rec, setRec] = useState(null);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -15713,10 +15721,54 @@ function OrderRecorderModal({ storeId, employeeId, employeeName, onClose }) {
   useEffect(() => () => { // unmount: stop any live recorder + release mic
     try { recRef.current && recRef.current.state !== "inactive" && recRef.current.stop(); } catch {}
   }, []);
+  // List audio inputs (labels appear once mic permission has been granted).
+  useEffect(() => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    navigator.mediaDevices.enumerateDevices()
+      .then(ds => setMics(ds.filter(d => d.kind === "audioinput")))
+      .catch(() => {});
+  }, [recording]); // refresh after permission is granted by the first recording
+  // Hardware-trigger capture: next key pressed becomes the trigger.
+  useEffect(() => {
+    if (!settingTrigger) return;
+    const onKey = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      setTriggerKey(e.code);
+      try { localStorage.setItem("orderRecTriggerKey", e.code); } catch {}
+      setSettingTrigger(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [settingTrigger]);
+  const startRef = useRef(null); // latest start() closure for the trigger listener
+  // While the modal is open, the trigger key toggles start/stop.
+  useEffect(() => {
+    if (!triggerKey || settingTrigger) return;
+    const onKey = (e) => {
+      if (e.code !== triggerKey) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return; // don't hijack typing
+      e.preventDefault();
+      if (recRef.current && recRef.current.state === "recording") {
+        try { recRef.current.stop(); } catch {}
+        setRecording(false);
+      } else if (!busy && !done) {
+        startRef.current && startRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [triggerKey, settingTrigger, busy, done]);
   const start = async () => {
     setErr(null); setBlob(null); setElapsed(0);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let stream;
+      if (micId) {
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } }); }
+        catch { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } // chosen mic unplugged — fall back
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       const supported = (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t);
       const m = supported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : (supported("audio/mp4") ? "audio/mp4" : "");
       const r = m ? new MediaRecorder(stream, { mimeType: m }) : new MediaRecorder(stream);
@@ -15734,6 +15786,8 @@ function OrderRecorderModal({ storeId, employeeId, employeeName, onClose }) {
       setErr(e && e.name === "NotAllowedError" ? "Microphone permission denied — allow the mic to record orders." : "Couldn't start the microphone on this device.");
     }
   };
+  startRef.current = start; // keep the trigger listener pointing at the latest closure
+  useEffect(() => { if (autoStart) start(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const stop = () => { try { recRef.current && recRef.current.state !== "inactive" && recRef.current.stop(); } catch {} setRecording(false); };
   const save = async () => {
     setBusy(true); setErr(null);
@@ -15754,6 +15808,17 @@ function OrderRecorderModal({ storeId, employeeId, employeeName, onClose }) {
         </div>
         <input value={tableRef} onChange={e => setTableRef(e.target.value)} placeholder="Table / order no. (e.g. T4)"
           className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500" />
+        <div className="flex gap-2">
+          <select value={micId} onChange={e => { setMicId(e.target.value); try { localStorage.setItem("orderRecMicId", e.target.value); } catch {} }}
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-2 py-2 text-xs text-slate-300 min-w-0">
+            <option value="">Default microphone</option>
+            {mics.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || "Microphone"}</option>)}
+          </select>
+          <button onClick={() => setSettingTrigger(true)}
+            className={`px-3 py-2 rounded-xl text-xs font-semibold flex-shrink-0 ${settingTrigger ? "bg-amber-600 text-white animate-pulse" : "bg-slate-800 text-slate-300 hover:text-white"}`}>
+            {settingTrigger ? "Press button…" : (triggerKey ? `Btn: ${triggerKey}` : "Set button")}
+          </button>
+        </div>
         {done ? (
           <div className="text-sm font-semibold text-emerald-400 text-center py-4">Saved ✓ — clip kept for 30 days</div>
         ) : (
@@ -15848,6 +15913,85 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const [clockBusy, setClockBusy] = useState(false);
   const [clockMsg, setClockMsg] = useState(null); // {type, msg}
   const [orderRecOpen, setOrderRecOpen] = useState(false); // ORDER_REC_V1
+  const [orderRecAuto, setOrderRecAuto] = useState(false); // ORDER_REC_V2: opened by hardware button
+  // ORDER_REC_V2 — global hardware-button listener: while on shift with the
+  // modal closed, the configured trigger key opens the recorder and starts
+  // recording immediately (press again inside the modal to stop).
+  useEffect(() => {
+    if (!myOpenPunch || orderRecOpen) return;
+    const onKey = (e) => {
+      let trigger = ""; try { trigger = localStorage.getItem("orderRecTriggerKey") || ""; } catch {}
+      if (!trigger || e.code !== trigger) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+      e.preventDefault();
+      setOrderRecAuto(true); setOrderRecOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [myOpenPunch, orderRecOpen]);
+  // ORDER_REC_HOTKEY_V1 — a paired Bluetooth clicker/shutter remote (acts as a
+  // keyboard: PageUp/PageDown/F13+) toggles hands-free recording: one press
+  // starts, the next press stops AND auto-saves (no table ref — time, staff and
+  // store still identify the clip). Only active while on shift; ignored while
+  // typing in a field. Max 5 min, then auto-stop-and-save.
+  const [quickRecOn, setQuickRecOn] = useState(false);
+  const [quickMsg, setQuickMsg] = useState(null); // transient toast
+  const quickRef = useRef(null); // { rec, stream, startedAt, chunks, timer }
+  useEffect(() => {
+    if (!myOpenPunch) return;
+    const punch = myOpenPunch;
+    const empId = currentUser.opsTeamMemberId || currentUser.id;
+    const empName = myOpsMember ? `${myOpsMember.firstName} ${myOpsMember.lastName || ""}`.trim() : (currentUser.name || "");
+    const HOTKEYS = new Set(["PageDown", "PageUp", "F13", "F14", "F15", "MediaPlayPause", "MediaTrackNext", "MediaTrackPrevious"]);
+    const flash = (m) => { setQuickMsg(m); setTimeout(() => setQuickMsg(null), 2500); };
+    const stopAndSave = () => {
+      const q = quickRef.current; if (!q) return;
+      quickRef.current = null; setQuickRecOn(false);
+      clearTimeout(q.timer);
+      try { if (q.rec.state !== "inactive") q.rec.stop(); } catch {}
+      // upload happens in the recorder's onstop (has the final blob)
+    };
+    const start = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const supported = (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t);
+        const m = supported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : (supported("audio/mp4") ? "audio/mp4" : "");
+        const rec = m ? new MediaRecorder(stream, { mimeType: m }) : new MediaRecorder(stream);
+        const chunks = [];
+        const startedAt = Date.now();
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        rec.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          const type = rec.mimeType || m || "audio/webm";
+          const blob = new Blob(chunks, { type });
+          const durationSecs = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+          try {
+            await uploadOrderRecording({ storeId: punch.storeId, employeeId: empId, employeeName: empName, tableRef: "", durationSecs, blob, mimeType: type });
+            flash({ tone: "ok", text: "Order clip saved ✓" });
+          } catch (e2) { flash({ tone: "err", text: "Clip failed to save — try the 🎙 button." }); }
+        };
+        rec.start();
+        const timer = setTimeout(stopAndSave, 300000); // 5 min cap
+        quickRef.current = { rec, stream, startedAt, chunks, timer };
+        setQuickRecOn(true);
+      } catch (e) {
+        flash({ tone: "err", text: e && e.name === "NotAllowedError" ? "Mic permission needed — allow it once via the 🎙 button." : "Couldn't start the mic." });
+      }
+    };
+    const onKey = (e) => {
+      if (!HOTKEYS.has(e.key)) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      e.preventDefault();
+      if (quickRef.current) stopAndSave(); else start();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      stopAndSave(); // clocking out / unmount ends any live recording (and saves it)
+    };
+  }, [myOpenPunch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── DRIVER_TRACK_V1 — shift-bounded vehicle tracking (company device) ──────
   // Active ONLY while: member's department marks them a driver AND a punch is
@@ -16061,7 +16205,17 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         <OrderRecorderModal storeId={myOpenPunch.storeId}
           employeeId={currentUser.opsTeamMemberId || currentUser.id}
           employeeName={myOpsMember ? `${myOpsMember.firstName} ${myOpsMember.lastName || ""}`.trim() : (currentUser.name || "")}
-          onClose={() => setOrderRecOpen(false)} />
+          autoStart={orderRecAuto}
+          onClose={() => { setOrderRecOpen(false); setOrderRecAuto(false); }} />
+      )}
+      {/* ORDER_REC_HOTKEY_V1 — hands-free recording state */}
+      {quickRecOn && (
+        <div className="fixed top-2 right-2 z-50 flex items-center gap-1.5 bg-red-600 rounded-full px-3 py-1.5 text-[11px] font-bold text-white shadow-lg">
+          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"/> Recording order — press remote to stop
+        </div>
+      )}
+      {quickMsg && !quickRecOn && (
+        <div className={`fixed top-2 right-2 z-50 rounded-full px-3 py-1.5 text-[11px] font-bold text-white shadow-lg ${quickMsg.tone === "ok" ? "bg-emerald-600" : "bg-red-600"}`}>{quickMsg.text}</div>
       )}
       {/* DRIVER_TRACK_V1 — visible while vehicle tracking is running */}
       {trackingActive && (
