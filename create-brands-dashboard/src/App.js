@@ -49040,23 +49040,47 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
 // Mobile bottom tab bar (md:hidden). Desktop keeps the sidebar untouched.
 // "More" opens a full-screen grouped sheet. All routing via setActiveView.
-function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: tabsOverride }) {
-  const tabs = tabsOverride || [
+function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: tabsOverride, liveGroups = null, onSelectSub = null }) {
+  // MOBILE_NAV_FROMLIVE — derive the 4 primary tabs from the SAME navGroups the
+  // desktop sidebar uses, so mobile can't drift out of sync. Each tab is the
+  // first reachable destination of a top-level item: an item with a `tab` child
+  // resolves to {view,tab}; a plain item is a direct view key. Falls back to the
+  // legacy hardcoded set only if no live groups are supplied.
+  const derived = (() => {
+    if (tabsOverride || !liveGroups || !liveGroups.length) return null;
+    const flat = liveGroups.flatMap(g => g.items);
+    const dest = (it) => {
+      if (it.children && it.children.length) {
+        const first = it.children[0];
+        return first.tab && first.view
+          ? { key: it.key, label: it.label, icon: it.icon, view: first.view, tab: first.tab }
+          : { key: first.key, label: it.label, icon: it.icon };
+      }
+      return { key: it.key, label: it.label, icon: it.icon };
+    };
+    return flat.slice(0, 4).map(dest);
+  })();
+  const tabs = tabsOverride || derived || [
     { key: "store-analytics", label: "Home",     icon: LayoutDashboard },
     { key: "schedule",        label: "Schedule", icon: CalendarDays },
     { key: "availability",    label: "Availability", icon: Calendar },
     { key: "ops-tasks",       label: "Tasks",    icon: CheckSquare },
-    { key: "__more__",        label: "More",     icon: Menu },
   ];
+  const withMore = [...tabs, { key: "__more__", label: "More", icon: Menu }];
+  const isActive = (t) => t.view ? (activeView === t.view && !moreOpen) : (activeView === t.key && !moreOpen);
+  const goTab = (t) => {
+    if (t.view && t.tab && onSelectSub) onSelectSub(t.view, t.tab);
+    else setActiveView(t.key);
+  };
   return (
     <nav className="cb-chrome emp-theme md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex items-stretch">
-      {tabs.map(t => {
+      {withMore.map(t => {
         const Icon = t.icon;
         const isMore = t.key === "__more__";
-        const activeTab = isMore ? moreOpen : (activeView === t.key && !moreOpen);
+        const activeTab = isMore ? moreOpen : isActive(t);
         return (
           <button key={t.key}
-            onClick={() => isMore ? onOpenMore() : setActiveView(t.key)}
+            onClick={() => isMore ? onOpenMore() : goTab(t)}
             className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 ${activeTab ? "text-indigo-400" : "text-slate-500"}`}>
             <Icon size={20}/>
             <span className="text-[10px] font-semibold">{t.label}</span>
@@ -49067,14 +49091,18 @@ function BottomTabBar({ activeView, setActiveView, onOpenMore, moreOpen, tabs: t
   );
 }
 
-function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverride = null, liveGroups = null, onLogout, onSwitchEntity = null }) {
+function MoreSheet({ open, onClose, setActiveView, onSelectSub = null, allowedKeys = [], groupsOverride = null, liveGroups = null, onLogout, onSwitchEntity = null }) {
   if (!open) return null;
   // If live nav groups are supplied and contain expandable children (e.g. the
   // Distribution WAREHOUSE group's Purchasing/Sales), surface those groups so
   // their sub-items are reachable on mobile.
+  // MOBILE_NAV_FROMLIVE — render the whole mobile menu from the live desktop
+  // navGroups when available, so the two can't diverge. childGroups kept for the
+  // legacy path only.
   const childGroups = (liveGroups || [])
     .filter(g => g.items.some(it => it.children && it.children.length))
     .map(g => ({ title: g.group, items: g.items, hasChildren: true }));
+  const liveMapped = (liveGroups || []).map(g => ({ title: g.group, items: g.items }));
   const GROUPS = groupsOverride
     ? groupsOverride.map(g => ({ title: g.group, items: g.items }))
     : [
@@ -49116,7 +49144,12 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
       { key:"admin", label:"Admin", icon:Users },
     ]},
   ];
-  const go = (key) => { setActiveView(key); onClose(); };
+  const go = (child) => {
+    // child may be a full item object ({key,view,tab}) or a bare key string.
+    if (typeof child === "object" && child.tab && child.view && onSelectSub) onSelectSub(child.view, child.tab);
+    else setActiveView(typeof child === "object" ? child.key : child);
+    onClose();
+  };
   return (
     <div className="emp-theme md:hidden fixed inset-0 z-50 bg-slate-950 flex flex-col">
       <div className="cb-chrome flex items-center justify-between px-5 py-4 border-b border-slate-800 flex-shrink-0">
@@ -49132,7 +49165,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
             <ChevronRight size={16} className="text-indigo-300"/>
           </button>
         )}
-        {[...childGroups, ...GROUPS].map(g => {
+        {(liveMapped.length ? liveMapped : [...childGroups, ...GROUPS]).map(g => {
           const items = g.items.filter(it => allowedKeys.includes(it.key) || (it.children && it.children.some(c => allowedKeys.includes(c.key))));
           if (!items.length) return null;
           return (
@@ -49154,7 +49187,7 @@ function MoreSheet({ open, onClose, setActiveView, allowedKeys = [], groupsOverr
                         {kids.map(c => {
                           const CIcon = c.icon;
                           return (
-                            <button key={c.key} onClick={() => go(c.key)}
+                            <button key={c.key} onClick={() => go(c)}
                               className="w-full flex items-center gap-3 pl-9 pr-4 py-3 hover:bg-slate-800/50 text-left">
                               {CIcon && <CIcon size={16} className="text-slate-400 flex-shrink-0"/>}
                               <span className="text-sm font-semibold text-white flex-1">{c.label}</span>
@@ -51515,13 +51548,26 @@ export default function App() {
           </main>
         </div>
         <BottomTabBar activeView={effectiveActiveView} setActiveView={(k)=>{ setMoreOpen(false); setActiveView(k); }} onOpenMore={()=>setMoreOpen(true)} moreOpen={moreOpen}
+          liveGroups={isFinanceEntity ? null : effectiveNavGroups}
+          onSelectSub={(view, tab) => {
+            setMoreOpen(false);
+            const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab, comms: setCommsTab };
+            if (setters[view]) setters[view](tab);
+            setActiveView(view);
+          }}
           tabs={isFinanceEntity ? [
             { key: "accounts",   label: "Accounts", icon: BarChart2 },
             { key: "spend",      label: "Spend",    icon: TrendingDown },
             { key: "petty-cash", label: "Petty Cash", icon: Wallet },
             { key: "expenses",   label: "Expenses", icon: Receipt },
           ] : undefined}/>
-        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView} allowedKeys={effectiveNavGroups.flatMap(g => g.items.flatMap(i => [i.key, ...((i.children || []).map(c => c.key))]))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} liveGroups={effectiveNavGroups} onLogout={handleLogout} onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}/>
+        <MoreSheet open={moreOpen} onClose={()=>setMoreOpen(false)} setActiveView={setActiveView}
+          onSelectSub={(view, tab) => {
+            const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab, comms: setCommsTab };
+            if (setters[view]) setters[view](tab);
+            setActiveView(view);
+          }}
+          allowedKeys={effectiveNavGroups.flatMap(g => g.items.flatMap(i => [i.key, ...((i.children || []).map(c => c.key))]))} groupsOverride={isFinanceEntity ? FINANCE_NAV : null} liveGroups={effectiveNavGroups} onLogout={handleLogout} onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}/>
         <WhosWorkingModal open={whosWorkingOpen} onClose={() => setWhosWorkingOpen(false)} punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={scopedVisibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>
         {/* Toast */}
         {toast && (
