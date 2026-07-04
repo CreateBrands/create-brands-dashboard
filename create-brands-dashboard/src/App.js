@@ -202,7 +202,8 @@ import {
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Paperclip, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
-  Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type
+  Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type,
+  Ship, Plane
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -9979,42 +9980,55 @@ function PackagingOrdersView({ currentUser }) {
 // Rich pipeline dashboard: KPI cards, an order-stage pipeline strip, and a
 // per-item table showing quantities at each stage next to live on-hand stock.
 function PackagingDashboard({ dash, orders, onOpenOrder }) {
-  const [drill, setDrill] = useState(null); // { title, items:[...] } for stage/metric drill
-  const [flowSort, setFlowSort] = useState("urgent"); // "default" | "urgent" — unit-flow ordering
+  const [drill, setDrill] = useState(null); // { title, orders:[...] } for stage drill
+  const [flowSort, setFlowSort] = useState("urgent"); // "default" | "urgent"
   const fmt = (n) => (n || 0).toLocaleString();
 
-  if (!dash) return <div className="text-center py-12 text-sm text-slate-500">Loading…</div>;
-  const t = dash.totals, fin = dash.finance, risk = dash.risk;
-  const hasData = dash.orderCount > 0;
-
-  if (!hasData) {
-    return <div className="text-center py-16 text-sm text-slate-600">No active packaging orders. Create one to see the pipeline, stock position and finance roll up here.</div>;
-  }
-
-  // KPI hero cards
-  const kpis = [
-    { label:"Active orders", value: dash.orderCount, sub:`${dash.suppliers.length} supplier${dash.suppliers.length===1?"":"s"}`, tone:"indigo" },
-    { label:"Quoted value", value: gbp(fin.quotedTotal), sub:`${gbp(fin.paidTotal)} paid`, tone:"sky" },
-    { label:"Outstanding", value: gbp(fin.outstanding), sub: risk.unpaidOrders?`${risk.unpaidOrders} order${risk.unpaidOrders===1?"":"s"} owing`:"all settled", tone: fin.outstanding>0?"amber":"emerald" },
-    { label:"Units incoming", value: fmt(t.atSupplier+t.inTransit+t.notYetShipped), sub:`${fmt(t.received)} received`, tone:"violet" },
-    { label:"In transit", value: fmt(t.inTransit), sub:"sea / air now", tone:"amber" },
-    { label:"Alerts", value: (risk.redCount||0)+(risk.amberCount||0), sub: (risk.redCount||0)?`${risk.redCount} critical`:"all clear", tone: (risk.redCount||0)?"red":(risk.amberCount||0)?"amber":"emerald" },
-  ];
-  const toneMap = {
-    indigo:"text-indigo-300", sky:"text-sky-300", amber:"text-amber-300",
-    emerald:"text-emerald-300", violet:"text-violet-300", red:"text-red-400",
+  // ── Light-theme tokens (match AnalysisBlock: cream surface, cocoa ink) ──────
+  // Designed for WCAG AA (>=4.5:1) dark-on-light text. One warm accent + semantic
+  // red/amber/green/blue, each paired with an icon+label so meaning never relies
+  // on colour alone.
+  const T = {
+    ink: "#3A2E26",         // primary text (12.8:1 on cream)
+    inkSoft: "#6B5D4F",     // secondary text (5.9:1)
+    inkFaint: "#8A7B68",    // tertiary/labels (4.6:1)
+    surface: "#FBF6EC",
+    surfaceAlt: "#F3EADA",  // zebra / inner panels
+    line: "#E8DCC6",
+    lineSoft: "#EFE6D4",
+    accent: "#B4622E",      // burnt-orange accent (5.2:1)
+    red: "#A23B2E", redBg: "#F6E4DF", redLine: "#E5C4BB",
+    amber: "#8A5A12", amberBg: "#F7EBD4", amberLine: "#E9D3A6",
+    green: "#3F6B3A", greenBg: "#E4EEDC", greenLine: "#CADFBE",
+    blue: "#2F5C86", blueBg: "#E1EAF2", blueLine: "#BFD3E5",
+    slate: "#6B5D4F", slateBg: "#EFE9DD",
   };
 
-  // Pipeline funnel: order stages with count + value; width scaled to max value.
+  if (!dash) return <div className="text-center py-12 text-sm" style={{color:T.inkFaint}}>Loading…</div>;
+  const t = dash.totals, fin = dash.finance, risk = dash.risk;
+  if (dash.orderCount === 0) {
+    return <div className="text-center py-16 text-sm" style={{color:T.inkFaint}}>No active packaging orders. Create one to see the pipeline, stock position and finance roll up here.</div>;
+  }
+
+  const sevColor = (lvl) => lvl==="red" ? {fg:T.red,bg:T.redBg,ln:T.redLine} : lvl==="amber" ? {fg:T.amber,bg:T.amberBg,ln:T.amberLine} : {fg:T.green,bg:T.greenBg,ln:T.greenLine};
+
+  // ── KPI hero ───────────────────────────────────────────────────────────────
+  const kpis = [
+    { label:"Active orders", value: dash.orderCount, sub:`${dash.suppliers.length} supplier${dash.suppliers.length===1?"":"s"}`, color:T.ink },
+    { label:"Quoted value", value: gbp(fin.quotedTotal), sub:`${gbp(fin.paidTotal)} paid`, color:T.ink },
+    { label:"Outstanding", value: gbp(fin.outstanding), sub: risk.unpaidOrders?`${risk.unpaidOrders} owing`:"all settled", color: fin.outstanding>0?T.amber:T.green },
+    { label:"Units incoming", value: fmt(t.atSupplier+t.inTransit+t.notYetShipped), sub:`${fmt(t.received)} received`, color:T.ink },
+    { label:"In transit", value: fmt(t.inTransit), sub:"sea / air now", color: t.inTransit>0?T.blue:T.inkFaint },
+    { label:"Alerts", value: (risk.redCount||0)+(risk.amberCount||0), sub: (risk.redCount||0)?`${risk.redCount} critical`:"all clear", color: (risk.redCount||0)?T.red:(risk.amberCount||0)?T.amber:T.green },
+  ];
+
   const funnelStages = PACKORDER_STAGES.filter(s => s.key !== "cancelled");
   const maxStageVal = Math.max(1, ...funnelStages.map(s => dash.stageValue[s.key] || 0));
-
-  // Stage bar (units) for the flow visual.
   const flowSegs = [
-    { label:"Not shipped", val:t.notYetShipped, cls:"bg-slate-600" },
-    { label:"At supplier", val:t.atSupplier, cls:"bg-indigo-500" },
-    { label:"In transit", val:t.inTransit, cls:"bg-amber-500" },
-    { label:"Received", val:t.received, cls:"bg-emerald-500" },
+    { label:"Not shipped", key:"notYetShipped", color:T.slate },
+    { label:"At supplier", key:"atSupplier", color:T.accent },
+    { label:"In transit", key:"inTransit", color:T.amber },
+    { label:"Received", key:"receivedViaOrders", color:T.green },
   ];
 
   const openStageDrill = (stageKey, label) => {
@@ -10022,107 +10036,103 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
     setDrill({ title: `${label} · ${list.length} order${list.length===1?"":"s"}`, orders: list });
   };
 
+  const th = { color:T.inkFaint, fontWeight:600 };
+  const inTransitShipments = (dash.shipments||[]).filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage));
+
   return (
     <div className="space-y-4">
       {/* KPI HERO */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         {kpis.map(k => (
-          <div key={k.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
-            <div className="text-[10px] uppercase tracking-wider text-slate-600 font-bold">{k.label}</div>
-            <div className={`text-xl font-bold ${toneMap[k.tone]} mt-1 leading-tight`}>{k.value}</div>
-            <div className="text-[10px] text-slate-600 mt-0.5">{k.sub}</div>
+          <div key={k.label} className="rounded-2xl p-3.5" style={{background:T.surface, border:`1px solid ${T.line}`}}>
+            <div className="text-[10px] uppercase tracking-wider font-bold" style={{color:T.inkFaint}}>{k.label}</div>
+            <div className="text-xl font-bold mt-1 leading-tight" style={{color:k.color}}>{k.value}</div>
+            <div className="text-[10px] mt-0.5" style={{color:T.inkFaint}}>{k.sub}</div>
           </div>
         ))}
       </div>
 
-      {/* EXCEPTIONS — the action list, above the fold. Red = breached, amber = at risk. */}
+      {/* EXCEPTIONS — action list, above the fold */}
       {dash.exceptions && dash.exceptions.length > 0 ? (
         <AnalysisBlock title={`Needs attention — ${risk.redCount} critical, ${risk.amberCount} at risk`}>
-          <div className="space-y-1.5">
-            {dash.exceptions.slice(0, 8).map((ex, i) => (
-              <button key={i} onClick={()=>ex.orderId && onOpenOrder(ex.orderId)} className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl border transition-colors ${ex.level==="red"?"bg-red-950/20 border-red-500/30 hover:bg-red-950/30":"bg-amber-950/15 border-amber-500/25 hover:bg-amber-950/25"}`}>
-                <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${ex.level==="red"?"bg-red-500":"bg-amber-500"}`}/>
-                <div className="min-w-0 flex-1">
-                  <div className={`text-xs font-semibold ${ex.level==="red"?"text-red-200":"text-amber-200"}`}>{ex.title}</div>
-                  <div className="text-[11px] text-slate-500">{ex.detail}</div>
-                </div>
-                {ex.orderId && <ChevronRight size={14} className="text-slate-600 flex-shrink-0 mt-0.5"/>}
-              </button>
-            ))}
-            {dash.exceptions.length > 8 && <div className="text-[11px] text-slate-600 text-center pt-1">+ {dash.exceptions.length - 8} more</div>}
+          <div className="space-y-2">
+            {dash.exceptions.slice(0, 8).map((ex, i) => {
+              const c = sevColor(ex.level);
+              return (
+                <button key={i} onClick={()=>ex.orderId && onOpenOrder(ex.orderId)} className="w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl transition-opacity hover:opacity-80" style={{background:c.bg, border:`1px solid ${c.ln}`}}>
+                  <span className="mt-0.5 flex-shrink-0" style={{color:c.fg}}>{ex.level==="red" ? <AlertCircle size={15}/> : <AlertTriangle size={15}/>}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold" style={{color:c.fg}}>{ex.title}</div>
+                    <div className="text-[11px]" style={{color:T.inkSoft}}>{ex.detail}</div>
+                  </div>
+                  {ex.orderId && <ChevronRight size={14} className="flex-shrink-0 mt-0.5" style={{color:T.inkFaint}}/>}
+                </button>
+              );
+            })}
+            {dash.exceptions.length > 8 && <div className="text-[11px] text-center pt-1" style={{color:T.inkFaint}}>+ {dash.exceptions.length - 8} more</div>}
           </div>
         </AnalysisBlock>
       ) : (
-        <div className="px-4 py-3 rounded-2xl bg-emerald-950/15 border border-emerald-500/25 text-emerald-300 text-xs font-semibold">✓ All clear — no overdue orders, late shipments, or stock-out risks right now.</div>
+        <div className="px-4 py-3 rounded-2xl text-xs font-semibold flex items-center gap-2" style={{background:T.greenBg, border:`1px solid ${T.greenLine}`, color:T.green}}><CheckCircle size={15}/> All clear — no overdue orders, late shipments, or stock-out risks right now.</div>
       )}
 
-      {/* UNIT FLOW BAR */}
+      {/* WHERE THE UNITS ARE — per-item strips, common scale */}
       <AnalysisBlock title="Where the units are — by item" action={
         <div className="flex gap-1">
           {[["urgent","Most stuck first"],["default","Order added"]].map(([k,l])=>(
-            <button key={k} onClick={()=>setFlowSort(k)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${flowSort===k?"bg-indigo-600 text-white":"text-slate-500 hover:text-slate-300"}`}>{l}</button>
+            <button key={k} onClick={()=>setFlowSort(k)} className="px-2.5 py-1 rounded-lg text-[11px] font-semibold" style={flowSort===k?{background:T.accent,color:"#fff"}:{color:T.inkFaint}}>{l}</button>
           ))}
         </div>
       }>
         <div className="space-y-3">
-          {/* Shared legend */}
           <div className="flex flex-wrap gap-3">
             {flowSegs.map(s => (
               <div key={s.label} className="flex items-center gap-1.5 text-[11px]">
-                <span className={`w-2.5 h-2.5 rounded-sm ${s.cls}`}/>
-                <span className="text-slate-400">{s.label}</span>
+                <span className="w-2.5 h-2.5 rounded-sm" style={{background:s.color}}/>
+                <span style={{color:T.inkSoft}}>{s.label}</span>
               </div>
             ))}
           </div>
-          {/* Per-item strips. Bars share a COMMON SCALE (widest = largest order),
-              so bar length itself signals order size; sorted so the most-stuck
-              (0 on hand, highest % upstream) float to the top by default. */}
           {(() => {
             const maxOrdered = Math.max(1, ...dash.items.map(i => i.ordered));
-            const withMetrics = dash.items.map(it => {
+            const withM = dash.items.map(it => {
               const upstream = it.notYetShipped + it.atSupplier + it.inTransit;
               const pctUpstream = it.ordered > 0 ? Math.round((upstream / it.ordered) * 100) : 0;
               const critical = it.onHand === 0 && it.ordered > 0;
               return { ...it, upstream, pctUpstream, critical };
             });
             const rows = flowSort === "urgent"
-              ? [...withMetrics].sort((a,b) =>
-                  (b.critical - a.critical) || (b.pctUpstream - a.pctUpstream) || (b.upstream - a.upstream))
-              : withMetrics;
+              ? [...withM].sort((a,b) => (b.critical - a.critical) || (b.pctUpstream - a.pctUpstream) || (b.upstream - a.upstream))
+              : withM;
             return (
               <div className="space-y-3.5">
                 {rows.map((it, idx) => {
-                  const segs = [
-                    { label:"Not shipped", val: it.notYetShipped, cls:"bg-slate-600" },
-                    { label:"At supplier", val: it.atSupplier,    cls:"bg-indigo-500" },
-                    { label:"In transit",  val: it.inTransit,     cls:"bg-amber-500" },
-                    { label:"Received",    val: it.receivedViaOrders, cls:"bg-emerald-500" },
-                  ];
+                  const segs = flowSegs.map(s => ({ label:s.label, val: it[s.key], color:s.color }));
                   const total = Math.max(1, segs.reduce((a,s)=>a+s.val,0));
-                  const barWidth = Math.max(12, (it.ordered / maxOrdered) * 100); // common scale
+                  const barWidth = Math.max(14, (it.ordered / maxOrdered) * 100);
                   return (
                     <div key={idx}>
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs font-semibold text-white truncate">{it.name}</span>
-                          {it.critical && <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-red-950/40 text-red-300 border border-red-500/30 flex-shrink-0">0 on hand</span>}
-                          {!it.linked && <span className="text-[9px] text-amber-500 flex-shrink-0">unlinked</span>}
+                          <span className="text-xs font-semibold truncate" style={{color:T.ink}}>{it.name}</span>
+                          {it.critical && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 flex-shrink-0" style={{background:T.redBg,color:T.red,border:`1px solid ${T.redLine}`}}><AlertCircle size={9}/>0 on hand</span>}
+                          {!it.linked && <span className="text-[9px] flex-shrink-0" style={{color:T.amber}}>unlinked</span>}
                         </div>
-                        <span className="text-[10px] text-slate-500 font-mono flex-shrink-0">
+                        <span className="text-[10px] font-mono flex-shrink-0" style={{color:T.inkFaint}}>
                           {fmt(it.ordered)} ordered{it.onHand!=null?` · ${fmt(it.onHand)} on hand`:""}
                         </span>
                       </div>
-                      <div className="flex h-6 rounded-lg overflow-hidden bg-slate-950" style={{ width:`${barWidth}%`, minWidth:"180px" }}>
+                      <div className="flex h-6 rounded-lg overflow-hidden" style={{ width:`${barWidth}%`, minWidth:"180px", background:T.surfaceAlt }}>
                         {segs.map(s => s.val > 0 && (
-                          <div key={s.label} className={`${s.cls} flex items-center justify-center`} style={{ width:`${(s.val/total)*100}%` }} title={`${s.label}: ${fmt(s.val)}`}>
-                            {(s.val/total) > 0.14 && <span className="text-[10px] font-bold text-white px-1 truncate">{fmt(s.val)}</span>}
+                          <div key={s.label} className="flex items-center justify-center" style={{ width:`${(s.val/total)*100}%`, background:s.color }} title={`${s.label}: ${fmt(s.val)}`}>
+                            {(s.val/total) > 0.14 && <span className="text-[10px] font-bold px-1 truncate" style={{color:"#fff"}}>{fmt(s.val)}</span>}
                           </div>
                         ))}
                       </div>
                       <div className="flex gap-3 mt-1 text-[10px]">
-                        {it.receivedViaOrders > 0 && <span className="text-emerald-400">{fmt(it.receivedViaOrders)} received</span>}
-                        {it.upstream > 0 && <span className={it.critical?"text-red-400":"text-slate-500"}>{fmt(it.upstream)} upstream ({it.pctUpstream}%)</span>}
-                        {it.upstream === 0 && it.receivedViaOrders > 0 && <span className="text-slate-600">fully landed</span>}
+                        {it.receivedViaOrders > 0 && <span style={{color:T.green}}>{fmt(it.receivedViaOrders)} received</span>}
+                        {it.upstream > 0 && <span style={{color: it.critical?T.red:T.inkFaint}}>{fmt(it.upstream)} upstream ({it.pctUpstream}%)</span>}
+                        {it.upstream === 0 && it.receivedViaOrders > 0 && <span style={{color:T.inkFaint}}>fully landed</span>}
                       </div>
                     </div>
                   );
@@ -10133,7 +10143,7 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
         </div>
       </AnalysisBlock>
 
-      {/* ORDER PIPELINE FUNNEL (count + value, clickable) */}
+      {/* ORDER PIPELINE — count & value by stage, clickable */}
       <AnalysisBlock title="Order pipeline — count & value by stage">
         <div className="space-y-1.5">
           {funnelStages.map(s => {
@@ -10143,117 +10153,123 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
             return (
               <button key={s.key} onClick={()=>openStageDrill(s.key, s.label)} className="w-full flex items-center gap-3 group">
                 <div className="w-32 text-right flex-shrink-0"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(s.key)}`}>{s.label}</span></div>
-                <div className="flex-1 h-7 bg-slate-950 rounded-lg overflow-hidden relative">
-                  <div className={`h-full ${packStageColor(s.key)} opacity-40 group-hover:opacity-60 transition-opacity`} style={{ width:`${Math.max(4,(val/maxStageVal)*100)}%` }}/>
+                <div className="flex-1 h-7 rounded-lg overflow-hidden relative" style={{background:T.surfaceAlt}}>
+                  <div className="h-full transition-all group-hover:opacity-90" style={{ width:`${Math.max(4,(val/maxStageVal)*100)}%`, background:T.accent, opacity:0.28 }}/>
                   <div className="absolute inset-0 flex items-center px-3 gap-2">
-                    <span className="text-xs font-bold text-white">{cnt} order{cnt===1?"":"s"}</span>
-                    <span className="text-[11px] text-slate-400 ml-auto font-mono">{gbp(val)}</span>
+                    <span className="text-xs font-bold" style={{color:T.ink}}>{cnt} order{cnt===1?"":"s"}</span>
+                    <span className="text-[11px] ml-auto font-mono" style={{color:T.inkSoft}}>{gbp(val)}</span>
                   </div>
                 </div>
               </button>
             );
           })}
-          {funnelStages.every(s => (dash.stageCounts[s.key]||0)===0) && <div className="text-center py-4 text-xs text-slate-600">No orders in the pipeline.</div>}
         </div>
       </AnalysisBlock>
 
-      {/* IN-TRANSIT SHIPMENT TRACKER — where are the containers, and are they on time */}
-      {dash.shipments && dash.shipments.filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage)).length > 0 && (
+      {/* IN-TRANSIT SHIPMENT TRACKER */}
+      {inTransitShipments.length > 0 && (
         <AnalysisBlock title="In transit — live shipments">
           <div className="space-y-2">
-            {dash.shipments.filter(s => ["shipped_sea","shipped_air","at_destination"].includes(s.stage))
+            {inTransitShipments
               .sort((a,b) => { const ar=a.etaRisk?(a.etaRisk.level==="red"?0:1):2; const br=b.etaRisk?(b.etaRisk.level==="red"?0:1):2; return ar-br || (a.etaDate||"").localeCompare(b.etaDate||""); })
-              .map((sh, i) => (
-              <button key={i} onClick={()=>onOpenOrder(sh.orderId)} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/60 transition-colors">
-                <span className="text-lg flex-shrink-0">{sh.method==="air"?"✈":"🚢"}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-white">{sh.orderRef || "Order"} · {sh.ref || "shipment"} <span className="text-slate-500 font-normal">— {sh.supplier || ""}</span></div>
-                  <div className="text-[11px] text-slate-500">{fmt(sh.units)} units · {sh.stage==="at_destination"?"at destination port":sh.method==="air"?"in the air":"on the water"}{sh.etaDate?` · ETA ${sh.etaDate}`:""}</div>
-                </div>
-                {sh.etaRisk
-                  ? <span className={`px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0 ${sh.etaRisk.level==="red"?"bg-red-600 text-white":"bg-amber-500 text-amber-950"}`}>{sh.etaRisk.label}</span>
-                  : <span className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-slate-800 text-slate-400 flex-shrink-0">on track</span>}
-              </button>
-            ))}
+              .map((sh, i) => {
+                const risky = sh.etaRisk;
+                const c = risky ? sevColor(risky.level) : null;
+                return (
+                  <button key={i} onClick={()=>onOpenOrder(sh.orderId)} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-xl transition-opacity hover:opacity-80" style={{background:T.surfaceAlt}}>
+                    <span className="flex-shrink-0" style={{color:T.inkSoft}}>{sh.method==="air"?<Plane size={16}/>:<Ship size={16}/>}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold" style={{color:T.ink}}>{sh.orderRef || "Order"} · {sh.ref || "shipment"} <span className="font-normal" style={{color:T.inkFaint}}>— {sh.supplier || ""}</span></div>
+                      <div className="text-[11px]" style={{color:T.inkSoft}}>{fmt(sh.units)} units · {sh.stage==="at_destination"?"at destination port":sh.method==="air"?"in the air":"on the water"}{sh.etaDate?` · ETA ${sh.etaDate}`:""}</div>
+                    </div>
+                    {risky
+                      ? <span className="px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0 flex items-center gap-1" style={{background:c.bg,color:c.fg,border:`1px solid ${c.ln}`}}>{risky.level==="red"?<AlertCircle size={10}/>:<Clock size={10}/>}{risky.label}</span>
+                      : <span className="px-2 py-1 rounded-lg text-[10px] font-semibold flex-shrink-0 flex items-center gap-1" style={{background:T.greenBg,color:T.green,border:`1px solid ${T.greenLine}`}}><CheckCircle size={10}/>on track</span>}
+                  </button>
+                );
+              })}
           </div>
         </AnalysisBlock>
       )}
 
-      {/* ITEMS × STAGES with on-hand + projected stock */}
+      {/* ITEMS × STAGES with on-hand + projected + status */}
       {dash.items.length > 0 && (
-        <AnalysisBlock title="Items across stages — with live stock & projected on-hand">
+        <AnalysisBlock title="Items across stages — live stock & projected on-hand">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-slate-700 text-slate-600">
-                  <th className="px-3 py-2 text-left font-semibold">Item</th>
-                  <th className="px-3 py-2 text-right font-semibold">On hand</th>
-                  <th className="px-3 py-2 text-right font-semibold">Not shipped</th>
-                  <th className="px-3 py-2 text-right font-semibold">At supplier</th>
-                  <th className="px-3 py-2 text-right font-semibold">In transit</th>
-                  <th className="px-3 py-2 text-right font-semibold">Received</th>
-                  <th className="px-3 py-2 text-right font-semibold">Incoming</th>
-                  <th className="px-3 py-2 text-right font-semibold">Projected</th>
-                  <th className="px-3 py-2 text-right font-semibold">Value</th>
-                  <th className="px-3 py-2 text-center font-semibold">Status</th>
+                <tr style={{borderBottom:`1px solid ${T.line}`}}>
+                  <th className="px-3 py-2 text-left" style={th}>Item</th>
+                  <th className="px-3 py-2 text-right" style={th}>On hand</th>
+                  <th className="px-3 py-2 text-right" style={th}>Not shipped</th>
+                  <th className="px-3 py-2 text-right" style={th}>At supplier</th>
+                  <th className="px-3 py-2 text-right" style={th}>In transit</th>
+                  <th className="px-3 py-2 text-right" style={th}>Received</th>
+                  <th className="px-3 py-2 text-right" style={th}>Incoming</th>
+                  <th className="px-3 py-2 text-right" style={th}>Projected</th>
+                  <th className="px-3 py-2 text-right" style={th}>Value</th>
+                  <th className="px-3 py-2 text-center" style={th}>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {dash.items.map((r,i) => (
-                  <tr key={i} className="border-b border-slate-800/60 hover:bg-slate-800/30">
-                    <td className="px-3 py-2.5"><div className="text-white font-medium">{r.name}</div><div className="text-[10px] text-slate-600">{r.linked ? r.orderRefs.join(", ") : <span className="text-amber-500">not linked</span>}</div></td>
-                    <td className="px-3 py-2.5 text-right font-mono font-bold text-white">{r.onHand==null?"—":fmt(r.onHand)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-500">{fmt(r.notYetShipped)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-indigo-300">{fmt(r.atSupplier)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-amber-400">{fmt(r.inTransit)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{fmt(r.receivedViaOrders)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono font-bold text-sky-300">{fmt(r.incoming)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-300">{r.projected==null?"—":fmt(r.projected)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{gbp(r.value)}</td>
-                    <td className="px-3 py-2.5 text-center">{(() => {
-                      if (r.onHand == null) return <span className="text-[10px] text-slate-600">—</span>;
-                      if (r.onHand <= 0 && r.inTransit > 0) return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500 text-amber-950">arriving</span>;
-                      if (r.onHand <= 0) return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-600 text-white">out</span>;
-                      if (r.incoming > 0) return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-700 text-white">inbound</span>;
-                      return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-700 text-white">in stock</span>;
-                    })()}</td>
-                  </tr>
-                ))}
+                {dash.items.map((r,i) => {
+                  const badge = (() => {
+                    if (r.onHand == null) return null;
+                    if (r.onHand <= 0 && r.inTransit > 0) return {t:"arriving",c:sevColor("amber"),Ic:Clock};
+                    if (r.onHand <= 0) return {t:"out",c:sevColor("red"),Ic:AlertCircle};
+                    if (r.incoming > 0) return {t:"inbound",c:{fg:T.blue,bg:T.blueBg,ln:T.blueLine},Ic:Ship};
+                    return {t:"in stock",c:sevColor("green"),Ic:CheckCircle};
+                  })();
+                  return (
+                    <tr key={i} style={{borderBottom:`1px solid ${T.lineSoft}`, background: i%2?T.surfaceAlt+"55":"transparent"}}>
+                      <td className="px-3 py-2.5"><div className="font-medium" style={{color:T.ink}}>{r.name}</div><div className="text-[10px]" style={{color: r.linked?T.inkFaint:T.amber}}>{r.linked ? r.orderRefs.join(", ") : "not linked"}</div></td>
+                      <td className="px-3 py-2.5 text-right font-mono font-bold" style={{color:T.ink}}>{r.onHand==null?"—":fmt(r.onHand)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkFaint}}>{fmt(r.notYetShipped)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.accent}}>{fmt(r.atSupplier)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.amber}}>{fmt(r.inTransit)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.green}}>{fmt(r.receivedViaOrders)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono font-bold" style={{color:T.blue}}>{fmt(r.incoming)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{r.projected==null?"—":fmt(r.projected)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{gbp(r.value)}</td>
+                      <td className="px-3 py-2.5 text-center">{badge ? <span className="px-2 py-0.5 rounded-md text-[10px] font-bold inline-flex items-center gap-1" style={{background:badge.c.bg,color:badge.c.fg,border:`1px solid ${badge.c.ln}`}}><badge.Ic size={10}/>{badge.t}</span> : <span className="text-[10px]" style={{color:T.inkFaint}}>—</span>}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          <div className="text-[10px] text-slate-600 mt-2">On hand = live distribution stock · Incoming = at supplier + in transit + not shipped · Projected = on hand once everything lands.</div>
+          <div className="text-[10px] mt-2" style={{color:T.inkFaint}}>On hand = live distribution stock · Incoming = at supplier + in transit + not shipped · Projected = on hand once everything lands.</div>
         </AnalysisBlock>
       )}
 
-      {/* ORDERS TABLE — sortable-ish, overdue first, progress + payment */}
+      {/* ALL ACTIVE ORDERS */}
       <AnalysisBlock title="All active orders">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
-            <thead><tr className="border-b border-slate-700 text-slate-600">
-              <th className="px-3 py-2 text-left font-semibold">Order</th>
-              <th className="px-3 py-2 text-left font-semibold">Stage</th>
-              <th className="px-3 py-2 text-right font-semibold">Units</th>
-              <th className="px-3 py-2 text-left font-semibold">Progress</th>
-              <th className="px-3 py-2 text-right font-semibold">Quoted</th>
-              <th className="px-3 py-2 text-right font-semibold">Outstanding</th>
-              <th className="px-3 py-2 text-left font-semibold">Expected</th>
+            <thead><tr style={{borderBottom:`1px solid ${T.line}`}}>
+              <th className="px-3 py-2 text-left" style={th}>Order</th>
+              <th className="px-3 py-2 text-left" style={th}>Stage</th>
+              <th className="px-3 py-2 text-right" style={th}>Units</th>
+              <th className="px-3 py-2 text-left" style={th}>Progress</th>
+              <th className="px-3 py-2 text-right" style={th}>Quoted</th>
+              <th className="px-3 py-2 text-right" style={th}>Outstanding</th>
+              <th className="px-3 py-2 text-left" style={th}>Expected</th>
             </tr></thead>
             <tbody>
-              {dash.orders.map(o => (
-                <tr key={o.id} onClick={()=>onOpenOrder(o.id)} className="border-b border-slate-800/60 hover:bg-slate-800/30 cursor-pointer">
-                  <td className="px-3 py-2.5"><div className="text-white font-semibold">{o.ref || "Untitled"}</div><div className="text-[10px] text-slate-600">{o.supplier || "—"}</div></td>
+              {dash.orders.map((o,i) => (
+                <tr key={o.id} onClick={()=>onOpenOrder(o.id)} className="cursor-pointer transition-colors hover:opacity-90" style={{borderBottom:`1px solid ${T.lineSoft}`, background: i%2?T.surfaceAlt+"55":"transparent"}}>
+                  <td className="px-3 py-2.5"><div className="font-semibold" style={{color:T.ink}}>{o.ref || "Untitled"}</div><div className="text-[10px]" style={{color:T.inkFaint}}>{o.supplier || "—"}</div></td>
                   <td className="px-3 py-2.5"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${packStageColor(o.stage)}`}>{packStageLabel(o.stage)}</span></td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-300">{fmt(o.units)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{fmt(o.units)}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
-                      <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:`${o.pctReceived}%`}}/></div>
-                      <span className="text-[10px] text-slate-500 font-mono">{o.pctReceived}%</span>
+                      <div className="w-20 h-1.5 rounded-full overflow-hidden" style={{background:T.surfaceAlt}}><div className="h-full" style={{width:`${o.pctReceived}%`, background:T.green}}/></div>
+                      <span className="text-[10px] font-mono" style={{color:T.inkFaint}}>{o.pctReceived}%</span>
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-300">{gbp(o.quotedTotal)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono"><span className={o.outstanding>0.01?"text-amber-400":"text-slate-600"}>{o.outstanding>0.01?gbp(o.outstanding):"—"}</span></td>
-                  <td className="px-3 py-2.5"><span className={o.overdue?"text-red-400 font-semibold":"text-slate-500"}>{o.expectedDate || "—"}{o.overdue?" ⏰":""}</span></td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{gbp(o.quotedTotal)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono"><span style={{color:o.outstanding>0.01?T.amber:T.inkFaint}}>{o.outstanding>0.01?gbp(o.outstanding):"—"}</span></td>
+                  <td className="px-3 py-2.5"><span className="flex items-center gap-1" style={{color:o.overdue?T.red:T.inkFaint, fontWeight:o.overdue?600:400}}>{o.expectedDate || "—"}{o.overdue && <AlertCircle size={11}/>}</span></td>
                 </tr>
               ))}
             </tbody>
@@ -10261,28 +10277,28 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
         </div>
       </AnalysisBlock>
 
-      {/* SUPPLIER ROLLUP */}
+      {/* BY SUPPLIER */}
       {dash.suppliers.length > 0 && (
         <AnalysisBlock title="By supplier">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
-              <thead><tr className="border-b border-slate-700 text-slate-600">
-                <th className="px-3 py-2 text-left font-semibold">Supplier</th>
-                <th className="px-3 py-2 text-right font-semibold">Orders</th>
-                <th className="px-3 py-2 text-right font-semibold">Units</th>
-                <th className="px-3 py-2 text-right font-semibold">Received</th>
-                <th className="px-3 py-2 text-right font-semibold">Quoted</th>
-                <th className="px-3 py-2 text-right font-semibold">Paid</th>
+              <thead><tr style={{borderBottom:`1px solid ${T.line}`}}>
+                <th className="px-3 py-2 text-left" style={th}>Supplier</th>
+                <th className="px-3 py-2 text-right" style={th}>Orders</th>
+                <th className="px-3 py-2 text-right" style={th}>Units</th>
+                <th className="px-3 py-2 text-right" style={th}>Received</th>
+                <th className="px-3 py-2 text-right" style={th}>Quoted</th>
+                <th className="px-3 py-2 text-right" style={th}>Paid</th>
               </tr></thead>
               <tbody>
                 {dash.suppliers.map((s,i) => (
-                  <tr key={i} className="border-b border-slate-800/60">
-                    <td className="px-3 py-2.5 text-white font-medium">{s.supplier}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-300">{s.orders}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{fmt(s.units)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-emerald-400">{fmt(s.received)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-300">{gbp(s.quoted)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-400">{gbp(s.paid)}</td>
+                  <tr key={i} style={{borderBottom:`1px solid ${T.lineSoft}`, background: i%2?T.surfaceAlt+"55":"transparent"}}>
+                    <td className="px-3 py-2.5 font-medium" style={{color:T.ink}}>{s.supplier}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{s.orders}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkFaint}}>{fmt(s.units)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{color:T.green}}>{fmt(s.received)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkSoft}}>{gbp(s.quoted)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{color:T.inkFaint}}>{gbp(s.paid)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -10293,17 +10309,17 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
 
       {/* STAGE DRILL MODAL */}
       {drill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={()=>setDrill(null)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 sticky top-0 bg-slate-900">
-              <h3 className="text-sm font-bold text-white">{drill.title}</h3>
-              <button onClick={()=>setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800">✕</button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={()=>setDrill(null)}>
+          <div className="rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-auto" style={{background:T.surface, border:`1px solid ${T.line}`}} onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 sticky top-0" style={{background:T.surface, borderBottom:`1px solid ${T.line}`}}>
+              <h3 className="text-sm font-bold" style={{color:T.ink}}>{drill.title}</h3>
+              <button onClick={()=>setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center hover:opacity-70" style={{color:T.inkFaint}}><X size={16}/></button>
             </div>
             <div className="p-3 space-y-2">
               {drill.orders.map(o => (
-                <button key={o.id} onClick={()=>{ setDrill(null); onOpenOrder(o.id); }} className="w-full text-left bg-slate-950 rounded-xl p-3 hover:bg-slate-800">
-                  <div className="flex items-center gap-2"><span className="font-semibold text-white text-sm">{o.ref||"Untitled"}</span><span className="text-[11px] text-slate-500 ml-auto">{gbp(o.quotedTotal)}</span></div>
-                  <div className="text-[11px] text-slate-500">{o.supplier||"—"} · {fmt(o.units)} units · {o.pctReceived}% received{o.overdue?" · ⏰ overdue":""}</div>
+                <button key={o.id} onClick={()=>{ setDrill(null); onOpenOrder(o.id); }} className="w-full text-left rounded-xl p-3 hover:opacity-80" style={{background:T.surfaceAlt}}>
+                  <div className="flex items-center gap-2"><span className="font-semibold text-sm" style={{color:T.ink}}>{o.ref||"Untitled"}</span><span className="text-[11px] ml-auto" style={{color:T.inkFaint}}>{gbp(o.quotedTotal)}</span></div>
+                  <div className="text-[11px]" style={{color:T.inkSoft}}>{o.supplier||"—"} · {fmt(o.units)} units · {o.pctReceived}% received{o.overdue?" · overdue":""}</div>
                 </button>
               ))}
             </div>
@@ -10313,7 +10329,6 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
     </div>
   );
 }
-
 // Bulk import a packaging order from Excel. One file = one order: the first row
 // carries order-level fields (ref, supplier, dates, quote), every row is a line
 // item. Items are linked to distribution inventory by matching the item name
