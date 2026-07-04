@@ -9980,6 +9980,7 @@ function PackagingOrdersView({ currentUser }) {
 // per-item table showing quantities at each stage next to live on-hand stock.
 function PackagingDashboard({ dash, orders, onOpenOrder }) {
   const [drill, setDrill] = useState(null); // { title, items:[...] } for stage/metric drill
+  const [flowSort, setFlowSort] = useState("urgent"); // "default" | "urgent" — unit-flow ordering
   const fmt = (n) => (n || 0).toLocaleString();
 
   if (!dash) return <div className="text-center py-12 text-sm text-slate-500">Loading…</div>;
@@ -10044,7 +10045,13 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
       )}
 
       {/* UNIT FLOW BAR */}
-      <AnalysisBlock title="Where the units are — by item">
+      <AnalysisBlock title="Where the units are — by item" action={
+        <div className="flex gap-1">
+          {[["urgent","Most stuck first"],["default","Order added"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setFlowSort(k)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${flowSort===k?"bg-indigo-600 text-white":"text-slate-500 hover:text-slate-300"}`}>{l}</button>
+          ))}
+        </div>
+      }>
         <div className="space-y-3">
           {/* Shared legend */}
           <div className="flex flex-wrap gap-3">
@@ -10055,35 +10062,62 @@ function PackagingDashboard({ dash, orders, onOpenOrder }) {
               </div>
             ))}
           </div>
-          {/* One strip per item */}
-          <div className="space-y-2.5">
-            {dash.items.map((it, idx) => {
-              const segs = [
-                { label:"Not shipped", val: it.notYetShipped, cls:"bg-slate-600" },
-                { label:"At supplier", val: it.atSupplier,    cls:"bg-indigo-500" },
-                { label:"In transit",  val: it.inTransit,     cls:"bg-amber-500" },
-                { label:"Received",    val: it.receivedViaOrders, cls:"bg-emerald-500" },
-              ];
-              const total = Math.max(1, segs.reduce((a,s)=>a+s.val,0));
-              return (
-                <div key={idx}>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className="text-xs font-semibold text-white truncate">{it.name}</span>
-                    <span className="text-[10px] text-slate-500 font-mono ml-2 flex-shrink-0">
-                      {fmt(it.ordered)} ordered{it.onHand!=null?` · ${fmt(it.onHand)} on hand`:""}
-                    </span>
-                  </div>
-                  <div className="flex h-6 rounded-lg overflow-hidden bg-slate-950">
-                    {segs.map(s => s.val > 0 && (
-                      <div key={s.label} className={`${s.cls} flex items-center justify-center`} style={{ width:`${(s.val/total)*100}%` }} title={`${s.label}: ${fmt(s.val)}`}>
-                        {(s.val/total) > 0.12 && <span className="text-[10px] font-bold text-white px-1 truncate">{fmt(s.val)}</span>}
+          {/* Per-item strips. Bars share a COMMON SCALE (widest = largest order),
+              so bar length itself signals order size; sorted so the most-stuck
+              (0 on hand, highest % upstream) float to the top by default. */}
+          {(() => {
+            const maxOrdered = Math.max(1, ...dash.items.map(i => i.ordered));
+            const withMetrics = dash.items.map(it => {
+              const upstream = it.notYetShipped + it.atSupplier + it.inTransit;
+              const pctUpstream = it.ordered > 0 ? Math.round((upstream / it.ordered) * 100) : 0;
+              const critical = it.onHand === 0 && it.ordered > 0;
+              return { ...it, upstream, pctUpstream, critical };
+            });
+            const rows = flowSort === "urgent"
+              ? [...withMetrics].sort((a,b) =>
+                  (b.critical - a.critical) || (b.pctUpstream - a.pctUpstream) || (b.upstream - a.upstream))
+              : withMetrics;
+            return (
+              <div className="space-y-3.5">
+                {rows.map((it, idx) => {
+                  const segs = [
+                    { label:"Not shipped", val: it.notYetShipped, cls:"bg-slate-600" },
+                    { label:"At supplier", val: it.atSupplier,    cls:"bg-indigo-500" },
+                    { label:"In transit",  val: it.inTransit,     cls:"bg-amber-500" },
+                    { label:"Received",    val: it.receivedViaOrders, cls:"bg-emerald-500" },
+                  ];
+                  const total = Math.max(1, segs.reduce((a,s)=>a+s.val,0));
+                  const barWidth = Math.max(12, (it.ordered / maxOrdered) * 100); // common scale
+                  return (
+                    <div key={idx}>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-semibold text-white truncate">{it.name}</span>
+                          {it.critical && <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-red-950/40 text-red-300 border border-red-500/30 flex-shrink-0">0 on hand</span>}
+                          {!it.linked && <span className="text-[9px] text-amber-500 flex-shrink-0">unlinked</span>}
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-mono flex-shrink-0">
+                          {fmt(it.ordered)} ordered{it.onHand!=null?` · ${fmt(it.onHand)} on hand`:""}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                      <div className="flex h-6 rounded-lg overflow-hidden bg-slate-950" style={{ width:`${barWidth}%`, minWidth:"180px" }}>
+                        {segs.map(s => s.val > 0 && (
+                          <div key={s.label} className={`${s.cls} flex items-center justify-center`} style={{ width:`${(s.val/total)*100}%` }} title={`${s.label}: ${fmt(s.val)}`}>
+                            {(s.val/total) > 0.14 && <span className="text-[10px] font-bold text-white px-1 truncate">{fmt(s.val)}</span>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-3 mt-1 text-[10px]">
+                        {it.receivedViaOrders > 0 && <span className="text-emerald-400">{fmt(it.receivedViaOrders)} received</span>}
+                        {it.upstream > 0 && <span className={it.critical?"text-red-400":"text-slate-500"}>{fmt(it.upstream)} upstream ({it.pctUpstream}%)</span>}
+                        {it.upstream === 0 && it.receivedViaOrders > 0 && <span className="text-slate-600">fully landed</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       </AnalysisBlock>
 
