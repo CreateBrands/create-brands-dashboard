@@ -41,6 +41,8 @@ import {
   fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
+  fetchPendingPresenceCheck, fetchPresenceChecks, respondPresenceCheck, requestPresenceCheck,
+  insertVehiclePosition, fetchVehicleTrail,
   resolveAnnouncementAudience,
   notifyNewHelpdeskTicket, notifyHelpdeskAssignment, notifyHelpdeskReply,
   subscribeTyping, uploadChatAttachment,
@@ -15610,6 +15612,75 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
   );
 }
 
+// ── PRESENCE_CHECK_V1 — mid-shift location verification ──────────────────────
+// The presence-check-sweep cron randomly asks on-shift mobile staff to confirm
+// their location (max 2 per shift, >=90 min apart, only staff with push
+// subscriptions). A push notification brings them into the app; this watcher
+// polls for a pending check while a punch is open and shows a blocking prompt.
+// Responding captures GPS ONCE — the same permission and geofence model as
+// phone clock-in — and records the distance to the store. No response before
+// expiry = 'expired' (marked by the sweep). Results appear on the punch's pay
+// breakdown timeline in Time & Attendance.
+function PresenceCheckPrompt({ employeeId, stores, active }) {
+  const [check, setCheck] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active || !employeeId) { setCheck(null); return; }
+    let stop = false;
+    const poll = async () => {
+      try { const c = await fetchPendingPresenceCheck(employeeId); if (!stop) setCheck(c); } catch { /* best-effort */ }
+    };
+    poll();
+    const iv = setInterval(poll, 60000);
+    const onVis = () => { if (document.visibilityState === "visible") poll(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop = true; clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [active, employeeId]);
+  // 1s tick so the countdown moves while the prompt is up.
+  useEffect(() => { if (!check) return; const iv = setInterval(() => setTick(x => x + 1), 1000); return () => clearInterval(iv); }, [check]);
+  if (!check) return null;
+  const store = (stores || []).find(s => s.id === check.storeId) || null;
+  const secsLeft = Math.max(0, Math.floor((new Date(check.expiresAt).getTime() - Date.now()) / 1000));
+  if (secsLeft <= 0) return null; // expired — the sweep will mark it
+  const confirm = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const coords = await new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("Location isn't available on this device."));
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve(pos.coords),
+          err => reject(new Error(err.code === 1 ? "Location permission denied — enable location to confirm." : "Couldn't get your location — try again near a window.")),
+          { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+        );
+      });
+      let distanceM = null, status = "ok";
+      if (store && store.latitude != null && store.longitude != null) {
+        distanceM = metresBetween(coords.latitude, coords.longitude, store.latitude, store.longitude);
+        status = distanceM <= (store.geofenceRadius || 200) ? "ok" : "out_of_radius";
+      }
+      await respondPresenceCheck({ id: check.id, latitude: coords.latitude, longitude: coords.longitude, accuracyM: coords.accuracy ?? null, distanceM: distanceM != null ? Math.round(distanceM) : null, status });
+      setMsg({ type: "ok", text: status === "ok" ? "Thanks — location confirmed ✓" : "Recorded — you appear to be outside the store area. Your manager will see this." });
+      setTimeout(() => setCheck(null), 2500);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Something went wrong — try again." });
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-5">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-sm text-center space-y-3">
+        <div className="text-3xl">📍</div>
+        <div className="text-white font-bold text-base">Location check</div>
+        <div className="text-slate-400 text-sm">Please confirm you're at {store ? (store.shortName || store.name) : "your store"}. This uses your location once, like clocking in.</div>
+        <div className="text-xs font-mono text-amber-400">{Math.floor(secsLeft/60)}:{String(secsLeft%60).padStart(2,"0")} to respond</div>
+        {msg && <div className={`text-xs font-semibold rounded-lg px-3 py-2 ${msg.type === "error" ? "bg-red-600" : "bg-emerald-600"} text-white`}>{msg.text}</div>}
+        <button onClick={confirm} disabled={busy} className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm">{busy ? "Checking…" : "Confirm my location"}</button>
+      </div>
+    </div>
+  );
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
@@ -15675,6 +15746,40 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const myClockStore = (stores || []).find(s => s.id === (myOpenPunch?.storeId || (myOpsMember?.storeIds && myOpsMember.storeIds[0]) || null)) || null;
   const [clockBusy, setClockBusy] = useState(false);
   const [clockMsg, setClockMsg] = useState(null); // {type, msg}
+
+  // ── DRIVER_TRACK_V1 — shift-bounded vehicle tracking (company device) ──────
+  // Active ONLY while: member's department marks them a driver AND a punch is
+  // open. Streams a breadcrumb every ~60s (or 75m of movement, min 30s apart),
+  // holds a screen wake-lock so a mounted vehicle-charged device keeps
+  // reporting, and stops the instant the punch closes. Disclosed tracking per
+  // the driver agreement — the pill below makes it visible to the driver.
+  const isDriverRole = /driver|delivery/i.test(myOpsMember?.department || "");
+  const trackingActive = isDriverRole && !!myOpenPunch;
+  useEffect(() => {
+    if (!trackingActive) return;
+    const punchId = myOpenPunch.id, empId = myOpenPunch.employeeId, stId = myOpenPunch.storeId;
+    let watchId = null, wakeLock = null, lastWrite = 0, lastLat = null, lastLng = null;
+    const acquireWake = async () => { try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch { /* not supported / denied */ } };
+    acquireWake();
+    const onVis = () => { if (document.visibilityState === "visible") acquireWake(); }; // wake locks release on background
+    document.addEventListener("visibilitychange", onVis);
+    if (navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const { latitude, longitude, accuracy, speed } = pos.coords;
+        const now = Date.now();
+        if (now - lastWrite < 30000) return; // hard floor: 30s
+        const moved = lastLat == null ? Infinity : metresBetween(latitude, longitude, lastLat, lastLng);
+        if (now - lastWrite < 60000 && moved < 75) return; // within a minute, only on real movement
+        lastWrite = now; lastLat = latitude; lastLng = longitude;
+        insertVehiclePosition({ punchId, employeeId: empId, storeId: stId, latitude, longitude, accuracyM: accuracy ?? null, speedMps: speed ?? null }).catch(() => {});
+      }, () => { /* GPS errors are non-fatal; next fix retries */ }, { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+    }
+    return () => {
+      if (watchId != null && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+      try { wakeLock && wakeLock.release(); } catch {}
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [trackingActive, myOpenPunch?.id]);
   const doPhoneClock = async () => {
     const action = myOpenPunch ? "out" : "in";
     setClockMsg(null); setClockBusy(true);
@@ -15843,6 +15948,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   const MoreSheet = () => (
     <>
+      {/* PRESENCE_CHECK_V1 — only polls while this member has an open punch */}
+      <PresenceCheckPrompt employeeId={currentUser.opsTeamMemberId || currentUser.id} stores={stores} active={!!myOpenPunch} />
+      {/* DRIVER_TRACK_V1 — visible while vehicle tracking is running */}
+      {trackingActive && (
+        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 bg-slate-900/90 border border-emerald-700/50 rounded-full px-3 py-1 text-[10px] font-semibold text-emerald-400 shadow-lg">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/> Vehicle tracking on — ends at clock-out
+        </div>
+      )}
       {/* backdrop */}
       <div onClick={() => setMoreOpen(false)}
         className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity ${moreOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}/>
@@ -44469,8 +44582,11 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   // PUNCH_GRACE_V1 — graced punch in/out times for DISPLAY (actual stays in storage).
   const gracedPunchTimes = (r) => {
     if (!r.punchIn) return { inIso: r.punchIn, outIso: r.punchOut };
-    let pIn = new Date(r.punchIn).getTime();
-    let pOut = r.punchOut ? new Date(r.punchOut).getTime() : null;
+    // Minute-truncated (matches computePunchHours): the UI shows HH:MM, so all
+    // grace/hour maths runs on the clock-face minute, not stray seconds.
+    const floorMin = (ms) => Math.floor(ms / 60000) * 60000;
+    let pIn = floorMin(new Date(r.punchIn).getTime());
+    let pOut = r.punchOut ? floorMin(new Date(r.punchOut).getTime()) : null;
     if (r.scheduledStart && r.scheduledEnd) {
       const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
       let ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
@@ -44484,8 +44600,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   };
   const calcGracedHours = (r) => {
     if (!r.punchIn || !r.punchOut) return r.hoursWorked;
-    let pIn = new Date(r.punchIn).getTime();
-    let pOut = new Date(r.punchOut).getTime();
+    const floorMin = (ms) => Math.floor(ms / 60000) * 60000; // minute-truncated — matches computePunchHours
+    let pIn = floorMin(new Date(r.punchIn).getTime());
+    let pOut = floorMin(new Date(r.punchOut).getTime());
     if (r.scheduledStart && r.scheduledEnd) {
       const GRACE_IN_MS = 15 * 60000, GRACE_OUT_MS = 14 * 60000;
       let ssMs = new Date(r.date + "T" + r.scheduledStart + ":00").getTime();
@@ -44504,8 +44621,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const schedEnd   = new Date(r.date + "T" + r.scheduledEnd   + ":00");
     let ssMs = schedStart.getTime(), seMs = schedEnd.getTime();
     if (seMs <= ssMs) seMs += 86400000;
-    let pIn  = new Date(r.punchIn).getTime();
-    let pOut = new Date(r.punchOut).getTime();
+    const floorMin = (ms) => Math.floor(ms / 60000) * 60000; // minute-truncated — matches computePunchHours
+    let pIn  = floorMin(new Date(r.punchIn).getTime());
+    let pOut = floorMin(new Date(r.punchOut).getTime());
     const earlyMs = ssMs - pIn;  if (earlyMs > 0 && earlyMs <= GRACE_IN_MS)  pIn  = ssMs;
     const lateMs  = pOut - seMs; if (lateMs  > 0 && lateMs  <= GRACE_OUT_MS) pOut = seMs;
     const actualMs = pOut - pIn;
@@ -45073,6 +45191,12 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                 {/* Pay breakdown + shift event timeline */}
                 <PayBreakdown r={r} member={opsTeam.find(m => m.id === r.employeeId)} />
 
+                {/* Live-shift location checks (open punches only) */}
+                <PresenceCheckPanel r={r} />
+
+                {/* Vehicle trail (drivers only — renders nothing without positions) */}
+                <VehicleTrailPanel r={r} />
+
                 {/* Overtime section */}
                 {hasOT && (
                   <div className={`rounded-xl p-3 border space-y-3 ${r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" : "bg-red-950/20 border-red-500/20"}`}>
@@ -45341,6 +45465,120 @@ function PunchHistory({ punchId }) {
   );
 }
 
+// ── VehicleTrailPanel — shift GPS trail (DRIVER_TRACK_V1, T&A expanded row) ──
+// Shows the vehicle breadcrumbs recorded during this punch: last-seen freshness
+// (live shifts refresh every 30s), the most recent pin, a condensed point list,
+// and an "open route in Maps" link built from up to 10 evenly-spaced waypoints.
+// Renders nothing when the punch has no positions (non-drivers).
+function VehicleTrailPanel({ r }) {
+  const isOpen = !r.punchOut;
+  const [trail, setTrail] = useState(null); // null = not loaded yet
+  useEffect(() => {
+    let stop = false;
+    const load = () => fetchVehicleTrail(r.id).then(t => { if (!stop) setTrail(t || []); }).catch(() => { if (!stop) setTrail([]); });
+    load();
+    if (!isOpen) return () => { stop = true; };
+    const iv = setInterval(load, 30000);
+    return () => { stop = true; clearInterval(iv); };
+  }, [r.id, isOpen]);
+  if (!trail || trail.length === 0) return null;
+  const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
+  const last = trail[trail.length - 1];
+  const ageMin = Math.round((Date.now() - new Date(last.recordedAt).getTime()) / 60000);
+  const pin = (p) => `https://www.google.com/maps?q=${p.latitude},${p.longitude}`;
+  // Route link: Google Maps dir accepts a limited number of waypoints — sample
+  // up to 10 evenly across the trail so long shifts still produce a usable route.
+  const sampled = trail.length <= 10 ? trail : Array.from({ length: 10 }, (_, i) => trail[Math.round(i * (trail.length - 1) / 9)]);
+  const routeHref = `https://www.google.com/maps/dir/${sampled.map(p => `${p.latitude},${p.longitude}`).join("/")}`;
+  const recent = trail.slice(-5).reverse();
+  return (
+    <div className="bg-slate-950 rounded-xl p-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold text-slate-600">🛰 Vehicle trail — {trail.length} point{trail.length === 1 ? "" : "s"}</div>
+        <a href={routeHref} target="_blank" rel="noreferrer" className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex-shrink-0">Open route in Maps</a>
+      </div>
+      <div className="flex items-baseline gap-2 text-xs">
+        <span className={`font-semibold ${isOpen ? (ageMin > 5 ? "text-amber-400" : "text-emerald-400") : "text-slate-400"}`}>
+          {isOpen ? (ageMin <= 1 ? "Live · reporting now" : `Last seen ${ageMin} min ago`) : `Shift trail · ${fmtT(trail[0].recordedAt)}–${fmtT(last.recordedAt)}`}
+        </span>
+        <a href={pin(last)} target="_blank" rel="noreferrer" className="text-sky-400 underline decoration-dotted underline-offset-2 text-[10px]">latest position · map</a>
+        {isOpen && ageMin > 5 && <span className="text-[10px] text-amber-400">no signal — device may be locked or app closed</span>}
+      </div>
+      <div className="space-y-0.5">
+        {recent.map(p => (
+          <div key={p.id} className="flex items-baseline gap-2 text-[11px]">
+            <span className="font-mono text-slate-400 w-11 flex-shrink-0">{fmtT(p.recordedAt)}</span>
+            <a href={pin(p)} target="_blank" rel="noreferrer" className="text-slate-500 hover:text-sky-400 underline decoration-dotted underline-offset-2">
+              {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}{p.speedMps != null && p.speedMps > 0.5 ? ` · ${Math.round(p.speedMps * 3.6)} km/h` : ""}
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── PresenceCheckPanel — live-shift location checks (T&A expanded row) ───────
+// Rendered for OPEN punches only (closed punches show checks on the pay
+// timeline instead). "Request location now" pings the employee's phone via the
+// existing push pipeline; the reply (or silence) appears here within minutes,
+// with a map link on the exact pin. Polls every 15s while a check is pending.
+function PresenceCheckPanel({ r }) {
+  const isOpen = !r.punchOut;
+  const [checks, setChecks] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    let stop = false;
+    const load = () => fetchPresenceChecks(r.id).then(cs => { if (!stop) setChecks(cs || []); }).catch(() => {});
+    load();
+    const iv = setInterval(load, 15000);
+    return () => { stop = true; clearInterval(iv); };
+  }, [isOpen, r.id]);
+  if (!isOpen) return null;
+  const hasPending = checks.some(c => c.status === "pending");
+  const request = async () => {
+    setBusy(true); setErr(null);
+    try { await requestPresenceCheck({ punchId: r.id, employeeId: r.employeeId, storeId: r.storeId });
+      const cs = await fetchPresenceChecks(r.id); setChecks(cs || []); }
+    catch (e) { setErr(e.message || "Couldn't send the check."); }
+    finally { setBusy(false); }
+  };
+  const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
+  return (
+    <div className="bg-slate-950 rounded-xl p-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold text-slate-600">📍 Location checks — live shift</div>
+        <button onClick={request} disabled={busy || hasPending}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white flex-shrink-0">
+          {hasPending ? "Check pending…" : (busy ? "Sending…" : "Request location now")}
+        </button>
+      </div>
+      {err && <div className="text-[10px] text-red-400">{err}</div>}
+      {checks.length === 0 && !err && (
+        <div className="text-[10px] text-slate-600">No checks yet this shift. "Request location now" pings their phone — the reply (with a map pin) lands here within a minute or two. No reply in 10 minutes shows as expired.</div>
+      )}
+      {checks.map(pc => {
+        const href = pc.latitude != null && pc.longitude != null ? `https://www.google.com/maps?q=${pc.latitude},${pc.longitude}` : null;
+        const label = pc.status === "ok" ? `confirmed · ${pc.distanceM != null ? Math.round(pc.distanceM) + "m from store" : "at store"}`
+          : pc.status === "out_of_radius" ? `responded ${pc.distanceM != null ? (pc.distanceM / 1000).toFixed(1) + "km from store" : "away from store"}`
+          : pc.status === "expired" ? "no response within the window"
+          : "awaiting response…";
+        const tone = pc.status === "ok" ? "text-emerald-400" : pc.status === "expired" ? "text-red-400" : "text-amber-400";
+        return (
+          <div key={pc.id} className="flex items-baseline gap-2 text-xs">
+            <span className="font-mono text-slate-300 w-11 flex-shrink-0">{fmtT(pc.respondedAt || pc.requestedAt)}</span>
+            {href
+              ? <a href={href} target="_blank" rel="noreferrer" className={`${tone} underline decoration-dotted underline-offset-2`}>{label} · map</a>
+              : <span className={tone}>{label}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── PayBreakdown — per-shift pay detail + event timeline (T&A expanded row) ──
 // Left: "Shift timeline" — every event during the punch window in order, with
 // late/early/grace/overtime annotations. Right: "Pay calculation" — a mini
@@ -45355,6 +45593,14 @@ function PayBreakdown({ r, member }) {
   const salaried = isSalaried(member);
   const rate = (member?.hourlyRate != null ? member.hourlyRate : r.hourlyRate) || 0;
   const mult = OT_RULES.multiplier || 1;
+
+  // PRESENCE_CHECK_V1 — lazy-load this punch's location checks for the timeline.
+  const [presence, setPresence] = useState([]);
+  useEffect(() => {
+    let stop = false;
+    fetchPresenceChecks(r.id).then(cs => { if (!stop) setPresence(cs || []); }).catch(() => {});
+    return () => { stop = true; };
+  }, [r.id]);
 
   const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
   const fmtMin = (mins) => { const m = Math.round(Math.abs(mins)); const h = Math.floor(m/60); return h > 0 ? `${h}h ${String(m%60).padStart(2,"0")}m` : `${m}m`; };
@@ -45372,8 +45618,11 @@ function PayBreakdown({ r, member }) {
 
   const inIso  = r.gracedIn  ?? r.punchIn;
   const outIso = r.gracedOut ?? r.punchOut;
-  const rawInMs = new Date(r.punchIn).getTime();
-  let rawOutMs = new Date(r.punchOut).getTime();
+  // Minute-truncated (matches computePunchHours) so "1m late" can't appear on a
+  // punch the display shows as on time.
+  const floorMin = (ms) => Math.floor(ms / 60000) * 60000;
+  const rawInMs = floorMin(new Date(r.punchIn).getTime());
+  let rawOutMs = floorMin(new Date(r.punchOut).getTime());
   if (rawOutMs < rawInMs) rawOutMs += 86400000; // overnight
 
   // Canonical worked / break / payable split (single source of truth).
@@ -45436,6 +45685,20 @@ function PayBreakdown({ r, member }) {
     }
     events.push({ t: rawOutMs, icon: "🔴", label: "Clocked out", time: fmtT(r.punchOut), note, tone, photo: !!r.photoUrlOut });
   }
+  // Location checks (PRESENCE_CHECK_V1) as timeline events. Away-from-store is
+  // a recorded FACT with a map link, not an automatic verdict — mobile roles
+  // (delivery drivers) legitimately respond from the road; the manager judges
+  // whether the pin matches real work. Only silence (expired) is red.
+  presence.forEach(pc => {
+    const iso = pc.respondedAt || pc.requestedAt;
+    let note, tone, href = null;
+    if (pc.latitude != null && pc.longitude != null) href = `https://www.google.com/maps?q=${pc.latitude},${pc.longitude}`;
+    if (pc.status === "ok") { note = pc.distanceM != null ? `confirmed · ${Math.round(pc.distanceM)}m from store` : "confirmed at store"; tone = "text-emerald-400"; }
+    else if (pc.status === "out_of_radius") { note = pc.distanceM != null ? `responded ${(pc.distanceM / 1000).toFixed(1)}km from store` : "responded away from store"; tone = "text-amber-400"; }
+    else if (pc.status === "expired") { note = "no response within the window"; tone = "text-red-400"; }
+    else { note = "awaiting response"; tone = "text-amber-400"; }
+    events.push({ t: new Date(iso).getTime(), icon: "📍", label: "Location check", time: fmtT(iso), note, tone, href });
+  });
   events.sort((a, b) => a.t - b.t);
 
   const breakNote = split.breakPaid
@@ -45465,7 +45728,9 @@ function PayBreakdown({ r, member }) {
                 <span className="font-mono text-slate-300 w-11 flex-shrink-0">{e.time}</span>
                 <span className="text-slate-400 flex-shrink-0">{e.label}</span>
                 {e.photo && <span title="Photo captured" className="flex-shrink-0">📷</span>}
-                {e.note && <span className={`${e.tone} text-[10px]`}>{e.note}</span>}
+                {e.note && (e.href
+                  ? <a href={e.href} target="_blank" rel="noreferrer" className={`${e.tone} text-[10px] underline decoration-dotted underline-offset-2`}>{e.note} · map</a>
+                  : <span className={`${e.tone} text-[10px]`}>{e.note}</span>)}
               </div>
             ))}
           </div>
