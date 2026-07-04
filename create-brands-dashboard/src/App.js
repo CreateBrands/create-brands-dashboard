@@ -19145,7 +19145,7 @@ function OnboardingBoard({ stores, opsTeam }) {
 // table and the styled ExcelJS export, so they can never drift apart.
 // Reports hub — tabs for the timesheet/sales report generator plus the
 // Google Reviews, Weekly Reports and Review Scans views (moved here from nav).
-function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [], assignments = [], auditTrail = [], onClearAudit }) {
+function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [], assignments = [], auditTrail = [], onClearAudit, checklistStates = {} }) {
   const role = currentUser?.role;
   const { canFeature } = useAccess();
   const TABS = [
@@ -19172,7 +19172,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [
       {tab === "weekly"  && canFeature("feat.reports.weekly") && <WeeklyReportsView/>}
       {tab === "reviews" && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
       {tab === "scans"   && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
-      {tab === "compliance" && <ComplianceView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
+      {tab === "compliance" && <ComplianceView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
       {tab === "audit"   && <AuditTrailView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={onClearAudit}/>}
     </div>
   );
@@ -26238,6 +26238,21 @@ function isOverdue(a) {
   const [h,m] = a.winEnd.split(":").map(Number);
   const now = new Date(); return now.getHours()*60+now.getMinutes() > h*60+m;
 }
+// TASK_LIFECYCLE_V2 — authoritative "is THIS assignment signed off today?".
+// The per-assignment checklist state (asg::{id}||{date}.__signedOff) is the
+// source of truth used by both the employee task list and the sign-off writer.
+// The audit trail is only a secondary log with fuzzy text, so overview metrics
+// must key off this, not off counting sign-off audit rows.
+function isAssignmentDoneToday(a, checklistStates, dateStr) {
+  if (!a || !checklistStates) return false;
+  const d = dateStr || getTodayStr();
+  const st = checklistStates[`asg::${a.id}||${d}`];
+  return !!(st && st.__signedOff === true);
+}
+// Overdue that RESPECTS completion: a signed-off task is never overdue.
+function isOpenOverdue(a, checklistStates, dateStr) {
+  return isOverdue(a) && !isAssignmentDoneToday(a, checklistStates, dateStr);
+}
 function tempLimitText(u) {
   const a = u.min != null ? Number(u.min) : null;
   const b = u.max != null ? Number(u.max) : null;
@@ -26300,7 +26315,7 @@ function OpsConfirmModal({ message, onConfirm, onClose }) {
 }
 
 // ─── Ops Network Dashboard ────────────────────────────────────────────────────
-function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, auditTrail, opsTeam, checklists = [], tempUnits = [], cleaningTasks = [] }) {
+function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, auditTrail, opsTeam, checklists = [], tempUnits = [], cleaningTasks = [], checklistStates = {} }) {
   const { user } = useAuth();
 
   // Same store-scope pattern as ComplianceView. Owner/HQ default to "owned".
@@ -26339,6 +26354,9 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   // Per-store metrics with the same legacy-split logic from ComplianceView.
   // Legacy rows (no store_id) get distributed evenly across the brand's
   // visible stores so the dashboard isn't dominated by zeros.
+  // TASK_LIFECYCLE_V2 — completion and overdue both derived from the SAME set of
+  // active assignments using the authoritative per-assignment sign-off state,
+  // so done <= la always, overdue excludes completed, and rate is consistent.
   const rowFor = (store) => {
     const direct = assignments.filter(a => a.storeId === store.id && isActiveToday(a));
     const brandStoresInScope = sortedStores.filter(s => s.brandId === store.brandId);
@@ -26346,18 +26364,16 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
     const legacyShare = brandStoresInScope.length > 0 ? legacyBrand.length / brandStoresInScope.length : 0;
 
     const la = direct.length + Math.round(legacyShare);
-    const od = direct.filter(isOverdue).length;
+    // done: count active DIRECT assignments actually signed off today, plus the
+    // legacy brand share done. Capped at la so rate can never exceed 100%.
+    const directDone = direct.filter(a => isAssignmentDoneToday(a, checklistStates, todayStr)).length;
+    const legacyDone = legacyBrand.filter(a => isAssignmentDoneToday(a, checklistStates, todayStr)).length;
+    const done = Math.min(la, directDone + Math.round(brandStoresInScope.length > 0 ? legacyDone / brandStoresInScope.length : 0));
+    // overdue: window passed AND not signed off (completed tasks aren't overdue).
+    const od = direct.filter(a => isOpenOverdue(a, checklistStates, todayStr)).length;
 
-    const directDone = auditTrail.filter(t =>
-      t.storeId === store.id && t.date === todayStr && t.action.includes("sign-off")
-    ).length;
-    const legacyDoneBrand = auditTrail.filter(t =>
-      !t.storeId && t.brandId === store.brandId && t.date === todayStr && t.action.includes("sign-off")
-    ).length;
-    const done = directDone + Math.round(brandStoresInScope.length > 0 ? legacyDoneBrand / brandStoresInScope.length : 0);
-
-    const rate = la > 0 ? Math.round((done / la) * 100) : 0;
-    const rag = od > 0 ? "red" : (la > 0 && done >= la) ? "green" : "amber";
+    const rate = la > 0 ? Math.round((done / la) * 100) : (la === 0 ? 100 : 0);
+    const rag = od > 0 ? "red" : (la === 0 || done >= la) ? "green" : "amber";
     return { la, od, done, rate, rag };
   };
 
@@ -26371,7 +26387,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
       totalCompleted: rows.reduce((a, r) => a + r.done, 0),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopedStores, assignments, auditTrail]);
+  }, [scopedStores, assignments, auditTrail, checklistStates]);
 
   if (allVisibleStores.length === 0) {
     return (
@@ -33195,7 +33211,7 @@ function ApplicationFormModal({ brands, stores, storeRoles, item, onSave, onClos
 }
 
 // ─── Compliance View ──────────────────────────────────────────────────────────
-function ComplianceView({ brands, stores, visibleStoreIds, assignments, auditTrail }) {
+function ComplianceView({ brands, stores, visibleStoreIds, assignments, auditTrail, checklistStates = {} }) {
   const { user } = useAuth();
 
   const allVisibleStores = useMemo(
@@ -33222,27 +33238,22 @@ function ComplianceView({ brands, stores, visibleStoreIds, assignments, auditTra
   //     they belong to. That brand-level count gets divided evenly across
   //     the brand's stores so the rolldown is at least consistent.
   // The same logic applies to audit trail sign-off rows.
+  // TASK_LIFECYCLE_V2 — authoritative per-assignment completion (see OpsNetwork).
   const rowFor = (store) => {
-    // Direct store assignments
+    const today = getTodayStr();
     const direct = assignments.filter(a => a.storeId === store.id && isActiveToday(a));
-    // Brand-fallback assignments (no store_id) — fairly split across brand stores
     const brandStores = sortedStores.filter(s => s.brandId === store.brandId);
     const legacyBrand = assignments.filter(a => !a.storeId && a.brandId === store.brandId && isActiveToday(a));
     const legacyShare = brandStores.length > 0 ? legacyBrand.length / brandStores.length : 0;
 
     const la = direct.length + Math.round(legacyShare);
-    const od = direct.filter(isOverdue).length;
+    const directDone = direct.filter(a => isAssignmentDoneToday(a, checklistStates, today)).length;
+    const legacyDone = legacyBrand.filter(a => isAssignmentDoneToday(a, checklistStates, today)).length;
+    const done = Math.min(la, directDone + Math.round(brandStores.length > 0 ? legacyDone / brandStores.length : 0));
+    const od = direct.filter(a => isOpenOverdue(a, checklistStates, today)).length;
 
-    const directDone = auditTrail.filter(t =>
-      t.storeId === store.id && t.date === getTodayStr() && t.action.includes("sign-off")
-    ).length;
-    const legacyDoneBrand = auditTrail.filter(t =>
-      !t.storeId && t.brandId === store.brandId && t.date === getTodayStr() && t.action.includes("sign-off")
-    ).length;
-    const done = directDone + Math.round(brandStores.length > 0 ? legacyDoneBrand / brandStores.length : 0);
-
-    const rate = la > 0 ? Math.round((done / la) * 100) : 0;
-    const rag = od > 0 ? "red" : (la > 0 && rate >= 80) ? "green" : "amber";
+    const rate = la > 0 ? Math.round((done / la) * 100) : (la === 0 ? 100 : 0);
+    const rag = od > 0 ? "red" : (la === 0 || rate >= 80) ? "green" : "amber";
     return { la, od, done, rate, rag };
   };
 
@@ -51376,14 +51387,14 @@ export default function App() {
                   {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords} schedules={schedules}/>}
                   {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
                   {effOpsTab === "ops-deliveries" && <DeliveriesView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-                  {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks}/>}
+                  {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} checklistStates={checklistStates}/>}
                   {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
                 </div>
               );
             })()}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "agent-inbox" && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail}/>}
+            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
               employeeId={selectedEmployeeId}
@@ -51605,7 +51616,7 @@ export default function App() {
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
-            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit}/>}
+            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
