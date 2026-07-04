@@ -46148,6 +46148,10 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
   const [punchOutTime, setPunchOutTime] = useState(toTimeStr(record.punchOut));
   const [notes,        setNotes]        = useState(record.notes || "");
   const [breakPaid,    setBreakPaid]    = useState(record.breakPaid ?? false);
+  // BREAK_EDIT_V1 — editable break so a forgotten break-end can be corrected.
+  const [breakMins,    setBreakMins]    = useState(record.breakMinutes != null ? String(record.breakMinutes) : "");
+  const [breakStartT,  setBreakStartT]  = useState(toTimeStr(record.breakStart));
+  const [breakEndT,    setBreakEndT]    = useState(toTimeStr(record.breakEnd));
   const [confirmDel,   setConfirmDel]   = useState(false);
 
   const handleSave = () => {
@@ -46165,14 +46169,35 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
     if (spanH != null && spanH > 16) {
       if (!window.confirm(`This shift is ${spanH.toFixed(1)} hours, which looks unusually long. Save anyway?`)) return;
     }
-    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: record.breakMinutes, breakStart: record.breakStart, breakEnd: record.breakEnd, breakPaid }).hours : null;
+    // Resolved break values. Start/end times are stamped on the punch's date
+    // (overnight-aware: an end at/before start rolls forward a day). If either
+    // time is cleared, that timestamp becomes null.
+    const toIsoOnDate = (t) => t ? new Date(dateBase + t + ":00").toISOString() : null;
+    let newBreakStart = toIsoOnDate(breakStartT);
+    let newBreakEnd   = toIsoOnDate(breakEndT);
+    if (newBreakStart && newBreakEnd && new Date(newBreakEnd) <= new Date(newBreakStart)) {
+      newBreakEnd = new Date(new Date(newBreakEnd).getTime() + 86400000).toISOString();
+    }
+    // If both times are set, break minutes derive from them; otherwise use the
+    // manually-entered minutes (or fall back to the stored value).
+    let newBreakMins;
+    if (newBreakStart && newBreakEnd) {
+      newBreakMins = Math.max(0, Math.round((new Date(newBreakEnd) - new Date(newBreakStart)) / 60000));
+    } else {
+      newBreakMins = breakMins === "" ? (record.breakMinutes ?? 0) : Math.max(0, Math.round(Number(breakMins) || 0));
+    }
+    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd, breakPaid }).hours : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
     const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
     const _audit = [];
     if (record.punchIn !== newPunchIn) _audit.push({ field: "punch_in", oldValue: fmtT(record.punchIn), newValue: fmtT(newPunchIn) });
     if ((record.punchOut || null) !== newPunchOut) _audit.push({ field: "punch_out", oldValue: fmtT(record.punchOut), newValue: fmtT(newPunchOut) });
     if ((record.breakPaid ?? false) !== breakPaid) _audit.push({ field: "break_paid", oldValue: (record.breakPaid ? "Yes" : "No"), newValue: (breakPaid ? "Yes" : "No") });
+    if ((record.breakStart || null) !== newBreakStart) _audit.push({ field: "break_start", oldValue: fmtT(record.breakStart), newValue: fmtT(newBreakStart) });
+    if ((record.breakEnd || null) !== newBreakEnd) _audit.push({ field: "break_end", oldValue: fmtT(record.breakEnd), newValue: fmtT(newBreakEnd) });
+    if ((record.breakMinutes ?? 0) !== newBreakMins) _audit.push({ field: "break_minutes", oldValue: `${record.breakMinutes ?? 0}m`, newValue: `${newBreakMins}m` });
     onSave({ ...record, punchIn: newPunchIn, punchOut: newPunchOut, hoursWorked, grossPay, notes, breakPaid,
+             breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd,
              status: punchOutTime ? "amended" : "open", approved: false, updatedAt: new Date().toISOString(), _audit });
   };
 
@@ -46213,6 +46238,28 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
             ⏹ Force Clock Out Now
           </button>
         )}
+        {/* BREAK_EDIT_V1 — fix a break (e.g. someone forgot to end it). Setting
+            both start and end recomputes the minutes; leaving times blank lets
+            you enter total minutes directly. */}
+        <div className="bg-slate-950 rounded-xl p-3 space-y-3">
+          <div className="text-xs font-semibold text-slate-500">Break</div>
+          {record.breakStart && !record.breakEnd && (
+            <div className="text-[11px] text-amber-400">⚠ Break was started at {toTimeStr(record.breakStart)} but never ended — set an end time below.</div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <AvailTimeField label="Break Start" value={breakStartT} onChange={setBreakStartT}/>
+            <AvailTimeField label="Break End"   value={breakEndT}   onChange={setBreakEndT}/>
+          </div>
+          <div>
+            <label className={labelCls}>Break minutes {breakStartT && breakEndT ? "(from times above)" : "(manual)"}</label>
+            <input type="number" min="0" value={breakStartT && breakEndT
+                ? String(Math.max(0, Math.round(((new Date(record.date+"T"+breakEndT+":00") - new Date(record.date+"T"+breakStartT+":00")) / 60000 + 1440) % 1440)))
+                : breakMins}
+              onChange={e => setBreakMins(e.target.value)} disabled={!!(breakStartT && breakEndT)}
+              placeholder="e.g. 30" className={`${inputCls} ${breakStartT && breakEndT ? "opacity-60" : ""}`}/>
+            <div className="text-[10px] text-slate-600 mt-1">The unpaid-break minimum for the shift length still applies on top of this.</div>
+          </div>
+        </div>
         {/* Paid break: manager marks the break as paid when it couldn't be
             given, so it is NOT deducted from paid hours. */}
         <button type="button" onClick={() => setBreakPaid(v => !v)}
