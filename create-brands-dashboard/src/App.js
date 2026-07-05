@@ -4779,6 +4779,13 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
 //   • Finance entity (drivers) → orders with fresh produce to buy & deliver
 // Reuses the cream warehouse design system.
 // ============================================================================
+// ============================================================================
+// TYPED FULFILMENT — CONSOLIDATED. Merges every open store order of one item
+// type into ONE combined list: each item summed across all orders, so the team
+// buys/prepares once. A "By order" toggle shows the per-order breakdown.
+//   • Central Kitchen entity → CK items to prepare & dispatch
+//   • Finance entity (drivers) → fresh produce to buy & deliver
+// ============================================================================
 function DistTypedItemsView({ itemType }) {
   const isFresh = itemType === "fresh";
   const [orders, setOrders] = useState([]);
@@ -4786,6 +4793,8 @@ function DistTypedItemsView({ itemType }) {
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [view, setView] = useState("combined"); // "combined" | "orders"
+  const [expanded, setExpanded] = useState({});  // itemId -> show which orders
 
   const load = useCallback(async () => {
     setLoading(true); setErr("");
@@ -4806,23 +4815,28 @@ function DistTypedItemsView({ itemType }) {
     );
   }, [orders, search]);
 
-  const title = isFresh ? "Fresh produce to fulfil" : "Central Kitchen orders";
-  const subtitle = isFresh
-    ? "Store orders waiting on fresh produce — what to buy and deliver, per order."
-    : "Store orders waiting on Central Kitchen items — what to prepare and dispatch.";
-
-  // Aggregate shopping/prep list across all open orders (total per item).
-  const aggregate = useMemo(() => {
+  // Consolidated: total each item across all open orders, with the contributing
+  // orders (store + qty) so they can still see who ordered what.
+  const combined = useMemo(() => {
     const m = new Map();
     for (const o of filtered) for (const l of o.lines) {
-      const cur = m.get(l.itemId) || { name: l.name, packUnit: l.packUnit, qty: 0, orders: 0 };
-      cur.qty += Number(l.qty) || 0; cur.orders += 1; m.set(l.itemId, cur);
+      const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, qty: 0, breakdown: [] };
+      cur.qty += Number(l.qty) || 0;
+      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId });
+      m.set(l.itemId, cur);
     }
-    return Array.from(m.values()).sort((a, b) => b.qty - a.qty);
+    return Array.from(m.values()).sort((a, b) => cleanName(a.name).localeCompare(cleanName(b.name)));
   }, [filtered]);
+
+  const title = isFresh ? "Fresh produce to fulfil" : "Central Kitchen orders";
+  const subtitle = isFresh
+    ? "Every open order's produce, combined — buy once, deliver to each store."
+    : "Every open order's CK items, combined — prepare once, dispatch to each store.";
 
   const stageTone = (s) => s === "confirmed" ? "amber" : s === "picking" ? "blue" : s === "dispatched" ? "green" : s === "invoiced" ? "green" : "slate";
   const stageLabel = (s) => ({ confirmed: "To fulfil", picking: "Being picked", dispatched: "Dispatched", invoiced: "Invoiced", paid: "Paid" }[s] || s);
+
+  const totalUnits = filtered.reduce((s, o) => s + o.totalUnits, 0);
 
   return (
     <WhShell
@@ -4830,41 +4844,71 @@ function DistTypedItemsView({ itemType }) {
       subtitle={loading ? "Loading…" : subtitle}
       error={err}
       actions={<>
+        <div className="inline-flex rounded-xl overflow-hidden" style={{ border: `1px solid ${WH.line}` }}>
+          {[["combined", "Combined"], ["orders", "By order"]].map(([k, l]) => (
+            <button key={k} onClick={() => setView(k)} className="px-3 py-1.5 text-xs font-semibold"
+              style={{ background: view === k ? WH.accent : WH.surface, color: view === k ? "#fff" : WH.inkSoft }}>{l}</button>
+          ))}
+        </div>
         <WhButton variant="ghost" size="sm" onClick={() => setShowDone(v => !v)}>{showDone ? "Hide completed" : "Show completed"}</WhButton>
         <WhButton variant="ghost" size="sm" icon={RefreshCw} onClick={load}>Refresh</WhButton>
       </>}
     >
       {!loading && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <WhKpi label="Open orders" value={filtered.length} sub={isFresh ? "need produce" : "need CK items"} tone={filtered.length ? "amber" : "green"}/>
-          <WhKpi label={isFresh ? "Produce lines" : "CK lines"} value={filtered.reduce((s, o) => s + o.lines.length, 0)} sub="across orders"/>
-          <WhKpi label="Total units" value={filtered.reduce((s, o) => s + o.totalUnits, 0)} sub="to fulfil"/>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <WhKpi label={isFresh ? "Produce items" : "CK items"} value={combined.length} sub="distinct to source" tone={combined.length ? "amber" : "green"}/>
+          <WhKpi label="Total units" value={totalUnits} sub="across all orders"/>
+          <WhKpi label="Open orders" value={filtered.length} sub="to fulfil"/>
+          <WhKpi label="Stores" value={new Set(filtered.map(o => o.customerId)).size} sub="waiting"/>
         </div>
       )}
 
-      {/* Aggregate buy/prep list — the total of each item across all open orders */}
-      {!loading && aggregate.length > 0 && (
-        <WhCard title={isFresh ? "Shopping list — total to buy" : "Prep list — total to make"}>
-          <div className="flex flex-wrap gap-2">
-            {aggregate.map((a, i) => (
-              <div key={i} className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-2" style={{ background: WH.surfaceAlt, border: `1px solid ${WH.line}` }}>
-                <span style={{ color: WH.ink, fontWeight: 600 }}>{cleanName(a.name)}</span>
-                <span style={{ color: WH.accent, fontWeight: 700 }}>{a.qty}{a.packUnit ? ` ${a.packUnit}` : ""}</span>
-                <span style={{ color: WH.inkFaint }}>· {a.orders} order{a.orders===1?"":"s"}</span>
-              </div>
-            ))}
-          </div>
-        </WhCard>
-      )}
-
-      <WhSearch value={search} onChange={setSearch} placeholder="Search order, store, or item…"/>
+      <WhSearch value={search} onChange={setSearch} placeholder={view === "combined" ? "Search item…" : "Search order, store, or item…"}/>
 
       {loading ? <div className="text-sm py-8 text-center" style={{ color: WH.inkFaint }}>Loading…</div>
         : filtered.length === 0 ? (
           <WhCard><div className="text-sm text-center py-8" style={{ color: WH.inkFaint }}>
             {isFresh ? "No open orders need fresh produce right now." : "No open orders need Central Kitchen items right now."}
           </div></WhCard>
-        ) : (
+        ) : view === "combined" ? (
+        /* ── COMBINED: one row per item, total qty, expandable to see orders ── */
+        <WhCard pad={false} title={isFresh ? "Shopping list — total to buy" : "Prep list — total to make"}>
+          <div className="divide-y" style={{ borderColor: WH.lineSoft }}>
+            {combined.map(c => {
+              const open = expanded[c.itemId];
+              return (
+                <div key={c.itemId}>
+                  <button onClick={() => setExpanded(p => ({ ...p, [c.itemId]: !p[c.itemId] }))}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors" style={{ background: open ? WH.surfaceAlt + "66" : "transparent" }}>
+                    <div className="flex-shrink-0" style={{ color: WH.inkFaint }}>{open ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-bold truncate" style={{ color: WH.ink }}>{cleanName(c.name)}</div>
+                      <div className="text-[11px]" style={{ color: WH.inkFaint }}>{c.category || "—"} · {c.breakdown.length} order{c.breakdown.length===1?"":"s"}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-xl font-black leading-none" style={{ color: WH.accent }}>{c.qty}{c.packUnit ? <span className="text-xs font-semibold" style={{ color: WH.inkSoft }}> {c.packUnit}</span> : ""}</div>
+                      <div className="text-[10px]" style={{ color: WH.inkFaint }}>total{isFresh ? " to buy" : " to make"}</div>
+                    </div>
+                  </button>
+                  {open && (
+                    <div className="px-4 pb-3 pt-0" style={{ background: WH.surfaceAlt + "66" }}>
+                      <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${WH.line}` }}>
+                        {c.breakdown.map((b, i) => (
+                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ background: WH.surface, borderTop: i ? `1px solid ${WH.lineSoft}` : "none" }}>
+                            <span style={{ color: WH.inkSoft }}><span className="font-mono font-semibold" style={{ color: WH.accent }}>{b.soNumber}</span> · {b.customerName}</span>
+                            <span className="font-bold" style={{ color: WH.ink }}>{b.qty}{c.packUnit ? ` ${c.packUnit}` : ""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </WhCard>
+      ) : (
+        /* ── BY ORDER: per-order cards (the original breakdown) ── */
         <div className="space-y-3">
           {filtered.map(o => (
             <WhCard key={o.soId} pad={false}>
