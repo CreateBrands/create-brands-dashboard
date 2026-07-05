@@ -17979,7 +17979,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "smallware",      label: "Assets",          icon: Package },
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
-    { key: "my-hours",       label: "My Hours",        icon: Clock },
+    { key: "my-hours",       label: "My Overtime",        icon: Clock },
     { key: "my-payslips",    label: "My Payslips",     icon: FileText },
     { key: "my-documents",   label: "My Documents",    icon: FolderOpen },
     { key: "my-loans",       label: "My Loans",        icon: PoundSterling },
@@ -46967,8 +46967,8 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                     </div>
                     <div className="text-slate-700 text-xs">
                       {successUnsched
-                        ? "This shift wasn't scheduled. Open the app → My Hours to submit a reason for your manager to approve."
-                        : "You worked outside your scheduled hours. Open the app → My Hours to submit a reason for your manager to approve."}
+                        ? "This shift wasn't scheduled. Open the app → My Overtime to submit a reason for your manager to approve."
+                        : "You worked outside your scheduled hours. Open the app → My Overtime to submit a reason for your manager to approve."}
                     </div>
                   </div>
                 )}
@@ -49335,8 +49335,14 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, gracedHours, isUnscheduled };
   });
 
-  const totalHours = enriched.reduce((a,r) => a + (r.hoursWorked||0), 0);
+  const totalHours = enriched.reduce((a,r) => a + (r.hoursWorked||0), 0); // internal only — never shown to employee
   const approvedOT = enriched.filter(r => r.overtimeApproved).reduce((a,r) => a + (r.overtimeHrs||0), 0);
+  // Employees only ever see OVERTIME here — never their worked hours. Approved OT
+  // clears from their view (it's settled), so we surface only OT/unscheduled that
+  // still needs their attention or a manager decision.
+  const otRecords = enriched.filter(r => (r.overtimeHrs > 0 || r.isUnscheduled) && !r.overtimeApproved);
+  const pendingOTHours = otRecords.reduce((a,r) => a + (r.overtimeHrs||0), 0);
+  void totalHours; // retained for internal parity; intentionally not displayed
   const brand = brands.find(b => b.id === myBrandId);
 
   const handleSubmitReason = (r) => {
@@ -49350,12 +49356,13 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     <div className="space-y-5 max-w-2xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">My Hours</h2>
+          <h2 className="text-base font-bold text-white">My Overtime</h2>
           {brand && <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span className="text-slate-600">{fmtDur(totalHours)} this week</span>
-          {approvedOT > 0 && <span className="text-amber-400 font-semibold">+ {fmtDur(approvedOT)} approved OT</span>}
+          {pendingOTHours > 0
+            ? <span className="text-amber-400 font-semibold">{fmtDur(pendingOTHours)} overtime awaiting approval</span>
+            : <span className="text-slate-600">No overtime awaiting approval</span>}
         </div>
       </div>
 
@@ -49369,29 +49376,21 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
         <button onClick={()=>setWeekOffset(w=>w+1)} disabled={weekOffset>=0} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"><ChevronRight size={16}/></button>
       </div>
 
-      {enriched.length === 0 && (
-        <EmptyState icon={Clock} title="No hours this week"
-          message="Once you clock in at the kiosk, your shifts will appear here. You'll also be prompted to give a reason for any overtime or unscheduled shifts."/>
+      {otRecords.length === 0 && (
+        <EmptyState icon={Clock} title="No overtime this week"
+          message="Any overtime or unscheduled shifts will appear here for you to explain, so your manager can approve them. Once approved, they clear from this list. You won't see your regular worked hours here."/>
       )}
 
       <div className="space-y-3">
-        {enriched.map(r => {
+        {otRecords.map(r => {
           const hasOT       = r.overtimeHrs > 0;
           const needsReason = (hasOT || r.isUnscheduled) && !r.overtimeReason;
           const awaitingApproval = (hasOT || r.isUnscheduled) && r.overtimeReason && !r.overtimeApproved && !r.overtimeRejectedReason;
           const rejected    = r.overtimeApproved === false && !!r.overtimeRejectedReason;
-          // Needs attention from employee:
-          //   - needsReason (haven't given one yet)
-          //   - awaitingApproval (in active conversation — they may want to add a follow-up)
-          //   - currently clocked in
-          // Settled (collapsible):
-          //   - rejected (decided, employee can't change it)
-          //   - approved OT (decided positively)
-          //   - normal record with no OT
           const needsAttention = needsReason || awaitingApproval || r.status === "open";
           const isExpanded = expanded.has(r.id);
 
-          // ── Collapsed view ──
+          // ── Collapsed view (settled/rejected OT) — NO worked hours shown ──
           if (!needsAttention && !isExpanded) {
             return (
               <div key={r.id}
@@ -49401,12 +49400,10 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                   <div className="text-xs font-semibold text-slate-600 w-20 flex-shrink-0">
                     {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                   </div>
-                  <div className="text-sm font-bold text-white tabular-nums flex-shrink-0">{fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
-                  {hasOT && r.overtimeApproved && <span className="text-xs text-emerald-400 font-semibold">+ OT approved</span>}
+                  <div className="text-sm font-bold text-white tabular-nums flex-shrink-0">{r.isUnscheduled ? "Unscheduled" : fmtHM(r.overtimeHrs)}</div>
                   {rejected && <span className="text-xs text-slate-500 font-semibold">OT not approved</span>}
                 </div>
-                {r.approved && !rejected && <span className="text-xs text-emerald-400 font-semibold flex-shrink-0">✓</span>}
-                {!r.approved && <span className="text-xs text-amber-400 font-semibold flex-shrink-0">Pending</span>}
+                {awaitingApproval && <span className="text-xs text-amber-400 font-semibold flex-shrink-0">Awaiting approval</span>}
                 <ChevronDown size={14} className="text-slate-600 flex-shrink-0"/>
               </div>
             );
@@ -49420,14 +49417,12 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
               awaitingApproval ? "bg-amber-950/20 border-amber-500/30" :
               "bg-slate-900 border-slate-700"
             }`}>
-              {/* Date + status */}
+              {/* Date + status — NO worked hours shown to employee */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="text-sm font-bold text-white">
                   {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {r.approved && !hasOT && <Badge label="✓ Approved" color="emerald"/>}
-                  {!r.approved && r.status === "closed" && !hasOT && <Badge label="Pending approval" color="amber"/>}
                   {r.status === "open" && <Badge label="Clocked in" color="amber"/>}
                   {!needsAttention && isExpanded && (
                     <button onClick={()=>toggleExpanded(r.id)} className="p-1 rounded-lg bg-slate-950 text-slate-400 hover:text-white transition-colors" title="Collapse"><ChevronUp size={13}/></button>
@@ -49435,38 +49430,22 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
                 </div>
               </div>
 
-              {/* Hours summary — NO scheduled times shown to employee */}
-              <div className="bg-slate-950 rounded-xl p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold text-slate-600">Hours worked</div>
-                  <div className="text-lg font-black text-white tabular-nums">{fmtDur(r.gracedHours ?? r.hoursWorked)}</div>
-                </div>
-              </div>
-
-              {/* Overtime / unscheduled — ONLY shown if it exists */}
+              {/* Overtime / unscheduled — the ONLY thing an employee sees here */}
               {(hasOT || r.isUnscheduled) && (
                 <div className={`rounded-xl p-3 border space-y-2 ${
-                  r.overtimeApproved ? "bg-emerald-950/20 border-emerald-500/20" :
                   rejected ? "bg-slate-800/40 border-slate-800/60" :
                   needsReason ? "bg-red-950/20 border-red-500/30" :
                   "bg-amber-950/20 border-amber-500/20"
                 }`}>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`text-xs font-bold ${
-                      r.overtimeApproved ? "text-emerald-400" :
-                      rejected ? "text-slate-600" :
-                      "text-red-400"
+                      rejected ? "text-slate-600" : "text-red-400"
                     }`}>
                       ⏱ {r.isUnscheduled ? "Unscheduled shift" : `${fmtHM(r.overtimeHrs)} extra time`}
                     </span>
-                    {r.overtimeApproved && <Badge label={`✓ Approved`} color="emerald"/>}
                     {awaitingApproval && <Badge label="Awaiting manager approval" color="amber"/>}
                     {rejected && <Badge label="Not approved" color="slate"/>}
                   </div>
-
-                  {r.overtimeApproved && (
-                    <div className="text-xs text-emerald-300">This extra time has been approved and will count towards your pay.</div>
-                  )}
 
                   {rejected && (
                     <div className="text-xs text-slate-600">
