@@ -823,6 +823,146 @@ function AnalysisBlock({ title, children, className = "", action }) {
   );
 }
 
+// ============================================================================
+// WAREHOUSE DESIGN SYSTEM — cream-themed primitives shared across all
+// Distribution/Warehouse views for a consistent, legible, premium look.
+// Palette: cream surfaces (#FBF6EC), warm cocoa ink (#3A2E26), brown accent
+// (#844429), semantic red/amber/green/blue. All text passes WCAG AA on cream.
+// ============================================================================
+const WH = {
+  bg: "#F4E9DD", surface: "#FBF6EC", surfaceAlt: "#F3EADA", line: "#E8DCC6", lineSoft: "#EFE6D4",
+  ink: "#3A2E26", inkSoft: "#6B5D4F", inkFaint: "#8A7B68",
+  accent: "#844429", accentSoft: "#C9854F",
+  red: "#A23B2E", redBg: "#F6E4DF", redLine: "#E5C4BB",
+  amber: "#8A5A12", amberBg: "#F7EBD4", amberLine: "#E9D3A6",
+  green: "#3F6B3A", greenBg: "#E4EEDC", greenLine: "#CADFBE",
+  blue: "#2F5C86", blueBg: "#E1EAF2", blueLine: "#BFD3E5",
+};
+const whTone = (t) => ({
+  red:   { fg: WH.red,   bg: WH.redBg,   ln: WH.redLine },
+  amber: { fg: WH.amber, bg: WH.amberBg, ln: WH.amberLine },
+  green: { fg: WH.green, bg: WH.greenBg, ln: WH.greenLine },
+  blue:  { fg: WH.blue,  bg: WH.blueBg,  ln: WH.blueLine },
+  slate: { fg: WH.inkSoft, bg: WH.surfaceAlt, ln: WH.line },
+  accent:{ fg: "#fff", bg: WH.accent, ln: WH.accent },
+}[t] || { fg: WH.inkSoft, bg: WH.surfaceAlt, ln: WH.line });
+
+// Page shell: title, optional subtitle, action buttons, and error banner.
+function WhShell({ title, subtitle, actions, error, children }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h2 className="text-lg font-black leading-tight" style={{ color: WH.ink }}>{title}</h2>
+          {subtitle && <div className="text-xs mt-0.5" style={{ color: WH.inkFaint }}>{subtitle}</div>}
+        </div>
+        {actions && <div className="ml-auto flex items-center gap-2 flex-wrap">{actions}</div>}
+      </div>
+      {error && <div className="text-sm px-3 py-2 rounded-xl" style={{ background: WH.redBg, color: WH.red, border: `1px solid ${WH.redLine}` }}>{error}</div>}
+      {children}
+    </div>
+  );
+}
+
+// Button — variants: primary (green/save), accent (brown), ghost (subtle), danger.
+function WhButton({ children, onClick, variant = "ghost", size = "md", disabled, icon: Icon, className = "", type }) {
+  const pad = size === "sm" ? "px-2.5 py-1.5 text-xs" : "px-3.5 py-2 text-sm";
+  const styles = {
+    primary: { background: "#3F6B3A", color: "#fff" },
+    accent:  { background: WH.accent, color: "#fff" },
+    ghost:   { background: WH.surfaceAlt, color: WH.accent, border: `1px solid ${WH.line}` },
+    danger:  { background: WH.redBg, color: WH.red, border: `1px solid ${WH.redLine}` },
+  }[variant] || {};
+  return (
+    <button type={type} onClick={onClick} disabled={disabled}
+      className={`rounded-xl font-semibold inline-flex items-center gap-1.5 transition-opacity ${pad} ${disabled ? "opacity-50" : "hover:opacity-90"} ${className}`}
+      style={styles}>
+      {Icon && <Icon size={size === "sm" ? 13 : 15}/>}{children}
+    </button>
+  );
+}
+
+// Status pill with optional icon — colour + label (never colour alone).
+function WhPill({ children, tone = "slate", icon: Icon }) {
+  const c = whTone(tone);
+  return (
+    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold inline-flex items-center gap-1 whitespace-nowrap" style={{ background: c.bg, color: c.fg, border: `1px solid ${c.ln}` }}>
+      {Icon && <Icon size={10}/>}{children}
+    </span>
+  );
+}
+
+// KPI card.
+function WhKpi({ label, value, sub, tone = "ink", onClick }) {
+  const color = tone === "ink" ? WH.ink : whTone(tone).fg;
+  return (
+    <div onClick={onClick} className={`rounded-2xl p-3.5 ${onClick ? "cursor-pointer hover:opacity-90" : ""}`} style={{ background: WH.surface, border: `1px solid ${WH.line}` }}>
+      <div className="text-[10px] uppercase tracking-wider font-bold" style={{ color: WH.inkFaint }}>{label}</div>
+      <div className="text-xl font-bold mt-1 leading-tight" style={{ color }}>{value}</div>
+      {sub && <div className="text-[10px] mt-0.5" style={{ color: WH.inkFaint }}>{sub}</div>}
+    </div>
+  );
+}
+
+// Card container (like AnalysisBlock but lighter — no header divider required).
+function WhCard({ title, action, children, className = "", pad = true }) {
+  return (
+    <div className={`rounded-2xl overflow-hidden ${className}`} style={{ background: WH.surface, border: `1px solid ${WH.line}` }}>
+      {title && <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid ${WH.line}` }}>
+        <h3 className="text-sm font-bold" style={{ color: WH.ink }}>{title}</h3>{action}
+      </div>}
+      <div className={pad ? "p-4" : ""}>{children}</div>
+    </div>
+  );
+}
+
+// Data table — cream themed, zebra rows, clickable rows. columns: [{key,label,align,render,width}].
+function WhTable({ columns, rows, rowKey, onRowClick, empty = "Nothing to show.", dense = false }) {
+  const py = dense ? "py-2" : "py-2.5";
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: WH.surface, border: `1px solid ${WH.line}` }}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${WH.line}` }}>
+              {columns.map(c => (
+                <th key={c.key} className={`px-3 ${py} font-semibold ${c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left"}`} style={{ color: WH.inkFaint, width: c.width }}>{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && <tr><td colSpan={columns.length} className="text-center py-10 text-sm" style={{ color: WH.inkFaint }}>{empty}</td></tr>}
+            {rows.map((r, i) => (
+              <tr key={rowKey ? rowKey(r) : i}
+                onClick={onRowClick ? () => onRowClick(r) : undefined}
+                className={onRowClick ? "cursor-pointer transition-colors" : ""}
+                style={{ borderBottom: `1px solid ${WH.lineSoft}`, background: i % 2 ? WH.surfaceAlt + "55" : "transparent" }}>
+                {columns.map(c => (
+                  <td key={c.key} className={`px-3 ${py} ${c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left"} ${c.mono ? "font-mono" : ""}`} style={{ color: c.color || WH.ink }}>
+                    {c.render ? c.render(r) : r[c.key]}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Search input — cream themed.
+function WhSearch({ value, onChange, placeholder = "Search…", className = "" }) {
+  return (
+    <div className={`relative ${className}`}>
+      <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: WH.inkFaint }}/>
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        className="w-full pl-9 pr-3 py-2 rounded-xl text-sm focus:outline-none"
+        style={{ background: WH.surface, border: `1px solid ${WH.line}`, color: WH.ink }}/>
+    </div>
+  );
+}
+
 function Sparkline({ data, color = "#C9854F", height = 28 }) {
   if (!data || data.length < 2) return null;
   const w = 90, h = height, pad = 2;
@@ -13035,39 +13175,48 @@ function DistItemsView({ currentUser }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[220px]">
-          <Search size={15} className="absolute left-3 top-2.5 text-slate-500"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items, SKU, category…"
-            className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={async () => { setCleanupBusy(true); setCleanupResult(null); try { setCleanupPreview(await previewDeleteInactiveDistItems()); } catch (e) { setErr(e.message); } setCleanupBusy(false); }} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold flex items-center gap-1.5" title="Permanently remove inactive items"><Trash2 size={14}/> Clean up inactive</button>
-          <button onClick={() => setImportOpen(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import CSV</button>
-          <button onClick={() => setEditItem({ active: true, packCount: 1 })} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New item</button>
-        </div>
-      </div>
-
-      {err && <div className="text-xs text-red-400 bg-red-950/40 border border-red-900/50 rounded-lg px-3 py-2">{err}</div>}
-      {loading ? <div className="text-sm text-slate-500 py-8 text-center">Loading…</div> : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          <div className="grid grid-cols-12 gap-2 px-4 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">
-            <div className="col-span-1">SKU</div><div className="col-span-3">Name</div><div className="col-span-2">Category</div>
-            <div className="col-span-2">Pack</div><div className="col-span-2 text-right">On-hand</div><div className="col-span-2 text-right">Available</div>
+    <WhShell
+      title="Items"
+      subtitle={loading ? "Loading…" : `${filtered.length} of ${items.length} item${items.length===1?"":"s"}`}
+      error={err}
+      actions={<>
+        <WhButton variant="ghost" icon={Trash2} onClick={async () => { setCleanupBusy(true); setCleanupResult(null); try { setCleanupPreview(await previewDeleteInactiveDistItems()); } catch (e) { setErr(e.message); } setCleanupBusy(false); }}>Clean up inactive</WhButton>
+        <WhButton variant="ghost" icon={Upload} onClick={() => setImportOpen(true)}>Import CSV</WhButton>
+        <WhButton variant="accent" icon={Plus} onClick={() => setEditItem({ active: true, packCount: 1 })}>New item</WhButton>
+      </>}
+    >
+      {/* Quick stats */}
+      {!loading && (() => {
+        const withStock = filtered.filter(i => i.onHand !== 0).length;
+        const neg = filtered.filter(i => i.negative).length;
+        const lowAvail = filtered.filter(i => i.available < 0).length;
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <WhKpi label="Items" value={items.length} sub={`${withStock} with stock`}/>
+            <WhKpi label="Categories" value={new Set(items.map(i=>i.category).filter(Boolean)).size} sub="distinct"/>
+            <WhKpi label="Negative stock" value={neg} sub={neg?"needs attention":"all positive"} tone={neg?"red":"green"}/>
+            <WhKpi label="Oversold" value={lowAvail} sub={lowAvail?"available < 0":"none"} tone={lowAvail?"amber":"green"}/>
           </div>
-          {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No items yet. Import a CSV/Excel file or add one.</div>}
-          {filtered.map(i => (
-            <button key={i.id} onClick={() => setDetailItem(i)} className="w-full grid grid-cols-12 gap-2 px-4 py-2.5 text-sm text-left hover:bg-slate-800/50 border-b border-slate-800/50 items-center">
-              <div className="col-span-1 font-mono text-[11px] text-indigo-300">{i.sku || "—"}</div>
-              <div className="col-span-3 text-white truncate">{i.name}{!i.active && <span className="ml-1 text-[9px] text-slate-500">(inactive)</span>}</div>
-              <div className="col-span-2 text-slate-400 truncate">{i.category || "—"}</div>
-              <div className="col-span-2 text-slate-400">{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</div>
-              <div className={`col-span-2 text-right font-semibold ${i.negative ? "text-red-400" : "text-white"}`}>{i.onHand}{i.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</div>
-              <div className={`col-span-2 text-right ${i.available < 0 ? "text-red-400" : "text-emerald-300"}`}>{i.available}</div>
-            </button>
-          ))}
-        </div>
+        );
+      })()}
+
+      <WhSearch value={search} onChange={setSearch} placeholder="Search items, SKU, category…"/>
+
+      {loading ? <div className="text-sm py-8 text-center" style={{ color: WH.inkFaint }}>Loading…</div> : (
+        <WhTable
+          columns={[
+            { key: "sku", label: "SKU", mono: true, color: WH.accent, render: i => i.sku || "—" },
+            { key: "name", label: "Name", render: i => <span>{i.name}{!i.active && <span className="ml-1 text-[9px]" style={{ color: WH.inkFaint }}>(inactive)</span>}</span> },
+            { key: "category", label: "Category", color: WH.inkSoft, render: i => i.category || "—" },
+            { key: "pack", label: "Pack", color: WH.inkSoft, render: i => <>{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</> },
+            { key: "onHand", label: "On-hand", align: "right", mono: true, render: i => <span style={{ color: i.negative ? WH.red : WH.ink, fontWeight: 600 }}>{i.onHand}{i.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</span> },
+            { key: "available", label: "Available", align: "right", mono: true, render: i => <span style={{ color: i.available < 0 ? WH.red : WH.green }}>{i.available}</span> },
+          ]}
+          rows={filtered}
+          rowKey={i => i.id}
+          onRowClick={i => setDetailItem(i)}
+          empty="No items yet. Import a CSV/Excel file or add one."
+        />
       )}
 
       {/* Item detail + stock + movement history */}
@@ -13272,7 +13421,7 @@ function DistItemsView({ currentUser }) {
           </div>
         </Modal>
       )}
-    </div>
+    </WhShell>
   );
 }
 
