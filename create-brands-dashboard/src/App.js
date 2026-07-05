@@ -178,7 +178,7 @@ import {
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistCollections, upsertDistCollection, deleteDistCollection, fetchDistCollectionItems, setDistCollectionItems, fetchDistCollectionsWithItems,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
-  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, fetchFreshLinesNeedingCost, fetchDistOrdersByItemType,
+  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, fetchFreshLinesNeedingCost, fetchDistOrdersByItemType, setDistFulfilCheck, setDistFulfilOrderChecks, setDistFulfilItemChecks,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
@@ -4786,7 +4786,14 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
 //   • Central Kitchen entity → CK items to prepare & dispatch
 //   • Finance entity (drivers) → fresh produce to buy & deliver
 // ============================================================================
-function DistTypedItemsView({ itemType }) {
+// ============================================================================
+// TYPED FULFILMENT — CONSOLIDATED + CHECK-OFF. Combined total of one item type
+// across every open order, with tick-to-complete so what's left is the pending
+// basket. Marks persist and are shared (dist_fulfil_checks).
+//   • Combined view: tick an item = done across ALL its orders.
+//   • By-order view: tick a line, or "Mark order ready" to tick the whole order.
+// ============================================================================
+function DistTypedItemsView({ itemType, currentUser }) {
   const isFresh = itemType === "fresh";
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4794,7 +4801,9 @@ function DistTypedItemsView({ itemType }) {
   const [search, setSearch] = useState("");
   const [showDone, setShowDone] = useState(false);
   const [view, setView] = useState("combined"); // "combined" | "orders"
-  const [expanded, setExpanded] = useState({});  // itemId -> show which orders
+  const [expanded, setExpanded] = useState({});
+  const [busy, setBusy] = useState({}); // key -> true while toggling
+  const uid = currentUser?.id || currentUser?.name || null;
 
   const load = useCallback(async () => {
     setLoading(true); setErr("");
@@ -4815,28 +4824,68 @@ function DistTypedItemsView({ itemType }) {
     );
   }, [orders, search]);
 
-  // Consolidated: total each item across all open orders, with the contributing
-  // orders (store + qty) so they can still see who ordered what.
+  // Combined per item, tracking done-ness across its order lines.
   const combined = useMemo(() => {
     const m = new Map();
     for (const o of filtered) for (const l of o.lines) {
-      const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, qty: 0, breakdown: [] };
+      const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, qty: 0, doneQty: 0, breakdown: [] };
       cur.qty += Number(l.qty) || 0;
-      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId });
+      if (l.done) cur.doneQty += Number(l.qty) || 0;
+      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId, done: l.done });
       m.set(l.itemId, cur);
     }
-    return Array.from(m.values()).sort((a, b) => cleanName(a.name).localeCompare(cleanName(b.name)));
+    return Array.from(m.values()).map(c => ({ ...c, done: c.breakdown.every(b => b.done) }))
+      .sort((a, b) => (a.done === b.done ? cleanName(a.name).localeCompare(cleanName(b.name)) : a.done ? 1 : -1));
   }, [filtered]);
 
   const title = isFresh ? "Fresh produce to fulfil" : "Central Kitchen orders";
   const subtitle = isFresh
-    ? "Every open order's produce, combined — buy once, deliver to each store."
-    : "Every open order's CK items, combined — prepare once, dispatch to each store.";
+    ? "Every open order's produce, combined — tick items as you buy them."
+    : "Every open order's CK items, combined — tick items as you prepare them.";
 
   const stageTone = (s) => s === "confirmed" ? "amber" : s === "picking" ? "blue" : s === "dispatched" ? "green" : s === "invoiced" ? "green" : "slate";
   const stageLabel = (s) => ({ confirmed: "To fulfil", picking: "Being picked", dispatched: "Dispatched", invoiced: "Invoiced", paid: "Paid" }[s] || s);
 
-  const totalUnits = filtered.reduce((s, o) => s + o.totalUnits, 0);
+  // Optimistically flip a line's done flag in local state, then persist.
+  const patchLine = (soId, itemId, done) => setOrders(prev => prev.map(o => o.soId !== soId ? o : {
+    ...o, lines: o.lines.map(l => l.itemId === itemId ? { ...l, done } : l),
+    allDone: o.lines.every(l => (l.itemId === itemId ? done : l.done)),
+  }));
+
+  const toggleLine = async (soId, itemId, done) => {
+    const key = `${soId}:${itemId}`;
+    setBusy(b => ({ ...b, [key]: true })); patchLine(soId, itemId, done);
+    try { await setDistFulfilCheck(soId, itemId, done, uid); }
+    catch (e) { setErr(e.message); patchLine(soId, itemId, !done); }
+    setBusy(b => ({ ...b, [key]: false }));
+  };
+  const toggleOrder = async (o, done) => {
+    const key = `order:${o.soId}`; setBusy(b => ({ ...b, [key]: true }));
+    const ids = o.lines.map(l => l.itemId);
+    setOrders(prev => prev.map(x => x.soId !== o.soId ? x : { ...x, lines: x.lines.map(l => ({ ...l, done })), allDone: done }));
+    try { await setDistFulfilOrderChecks(o.soId, ids, done, uid); }
+    catch (e) { setErr(e.message); load(); }
+    setBusy(b => ({ ...b, [key]: false }));
+  };
+  const toggleCombinedItem = async (c, done) => {
+    const key = `item:${c.itemId}`; setBusy(b => ({ ...b, [key]: true }));
+    const soIds = c.breakdown.map(b => b.soId);
+    setOrders(prev => prev.map(o => (soIds.includes(o.soId) ? { ...o, lines: o.lines.map(l => l.itemId === c.itemId ? { ...l, done } : l), allDone: o.lines.every(l => (l.itemId === c.itemId ? done : l.done)) } : o)));
+    try { await setDistFulfilItemChecks(c.itemId, soIds, done, uid); }
+    catch (e) { setErr(e.message); load(); }
+    setBusy(b => ({ ...b, [key]: false }));
+  };
+
+  const pendingItems = combined.filter(c => !c.done).length;
+  const pendingUnits = combined.reduce((s, c) => s + (c.qty - c.doneQty), 0);
+  const pendingOrders = filtered.filter(o => !o.allDone).length;
+
+  const CheckBox = ({ on, onClick, disabled }) => (
+    <button onClick={onClick} disabled={disabled} className="flex-shrink-0 rounded-md flex items-center justify-center transition-colors"
+      style={{ width: 22, height: 22, border: `2px solid ${on ? "#3F6B3A" : WH.accentSoft}`, background: on ? "#3F6B3A" : "transparent" }}>
+      {on && <Check size={13} color="#fff"/>}
+    </button>
+  );
 
   return (
     <WhShell
@@ -4856,9 +4905,9 @@ function DistTypedItemsView({ itemType }) {
     >
       {!loading && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <WhKpi label={isFresh ? "Produce items" : "CK items"} value={combined.length} sub="distinct to source" tone={combined.length ? "amber" : "green"}/>
-          <WhKpi label="Total units" value={totalUnits} sub="across all orders"/>
-          <WhKpi label="Open orders" value={filtered.length} sub="to fulfil"/>
+          <WhKpi label="Pending items" value={pendingItems} sub={isFresh ? "left to buy" : "left to make"} tone={pendingItems ? "amber" : "green"}/>
+          <WhKpi label="Pending units" value={pendingUnits} sub="still to source"/>
+          <WhKpi label="Pending orders" value={pendingOrders} sub={`of ${filtered.length}`} tone={pendingOrders ? "amber" : "green"}/>
           <WhKpi label="Stores" value={new Set(filtered.map(o => o.customerId)).size} sub="waiting"/>
         </div>
       )}
@@ -4871,31 +4920,34 @@ function DistTypedItemsView({ itemType }) {
             {isFresh ? "No open orders need fresh produce right now." : "No open orders need Central Kitchen items right now."}
           </div></WhCard>
         ) : view === "combined" ? (
-        /* ── COMBINED: one row per item, total qty, expandable to see orders ── */
-        <WhCard pad={false} title={isFresh ? "Shopping list — total to buy" : "Prep list — total to make"}>
+        <WhCard pad={false} title={isFresh ? "Shopping list — tick as you buy" : "Prep list — tick as you make"}
+          action={<span className="text-[11px] font-semibold" style={{ color: pendingItems ? WH.amber : WH.green }}>{pendingItems ? `${pendingItems} pending` : "All done"}</span>}>
           <div className="divide-y" style={{ borderColor: WH.lineSoft }}>
             {combined.map(c => {
               const open = expanded[c.itemId];
               return (
-                <div key={c.itemId}>
-                  <button onClick={() => setExpanded(p => ({ ...p, [c.itemId]: !p[c.itemId] }))}
-                    className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors" style={{ background: open ? WH.surfaceAlt + "66" : "transparent" }}>
-                    <div className="flex-shrink-0" style={{ color: WH.inkFaint }}>{open ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}</div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-bold truncate" style={{ color: WH.ink }}>{cleanName(c.name)}</div>
-                      <div className="text-[11px]" style={{ color: WH.inkFaint }}>{c.category || "—"} · {c.breakdown.length} order{c.breakdown.length===1?"":"s"}</div>
-                    </div>
+                <div key={c.itemId} style={{ opacity: c.done ? 0.55 : 1 }}>
+                  <div className="flex items-center gap-3 px-4 py-3">
+                    <CheckBox on={c.done} disabled={busy[`item:${c.itemId}`]} onClick={() => toggleCombinedItem(c, !c.done)}/>
+                    <button onClick={() => setExpanded(p => ({ ...p, [c.itemId]: !p[c.itemId] }))} className="min-w-0 flex-1 text-left flex items-center gap-2">
+                      <span className="flex-shrink-0" style={{ color: WH.inkFaint }}>{open ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}</span>
+                      <span className="min-w-0">
+                        <span className="text-sm font-bold truncate block" style={{ color: WH.ink, textDecoration: c.done ? "line-through" : "none" }}>{cleanName(c.name)}</span>
+                        <span className="text-[11px]" style={{ color: WH.inkFaint }}>{c.category || "—"} · {c.breakdown.length} order{c.breakdown.length===1?"":"s"}</span>
+                      </span>
+                    </button>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-xl font-black leading-none" style={{ color: WH.accent }}>{c.qty}{c.packUnit ? <span className="text-xs font-semibold" style={{ color: WH.inkSoft }}> {c.packUnit}</span> : ""}</div>
+                      <div className="text-xl font-black leading-none" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{c.qty}{c.packUnit ? <span className="text-xs font-semibold" style={{ color: WH.inkSoft }}> {c.packUnit}</span> : ""}</div>
                       <div className="text-[10px]" style={{ color: WH.inkFaint }}>total{isFresh ? " to buy" : " to make"}</div>
                     </div>
-                  </button>
+                  </div>
                   {open && (
-                    <div className="px-4 pb-3 pt-0" style={{ background: WH.surfaceAlt + "66" }}>
+                    <div className="px-4 pb-3" style={{ background: WH.surfaceAlt + "66" }}>
                       <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${WH.line}` }}>
                         {c.breakdown.map((b, i) => (
-                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ background: WH.surface, borderTop: i ? `1px solid ${WH.lineSoft}` : "none" }}>
-                            <span style={{ color: WH.inkSoft }}><span className="font-mono font-semibold" style={{ color: WH.accent }}>{b.soNumber}</span> · {b.customerName}</span>
+                          <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs" style={{ background: WH.surface, borderTop: i ? `1px solid ${WH.lineSoft}` : "none" }}>
+                            <CheckBox on={b.done} disabled={busy[`${b.soId}:${c.itemId}`]} onClick={() => toggleLine(b.soId, c.itemId, !b.done)}/>
+                            <span className="flex-1" style={{ color: WH.inkSoft, textDecoration: b.done ? "line-through" : "none" }}><span className="font-mono font-semibold" style={{ color: WH.accent }}>{b.soNumber}</span> · {b.customerName}</span>
                             <span className="font-bold" style={{ color: WH.ink }}>{b.qty}{c.packUnit ? ` ${c.packUnit}` : ""}</span>
                           </div>
                         ))}
@@ -4908,31 +4960,30 @@ function DistTypedItemsView({ itemType }) {
           </div>
         </WhCard>
       ) : (
-        /* ── BY ORDER: per-order cards (the original breakdown) ── */
         <div className="space-y-3">
-          {filtered.map(o => (
-            <WhCard key={o.soId} pad={false}>
+          {[...filtered].sort((a, b) => (a.allDone === b.allDone ? 0 : a.allDone ? 1 : -1)).map(o => (
+            <WhCard key={o.soId} pad={false} className={o.allDone ? "opacity-60" : ""}>
               <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: `1px solid ${WH.line}` }}>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-bold" style={{ color: WH.accent }}>{o.soNumber}</span>
-                    <WhPill tone={stageTone(o.stage)}>{stageLabel(o.stage)}</WhPill>
+                    <WhPill tone={o.allDone ? "green" : stageTone(o.stage)} icon={o.allDone ? CheckCircle : undefined}>{o.allDone ? "Ready" : stageLabel(o.stage)}</WhPill>
                   </div>
                   <div className="text-xs mt-0.5" style={{ color: WH.inkSoft }}>{o.customerName}{o.orderDate ? ` · ${o.orderDate}` : ""}</div>
                 </div>
-                <div className="text-right flex-shrink-0">
-                  <div className="text-lg font-bold leading-none" style={{ color: WH.ink }}>{o.totalUnits}</div>
-                  <div className="text-[10px]" style={{ color: WH.inkFaint }}>units</div>
-                </div>
+                <WhButton size="sm" variant={o.allDone ? "ghost" : "primary"} disabled={busy[`order:${o.soId}`]} onClick={() => toggleOrder(o, !o.allDone)}>
+                  {o.allDone ? "Undo" : "Mark order ready"}
+                </WhButton>
               </div>
               <div className="divide-y" style={{ borderColor: WH.lineSoft }}>
                 {o.lines.map((l, i) => (
-                  <div key={i} className="flex items-center gap-3 px-4 py-2">
+                  <div key={i} className="flex items-center gap-3 px-4 py-2" style={{ opacity: l.done ? 0.55 : 1 }}>
+                    <CheckBox on={l.done} disabled={busy[`${o.soId}:${l.itemId}`]} onClick={() => toggleLine(o.soId, l.itemId, !l.done)}/>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm truncate" style={{ color: WH.ink }}>{cleanName(l.name)}</div>
+                      <div className="text-sm truncate" style={{ color: WH.ink, textDecoration: l.done ? "line-through" : "none" }}>{cleanName(l.name)}</div>
                       {l.category && <div className="text-[10px]" style={{ color: WH.inkFaint }}>{l.category}</div>}
                     </div>
-                    <div className="text-sm font-bold flex-shrink-0" style={{ color: WH.accent }}>{l.qty}{l.packUnit ? ` ${l.packUnit}` : ""}</div>
+                    <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{l.qty}{l.packUnit ? ` ${l.packUnit}` : ""}</div>
                   </div>
                 ))}
               </div>
@@ -53918,7 +53969,7 @@ export default function App() {
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "ck-dist-items" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <DistTypedItemsView itemType="ck"/>}
+            {effectiveActiveView === "ck-dist-items" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <DistTypedItemsView itemType="ck" currentUser={currentUser}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser} stores={stores}/>}
@@ -53941,7 +53992,7 @@ export default function App() {
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
-            {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh"/>}
+            {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates}/>}
             {effectiveActiveView === "comms" && <CommunicationView

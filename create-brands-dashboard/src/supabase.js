@@ -13169,6 +13169,7 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
     fetchDistContacts({ kind: "customer" }).catch(() => []),
     fetchDistFulfilmentBoard().catch(() => []),
   ]);
+  const checks = await fetchDistFulfilChecks(orders.map(o => o.id)).catch(() => new Set());
   const itemById = new Map(items.map(i => [i.id, i]));
   const custById = new Map(customers.map(c => [c.id, c]));
   const stageBySo = new Map(board.map(b => [b.soId, b.stage]));
@@ -13183,16 +13184,61 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
         return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, packUnit: it?.packUnit || "" };
       });
     if (!matchLines.length) continue; // order has none of this type — skip
+    const withDone = matchLines.map(l => ({ ...l, done: checks.has(`${so.id}:${l.itemId}`) }));
     const cust = custById.get(so.customerId);
     out.push({
       soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate,
       customerId: so.customerId, customerName: cust?.displayName || cust?.companyName || "—",
       stage: stageBySo.get(so.id) || so.status || "confirmed",
-      lines: matchLines,
+      lines: withDone,
+      allDone: withDone.length > 0 && withDone.every(l => l.done),
       totalUnits: matchLines.reduce((s, l) => s + (Number(l.qty) || 0), 0),
     });
   }
   // Oldest orders first (most urgent to fulfil).
   out.sort((a, b) => String(a.orderDate || "").localeCompare(String(b.orderDate || "")));
   return out;
+}
+
+// ── FULFILMENT CHECK-OFF (per order-line) ───────────────────────────────────
+// Presence of a (so_id,item_id) row = that line is marked ready/done.
+export async function fetchDistFulfilChecks(soIds = []) {
+  if (!soIds.length) return new Set();
+  const { data, error } = await supabase.from("dist_fulfil_checks").select("so_id, item_id").in("so_id", soIds);
+  if (error) throw error;
+  return new Set((data || []).map(r => `${r.so_id}:${r.item_id}`));
+}
+// Mark or unmark a single order-line.
+export async function setDistFulfilCheck(soId, itemId, done, userId) {
+  if (done) {
+    const { error } = await supabase.from("dist_fulfil_checks").upsert({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() });
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("dist_fulfil_checks").delete().eq("so_id", soId).eq("item_id", itemId);
+    if (error) throw error;
+  }
+}
+// Mark/unmark every given item on one order in a single call.
+export async function setDistFulfilOrderChecks(soId, itemIds = [], done, userId) {
+  if (!itemIds.length) return;
+  if (done) {
+    const rows = itemIds.map(itemId => ({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() }));
+    const { error } = await supabase.from("dist_fulfil_checks").upsert(rows);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("dist_fulfil_checks").delete().eq("so_id", soId).in("item_id", itemIds);
+    if (error) throw error;
+  }
+}
+// Mark/unmark one item across ALL the given orders (for the combined view).
+export async function setDistFulfilItemChecks(itemId, soIds = [], done, userId) {
+  if (!soIds.length) return;
+  if (done) {
+    const rows = soIds.map(soId => ({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() }));
+    const { error } = await supabase.from("dist_fulfil_checks").upsert(rows);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("dist_fulfil_checks").delete().eq("item_id", itemId).in("so_id", soIds);
+    if (error) throw error;
+  }
 }
