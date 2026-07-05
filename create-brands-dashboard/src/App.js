@@ -4764,6 +4764,87 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
   );
 }
 
+// ============================================================================
+// TYPED ITEM VIEW — a focused, read-only list of Distribution items of one type,
+// surfaced inside the relevant entity so staff see only their items, no noise.
+//   • Central Kitchen entity → CK items (stocked; shows on-hand + incoming)
+//   • Finance entity (drivers) → Fresh produce (non-stocked; sourced to order)
+// Reuses the cream warehouse design system (WhShell/WhTable/WhKpi/WhPill).
+// ============================================================================
+function DistTypedItemsView({ itemType }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+
+  const isFresh = itemType === "fresh";
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setErr("");
+      try {
+        // Snapshot carries stock for stocked types; fresh items come back stocked:false.
+        const snap = await fetchDistStockSnapshot();
+        if (!alive) return;
+        const effType = (i) => i.itemType || (i.ckProductId ? "ck" : "warehouse");
+        setRows(snap.filter(i => effType(i) === itemType && i.active !== false));
+      } catch (e) { if (alive) setErr(e.message); }
+      if (alive) setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [itemType]);
+
+  const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(i => (i.name || "").toLowerCase().includes(q) || (i.sku || "").toLowerCase().includes(q) || (i.category || "").toLowerCase().includes(q));
+  }, [rows, search]);
+
+  const title = isFresh ? "Fresh produce" : "Central Kitchen items";
+  const subtitle = isFresh
+    ? "Items drivers source same-day from supermarkets — ordered by stores, fulfilled to order."
+    : "Products made by the Central Kitchen and dispatched into Distribution.";
+
+  const categories = useMemo(() => Array.from(new Set(filtered.map(i => i.category).filter(Boolean))).sort(), [filtered]);
+
+  return (
+    <WhShell title={title} subtitle={loading ? "Loading…" : subtitle} error={err}>
+      {!loading && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <WhKpi label="Items" value={filtered.length} sub={isFresh ? "sourced to order" : "from CK"}/>
+          <WhKpi label="Categories" value={categories.length} sub="distinct"/>
+          {isFresh
+            ? <WhKpi label="Sourcing" value="To order" sub="not stocked" tone="green"/>
+            : <WhKpi label="In stock" value={filtered.filter(i => (i.onHand || 0) > 0).length} sub="with on-hand" tone="blue"/>}
+        </div>
+      )}
+
+      <WhSearch value={search} onChange={setSearch} placeholder={`Search ${isFresh ? "produce" : "CK items"}…`}/>
+
+      {loading ? <div className="text-sm py-8 text-center" style={{ color: WH.inkFaint }}>Loading…</div> : (
+        <WhTable
+          columns={[
+            { key: "sku", label: "SKU", mono: true, color: WH.accent, render: i => i.sku || "—" },
+            { key: "name", label: "Item", render: i => cleanName(i.name) },
+            { key: "category", label: "Category", color: WH.inkSoft, render: i => i.category || "—" },
+            { key: "pack", label: "Pack", color: WH.inkSoft, render: i => <>{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</> },
+            ...(isFresh
+              ? [{ key: "status", label: "Sourcing", align: "right", render: () => <WhPill tone="green" icon={Truck}>To order</WhPill> }]
+              : [
+                { key: "onHand", label: "On-hand", align: "right", mono: true, render: i => <span style={{ color: (i.onHand || 0) < 0 ? WH.red : WH.ink, fontWeight: 600 }}>{i.onHand ?? 0}</span> },
+                { key: "available", label: "Available", align: "right", mono: true, render: i => <span style={{ color: (i.available || 0) < 0 ? WH.red : WH.green }}>{i.available ?? 0}</span> },
+              ]),
+          ]}
+          rows={filtered}
+          rowKey={i => i.id}
+          empty={isFresh ? "No fresh produce items yet. Add them in Warehouse › Items and set the type to Fresh produce." : "No Central Kitchen items yet. Add them in Warehouse › Items and set the type to Central Kitchen."}
+        />
+      )}
+    </WhShell>
+  );
+}
+
 function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const { canFeature: ckCanFeature } = useAccess();
   // The central kitchen site.
@@ -53224,6 +53305,7 @@ export default function App() {
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "google-hub", label: "Google Command", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
+      { key: "ck-dist-items", label: "Distribution Items", icon: Package, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
     ]},
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
@@ -53359,6 +53441,7 @@ export default function App() {
       { key: "spend", label: "Spend", icon: TrendingDown },
       { key: "petty-cash", label: "Petty Cash", icon: Wallet },
       { key: "expenses", label: "Expenses", icon: Receipt },
+      { key: "fresh-produce", label: "Fresh Produce", icon: Truck },
     ].filter(i => !FINANCE_NAV_FEAT[i.key] || canFeature(FINANCE_NAV_FEAT[i.key])) },
   ];
   const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : NAV_GROUPS;
@@ -53736,6 +53819,7 @@ export default function App() {
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "ck-dist-items" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <DistTypedItemsView itemType="ck"/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser} stores={stores}/>}
@@ -53758,6 +53842,7 @@ export default function App() {
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
+            {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh"/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates}/>}
             {effectiveActiveView === "comms" && <CommunicationView
