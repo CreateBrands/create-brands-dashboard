@@ -13319,7 +13319,7 @@ function DistItemsView({ currentUser }) {
             { key: "sku", label: "SKU", mono: true, color: WH.accent, render: i => i.sku || "—" },
             { key: "name", label: "Name", render: i => <span>{i.name}{!i.active && <span className="ml-1 text-[9px]" style={{ color: WH.inkFaint }}>(inactive)</span>}</span> },
             { key: "type", label: "Type", render: i => {
-              const t = i.itemType || "warehouse";
+              const t = i.itemType || (i.ckProductId ? "ck" : "warehouse");
               return t === "warehouse" ? <WhPill tone="slate">Warehouse</WhPill> : t === "ck" ? <WhPill tone="blue" icon={ChefHat}>CK</WhPill> : <WhPill tone="green" icon={Truck}>Fresh</WhPill>;
             } },
             { key: "category", label: "Category", color: WH.inkSoft, render: i => i.category || "—" },
@@ -13385,27 +13385,39 @@ function DistItemsView({ currentUser }) {
             {/* Item type — determines whether it's stocked in the warehouse. */}
             <div>
               <div className="text-xs text-slate-400 mb-1.5">Item type</div>
-              <div className="grid grid-cols-3 gap-2">
+              {(() => {
+                // Effective type: fall back to "ck" for legacy items that have a CK
+                // link but no explicit type set yet, otherwise "warehouse".
+                const effType = editItem.itemType || (editItem.ckProductId ? "ck" : "warehouse");
+                return (
+                <div className="grid grid-cols-3 gap-2">
                 {[
                   { k: "warehouse", label: "Warehouse", desc: "Stocked · bought in" },
                   { k: "ck", label: "Central Kitchen", desc: "Stocked · from CK" },
                   { k: "fresh", label: "Fresh produce", desc: "Not stocked · to order" },
                 ].map(t => {
-                  const on = (editItem.itemType || "warehouse") === t.k;
+                  const on = effType === t.k;
                   return (
-                    <button key={t.k} type="button" onClick={() => setEditItem({ ...editItem, itemType: t.k })}
+                    <button key={t.k} type="button" onClick={() => setEditItem({ ...editItem, itemType: t.k, ...(t.k !== "ck" ? { ckProductId: null } : {}) })}
                       className={`rounded-xl px-3 py-2 text-left border transition-colors ${on ? "bg-indigo-600/20 border-indigo-500" : "bg-slate-800 border-slate-700 hover:border-slate-600"}`}>
                       <div className={`text-xs font-bold ${on ? "text-white" : "text-slate-300"}`}>{t.label}</div>
                       <div className="text-[10px] text-slate-500">{t.desc}</div>
                     </button>
                   );
                 })}
-              </div>
+                </div>
+                );
+              })()}
               {editItem.itemType === "fresh" && (
                 <div className="text-[10px] text-amber-300 mt-1.5">Not stocked: no stock levels, batches, or valuation. A driver sources it same-day; stores order it and Distribution fulfils to order. Stores are charged the item's sell price (or their price-list price).</div>
               )}
-              {editItem.itemType === "ck" && (
-                <div className="text-[10px] text-slate-400 mt-1.5">Stocked here: the Central Kitchen dispatches this into Distribution (a goods receipt adds stock), then it's picked and fulfilled from stock like any warehouse item. Link the CK product below.</div>
+              {(editItem.itemType === "ck" || (!editItem.itemType && editItem.ckProductId)) && (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[10px] text-slate-400">Stocked here: the Central Kitchen dispatches this into Distribution (a goods receipt adds stock), then it's picked and fulfilled from stock like any warehouse item.</div>
+                  <label className="text-xs text-slate-400 block">Central Kitchen product link
+                    <SearchableItemSelect items={ckProducts} value={editItem.ckProductId || ""} onSelect={p => setEditItem({ ...editItem, ckProductId: p?.id || null, itemType: "ck" })} placeholder="— not linked —" />
+                    <span className="text-[10px] text-slate-500">When the CK dispatches this product, a draft goods receipt is created for this item.</span></label>
+                </div>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -13446,9 +13458,6 @@ function DistItemsView({ currentUser }) {
                     return <optgroup key={lineKey} label={lineLabel}>{opts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>;
                   })}
                 </select></label>
-              <label className="text-xs text-slate-400 col-span-2">Central Kitchen product link
-                <SearchableItemSelect items={ckProducts} value={editItem.ckProductId || ""} onSelect={p => setEditItem({ ...editItem, ckProductId: p?.id || null })} placeholder="— not linked —" />
-                <span className="text-[10px] text-slate-500">When the CK dispatches this product to the warehouse, a draft goods receipt is created for this item.</span></label>
               <label className="text-xs text-slate-400">Reorder point
                 <input type="number" value={editItem.reorderPoint ?? ""} onChange={e => setEditItem({ ...editItem, reorderPoint: e.target.value })} placeholder="0" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <div className="text-xs text-slate-400 col-span-2">Product image <span className="text-slate-600">(shown on the store ordering portal)</span>
