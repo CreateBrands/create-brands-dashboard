@@ -178,7 +178,7 @@ import {
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistCollections, upsertDistCollection, deleteDistCollection, fetchDistCollectionItems, setDistCollectionItems, fetchDistCollectionsWithItems,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
-  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, fetchFreshLinesNeedingCost,
+  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, fetchFreshLinesNeedingCost, fetchDistOrdersByItemType,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
@@ -4771,75 +4771,130 @@ function CkStockCount({ ingredients = [], siteId, currentUser }) {
 //   • Finance entity (drivers) → Fresh produce (non-stocked; sourced to order)
 // Reuses the cream warehouse design system (WhShell/WhTable/WhKpi/WhPill).
 // ============================================================================
+// ============================================================================
+// TYPED ORDER FULFILMENT QUEUE — the OPEN store orders that contain items of
+// one type, showing ONLY those lines, so the right team sees exactly what to
+// fulfil per order with no noise.
+//   • Central Kitchen entity → orders with CK items to prepare & dispatch
+//   • Finance entity (drivers) → orders with fresh produce to buy & deliver
+// Reuses the cream warehouse design system.
+// ============================================================================
 function DistTypedItemsView({ itemType }) {
-  const [rows, setRows] = useState([]);
+  const isFresh = itemType === "fresh";
+  const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
+  const [showDone, setShowDone] = useState(false);
 
-  const isFresh = itemType === "fresh";
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setLoading(true); setErr("");
-      try {
-        // Snapshot carries stock for stocked types; fresh items come back stocked:false.
-        const snap = await fetchDistStockSnapshot();
-        if (!alive) return;
-        const effType = (i) => i.itemType || (i.ckProductId ? "ck" : "warehouse");
-        setRows(snap.filter(i => effType(i) === itemType && i.active !== false));
-      } catch (e) { if (alive) setErr(e.message); }
-      if (alive) setLoading(false);
-    })();
-    return () => { alive = false; };
-  }, [itemType]);
+  const load = useCallback(async () => {
+    setLoading(true); setErr("");
+    try { setOrders(await fetchDistOrdersByItemType(itemType, { includeDone: showDone })); }
+    catch (e) { setErr(e.message); }
+    setLoading(false);
+  }, [itemType, showDone]);
+  useEffect(() => { load(); }, [load]);
 
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(i => (i.name || "").toLowerCase().includes(q) || (i.sku || "").toLowerCase().includes(q) || (i.category || "").toLowerCase().includes(q));
-  }, [rows, search]);
+    if (!q) return orders;
+    return orders.filter(o =>
+      (o.soNumber || "").toLowerCase().includes(q) ||
+      (o.customerName || "").toLowerCase().includes(q) ||
+      o.lines.some(l => (l.name || "").toLowerCase().includes(q))
+    );
+  }, [orders, search]);
 
-  const title = isFresh ? "Fresh produce" : "Central Kitchen items";
+  const title = isFresh ? "Fresh produce to fulfil" : "Central Kitchen orders";
   const subtitle = isFresh
-    ? "Items drivers source same-day from supermarkets — ordered by stores, fulfilled to order."
-    : "Products made by the Central Kitchen and dispatched into Distribution.";
+    ? "Store orders waiting on fresh produce — what to buy and deliver, per order."
+    : "Store orders waiting on Central Kitchen items — what to prepare and dispatch.";
 
-  const categories = useMemo(() => Array.from(new Set(filtered.map(i => i.category).filter(Boolean))).sort(), [filtered]);
+  // Aggregate shopping/prep list across all open orders (total per item).
+  const aggregate = useMemo(() => {
+    const m = new Map();
+    for (const o of filtered) for (const l of o.lines) {
+      const cur = m.get(l.itemId) || { name: l.name, packUnit: l.packUnit, qty: 0, orders: 0 };
+      cur.qty += Number(l.qty) || 0; cur.orders += 1; m.set(l.itemId, cur);
+    }
+    return Array.from(m.values()).sort((a, b) => b.qty - a.qty);
+  }, [filtered]);
+
+  const stageTone = (s) => s === "confirmed" ? "amber" : s === "picking" ? "blue" : s === "dispatched" ? "green" : s === "invoiced" ? "green" : "slate";
+  const stageLabel = (s) => ({ confirmed: "To fulfil", picking: "Being picked", dispatched: "Dispatched", invoiced: "Invoiced", paid: "Paid" }[s] || s);
 
   return (
-    <WhShell title={title} subtitle={loading ? "Loading…" : subtitle} error={err}>
+    <WhShell
+      title={title}
+      subtitle={loading ? "Loading…" : subtitle}
+      error={err}
+      actions={<>
+        <WhButton variant="ghost" size="sm" onClick={() => setShowDone(v => !v)}>{showDone ? "Hide completed" : "Show completed"}</WhButton>
+        <WhButton variant="ghost" size="sm" icon={RefreshCw} onClick={load}>Refresh</WhButton>
+      </>}
+    >
       {!loading && (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <WhKpi label="Items" value={filtered.length} sub={isFresh ? "sourced to order" : "from CK"}/>
-          <WhKpi label="Categories" value={categories.length} sub="distinct"/>
-          {isFresh
-            ? <WhKpi label="Sourcing" value="To order" sub="not stocked" tone="green"/>
-            : <WhKpi label="In stock" value={filtered.filter(i => (i.onHand || 0) > 0).length} sub="with on-hand" tone="blue"/>}
+          <WhKpi label="Open orders" value={filtered.length} sub={isFresh ? "need produce" : "need CK items"} tone={filtered.length ? "amber" : "green"}/>
+          <WhKpi label={isFresh ? "Produce lines" : "CK lines"} value={filtered.reduce((s, o) => s + o.lines.length, 0)} sub="across orders"/>
+          <WhKpi label="Total units" value={filtered.reduce((s, o) => s + o.totalUnits, 0)} sub="to fulfil"/>
         </div>
       )}
 
-      <WhSearch value={search} onChange={setSearch} placeholder={`Search ${isFresh ? "produce" : "CK items"}…`}/>
+      {/* Aggregate buy/prep list — the total of each item across all open orders */}
+      {!loading && aggregate.length > 0 && (
+        <WhCard title={isFresh ? "Shopping list — total to buy" : "Prep list — total to make"}>
+          <div className="flex flex-wrap gap-2">
+            {aggregate.map((a, i) => (
+              <div key={i} className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-2" style={{ background: WH.surfaceAlt, border: `1px solid ${WH.line}` }}>
+                <span style={{ color: WH.ink, fontWeight: 600 }}>{cleanName(a.name)}</span>
+                <span style={{ color: WH.accent, fontWeight: 700 }}>{a.qty}{a.packUnit ? ` ${a.packUnit}` : ""}</span>
+                <span style={{ color: WH.inkFaint }}>· {a.orders} order{a.orders===1?"":"s"}</span>
+              </div>
+            ))}
+          </div>
+        </WhCard>
+      )}
 
-      {loading ? <div className="text-sm py-8 text-center" style={{ color: WH.inkFaint }}>Loading…</div> : (
-        <WhTable
-          columns={[
-            { key: "sku", label: "SKU", mono: true, color: WH.accent, render: i => i.sku || "—" },
-            { key: "name", label: "Item", render: i => cleanName(i.name) },
-            { key: "category", label: "Category", color: WH.inkSoft, render: i => i.category || "—" },
-            { key: "pack", label: "Pack", color: WH.inkSoft, render: i => <>{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</> },
-            ...(isFresh
-              ? [{ key: "status", label: "Sourcing", align: "right", render: () => <WhPill tone="green" icon={Truck}>To order</WhPill> }]
-              : [
-                { key: "onHand", label: "On-hand", align: "right", mono: true, render: i => <span style={{ color: (i.onHand || 0) < 0 ? WH.red : WH.ink, fontWeight: 600 }}>{i.onHand ?? 0}</span> },
-                { key: "available", label: "Available", align: "right", mono: true, render: i => <span style={{ color: (i.available || 0) < 0 ? WH.red : WH.green }}>{i.available ?? 0}</span> },
-              ]),
-          ]}
-          rows={filtered}
-          rowKey={i => i.id}
-          empty={isFresh ? "No fresh produce items yet. Add them in Warehouse › Items and set the type to Fresh produce." : "No Central Kitchen items yet. Add them in Warehouse › Items and set the type to Central Kitchen."}
-        />
+      <WhSearch value={search} onChange={setSearch} placeholder="Search order, store, or item…"/>
+
+      {loading ? <div className="text-sm py-8 text-center" style={{ color: WH.inkFaint }}>Loading…</div>
+        : filtered.length === 0 ? (
+          <WhCard><div className="text-sm text-center py-8" style={{ color: WH.inkFaint }}>
+            {isFresh ? "No open orders need fresh produce right now." : "No open orders need Central Kitchen items right now."}
+          </div></WhCard>
+        ) : (
+        <div className="space-y-3">
+          {filtered.map(o => (
+            <WhCard key={o.soId} pad={false}>
+              <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: `1px solid ${WH.line}` }}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-bold" style={{ color: WH.accent }}>{o.soNumber}</span>
+                    <WhPill tone={stageTone(o.stage)}>{stageLabel(o.stage)}</WhPill>
+                  </div>
+                  <div className="text-xs mt-0.5" style={{ color: WH.inkSoft }}>{o.customerName}{o.orderDate ? ` · ${o.orderDate}` : ""}</div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-lg font-bold leading-none" style={{ color: WH.ink }}>{o.totalUnits}</div>
+                  <div className="text-[10px]" style={{ color: WH.inkFaint }}>units</div>
+                </div>
+              </div>
+              <div className="divide-y" style={{ borderColor: WH.lineSoft }}>
+                {o.lines.map((l, i) => (
+                  <div key={i} className="flex items-center gap-3 px-4 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm truncate" style={{ color: WH.ink }}>{cleanName(l.name)}</div>
+                      {l.category && <div className="text-[10px]" style={{ color: WH.inkFaint }}>{l.category}</div>}
+                    </div>
+                    <div className="text-sm font-bold flex-shrink-0" style={{ color: WH.accent }}>{l.qty}{l.packUnit ? ` ${l.packUnit}` : ""}</div>
+                  </div>
+                ))}
+              </div>
+            </WhCard>
+          ))}
+        </div>
       )}
     </WhShell>
   );

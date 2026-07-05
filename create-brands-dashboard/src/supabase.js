@@ -13154,3 +13154,45 @@ export async function fetchDistCollectionsWithItems() {
   });
   return { collections, itemsByCollection: Object.fromEntries(byColl), items };
 }
+
+// ORDER FULFILMENT QUEUE BY ITEM TYPE — for the CK entity (ck items) and the
+// Finance/driver entity (fresh produce). Returns OPEN orders that contain at
+// least one line of the given item type, with ONLY those lines (so CK staff /
+// drivers see exactly what they must prepare or buy per order, no other items).
+export async function fetchDistOrdersByItemType(itemType, { includeDone = false } = {}) {
+  const openStatuses = includeDone
+    ? ["confirmed", "picking", "dispatched", "invoiced"]
+    : ["confirmed", "picking"]; // not yet dispatched = still to fulfil
+  const [orders, items, customers, board] = await Promise.all([
+    fetchDistSalesOrders({ status: openStatuses }).catch(() => []),
+    fetchDistItems({ includeInactive: true }).catch(() => []),
+    fetchDistContacts({ kind: "customer" }).catch(() => []),
+    fetchDistFulfilmentBoard().catch(() => []),
+  ]);
+  const itemById = new Map(items.map(i => [i.id, i]));
+  const custById = new Map(customers.map(c => [c.id, c]));
+  const stageBySo = new Map(board.map(b => [b.soId, b.stage]));
+  const effType = (i) => (i && (i.itemType || (i.ckProductId ? "ck" : "warehouse"))) || "warehouse";
+
+  const out = [];
+  for (const so of orders) {
+    const matchLines = (so.lines || [])
+      .filter(l => effType(itemById.get(l.itemId)) === itemType)
+      .map(l => {
+        const it = itemById.get(l.itemId);
+        return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, packUnit: it?.packUnit || "" };
+      });
+    if (!matchLines.length) continue; // order has none of this type — skip
+    const cust = custById.get(so.customerId);
+    out.push({
+      soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate,
+      customerId: so.customerId, customerName: cust?.displayName || cust?.companyName || "—",
+      stage: stageBySo.get(so.id) || so.status || "confirmed",
+      lines: matchLines,
+      totalUnits: matchLines.reduce((s, l) => s + (Number(l.qty) || 0), 0),
+    });
+  }
+  // Oldest orders first (most urgent to fulfil).
+  out.sort((a, b) => String(a.orderDate || "").localeCompare(String(b.orderDate || "")));
+  return out;
+}
