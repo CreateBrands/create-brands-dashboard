@@ -178,7 +178,7 @@ import {
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistCollections, upsertDistCollection, deleteDistCollection, fetchDistCollectionItems, setDistCollectionItems, fetchDistCollectionsWithItems,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
-  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice,
+  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, fetchFreshLinesNeedingCost,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
@@ -8493,6 +8493,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const { navigate } = useDistDocLink();
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
+  const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
+  const [freshScan, setFreshScan] = useState(""); // scan status message
+  const freshScanRef = useRef(null);
   useEffect(() => {
     let alive = true;
     fetchDistSalesOrderDetail(so.id).then(d => { if (alive) setDetail(d); }).catch(e => { if (alive) setErr(e.message); });
@@ -8531,7 +8534,13 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             setErr("");
             try {
               if (next.stage === "confirmed") await advanceDistOrderToPick(so.id);
-              else if (next.stage === "picked") await advanceDistOrderToDispatch(so.id);
+              else if (next.stage === "picked") {
+                // Fresh (non-stocked) lines are charged at cost — capture the
+                // driver's actual supermarket cost before dispatching.
+                const freshLines = await fetchFreshLinesNeedingCost(so.id).catch(() => []);
+                if (freshLines.length > 0) { setFreshPrompt({ lines: freshLines, costs: {} }); return; }
+                await advanceDistOrderToDispatch(so.id);
+              }
               else if (next.stage === "dispatched") await advanceDistOrderToInvoice(so.id);
               else if (next.stage === "invoiced") { navigate("dist-receipts"); onClose(); return; }
               // reload the order detail to reflect the new stage
@@ -8547,6 +8556,102 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           );
         })()}
         {err && <div className="text-xs text-red-400">{err}</div>}
+
+        {/* Fresh produce cost capture — store is charged exactly what the driver paid */}
+        {freshPrompt && (() => {
+          // Match a scanned receipt line to one of the order's fresh items by name.
+          const matchFreshLine = (rawDesc) => {
+            const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+            const target = norm(rawDesc);
+            if (!target) return null;
+            let best = null, bestScore = 0;
+            for (const l of freshPrompt.lines) {
+              const name = norm(l.name);
+              const nameWords = name.split(" ").filter(w => w.length > 2);
+              const targetWords = new Set(target.split(" "));
+              const hits = nameWords.filter(w => targetWords.has(w)).length;
+              const score = nameWords.length ? hits / nameWords.length : 0;
+              if (score > bestScore) { bestScore = score; best = l; }
+            }
+            return bestScore >= 0.5 ? best : null;
+          };
+          const onScanReceipt = async (file) => {
+            if (!file) return;
+            setFreshScan("Uploading receipt…"); setErr("");
+            try {
+              const inv = await uploadInvoiceFile(file, "brand-distribution", "");
+              setFreshScan("Reading line items…");
+              await extractInvoice(inv.id);
+              let lines = [];
+              for (let i = 0; i < 12; i++) {
+                const { lines: ls } = await getInvoiceWithLines(inv.id);
+                if (ls && ls.length) { lines = ls; break; }
+                await new Promise(r => setTimeout(r, 1500));
+              }
+              if (!lines.length) { setFreshScan("Couldn't read the receipt — enter costs manually."); return; }
+              // Auto-fill costs by matching scanned lines to the order's fresh items.
+              let matched = 0;
+              const nextCosts = { ...freshPrompt.costs };
+              for (const sl of lines) {
+                const m = matchFreshLine(sl.raw_description || sl.description || "");
+                const price = sl.pack_price_ex_vat != null ? sl.pack_price_ex_vat : (sl.unit_price != null ? sl.unit_price : null);
+                if (m && price != null) {
+                  // Scanned price is the pack price; divide by the ordered qty to get per-unit.
+                  const per = Number(price);
+                  nextCosts[m.itemId] = String(per);
+                  matched++;
+                }
+              }
+              setFreshPrompt(p => ({ ...p, costs: nextCosts }));
+              setFreshScan(matched > 0 ? `Matched ${matched} of ${freshPrompt.lines.length} item${freshPrompt.lines.length===1?"":"s"} — review below.` : "No items matched automatically — enter costs manually.");
+            } catch (e) { setFreshScan(""); setErr(e?.message || String(e)); }
+          };
+          return (
+          <Modal onClose={() => { setFreshPrompt(null); setFreshScan(""); }} title="Fresh produce — enter cost" maxW="max-w-md">
+            <div className="space-y-3">
+              <div className="text-xs text-slate-400">These are non-stocked fresh items. The store is charged <span className="font-semibold text-white">exactly what the driver paid</span>. Scan the supermarket receipt to read costs automatically, or enter them by hand.</div>
+              {/* Scan receipt */}
+              <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 p-3">
+                <input ref={freshScanRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; onScanReceipt(f); e.target.value = ""; }}/>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => freshScanRef.current?.click()} disabled={!!freshScan && freshScan.endsWith("…")} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5"><Upload size={14}/> Scan receipt</button>
+                  {freshScan && <span className={`text-[11px] ${freshScan.endsWith("…") ? "text-indigo-300" : "text-slate-400"}`}>{freshScan}</span>}
+                </div>
+              </div>
+              {freshPrompt.lines.map(l => (
+                <div key={l.itemId} className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm text-white truncate">{l.name}</div>
+                    <div className="text-[11px] text-slate-500">qty {l.qty}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-slate-500 text-sm">£</span>
+                    <input type="number" step="0.01" value={freshPrompt.costs[l.itemId] ?? ""}
+                      onChange={e => setFreshPrompt(p => ({ ...p, costs: { ...p.costs, [l.itemId]: e.target.value } }))}
+                      placeholder="0.00" className="w-24 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right text-sm"/>
+                    <span className="text-[11px] text-slate-500">/ unit</span>
+                  </div>
+                </div>
+              ))}
+              <div className="flex justify-end gap-2 pt-1">
+                <button onClick={() => { setFreshPrompt(null); setFreshScan(""); }} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+                <button
+                  disabled={freshPrompt.lines.some(l => freshPrompt.costs[l.itemId] === "" || freshPrompt.costs[l.itemId] == null)}
+                  onClick={async () => {
+                    setErr("");
+                    try {
+                      await advanceDistOrderToDispatch(so.id, undefined, freshPrompt.costs);
+                      setFreshPrompt(null); setFreshScan("");
+                      const fresh = await fetchDistSalesOrderDetail(so.id).catch(() => null);
+                      if (fresh) setDetail(fresh);
+                    } catch (e) { setErr(e.message); alert(e.message); }
+                  }}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">Dispatch at cost</button>
+              </div>
+            </div>
+          </Modal>
+          );
+        })()}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Status panel */}
@@ -8891,7 +8996,13 @@ function DistFulfilmentView({ currentUser }) {
     setBusyId(row.soId); setErr("");
     try {
       if (row.stage === "confirmed") await advanceDistOrderToPick(row.soId, currentUser?.id);
-      else if (row.stage === "picked") await advanceDistOrderToDispatch(row.soId, currentUser?.id);
+      else if (row.stage === "picked") {
+        // Fresh (non-stocked) lines need a cost entered before dispatch — open the
+        // order detail (which prompts) instead of dispatching blind from the board.
+        const freshLines = await fetchFreshLinesNeedingCost(row.soId).catch(() => []);
+        if (freshLines.length > 0) { openDoc("so", row.soId); setBusyId(null); return; }
+        await advanceDistOrderToDispatch(row.soId, currentUser?.id);
+      }
       else if (row.stage === "dispatched") await advanceDistOrderToInvoice(row.soId, currentUser?.id);
       else if (row.stage === "invoiced") { navigate("dist-receipts"); setBusyId(null); return; }
       await load();
@@ -13207,10 +13318,14 @@ function DistItemsView({ currentUser }) {
           columns={[
             { key: "sku", label: "SKU", mono: true, color: WH.accent, render: i => i.sku || "—" },
             { key: "name", label: "Name", render: i => <span>{i.name}{!i.active && <span className="ml-1 text-[9px]" style={{ color: WH.inkFaint }}>(inactive)</span>}</span> },
+            { key: "type", label: "Type", render: i => {
+              const t = i.itemType || "warehouse";
+              return t === "warehouse" ? <WhPill tone="slate">Warehouse</WhPill> : t === "ck" ? <WhPill tone="blue" icon={ChefHat}>CK</WhPill> : <WhPill tone="green" icon={Truck}>Fresh</WhPill>;
+            } },
             { key: "category", label: "Category", color: WH.inkSoft, render: i => i.category || "—" },
             { key: "pack", label: "Pack", color: WH.inkSoft, render: i => <>{i.packCount}&times;{i.packSize ?? "?"}{i.packUnit}</> },
-            { key: "onHand", label: "On-hand", align: "right", mono: true, render: i => <span style={{ color: i.negative ? WH.red : WH.ink, fontWeight: 600 }}>{i.onHand}{i.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</span> },
-            { key: "available", label: "Available", align: "right", mono: true, render: i => <span style={{ color: i.available < 0 ? WH.red : WH.green }}>{i.available}</span> },
+            { key: "onHand", label: "On-hand", align: "right", mono: true, render: i => i.itemType === "fresh" ? <span style={{ color: WH.inkFaint }}>not stocked</span> : <span style={{ color: i.negative ? WH.red : WH.ink, fontWeight: 600 }}>{i.onHand}{i.negative && <AlertTriangle size={11} className="inline ml-1 -mt-0.5"/>}</span> },
+            { key: "available", label: "Available", align: "right", mono: true, render: i => i.itemType === "fresh" ? <span style={{ color: WH.inkFaint }}>—</span> : <span style={{ color: i.available < 0 ? WH.red : WH.green }}>{i.available}</span> },
           ]}
           rows={filtered}
           rowKey={i => i.id}
@@ -13267,6 +13382,32 @@ function DistItemsView({ currentUser }) {
       {editItem && (
         <Modal onClose={() => setEditItem(null)} title={editItem.id ? "Edit item" : "New item"}>
           <div className="space-y-3">
+            {/* Item type — determines whether it's stocked in the warehouse. */}
+            <div>
+              <div className="text-xs text-slate-400 mb-1.5">Item type</div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { k: "warehouse", label: "Warehouse", desc: "Stocked · bought in" },
+                  { k: "ck", label: "Central Kitchen", desc: "Stocked · from CK" },
+                  { k: "fresh", label: "Fresh produce", desc: "Not stocked · to order" },
+                ].map(t => {
+                  const on = (editItem.itemType || "warehouse") === t.k;
+                  return (
+                    <button key={t.k} type="button" onClick={() => setEditItem({ ...editItem, itemType: t.k })}
+                      className={`rounded-xl px-3 py-2 text-left border transition-colors ${on ? "bg-indigo-600/20 border-indigo-500" : "bg-slate-800 border-slate-700 hover:border-slate-600"}`}>
+                      <div className={`text-xs font-bold ${on ? "text-white" : "text-slate-300"}`}>{t.label}</div>
+                      <div className="text-[10px] text-slate-500">{t.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {editItem.itemType === "fresh" && (
+                <div className="text-[10px] text-amber-300 mt-1.5">Not stocked: no stock levels, batches, or valuation. A driver sources it same-day; stores order it and Distribution fulfils to order. Stores are charged the item's sell price (or their price-list price).</div>
+              )}
+              {editItem.itemType === "ck" && (
+                <div className="text-[10px] text-slate-400 mt-1.5">Stocked here: the Central Kitchen dispatches this into Distribution (a goods receipt adds stock), then it's picked and fulfilled from stock like any warehouse item. Link the CK product below.</div>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-slate-400 col-span-2">Name
                 <input value={editItem.name || ""} onChange={e => setEditItem({ ...editItem, name: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>

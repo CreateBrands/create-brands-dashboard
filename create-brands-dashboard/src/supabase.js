@@ -6311,6 +6311,7 @@ function _invBody(p) {
   if ("location" in p) b.location = p.location || null;
   if ("allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
   if ("reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
+  if ("itemType" in p) b.item_type = p.itemType || "warehouse";
   if ("siteId" in p) b.site_id = p.siteId || null;
   return b;
 }
@@ -9611,6 +9612,7 @@ const mapDistItem = (i) => ({
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
   ckProductId: i.ck_product_id || null,
   reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
+  itemType: i.item_type || "warehouse", // "warehouse" (stocked) | "ck" | "fresh" (non-stocked)
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -9884,9 +9886,15 @@ export async function computeDistBatchOnHand(itemId) {
 export async function fetchDistStockSnapshot() {
   const [items, onHand, committed] = await Promise.all([fetchDistItems(), computeDistOnHand(), computeDistCommitted()]);
   return items.map((it) => {
+    // Only "fresh" produce is non-stocked (driver sources same-day). Warehouse
+    // AND CK items are stocked here — CK dispatches into Dist via a goods receipt.
+    const stocked = (it.itemType || "warehouse") !== "fresh";
+    if (!stocked) {
+      return { ...it, stocked: false, onHand: null, committed: 0, available: null, negative: false };
+    }
     const oh = onHand.get(it.id) || 0;
     const com = committed.get(it.id) || 0;
-    return { ...it, onHand: oh, committed: com, available: oh - com, negative: oh < 0 };
+    return { ...it, stocked: true, onHand: oh, committed: com, available: oh - com, negative: oh < 0 };
   });
 }
 
@@ -10911,8 +10919,8 @@ export async function createDistPick(pick, lines = []) {
   };
   const { error } = await supabase.from("dist_picks").insert(row);
   if (error) throw error;
-  const lr = lines.filter(l => l.itemId && l.batchId && Number(l.qty) > 0).map(l => ({
-    id: distId("dpickl"), pick_id: id, item_id: l.itemId, batch_id: l.batchId, qty: Number(l.qty) || 0,
+  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0 && (l.batchId || l.nonStock)).map(l => ({
+    id: distId("dpickl"), pick_id: id, item_id: l.itemId, batch_id: l.batchId || null, qty: Number(l.qty) || 0,
     unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
   }));
   if (lr.length) { const { error: e2 } = await supabase.from("dist_pick_lines").insert(lr); if (e2) throw e2; }
@@ -11067,10 +11075,21 @@ export async function advanceDistOrderToPick(soId, createdBy) {
   if (!so) throw new Error("Order not found.");
   const existing = (await fetchDistPicks({})).filter(p => p.soId === soId && p.status !== "cancelled");
   if (existing.length) throw new Error("This order already has a pick.");
-  // FEFO each line.
+  // Determine which items are non-stocked (fresh produce / CK) — those don't get
+  // FEFO-allocated; the driver sources them to order, so they pass straight through.
+  const allItems = await fetchDistItems().catch(() => []);
+  const typeById = new Map(allItems.map(i => [i.id, i.itemType || "warehouse"]));
+  // FEFO each STOCKED line; pass non-stocked lines through with a sentinel batch.
   const lines = [];
   for (const l of (so.lines || [])) {
     if (!l.itemId || !(Number(l.qty) > 0)) continue;
+    const stocked = (typeById.get(l.itemId) || "warehouse") !== "fresh";
+    if (!stocked) {
+      // Fresh produce: one line, no batch, no stock movement on dispatch —
+      // the driver sources it to order, so there's nothing to allocate.
+      lines.push({ itemId: l.itemId, batchId: null, qty: Number(l.qty), unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null, nonStock: true });
+      continue;
+    }
     const alloc = await suggestDistFefo(l.itemId, l.qty).catch(() => []);
     const got = alloc.reduce((s, a) => s + a.qty, 0);
     if (got + 0.0005 < Number(l.qty)) {
@@ -11084,16 +11103,42 @@ export async function advanceDistOrderToPick(soId, createdBy) {
 
 // Advance: picked → dispatched. Ships the order's pick (reduces stock, posts COGS).
 // Guarded: throws if already dispatched, or if no pick exists.
-export async function advanceDistOrderToDispatch(soId, createdBy) {
+export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {}) {
   const picks = (await fetchDistPicks({})).filter(p => p.soId === soId);
   const pick = picks.find(p => p.status === "picked") || picks[0];
   if (!pick) throw new Error("This order hasn't been picked yet.");
   const existing = (await fetchDistDispatches({})).filter(d => d.soId === soId);
   if (existing.length) throw new Error("This order has already been dispatched.");
-  // Build dispatch lines from the pick's batch allocations.
-  const lines = (pick.lines || []).map(l => ({ itemId: l.itemId, batchId: l.batchId, qty: l.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null }));
+  const allItems = await fetchDistItems().catch(() => []);
+  const typeById = new Map(allItems.map(i => [i.id, i.itemType || "warehouse"]));
+  // Build dispatch lines. Fresh (non-stocked) lines are charged AT COST — the
+  // store pays exactly what the driver paid — so their unit price is set from
+  // freshCosts[itemId] (the actual supermarket cost captured at dispatch).
+  const lines = (pick.lines || []).map(l => {
+    const isFresh = (typeById.get(l.itemId) || "warehouse") === "fresh";
+    const cost = isFresh && freshCosts[l.itemId] != null && freshCosts[l.itemId] !== "" ? Number(freshCosts[l.itemId]) : null;
+    return {
+      itemId: l.itemId, batchId: l.batchId, qty: l.qty,
+      unitPrice: isFresh ? (cost != null ? cost : (Number(l.unitPrice) || 0)) : (Number(l.unitPrice) || 0),
+      taxRateId: l.taxRateId || null, nonStock: isFresh,
+    };
+  });
   if (!lines.length) throw new Error("This pick has no lines to dispatch.");
   return postDistDispatch({ soId, pickId: pick.id, customerId: pick.customerId, createdBy }, lines);
+}
+
+// Which fresh (non-stocked) lines on a picked order still need an actual cost
+// entered before dispatch? Returns [{ itemId, name, qty }] for the UI prompt.
+export async function fetchFreshLinesNeedingCost(soId) {
+  const picks = (await fetchDistPicks({})).filter(p => p.soId === soId);
+  const pick = picks.find(p => p.status === "picked") || picks[0];
+  if (!pick) return [];
+  const allItems = await fetchDistItems().catch(() => []);
+  const typeById = new Map(allItems.map(i => [i.id, i.itemType || "warehouse"]));
+  const nameById = new Map(allItems.map(i => [i.id, i.name]));
+  return (pick.lines || [])
+    .filter(l => (typeById.get(l.itemId) || "warehouse") === "fresh")
+    .map(l => ({ itemId: l.itemId, name: nameById.get(l.itemId) || l.itemId, qty: l.qty }));
 }
 
 // Advance: dispatched → invoiced. Bills the customer for the dispatch.
@@ -11122,16 +11167,21 @@ export async function postDistDispatch(dispatch, lines = []) {
   if (error) throw error;
 
   let cogsValue = 0;
-  for (const l of lines.filter(x => x.itemId && x.batchId && Number(x.qty) > 0)) {
+  for (const l of lines.filter(x => x.itemId && Number(x.qty) > 0 && (x.batchId || x.nonStock))) {
+    const nonStock = l.nonStock || !l.batchId;
     await supabase.from("dist_dispatch_lines").insert({
-      id: distId("ddispl"), dispatch_id: id, item_id: l.itemId, batch_id: l.batchId, qty: Number(l.qty) || 0,
-      landed_cost: Number(l.landedCost) || 0, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+      id: distId("ddispl"), dispatch_id: id, item_id: l.itemId, batch_id: nonStock ? null : l.batchId, qty: Number(l.qty) || 0,
+      landed_cost: nonStock ? 0 : (Number(l.landedCost) || 0), unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
     });
-    await addDistMovement({
-      itemId: l.itemId, batchId: l.batchId, qty: -Math.abs(Number(l.qty) || 0), type: "issue",
-      sourceKind: "dispatch", sourceRef: `distdisp:${id}:${l.itemId}:${l.batchId}`, createdBy: dispatch.createdBy,
-    });
-    cogsValue += (Number(l.qty) || 0) * (Number(l.landedCost) || 0);
+    // Non-stocked (fresh produce / CK) lines: no stock movement, no stock-based
+    // COGS — the driver sourced them to order; their cost is the purchase itself.
+    if (!nonStock) {
+      await addDistMovement({
+        itemId: l.itemId, batchId: l.batchId, qty: -Math.abs(Number(l.qty) || 0), type: "issue",
+        sourceKind: "dispatch", sourceRef: `distdisp:${id}:${l.itemId}:${l.batchId}`, createdBy: dispatch.createdBy,
+      });
+      cogsValue += (Number(l.qty) || 0) * (Number(l.landedCost) || 0);
+    }
   }
 
   // Journal: Dr COGS 5000 / Cr Stock 1200 at landed cost.
@@ -11793,7 +11843,7 @@ export async function fetchDistPnL({ from, to } = {}) {
 // ── REORDER REPORT: items at/below reorder point (available <= reorder_point) ──
 export async function fetchDistReorderReport() {
   const snap = await fetchDistStockSnapshot();
-  return snap.filter(it => (Number(it.reorderPoint) || 0) > 0 && it.available <= (Number(it.reorderPoint) || 0))
+  return snap.filter(it => it.stocked !== false && (Number(it.reorderPoint) || 0) > 0 && it.available <= (Number(it.reorderPoint) || 0))
     .map(it => ({ itemId: it.id, sku: it.sku, name: it.name, onHand: it.onHand, committed: it.committed, available: it.available, reorderPoint: Number(it.reorderPoint) || 0, shortfall: +((Number(it.reorderPoint) || 0) - it.available).toFixed(3) }));
 }
 
