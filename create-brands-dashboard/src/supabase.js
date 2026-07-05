@@ -6311,7 +6311,6 @@ function _invBody(p) {
   if ("location" in p) b.location = p.location || null;
   if ("allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
   if ("reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
-  if ("itemType" in p) b.item_type = p.itemType || "warehouse";
   if ("siteId" in p) b.site_id = p.siteId || null;
   return b;
 }
@@ -9693,6 +9692,7 @@ export async function upsertDistItem(i) {
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
+    item_type: i.itemType || (i.ckProductId ? "ck" : "warehouse"),
     reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null,
     active: i.active !== false,
   };
