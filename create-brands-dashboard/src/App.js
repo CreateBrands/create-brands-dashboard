@@ -1595,10 +1595,11 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
 }
 
 // ─── Issue Form Modal ─────────────────────────────────────────────────────────
-function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defaultType, onSave, onClose }) {
+function IssueFormModal({ issue, brands, stores = [], users, currentUser, visibleBrands, defaultType, onSave, onClose }) {
   const isEdit = !!issue;
   const [form, setForm] = useState({
     brandId: issue?.brandId || visibleBrands[0]?.id || "",
+    storeId: issue?.storeId || "",
     type: issue?.type || defaultType || "Issue",
     title: issue?.title || "",
     description: issue?.description || "",
@@ -1649,6 +1650,21 @@ function IssueFormModal({ issue, brands, users, currentUser, visibleBrands, defa
               </div>
             </div>
           )}
+          {(() => {
+            // Store picker — scoped to the chosen brand. Persisting the store is
+            // what makes store-level filtering of issues actually work.
+            const brandStores = (stores || []).filter(s => !form.brandId || s.brandId === form.brandId);
+            if (!brandStores.length) return null;
+            return (
+              <div>
+                <label className="text-xs text-slate-600 font-semibold mb-1.5 block">Store</label>
+                <select value={form.storeId || ""} onChange={e => set("storeId", e.target.value)} className={selCls}>
+                  <option value="">— Select store —</option>
+                  {brandStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            );
+          })()}
           <div>
             <label className="text-xs text-slate-600 font-semibold mb-1.5 block">Type</label>
             <div className="flex gap-2">
@@ -1883,17 +1899,19 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
     [brands, visibleBrandIds, user.role, user.brandIds]
   );
 
-  // Per the design decision: store managers see only their stores' issues.
-  // Owner/HQ see everything in scope. A row with no storeId (legacy) is
-  // accepted if its brandId matches a brand in the user's store set OR if
-  // the user is HQ/owner.
+  // Per the design decision: store managers see their stores' issues.
+  // Owner/HQ see everything in scope. An issue is in scope if EITHER its store
+  // is visible OR (as a fallback for issues saved without a store) its brand is
+  // visible — so nothing silently disappears just because store_id is missing.
   const inScope = (i) => {
-    if (i.storeId) {
-      if (selStore === "all") return inScopeStoreIds.has(i.storeId);
-      return i.storeId === selStore;
+    if (isHqOrAbove(user.role)) {
+      // HQ/owner: everything, but honour an explicit store filter when set.
+      if (selStore !== "all") return i.storeId === selStore;
+      return true;
     }
-    // Legacy issue without storeId: brand-level fallback.
-    if (isHqOrAbove(user.role)) return true;
+    // Store-level users: match on store when present, else fall back to brand.
+    if (selStore !== "all") return i.storeId === selStore;
+    if (i.storeId && inScopeStoreIds.has(i.storeId)) return true;
     return visibleBrandIds.has(i.brandId);
   };
 
@@ -2033,8 +2051,8 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
       </div>
 
       {/* Modals */}
-      {showForm && <IssueFormModal brands={brands} currentUser={currentUser} visibleBrands={visibleBrands} defaultType={newIssueType} onSave={onAddIssue} onClose={() => setShowForm(false)} />}
-      {editIssue && <IssueFormModal issue={editIssue} brands={brands} users={users} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
+      {showForm && <IssueFormModal brands={brands} stores={visibleStores} currentUser={currentUser} visibleBrands={visibleBrands} defaultType={newIssueType} onSave={onAddIssue} onClose={() => setShowForm(false)} />}
+      {editIssue && <IssueFormModal issue={editIssue} brands={brands} stores={visibleStores} users={users} currentUser={currentUser} visibleBrands={visibleBrands} onSave={issue => { onUpdateIssue(issue); setEditIssue(null); }} onClose={() => setEditIssue(null)} />}
       {detailIssue && <IssueDetailModal issue={detailIssue} brands={brands} users={users} currentUser={currentUser} onUpdate={updated => { onUpdateIssue(updated); setDetailIssue(updated); }} onClose={() => setDetailIssue(null)} />}
       {deleteId && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4">
