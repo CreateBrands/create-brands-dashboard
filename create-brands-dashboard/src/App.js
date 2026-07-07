@@ -265,7 +265,8 @@ const useAuth = () => useContext(AuthContext);
 // background. Used everywhere a person-circle appears so photos show consistently.
 //   <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName}`} color={m.color} size={36} rounded="full" />
 // `initials` can be passed directly (e.g. "AM") to override name-derived ones.
-function Avatar({ photoUrl, name, initials, color, size = 36, rounded = "full", className = "" }) {
+function Avatar({ photoUrl, name, initials, color, size = 36, rounded = "full", className = "", enlargeable = false }) {
+  const [zoom, setZoom] = useState(false);
   const bg = color || "#844429";
   const radius = rounded === "full" ? "9999px" : rounded === "xl" ? "0.75rem" : "0.5rem";
   const text = (initials != null && initials !== "")
@@ -278,14 +279,27 @@ function Avatar({ photoUrl, name, initials, color, size = 36, rounded = "full", 
         .join("")
         .toUpperCase() || "?";
   const dim = { width: size, height: size, borderRadius: radius };
+  // Full-size lightbox overlay, shown when an enlargeable avatar is clicked.
+  const lightbox = (zoom && photoUrl) ? (
+    <div onClick={() => setZoom(false)}
+      style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, cursor: "zoom-out" }}>
+      <div style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh" }} onClick={e => e.stopPropagation()}>
+        <img src={photoUrl} alt={name || "photo"} style={{ maxWidth: "90vw", maxHeight: "85vh", borderRadius: 12, objectFit: "contain", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}/>
+        {name && <div style={{ textAlign: "center", color: "#fff", marginTop: 12, fontWeight: 600, fontSize: 15 }}>{name}</div>}
+        <button onClick={() => setZoom(false)} style={{ position: "absolute", top: -14, right: -14, width: 32, height: 32, borderRadius: "9999px", background: "#fff", color: "#111", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 16, lineHeight: "32px" }}>×</button>
+      </div>
+    </div>
+  ) : null;
   if (photoUrl) {
     return (
+      <>
       <img
         src={photoUrl}
         alt={name || "avatar"}
-        title={name || undefined}
+        title={enlargeable ? "Click to enlarge" : (name || undefined)}
         loading="lazy"
-        className={`object-cover flex-shrink-0 ${className}`}
+        onClick={enlargeable ? () => setZoom(true) : undefined}
+        className={`object-cover flex-shrink-0 ${enlargeable ? "cursor-zoom-in" : ""} ${className}`}
         style={dim}
         onError={(e) => {
           // If the image fails, fall back to an initials block in-place.
@@ -302,6 +316,8 @@ function Avatar({ photoUrl, name, initials, color, size = 36, rounded = "full", 
           el.replaceWith(span);
         }}
       />
+      {lightbox}
+      </>
     );
   }
   return (
@@ -17990,6 +18006,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   // EMP_BOTTOMNAV_V1: everything else lives in the More sheet
   const MORE_NAV = [
+    { key: "emp-profile",    label: "My Profile",      icon: UserCheck },
     { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
@@ -18010,6 +18027,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   const titles = {
     "ops-tasks":      "Today's Tasks",
+    "emp-profile":    "My Profile",
     "ops-temps":      "Temperature Log",
     "ops-deliveries": "Deliveries",
     "ops-network":    "Ops Status",
@@ -18256,6 +18274,62 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               brands={myBrands} issues={myIssues} currentUser={currentUser}
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
             />
+          )}
+
+          {activeView === "emp-profile" && (
+            <div className="max-w-md mx-auto space-y-5">
+              <div className="flex flex-col items-center text-center gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-6">
+                {/* Large profile photo */}
+                <div className="relative">
+                  {myOpsMember?.photoUrl ? (
+                    <img src={myOpsMember.photoUrl} alt={currentUser.name}
+                      className="w-36 h-36 rounded-full object-cover border-4 border-slate-700"/>
+                  ) : (
+                    <div className="w-36 h-36 rounded-full flex items-center justify-center text-4xl font-bold text-white border-4 border-slate-700"
+                      style={{ background: currentUser.color || "#6366f1" }}>
+                      {(currentUser.avatar || currentUser.name?.slice(0,2) || "?").toUpperCase()}
+                    </div>
+                  )}
+                  {/* Change button overlay */}
+                  <label className="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center cursor-pointer border-2 border-slate-900 shadow-lg" title="Change photo">
+                    <Camera size={18} className="text-white"/>
+                    <input type="file" accept="image/*" className="hidden" disabled={photoUploadBusy}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) onUploadMyPhoto(f); e.target.value = ""; }}/>
+                  </label>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-white">{currentUser.name}</div>
+                  <div className="text-sm text-slate-500 capitalize">{currentUser.role}</div>
+                </div>
+                {photoUploadBusy && <div className="text-xs text-indigo-300">Uploading photo…</div>}
+                {photoUploadErr && <div className="text-xs text-red-400">{photoUploadErr}</div>}
+                <label className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 cursor-pointer inline-flex items-center gap-1.5">
+                  <Camera size={13}/> {myOpsMember?.photoUrl ? "Change profile photo" : "Add a profile photo"}
+                  <input type="file" accept="image/*" className="hidden" disabled={photoUploadBusy}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) onUploadMyPhoto(f); e.target.value = ""; }}/>
+                </label>
+              </div>
+
+              {/* Basic details (read-only) */}
+              <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-2.5 text-sm">
+                {currentUser.email && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Email</span>
+                    <span className="text-slate-300 truncate">{currentUser.email}</span>
+                  </div>
+                )}
+                {myOpsMember?.phone && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Phone</span>
+                    <span className="text-slate-300">{myOpsMember.phone}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-500">Role</span>
+                  <span className="text-slate-300 capitalize">{currentUser.role}</span>
+                </div>
+              </div>
+            </div>
           )}
 
           {activeView === "emp-eod" && (
@@ -32835,7 +32909,7 @@ function EmployeeProfileView({
             <div
               className="flex-shrink-0"
             >
-              <Avatar photoUrl={employee.photoUrl} name={`${employee.firstName} ${employee.lastName || ""}`} color={employee.color} size={64} rounded="xl" />
+              <Avatar photoUrl={employee.photoUrl} name={`${employee.firstName} ${employee.lastName || ""}`} color={employee.color} size={64} rounded="xl" enlargeable />
             </div>
           )}
           <div className="flex-1 min-w-0">
