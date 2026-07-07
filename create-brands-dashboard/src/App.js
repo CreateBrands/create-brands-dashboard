@@ -18292,7 +18292,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   // Employee-filtered versions
   const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
-  const myIssues = issues.filter(i => currentUser.brandIds.includes(i.brandId));
+  const myIssues = issues.filter(i => (currentUser.brandIds || []).includes(i.brandId) || i.reportedBy === currentUser.name);
 
   return (
     <AuthContext.Provider value={{ user: currentUser }}>
@@ -18499,27 +18499,36 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
   const [form, setFormState] = useState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
 
-  const handleSubmit = () => {
-    if (!form.title.trim()) return;
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr, setSubmitErr] = useState("");
+  const handleSubmit = async () => {
+    if (!form.title.trim() || submitting) return;
     const brand = brands.find(b => b.id === form.brandId);
-    onAdd({
-      id: `issue-${Date.now()}`,
-      brandId: form.brandId,
-      brandName: brand?.name || "",
-      title: form.title.trim(),
-      description: form.description,
-      category: form.category,
-      priority: form.priority,
-      status: "Open",
-      type: "Issue",
-      reportedBy: currentUser.name,
-      assignedTo: "",
-      comments: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    setFormState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
-    setShowForm(false);
+    setSubmitting(true); setSubmitErr("");
+    try {
+      await onAdd({
+        id: `issue-${Date.now()}`,
+        brandId: form.brandId,
+        brandName: brand?.name || "",
+        storeId: form.storeId || currentUser.storeId || (currentUser.storeIds || [])[0] || null,
+        title: form.title.trim(),
+        description: form.description,
+        category: form.category,
+        priority: form.priority,
+        status: "Open",
+        type: "Issue",
+        reportedBy: currentUser.name,
+        assignedTo: "",
+        comments: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      setFormState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
+      setShowForm(false);
+    } catch (e) {
+      setSubmitErr(e?.message || "Couldn't save your report. Please try again.");
+    }
+    setSubmitting(false);
   };
 
   const myIssues = [...issues]
@@ -18568,9 +18577,10 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
               </select>
             </div>
           </div>
-          <button onClick={handleSubmit} disabled={!form.title.trim()}
+          {submitErr && <div className="text-xs text-red-400 bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-2">{submitErr}</div>}
+          <button onClick={handleSubmit} disabled={!form.title.trim() || submitting}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors">
-            Submit Report
+            {submitting ? "Saving…" : "Submit Report"}
           </button>
         </div>
       )}
