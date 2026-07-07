@@ -17931,7 +17931,13 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           breakMinutes: myOpenPunch.breakMinutes, breakStart: myOpenPunch.breakStart, breakEnd: myOpenPunch.breakEnd, breakEndRef: nowIso,
         });
         const gross = (myOpsMember.hourlyRate && !isSalaried(myOpsMember)) ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
-        await onEmpPunchOut(myOpenPunch.id, nowIso, hours, gross);
+        const savedOut = await onEmpPunchOut(myOpenPunch.id, nowIso, hours, gross);
+        // Only confirm if the record actually came back closed — never show a
+        // false "Clocked out" if the save silently failed (root cause of staff
+        // believing they'd clocked out while still showing clocked in).
+        if (savedOut && !(savedOut.punchOut || savedOut.punch_out)) {
+          throw new Error("Clock-out didn't go through — you're still clocked in. Please try again.");
+        }
         setClockMsg({ type: "ok", msg: "Clocked out ✓" });
       }
     } catch (e) {
@@ -49723,6 +49729,7 @@ function KioskShell() {
   const handlePunchOut = async (id, punchOut, hoursWorked, grossPay) => {
     try {
       const saved = await updatePunchOut(id, punchOut, hoursWorked, grossPay);
+      if (!saved || !(saved.punchOut || saved.punch_out)) throw new Error("Clock-out didn't save — still clocked in. Try again.");
       setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
     } catch (err) {
       console.error("PunchOut failed:", err);
@@ -53341,7 +53348,7 @@ export default function App() {
   const updateShiftPreset = useCallback(async p=>{try{const s=await upsertShiftPreset(p);setShiftPresets(ps=>ps.map(x=>x.id===s.id?s:x));showToast("Updated");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const deleteShiftPreset = useCallback(async id=>{try{await removeShiftPreset(id);setShiftPresets(ps=>ps.filter(p=>p.id!==id));showToast("Deleted");}catch(err){showToast(err.message,"error");}}, [showToast]);
   const handlePunchIn   = useCallback(async record=>{try{const saved=await insertPunchIn(record);setPunchRecords(ps=>[saved,...ps]);}catch(err){console.error("PunchIn failed:",err);if(err&&err.code==="ALREADY_CLOCKED_IN"){alert("This employee already has an open shift (a clock-in with no clock-out). Close that shift first, then add the manual entry.");}else{alert("Could not save the entry: "+(err&&err.message?err.message:"unknown error"));}}}, []);
-  const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));}catch(err){console.error("PunchOut failed:",err);}}, []);
+  const handlePunchOut  = useCallback(async(id,punchOut,hoursWorked,grossPay)=>{try{const saved=await updatePunchOut(id,punchOut,hoursWorked,grossPay);if(!saved||!(saved.punchOut||saved.punch_out)){throw new Error("Clock-out didn't save — you may still be clocked in. Try again.");}setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));return saved;}catch(err){console.error("PunchOut failed:",err);throw err;}}, []);
   const handleAmendPunch = useCallback(async record=>{try{if(isPunchLocked(record)){showToast("This punch is in an approved (locked) pay period. Re-open the period to edit it.","error");return;}const {_audit, ...clean}=record;const saved=await upsertPunchRecord(clean);setPunchRecords(ps=>ps.map(p=>p.id===saved.id?saved:p));if(_audit&&_audit.length){logPunchAudit(_audit.map(a=>({...a,punchId:saved.id,reason:"manager_amend",changedBy:currentUser?.name||currentUser?.id||"manager"})));}showToast("Amended");}catch(err){showToast("Failed: "+err.message,"error");}}, [showToast, currentUser, isPunchLocked]);
 
   const handleFlipdishSync = useCallback(async () => {
