@@ -11909,7 +11909,7 @@ function SalesCategoryMapView() {
         const to = new Date();
         const from = new Date(); from.setDate(from.getDate() - 90);
         const [list, m] = await Promise.all([
-          fetchFlipdishCategories({ from, to }).catch(() => []),
+          fetchFlipdishCategories({ from, to }),
           fetchSalesCategoryMap().catch(() => ({})),
         ]);
         setCats(list); setMap(m || {});
@@ -11949,7 +11949,15 @@ function SalesCategoryMapView() {
         </div>
       </div>
 
-      {cats.length === 0 && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-sm text-slate-500">No Flipdish categories found in the last 90 days.</div>}
+      {cats.length === 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-sm text-slate-500">
+          {msg
+            ? <span className="text-red-400">{msg}</span>
+            : cats._itemCount > 0
+              ? <>Found {cats._itemCount} sold items in the last 90 days, but none carry a Flipdish category{cats._uncategorised ? ` (${cats._uncategorised} had no category)` : ""}. The category may be stored under a different field — tell me and I'll map it.</>
+              : "No sold items found in the last 90 days. Check that Flipdish sales have synced."}
+        </div>
+      )}
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
         {cats.map(c => {

@@ -13254,16 +13254,22 @@ export const SALES_CATEGORIES = ["Breakfast", "Dinner", "Desserts", "Hot Drinks"
 export async function fetchFlipdishCategories({ from, to, brandId = "chocoberry" } = {}) {
   const { items } = await fetchItemsSold({ from, to, brandId });
   const byCat = new Map();
+  let uncategorised = 0;
   for (const it of (items || [])) {
-    const cat = (it.category || "Uncategorised").trim() || "Uncategorised";
+    const rawCat = it.category ?? it.Category ?? it.categoryName ?? it.menuSection ?? "";
+    const cat = String(rawCat || "").trim();
+    if (!cat) { uncategorised++; continue; }
     const cur = byCat.get(cat) || { category: cat, revenue: 0, quantity: 0 };
     cur.revenue += Number(it.revenue) || 0;
     cur.quantity += Number(it.quantity) || 0;
     byCat.set(cat, cur);
   }
-  return Array.from(byCat.values())
+  const rows = Array.from(byCat.values())
     .map(c => ({ ...c, revenue: +c.revenue.toFixed(2) }))
     .sort((a, b) => b.revenue - a.revenue);
+  rows._itemCount = (items || []).length;
+  rows._uncategorised = uncategorised;
+  return rows;
 }
 
 // The Flipdish-category → sales-bucket map.
