@@ -54133,7 +54133,7 @@ export default function App() {
                     { key: "cogs:reconcile", label: "COGS Reconcile", desc: "Reconcile theoretical vs actual.", gate: gCogs },
                     { key: "cogs:tillaudit", label: "Till Audit", desc: "Audit till items against recipes.", gate: gCogs },
                     { key: "cogs:modmapper", label: "Modifier Mapper", desc: "Bulk-map modifiers to costs.", gate: gCogs },
-                    { key: "cogs:salescats", label: "Sales Categories", desc: "Map Flipdish menu categories to Breakfast, Dinner, Desserts, Hot & Cold Drinks.", gate: gCogs },
+                    { key: "salescats", label: "Sales Categories", desc: "Map Flipdish menu categories to Breakfast, Dinner, Desserts, Hot & Cold Drinks.", gate: gCogs },
                   ].filter(i => i.gate()),
                 },
                 {
@@ -54199,7 +54199,7 @@ export default function App() {
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
-            {effectiveActiveView === "setup" && setupPanel === "cogs:salescats" && <SalesCategoryMapView/>}
+            {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
