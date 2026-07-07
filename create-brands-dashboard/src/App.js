@@ -24005,6 +24005,33 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   const period = useMemo(() => resolvePeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
   const prevPeriod = useMemo(() => resolvePrevPeriod(preset, customFrom, customTo), [preset, customFrom, customTo]);
 
+  // ── Sales by category (estate-wide) ───────────────────────────────────────
+  // Uses the brand-wide items-sold aggregation (which carries the Flipdish
+  // category) rolled through the saved category→bucket map. Honours the store
+  // filter when a single store is selected? No — items-sold is brand-scoped, so
+  // this reflects the selected brands over the chosen period.
+  const [catMapCfg, setCatMapCfg] = useState(null);
+  const [catItems, setCatItems] = useState(null);
+  const [catLoading, setCatLoading] = useState(false);
+  useEffect(() => { fetchSalesCategoryMap().then(setCatMapCfg).catch(() => setCatMapCfg({ categories: {}, items: {} })); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setCatLoading(true);
+    (async () => {
+      try {
+        const per = await Promise.all(visibleBrandIds.map(b =>
+          fetchItemsSold({ from: period.from, to: period.to, brandId: b }).then(r => r.items || []).catch(() => [])));
+        if (!cancelled) setCatItems(per.flat());
+      } catch { if (!cancelled) setCatItems([]); }
+      if (!cancelled) setCatLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [JSON.stringify(visibleBrandIds), period.from, period.to]); // eslint-disable-line react-hooks/exhaustive-deps
+  const salesByCat = useMemo(() => {
+    if (!catMapCfg || !catItems) return null;
+    return rollItemsSoldByCategory(catItems, catMapCfg);
+  }, [catItems, catMapCfg]);
+
   // storeId can be "all", a single store id, or an array of ids (multi-select).
   const selectedIds = useMemo(() => Array.isArray(storeId) ? storeId : (storeId === "all" ? null : [storeId]), [storeId]);
   // Some features (COGS, Prime Cost, Net Margin) only work for ONE store. This
@@ -24742,6 +24769,42 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
           <div className="text-[10px] text-[#9A8770] pt-3 mt-1 border-t border-[#EADFCB]">Tap a store to drill into its figures{prevPeriod ? ` · ▲▼ vs ${prevLabel.replace(" (to now)", "")}` : ""}</div>
         </AnalysisBlock>
       )}
+
+      {/* Sales by category — estate-wide, honours period + selected brands */}
+      {(() => {
+        const CAT_COLORS = { "Breakfast":"#E0A100", "Dinner":"#844429", "Desserts":"#D6428A", "Hot Drinks":"#D0492E", "Cold Drinks":"#2C97B0", "Uncategorised":"#B7A688" };
+        const gbp2 = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return (
+          <AnalysisBlock title={`Sales by category · ${period.label}`} action={salesByCat ? <span className="text-[11px] text-[#9A8770]">{gbp2(salesByCat.total)} total</span> : null}>
+            {catLoading && !salesByCat ? (
+              <div className="min-h-[80px] flex items-center justify-center text-xs text-[#9A8770]">Loading…</div>
+            ) : !salesByCat || salesByCat.rows.length === 0 ? (
+              <div className="min-h-[80px] flex items-center justify-center text-xs text-[#9A8770]">No categorised sales in this period. Map categories in Setup → Sales Categories.</div>
+            ) : (
+              <div className="space-y-3 pt-1">
+                <div className="flex h-3.5 rounded-full overflow-hidden" style={{ background: "#EADFCB" }}>
+                  {salesByCat.rows.map(r => r.pct > 0 && (
+                    <div key={r.category} style={{ width: `${r.pct*100}%`, background: CAT_COLORS[r.category] || "#B7A688" }} title={`${r.category}: ${(r.pct*100).toFixed(1)}%`}/>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5">
+                  {salesByCat.rows.map(r => (
+                    <div key={r.category} className="flex items-center gap-2.5">
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: CAT_COLORS[r.category] || "#B7A688" }}/>
+                      <span className="text-sm text-[#5C4A38] flex-1">{r.category}</span>
+                      <span className="text-xs text-[#9A8770] tabular-nums">{(r.pct*100).toFixed(1)}%</span>
+                      <span className="text-sm font-bold text-[#3A2E26] tabular-nums w-24 text-right">{gbp2(r.revenue)}</span>
+                    </div>
+                  ))}
+                </div>
+                {salesByCat.rows.find(r => r.category === "Uncategorised") && (
+                  <div className="text-[11px] text-[#B58900] pt-1">Some sales aren't mapped yet — assign them in Setup → Sales Categories.</div>
+                )}
+              </div>
+            )}
+          </AnalysisBlock>
+        );
+      })()}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
         {/* On single-day the hero already shows hourly bars; only show the full
