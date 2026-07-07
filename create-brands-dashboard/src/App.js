@@ -350,7 +350,7 @@ const FEATURE_REGISTRY = [
   // Documents & compliance
   { key: "feat.docs.approve", label: "Approve RTW / contract docs", section: "team", defaultRoles: ["owner","hq_staff"] },
   // EOD
-  { key: "feat.eod.submit", label: "Submit EOD report", section: "eod", defaultRoles: ["owner","hq_staff","manager"] },
+  { key: "feat.eod.submit", label: "Submit EOD report", section: "eod", defaultRoles: ["owner","hq_staff","manager","employee"] },
   // Helpdesk — 3 capability levels (role defaults; per-person overrides set in Access Control).
   // view = see tickets assigned to you · respond = reply to them · manage = see ALL + assign to others.
   { key: "feat.helpdesk.view",    label: "Help Desk · View assigned tickets", section: "comms", defaultRoles: ["owner","hq_staff","manager"] },
@@ -17705,7 +17705,7 @@ function OrderRecorderModal({ storeId, employeeId, employeeName, onClose, autoSt
 
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
-  onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue,
+  onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue, onAddEntry,
   hdTickets, onAddHdTicket, onUpdateHdTicket, helpdeskLevel = "none", messages, onSendMessage, onMarkRead,
   availability, onAddAvailability, onUpdateAvailability,
   schedules, punchRecords, onAmendPunch, onAddPunchComment,
@@ -17994,6 +17994,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
     { key: "issues",         label: "Report an Issue", icon: Wrench },
+    { key: "emp-eod",        label: "EOD Report",      icon: ClipboardList },
     { key: "smallware",      label: "Assets",          icon: Package },
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
@@ -18013,6 +18014,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "ops-deliveries": "Deliveries",
     "ops-network":    "Ops Status",
     "issues":         "Report an Issue",
+    "emp-eod":        "EOD Report",
     "comms":          "Communication",
     "availability":   "Availability",
     "emp-schedule":   "My Schedule",
@@ -18254,6 +18256,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               brands={myBrands} issues={myIssues} currentUser={currentUser}
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
             />
+          )}
+
+          {activeView === "emp-eod" && (
+            <EODFormView brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} onAddEntry={onAddEntry}/>
           )}
 
           {activeView === "comms" && (
@@ -53425,6 +53431,7 @@ export default function App() {
           tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
           onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}
           onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
+          onAddEntry={addEntry}
           onAddIssue={addIssue} onUpdateIssue={updateIssue}
           hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
           helpdeskLevel={helpdeskLevel()}
