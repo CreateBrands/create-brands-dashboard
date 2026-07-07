@@ -41,7 +41,7 @@ import {
   fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, SALES_CATEGORIES, fetchFlipdishCategories, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, SALES_CATEGORIES, fetchFlipdishCategories, fetchItemsInCategory, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   fetchPendingPresenceCheck, fetchPresenceChecks, respondPresenceCheck, requestPresenceCheck,
@@ -11895,39 +11895,57 @@ function DistOrderBuilderView() {
 // ============================================================================
 function SalesCategoryMapView() {
   const [cats, setCats] = useState([]);       // [{ category, revenue, quantity }]
-  const [map, setMap] = useState({});         // flipdishCategory -> bucket
+  const [catMap, setCatMap] = useState({});   // flipdishCategory -> bucket
+  const [itemMap, setItemMap] = useState({}); // itemNameLower -> bucket (override)
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [expanded, setExpanded] = useState(null);   // which category is drilled open
+  const [drillItems, setDrillItems] = useState({}); // category -> [{caption,revenue,quantity}]
+  const [drillLoading, setDrillLoading] = useState(false);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        // Item-level aggregation is heavy; a short recent window is enough to
-        // discover the categories in use (the menu rarely changes). Wider
-        // windows time out on the server.
         const to = new Date();
         const from = new Date(); from.setDate(from.getDate() - 14);
         const [list, m] = await Promise.all([
           fetchFlipdishCategories({ from, to }),
-          fetchSalesCategoryMap().catch(() => ({})),
+          fetchSalesCategoryMap().catch(() => ({ categories: {}, items: {} })),
         ]);
-        setCats(list); setMap(m || {});
+        setCats(list); setCatMap(m.categories || {}); setItemMap(m.items || {});
       } catch (e) { setMsg(e.message); }
       setLoading(false);
     })();
   }, []);
 
-  const setBucket = (cat, bucket) => { setMap(prev => ({ ...prev, [cat]: bucket })); setDirty(true); };
-  const clearBucket = (cat) => { setMap(prev => { const n = { ...prev }; delete n[cat]; return n; }); setDirty(true); };
+  const setBucket = (cat, bucket) => { setCatMap(prev => ({ ...prev, [cat]: bucket })); setDirty(true); };
+  const clearBucket = (cat) => { setCatMap(prev => { const n = { ...prev }; delete n[cat]; return n; }); setDirty(true); };
+  const setItemBucket = (nameKey, bucket) => { setItemMap(prev => ({ ...prev, [nameKey]: bucket })); setDirty(true); };
+  const clearItemBucket = (nameKey) => { setItemMap(prev => { const n = { ...prev }; delete n[nameKey]; return n; }); setDirty(true); };
 
-  const unmappedCount = cats.filter(c => !map[c.category]).length;
+  // Drill into a category (e.g. Uncategorised) to map its items individually.
+  const toggleDrill = async (category) => {
+    if (expanded === category) { setExpanded(null); return; }
+    setExpanded(category);
+    if (!drillItems[category]) {
+      setDrillLoading(true);
+      try {
+        const to = new Date();
+        const items = await fetchItemsInCategory({ from: new Date(to.getTime() - 14*86400000), to, category });
+        setDrillItems(prev => ({ ...prev, [category]: items }));
+      } catch (e) { setMsg("Couldn't load items: " + e.message); }
+      setDrillLoading(false);
+    }
+  };
+
+  const unmappedCount = cats.filter(c => !catMap[c.category]).length;
 
   const save = async () => {
     setSaving(true); setMsg("");
-    try { await saveSalesCategoryMap(map); setMsg("Saved — sales breakdowns now use this mapping."); setDirty(false); setTimeout(()=>setMsg(""), 3000); }
+    try { await saveSalesCategoryMap({ categories: catMap, items: itemMap }); setMsg("Saved — sales breakdowns now use this mapping."); setDirty(false); setTimeout(()=>setMsg(""), 3000); }
     catch (e) { setMsg("Save failed: " + e.message); }
     setSaving(false);
   };
@@ -11963,22 +11981,66 @@ function SalesCategoryMapView() {
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
         {cats.map(c => {
-          const cur = map[c.category] || "";
+          const cur = catMap[c.category] || "";
+          const isCatchAll = /^uncategori[sz]ed$/i.test(c.category || "");
+          const open = expanded === c.category;
+          const items = drillItems[c.category] || [];
           return (
-            <div key={c.category} className="flex items-center gap-3 px-4 py-3 flex-wrap">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-white truncate">{c.category}</div>
-                <div className="text-[11px] text-slate-500">{gbp(c.revenue)} · {c.quantity} sold (recent)</div>
+            <div key={c.category}>
+              <div className="flex items-center gap-3 px-4 py-3 flex-wrap">
+                <button onClick={()=>toggleDrill(c.category)} className="flex items-center gap-1.5 min-w-0 flex-1 text-left">
+                  <span className="flex-shrink-0 text-slate-500">{open ? <ChevronDown size={15}/> : <ChevronRight size={15}/>}</span>
+                  <span className="min-w-0">
+                    <span className="text-sm font-semibold text-white truncate block">{c.category}{isCatchAll && <span className="ml-1.5 text-[10px] font-normal text-amber-400/80">(no category in Flipdish)</span>}</span>
+                    <span className="text-[11px] text-slate-500">{gbp(c.revenue)} · {c.quantity} sold (recent) · tap to map items individually</span>
+                  </span>
+                </button>
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  {SALES_CATEGORIES.map(bucket => (
+                    <button key={bucket} onClick={()=>cur===bucket?clearBucket(c.category):setBucket(c.category,bucket)}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+                      style={cur===bucket ? { background: CAT_COLORS[bucket], color:"#fff" } : { background:"#1e293b", color:"#94a3b8" }}>
+                      {bucket}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                {SALES_CATEGORIES.map(bucket => (
-                  <button key={bucket} onClick={()=>cur===bucket?clearBucket(c.category):setBucket(c.category,bucket)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
-                    style={cur===bucket ? { background: CAT_COLORS[bucket], color:"#fff" } : { background:"#1e293b", color:"#94a3b8" }}>
-                    {bucket}
-                  </button>
-                ))}
-              </div>
+
+              {open && (
+                <div className="px-4 pb-3" style={{ background: "#0f172a66" }}>
+                  {isCatchAll && <div className="text-[11px] text-amber-400/70 pb-2">Map each item to a bucket below. Item mappings override the category, so these get sorted correctly.</div>}
+                  {cur && !isCatchAll && <div className="text-[11px] text-slate-500 pb-2">Whole category is set to <b style={{color:CAT_COLORS[cur]}}>{cur}</b>. Override individual items below if needed.</div>}
+                  {drillLoading && !items.length ? (
+                    <div className="text-xs text-slate-500 py-3 text-center">Loading items…</div>
+                  ) : items.length === 0 ? (
+                    <div className="text-xs text-slate-600 py-3 text-center">No items found.</div>
+                  ) : (
+                    <div className="rounded-xl overflow-hidden border border-slate-800 divide-y divide-slate-800/60">
+                      {items.map((it, i) => {
+                        const key = (it.caption || "").trim().toLowerCase();
+                        const icur = itemMap[key] || "";
+                        return (
+                          <div key={i} className="flex items-center gap-2 px-3 py-2 bg-slate-950/40 flex-wrap">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs text-white truncate">{it.caption}</div>
+                              <div className="text-[10px] text-slate-600">{gbp(it.revenue)} · {it.quantity} sold</div>
+                            </div>
+                            <div className="flex items-center gap-1 flex-wrap justify-end">
+                              {SALES_CATEGORIES.map(bucket => (
+                                <button key={bucket} onClick={()=>icur===bucket?clearItemBucket(key):setItemBucket(key,bucket)}
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-semibold"
+                                  style={icur===bucket ? { background: CAT_COLORS[bucket], color:"#fff" } : { background:"#1e293b", color:"#94a3b8" }}>
+                                  {bucket}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -22501,7 +22563,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
     valid.forEach(s => (s.saleItems || []).forEach(it => {
       const cap = (it.caption || it.name || "").trim().toLowerCase();
       const fdCat = captionToCat[cap] || it.category || "Uncategorised";
-      items.push({ category: fdCat, quantity: Number(it.quantity ?? it.qty ?? 1) || 0, revenue: Number(it.retailPrice ?? it.unitPrice ?? it.revenue ?? it.amount ?? 0) || 0 });
+      items.push({ caption: cap, category: fdCat, quantity: Number(it.quantity ?? it.qty ?? 1) || 0, revenue: Number(it.retailPrice ?? it.unitPrice ?? it.revenue ?? it.amount ?? 0) || 0 });
     }));
     return rollItemsSoldByCategory(items, salesCatMap);
   }, [valid, salesCatMap, captionToCat]);

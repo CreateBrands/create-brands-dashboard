@@ -13298,26 +13298,57 @@ export async function fetchFlipdishCategories({ from, to, brandId = "chocoberry"
   return rows;
 }
 
-// The Flipdish-category → sales-bucket map.
+// The map has two layers: Flipdish category → bucket, and an optional item-name
+// → bucket override (for items whose Flipdish category is blank/Uncategorised).
+// Item-name overrides win over the category mapping.
 export async function fetchSalesCategoryMap() {
   const s = await fetchAppSettings().catch(() => ({}));
-  let map = {};
-  try { map = s?.sales_category_map ? JSON.parse(s.sales_category_map) : {}; } catch { map = {}; }
-  return map; // { flipdishCategory: "Breakfast" | ... }
+  let parsed = {};
+  try { parsed = s?.sales_category_map ? JSON.parse(s.sales_category_map) : {}; } catch { parsed = {}; }
+  // Back-compat: an older flat map is just the category layer.
+  if (parsed && (parsed.categories || parsed.items)) return { categories: parsed.categories || {}, items: parsed.items || {} };
+  return { categories: parsed || {}, items: {} };
 }
 export async function saveSalesCategoryMap(map) {
-  await upsertAppSetting("sales_category_map", JSON.stringify(map || {}));
+  const norm = (map && (map.categories || map.items)) ? { categories: map.categories || {}, items: map.items || {} } : { categories: map || {}, items: {} };
+  await upsertAppSetting("sales_category_map", JSON.stringify(norm));
+}
+
+// Items sold within a given Flipdish category (for drilling into Uncategorised).
+export async function fetchItemsInCategory({ from, to, brandId = "chocoberry", category } = {}) {
+  const toDate = to instanceof Date ? to : new Date(to || Date.now());
+  const attempts = [14, 7, 3, 1];
+  let items = null, lastErr = null;
+  for (const days of attempts) {
+    const f = new Date(toDate); f.setDate(f.getDate() - days);
+    try { const res = await fetchItemsSold({ from: f, to: toDate, brandId }); items = res.items || []; break; }
+    catch (e) { lastErr = e; const m = (e?.message||"").toLowerCase(); if (!m.includes("timeout") && !m.includes("canceling statement")) throw e; }
+  }
+  if (items === null) throw (lastErr || new Error("Could not load items."));
+  const want = String(category || "").trim().toLowerCase();
+  return items
+    .filter(it => {
+      const c = String(it.category || "").trim().toLowerCase();
+      return want === "uncategorised" ? (!c || c === "uncategorised") : c === want;
+    })
+    .map(it => ({ caption: it.caption || "Unknown item", revenue: +(Number(it.revenue)||0).toFixed(2), quantity: Number(it.quantity)||0 }))
+    .sort((a, b) => b.revenue - a.revenue);
 }
 
 // Roll aggregated items-sold (each with a Flipdish category) into the five
 // buckets using the category map. Unmapped categories → "Uncategorised".
 export function rollItemsSoldByCategory(items, categoryMap) {
+  // categoryMap may be the two-layer shape { categories, items } or a legacy flat
+  // category map. Item-name overrides take priority over the category mapping.
+  const catLayer = (categoryMap && categoryMap.categories) ? categoryMap.categories : (categoryMap || {});
+  const itemLayer = (categoryMap && categoryMap.items) ? categoryMap.items : {};
   const out = {};
   for (const c of SALES_CATEGORIES) out[c] = { category: c, revenue: 0, quantity: 0 };
   out["Uncategorised"] = { category: "Uncategorised", revenue: 0, quantity: 0 };
   for (const it of (items || [])) {
+    const nameKey = (it.caption || it.name || "").trim().toLowerCase();
     const fdCat = (it.category || "Uncategorised").trim() || "Uncategorised";
-    const bucket = categoryMap[fdCat] || "Uncategorised";
+    const bucket = itemLayer[nameKey] || catLayer[fdCat] || "Uncategorised";
     const b = out[bucket] || out["Uncategorised"];
     b.revenue += Number(it.revenue) || 0;
     b.quantity += Number(it.quantity) || 0;
