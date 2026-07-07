@@ -41,7 +41,7 @@ import {
   fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, fetchCogsAll, SALES_CATEGORIES, fetchSalesCategoryMap, saveSalesCategoryMap, rollSalesByCategory,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   fetchPendingPresenceCheck, fetchPresenceChecks, respondPresenceCheck, requestPresenceCheck,
@@ -11887,6 +11887,129 @@ function DistOrderBuilderView() {
   );
 }
 
+// ============================================================================
+// SALES CATEGORY MAPPER — assign each product to one of the five sales
+// categories (Breakfast / Dinner / Desserts / Hot Drinks / Cold Drinks). The
+// map is stored in app_settings and drives the category breakdowns in Store
+// Analytics and the main dashboard.
+// ============================================================================
+function SalesCategoryMapView() {
+  const [products, setProducts] = useState([]);
+  const [map, setMap] = useState({});        // productNameLower -> category
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all"); // all | unmapped | <category>
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const [cogs, m] = await Promise.all([fetchCogsAll().catch(() => ({ products: [] })), fetchSalesCategoryMap().catch(() => ({}))]);
+        // De-dupe products by name (sales key is the name).
+        const seen = new Set(); const list = [];
+        for (const p of (cogs.products || [])) {
+          const key = (p.name || "").trim().toLowerCase();
+          if (!key || seen.has(key)) continue;
+          seen.add(key); list.push({ id: p.id, name: p.name, category: p.category });
+        }
+        list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        setProducts(list); setMap(m || {});
+      } catch (e) { setMsg(e.message); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const setCat = (nameKey, cat) => { setMap(prev => ({ ...prev, [nameKey]: cat })); setDirty(true); };
+  const clearCat = (nameKey) => { setMap(prev => { const n = { ...prev }; delete n[nameKey]; return n; }); setDirty(true); };
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return products.filter(p => {
+      const key = p.name.trim().toLowerCase();
+      if (q && !p.name.toLowerCase().includes(q)) return false;
+      if (filter === "all") return true;
+      if (filter === "unmapped") return !map[key];
+      return map[key] === filter;
+    });
+  }, [products, search, filter, map]);
+
+  const counts = useMemo(() => {
+    const c = { unmapped: 0 };
+    SALES_CATEGORIES.forEach(cat => c[cat] = 0);
+    products.forEach(p => { const cat = map[p.name.trim().toLowerCase()]; if (cat) c[cat] = (c[cat]||0)+1; else c.unmapped++; });
+    return c;
+  }, [products, map]);
+
+  const save = async () => {
+    setSaving(true); setMsg("");
+    try { await saveSalesCategoryMap(map); setMsg("Saved — category breakdowns will use this mapping."); setDirty(false); setTimeout(()=>setMsg(""), 3000); }
+    catch (e) { setMsg("Save failed: " + e.message); }
+    setSaving(false);
+  };
+
+  const CAT_COLORS = { "Breakfast":"#f59e0b", "Dinner":"#844429", "Desserts":"#ec4899", "Hot Drinks":"#ef4444", "Cold Drinks":"#06b6d4" };
+
+  if (loading) return <div className="text-sm text-slate-500 text-center py-12">Loading products…</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white">Sales categories</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Assign each product to a category. Used for sales breakdowns across the app.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {msg && <span className={`text-xs font-semibold ${msg.startsWith("Save failed") ? "text-red-400" : "text-emerald-400"}`}>{msg}</span>}
+          {dirty && <span className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300">Unsaved</span>}
+          <button onClick={save} disabled={saving || !dirty} className={`px-4 py-2 rounded-xl text-sm font-bold ${dirty ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-slate-800 text-slate-500"}`}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+
+      {/* Filter chips with counts */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <button onClick={()=>setFilter("all")} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${filter==="all"?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>All ({products.length})</button>
+        <button onClick={()=>setFilter("unmapped")} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${filter==="unmapped"?"bg-amber-600 text-white":"bg-slate-800 text-slate-400"}`}>Unmapped ({counts.unmapped})</button>
+        {SALES_CATEGORIES.map(cat => (
+          <button key={cat} onClick={()=>setFilter(cat)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${filter===cat?"text-white":"bg-slate-800 text-slate-400"}`} style={filter===cat?{background:CAT_COLORS[cat]}:{}}>{cat} ({counts[cat]})</button>
+        ))}
+      </div>
+
+      <div className="relative">
+        <Search size={15} className="absolute left-3 top-2.5 text-slate-500"/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…" className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"/>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
+        {filtered.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No products match.</div>}
+        {filtered.map(p => {
+          const key = p.name.trim().toLowerCase();
+          const cur = map[key] || "";
+          return (
+            <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-white truncate">{p.name}</div>
+                {p.category && <div className="text-[10px] text-slate-500 truncate">recipe cat: {p.category}</div>}
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                {SALES_CATEGORIES.map(cat => (
+                  <button key={cat} onClick={()=>cur===cat?clearCat(key):setCat(key,cat)}
+                    className="px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+                    style={cur===cat ? { background: CAT_COLORS[cat], color:"#fff" } : { background:"#1e293b", color:"#94a3b8" }}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DistOrderSetupView() {
   const [cfg, setCfg] = useState({ defaultBrowse: "category", defaultView: "card", categoryOrder: [], collectionOrder: [] });
   const [collections, setCollections] = useState([]);
@@ -22366,6 +22489,23 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
     return Object.values(m).sort((a, b) => b.quantity - a.quantity).slice(0, 15);
   }, [valid]);
 
+  // Sales grouped into the five sales categories (Breakfast / Dinner / Desserts
+  // / Hot & Cold Drinks) using the manual product→category map.
+  const [salesCatMap, setSalesCatMap] = useState(null);
+  useEffect(() => { fetchSalesCategoryMap().then(setSalesCatMap).catch(() => setSalesCatMap({})); }, []);
+  const salesByCat = useMemo(() => {
+    if (!salesCatMap) return null;
+    const lines = [];
+    valid.forEach(s => (s.saleItems || []).forEach(it => {
+      lines.push({
+        name: it.caption || it.name || it.title || it.product || "Unknown item",
+        quantity: Number(it.quantity ?? it.qty ?? it.count ?? 1) || 0,
+        revenue: Number(it.revenue ?? it.amount ?? it.price ?? it.total ?? 0) || 0,
+      });
+    }));
+    return rollSalesByCategory(lines, salesCatMap);
+  }, [valid, salesCatMap]);
+
   const refunds = useMemo(() => {
     const cancelled = sales.filter(s => s.isCancelled);
     const refunded = sales.filter(s => s.isFullyRefunded);
@@ -22567,6 +22707,41 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
         </div>
         <div className="text-[10px] text-slate-600 mt-2">Darker = busier ({heatMetric}). Hover a cell for detail.</div>
       </div>
+
+      {/* Sales by category */}
+      {salesByCat && salesByCat.rows.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white">Sales by category</h3>
+            <span className="text-xs text-slate-500">{fmtMoney(salesByCat.total)} total</span>
+          </div>
+          {(() => {
+            const CAT_COLORS = { "Breakfast":"#f59e0b", "Dinner":"#844429", "Desserts":"#ec4899", "Hot Drinks":"#ef4444", "Cold Drinks":"#06b6d4", "Uncategorised":"#64748b" };
+            const unmapped = salesByCat.rows.find(r => r.category === "Uncategorised");
+            return (
+              <div className="space-y-2.5">
+                {/* Stacked bar */}
+                <div className="flex h-3 rounded-full overflow-hidden bg-slate-800">
+                  {salesByCat.rows.map(r => r.pct > 0 && (
+                    <div key={r.category} style={{ width: `${r.pct*100}%`, background: CAT_COLORS[r.category] || "#64748b" }} title={`${r.category}: ${(r.pct*100).toFixed(1)}%`}/>
+                  ))}
+                </div>
+                {salesByCat.rows.map(r => (
+                  <div key={r.category} className="flex items-center gap-2.5">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: CAT_COLORS[r.category] || "#64748b" }}/>
+                    <span className="text-sm text-slate-300 flex-1">{r.category}</span>
+                    <span className="text-xs text-slate-500 tabular-nums">{(r.pct*100).toFixed(1)}%</span>
+                    <span className="text-sm font-semibold text-white tabular-nums w-20 text-right">{fmtMoney(r.revenue)}</span>
+                  </div>
+                ))}
+                {unmapped && unmapped.revenue > 0 && (
+                  <div className="text-[11px] text-amber-400/80 pt-1">{fmtMoney(unmapped.revenue)} isn't mapped to a category yet — assign products in Setup → Sales Categories.</div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
@@ -53996,6 +54171,7 @@ export default function App() {
                     { key: "cogs:reconcile", label: "COGS Reconcile", desc: "Reconcile theoretical vs actual.", gate: gCogs },
                     { key: "cogs:tillaudit", label: "Till Audit", desc: "Audit till items against recipes.", gate: gCogs },
                     { key: "cogs:modmapper", label: "Modifier Mapper", desc: "Bulk-map modifiers to costs.", gate: gCogs },
+                    { key: "cogs:salescats", label: "Sales Categories", desc: "Map products to Breakfast, Dinner, Desserts, Hot & Cold Drinks.", gate: gCogs },
                   ].filter(i => i.gate()),
                 },
                 {
@@ -54061,6 +54237,7 @@ export default function App() {
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
+            {effectiveActiveView === "setup" && setupPanel === "cogs:salescats" && <SalesCategoryMapView/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}

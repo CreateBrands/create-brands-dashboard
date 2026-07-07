@@ -13242,3 +13242,44 @@ export async function setDistFulfilItemChecks(itemId, soIds = [], done, userId) 
     if (error) throw error;
   }
 }
+
+// ── SALES CATEGORIES (Breakfast / Dinner / Desserts / Hot Drinks / Cold Drinks) ──
+// A manual map of product name → one of the five sales categories, stored in
+// app_settings so it's shared across the estate. Sales come in by item/till
+// name, which map to products; we categorise on the product name.
+export const SALES_CATEGORIES = ["Breakfast", "Dinner", "Desserts", "Hot Drinks", "Cold Drinks"];
+
+// Returns { map: { [productNameLower]: category }, raw } for the mapping UI + rollups.
+export async function fetchSalesCategoryMap() {
+  const s = await fetchAppSettings().catch(() => ({}));
+  let map = {};
+  try { map = s?.sales_category_map ? JSON.parse(s.sales_category_map) : {}; } catch { map = {}; }
+  return map; // { productNameLower: "Breakfast" | ... }
+}
+export async function saveSalesCategoryMap(map) {
+  await upsertAppSetting("sales_category_map", JSON.stringify(map || {}));
+}
+
+// Roll a list of sales lines [{ name, quantity, revenue }] into the 5 categories
+// using the product→category map. Anything unmapped goes to "Uncategorised".
+export function rollSalesByCategory(saleLines, categoryMap) {
+  const out = {};
+  for (const c of SALES_CATEGORIES) out[c] = { category: c, revenue: 0, quantity: 0, items: 0 };
+  out["Uncategorised"] = { category: "Uncategorised", revenue: 0, quantity: 0, items: 0 };
+  for (const l of (saleLines || [])) {
+    const key = (l.name || "").trim().toLowerCase();
+    const cat = categoryMap[key] || "Uncategorised";
+    const bucket = out[cat] || out["Uncategorised"];
+    bucket.revenue += Number(l.revenue) || 0;
+    bucket.quantity += Number(l.quantity ?? l.qty) || 0;
+    bucket.items += 1;
+  }
+  const total = Object.values(out).reduce((s, b) => s + b.revenue, 0);
+  return {
+    total: +total.toFixed(2),
+    rows: Object.values(out)
+      .map(b => ({ ...b, revenue: +b.revenue.toFixed(2), pct: total > 0 ? b.revenue / total : 0 }))
+      .filter(b => b.items > 0 || b.category !== "Uncategorised")   // hide empty Uncategorised
+      .sort((a, b) => b.revenue - a.revenue),
+  };
+}
