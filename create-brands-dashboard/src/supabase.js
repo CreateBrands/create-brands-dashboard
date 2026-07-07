@@ -13244,42 +13244,58 @@ export async function setDistFulfilItemChecks(itemId, soIds = [], done, userId) 
 }
 
 // ── SALES CATEGORIES (Breakfast / Dinner / Desserts / Hot Drinks / Cold Drinks) ──
-// A manual map of product name → one of the five sales categories, stored in
-// app_settings so it's shared across the estate. Sales come in by item/till
-// name, which map to products; we categorise on the product name.
+// Flipdish sale items already carry a menu category (e.g. "Matcha Range",
+// "Cold Coffee"). Rather than mapping hundreds of products, we map each Flipdish
+// CATEGORY → one of the five sales buckets. The map lives in app_settings.
 export const SALES_CATEGORIES = ["Breakfast", "Dinner", "Desserts", "Hot Drinks", "Cold Drinks"];
 
-// Returns { map: { [productNameLower]: category }, raw } for the mapping UI + rollups.
+// Distinct Flipdish categories that actually appear in sales over a period,
+// with their revenue — so the mapping screen only shows real, in-use categories.
+export async function fetchFlipdishCategories({ from, to, brandId = "chocoberry" } = {}) {
+  const { items } = await fetchItemsSold({ from, to, brandId });
+  const byCat = new Map();
+  for (const it of (items || [])) {
+    const cat = (it.category || "Uncategorised").trim() || "Uncategorised";
+    const cur = byCat.get(cat) || { category: cat, revenue: 0, quantity: 0 };
+    cur.revenue += Number(it.revenue) || 0;
+    cur.quantity += Number(it.quantity) || 0;
+    byCat.set(cat, cur);
+  }
+  return Array.from(byCat.values())
+    .map(c => ({ ...c, revenue: +c.revenue.toFixed(2) }))
+    .sort((a, b) => b.revenue - a.revenue);
+}
+
+// The Flipdish-category → sales-bucket map.
 export async function fetchSalesCategoryMap() {
   const s = await fetchAppSettings().catch(() => ({}));
   let map = {};
   try { map = s?.sales_category_map ? JSON.parse(s.sales_category_map) : {}; } catch { map = {}; }
-  return map; // { productNameLower: "Breakfast" | ... }
+  return map; // { flipdishCategory: "Breakfast" | ... }
 }
 export async function saveSalesCategoryMap(map) {
   await upsertAppSetting("sales_category_map", JSON.stringify(map || {}));
 }
 
-// Roll a list of sales lines [{ name, quantity, revenue }] into the 5 categories
-// using the product→category map. Anything unmapped goes to "Uncategorised".
-export function rollSalesByCategory(saleLines, categoryMap) {
+// Roll aggregated items-sold (each with a Flipdish category) into the five
+// buckets using the category map. Unmapped categories → "Uncategorised".
+export function rollItemsSoldByCategory(items, categoryMap) {
   const out = {};
-  for (const c of SALES_CATEGORIES) out[c] = { category: c, revenue: 0, quantity: 0, items: 0 };
-  out["Uncategorised"] = { category: "Uncategorised", revenue: 0, quantity: 0, items: 0 };
-  for (const l of (saleLines || [])) {
-    const key = (l.name || "").trim().toLowerCase();
-    const cat = categoryMap[key] || "Uncategorised";
-    const bucket = out[cat] || out["Uncategorised"];
-    bucket.revenue += Number(l.revenue) || 0;
-    bucket.quantity += Number(l.quantity ?? l.qty) || 0;
-    bucket.items += 1;
+  for (const c of SALES_CATEGORIES) out[c] = { category: c, revenue: 0, quantity: 0 };
+  out["Uncategorised"] = { category: "Uncategorised", revenue: 0, quantity: 0 };
+  for (const it of (items || [])) {
+    const fdCat = (it.category || "Uncategorised").trim() || "Uncategorised";
+    const bucket = categoryMap[fdCat] || "Uncategorised";
+    const b = out[bucket] || out["Uncategorised"];
+    b.revenue += Number(it.revenue) || 0;
+    b.quantity += Number(it.quantity) || 0;
   }
   const total = Object.values(out).reduce((s, b) => s + b.revenue, 0);
   return {
     total: +total.toFixed(2),
     rows: Object.values(out)
       .map(b => ({ ...b, revenue: +b.revenue.toFixed(2), pct: total > 0 ? b.revenue / total : 0 }))
-      .filter(b => b.items > 0 || b.category !== "Uncategorised")   // hide empty Uncategorised
+      .filter(b => b.revenue > 0 || b.category !== "Uncategorised")
       .sort((a, b) => b.revenue - a.revenue),
   };
 }
