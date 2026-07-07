@@ -24955,6 +24955,28 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
 
   const selected = useMemo(() => visible.find(e => e.id === selId) || null, [visible, selId]);
 
+  // Group the visible entries by DATE (newest first), then by STORE within each
+  // date — so the flat mixed list becomes clear date sections with each store's
+  // entry under it, instead of stores and dates jumbled together.
+  const grouped = useMemo(() => {
+    const byDate = new Map();
+    for (const e of visible) {
+      const d = e.date || "—";
+      if (!byDate.has(d)) byDate.set(d, new Map());
+      const label = (e.storeId && storeName(e.storeId)) || brandName(e.brandId) || "—";
+      const byStore = byDate.get(d);
+      if (!byStore.has(label)) byStore.set(label, []);
+      byStore.get(label).push(e);
+    }
+    // visible is already sorted date-desc, so Map insertion order preserves it.
+    return Array.from(byDate.entries()).map(([date, storeMap]) => ({
+      date,
+      stores: Array.from(storeMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))          // stores A→Z within a date
+        .map(([store, items]) => ({ store, items })),
+    }));
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Amend form state
   const [draft, setDraft] = useState({});
   const [reason, setReason] = useState("");
@@ -25100,26 +25122,60 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-1 space-y-2">
           {visible.length === 0 && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-600">No EOD entries in scope.</div>}
-          {visible.map(e => (
-            <button key={e.id} onClick={() => setSelId(e.id)}
-              className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs ${selId === e.id ? "border-indigo-500 bg-slate-800/60" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-slate-200 font-semibold">{e.date}</span>
-                <div className="flex items-center gap-1.5">
-                  {(() => {
-                    const v = (Number(e.physicalCash)||0) - ((Number(e.cashExpected)||0) - (Number(e.lopay)||0) - (Number(e.unreportedExpense)||0));
-                    return Math.abs(v) >= 0.005 ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-amber-950">{v>=0?"+":""}{fmtMoney(v)}</span> : null;
-                  })()}
-                  <EodReconBadge status={e.reconStatus || "open"} />
+          {grouped.map(group => {
+            // Per-date total variance across its stores, for a quick section read.
+            const dayVar = group.stores.reduce((sum, st) => sum + st.items.reduce((s, e) =>
+              s + ((Number(e.physicalCash)||0) - ((Number(e.cashExpected)||0) - (Number(e.lopay)||0) - (Number(e.unreportedExpense)||0))), 0), 0);
+            const dayCount = group.stores.reduce((n, st) => n + st.items.length, 0);
+            return (
+              <div key={group.date} className="space-y-1.5">
+                {/* Date section header */}
+                <div className="flex items-center justify-between gap-2 px-1 pt-1 sticky top-0 bg-[#F9F1E4] z-10">
+                  <div className="flex items-center gap-2">
+                    <CalendarDays size={13} className="text-indigo-400"/>
+                    <span className="text-xs font-bold text-slate-300">
+                      {(() => { const d = new Date(group.date + "T12:00:00"); return isNaN(d) ? group.date : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); })()}
+                    </span>
+                    <span className="text-[10px] text-slate-500">{dayCount} report{dayCount===1?"":"s"}</span>
+                  </div>
+                  {Math.abs(dayVar) >= 0.005 && (
+                    <span className="text-[10px] font-bold text-slate-500 tabular-nums">net {dayVar>=0?"+":""}{fmtMoney(dayVar)}</span>
+                  )}
                 </div>
+
+                {group.stores.map(({ store, items }) => (
+                  <div key={store} className="space-y-1">
+                    {/* Store sub-header */}
+                    <div className="flex items-center gap-1.5 px-1">
+                      <MapPin size={11} className="text-slate-500"/>
+                      <span className="text-[11px] font-semibold text-slate-400">{store}</span>
+                      {items.length > 1 && <span className="text-[10px] text-slate-600">×{items.length}</span>}
+                    </div>
+                    {items.map(e => (
+                      <button key={e.id} onClick={() => setSelId(e.id)}
+                        className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs ${selId === e.id ? "border-indigo-500 bg-slate-800/60" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-slate-300 font-semibold">{e.manager || "—"}</span>
+                          <div className="flex items-center gap-1.5">
+                            {(() => {
+                              const v = (Number(e.physicalCash)||0) - ((Number(e.cashExpected)||0) - (Number(e.lopay)||0) - (Number(e.unreportedExpense)||0));
+                              return Math.abs(v) >= 0.005 ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-amber-950">{v>=0?"+":""}{fmtMoney(v)}</span> : null;
+                            })()}
+                            <EodReconBadge status={e.reconStatus || "open"} />
+                          </div>
+                        </div>
+                        <div className="text-slate-500 mt-0.5">
+                          {fmtMoney(e.netSales)}
+                          {(e.amendments?.length > 0) && <span className="text-amber-500"> · {e.amendments.length} amend</span>}
+                          {(e.reconciliation?.length > 0) && <span className="text-indigo-400"> · {e.reconciliation.length} note</span>}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ))}
               </div>
-              <div className="text-slate-500 mt-0.5">
-                {(e.storeId && storeName(e.storeId)) || brandName(e.brandId)} · {e.manager || "—"} · {fmtMoney(e.netSales)}
-                {(e.amendments?.length > 0) && <span className="text-amber-500"> · {e.amendments.length} amend</span>}
-                {(e.reconciliation?.length > 0) && <span className="text-indigo-400"> · {e.reconciliation.length} note</span>}
-              </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
 
         <div className="xl:col-span-2 space-y-3">
