@@ -22466,20 +22466,35 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
     return Object.values(m).sort((a, b) => b.quantity - a.quantity).slice(0, 15);
   }, [valid]);
 
-  // Sales grouped into the five buckets using the Flipdish menu category on each
-  // sale item, rolled through the manual category→bucket map.
+  // Sales grouped into the five buckets. The raw per-store sale_items don't
+  // carry a Flipdish category, but the brand-wide items RPC does — so we build a
+  // caption→category lookup from it, then categorise this store's sold captions.
   const [salesCatMap, setSalesCatMap] = useState(null);
+  const [captionToCat, setCaptionToCat] = useState(null);
   useEffect(() => { fetchSalesCategoryMap().then(setSalesCatMap).catch(() => setSalesCatMap({})); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { items } = await fetchItemsSold({ from: toLocalDate(fromDate), to: toLocalDate(toDate) });
+        if (cancelled) return;
+        const lut = {};
+        (items || []).forEach(it => { const cap = (it.caption || "").trim().toLowerCase(); if (cap && it.category) lut[cap] = it.category; });
+        setCaptionToCat(lut);
+      } catch { if (!cancelled) setCaptionToCat({}); }
+    })();
+    return () => { cancelled = true; };
+  }, [fromDate, toDate]);
   const salesByCat = useMemo(() => {
-    if (!salesCatMap) return null;
+    if (!salesCatMap || !captionToCat) return null;
     const items = [];
     valid.forEach(s => (s.saleItems || []).forEach(it => {
-      // The raw sale item's Flipdish category — try common field spellings.
-      const category = it.category ?? it.Category ?? it.menuSection ?? it.MenuSection ?? it.section ?? "Uncategorised";
-      items.push({ category, quantity: Number(it.quantity ?? it.qty ?? it.count ?? 1) || 0, revenue: Number(it.revenue ?? it.amount ?? it.price ?? it.total ?? 0) || 0 });
+      const cap = (it.caption || it.name || "").trim().toLowerCase();
+      const fdCat = captionToCat[cap] || it.category || "Uncategorised";
+      items.push({ category: fdCat, quantity: Number(it.quantity ?? it.qty ?? 1) || 0, revenue: Number(it.retailPrice ?? it.unitPrice ?? it.revenue ?? it.amount ?? 0) || 0 });
     }));
     return rollItemsSoldByCategory(items, salesCatMap);
-  }, [valid, salesCatMap]);
+  }, [valid, salesCatMap, captionToCat]);
 
   const refunds = useMemo(() => {
     const cancelled = sales.filter(s => s.isCancelled);
