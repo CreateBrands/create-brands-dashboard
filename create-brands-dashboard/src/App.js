@@ -18006,7 +18006,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   // EMP_BOTTOMNAV_V1: everything else lives in the More sheet
   const MORE_NAV = [
-    { key: "emp-profile",    label: "My Profile",      icon: UserCheck },
     { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
@@ -18027,7 +18026,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   const titles = {
     "ops-tasks":      "Today's Tasks",
-    "emp-profile":    "My Profile",
     "ops-temps":      "Temperature Log",
     "ops-deliveries": "Deliveries",
     "ops-network":    "Ops Status",
@@ -18117,14 +18115,28 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         </div>
 
         <div className="px-4 pb-3 max-h-[64vh] overflow-auto">
-          {/* user card */}
+          {/* user card — tap the photo to change it */}
           <div className="flex items-center gap-3 px-3 py-3 mb-3 rounded-2xl bg-slate-800/60">
-            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
-              {(currentUser.name || "?").split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase()}
-            </div>
+            <label className="relative flex-shrink-0 cursor-pointer" title="Tap to change photo">
+              {myOpsMember?.photoUrl ? (
+                <img src={myOpsMember.photoUrl} alt={currentUser.name} className="w-12 h-12 rounded-full object-cover"/>
+              ) : (
+                <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ background: currentUser.color || "#6366f1" }}>
+                  {(currentUser.name || "?").split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase()}
+                </div>
+              )}
+              {/* small camera badge */}
+              <span className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-indigo-600 border-2 border-slate-800 flex items-center justify-center">
+                <Camera size={10} className="text-white"/>
+              </span>
+              <input type="file" accept="image/*" className="hidden" disabled={photoUploadBusy}
+                onChange={e => { const f = e.target.files?.[0]; if (f) onUploadMyPhoto(f); e.target.value = ""; }}/>
+            </label>
             <div className="min-w-0">
               <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
               <div className="text-xs text-slate-500 truncate">{brand?.name || "—"}</div>
+              {photoUploadBusy && <div className="text-[11px] text-indigo-300 mt-0.5">Uploading photo…</div>}
+              {photoUploadErr && <div className="text-[11px] text-red-400 mt-0.5">{photoUploadErr}</div>}
             </div>
           </div>
 
@@ -18274,62 +18286,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               brands={myBrands} issues={myIssues} currentUser={currentUser}
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
             />
-          )}
-
-          {activeView === "emp-profile" && (
-            <div className="max-w-md mx-auto space-y-5">
-              <div className="flex flex-col items-center text-center gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-6">
-                {/* Large profile photo */}
-                <div className="relative">
-                  {myOpsMember?.photoUrl ? (
-                    <img src={myOpsMember.photoUrl} alt={currentUser.name}
-                      className="w-36 h-36 rounded-full object-cover border-4 border-slate-700"/>
-                  ) : (
-                    <div className="w-36 h-36 rounded-full flex items-center justify-center text-4xl font-bold text-white border-4 border-slate-700"
-                      style={{ background: currentUser.color || "#6366f1" }}>
-                      {(currentUser.avatar || currentUser.name?.slice(0,2) || "?").toUpperCase()}
-                    </div>
-                  )}
-                  {/* Change button overlay */}
-                  <label className="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center cursor-pointer border-2 border-slate-900 shadow-lg" title="Change photo">
-                    <Camera size={18} className="text-white"/>
-                    <input type="file" accept="image/*" className="hidden" disabled={photoUploadBusy}
-                      onChange={e => { const f = e.target.files?.[0]; if (f) onUploadMyPhoto(f); e.target.value = ""; }}/>
-                  </label>
-                </div>
-                <div>
-                  <div className="text-lg font-bold text-white">{currentUser.name}</div>
-                  <div className="text-sm text-slate-500 capitalize">{currentUser.role}</div>
-                </div>
-                {photoUploadBusy && <div className="text-xs text-indigo-300">Uploading photo…</div>}
-                {photoUploadErr && <div className="text-xs text-red-400">{photoUploadErr}</div>}
-                <label className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 cursor-pointer inline-flex items-center gap-1.5">
-                  <Camera size={13}/> {myOpsMember?.photoUrl ? "Change profile photo" : "Add a profile photo"}
-                  <input type="file" accept="image/*" className="hidden" disabled={photoUploadBusy}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) onUploadMyPhoto(f); e.target.value = ""; }}/>
-                </label>
-              </div>
-
-              {/* Basic details (read-only) */}
-              <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-2.5 text-sm">
-                {currentUser.email && (
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-slate-500">Email</span>
-                    <span className="text-slate-300 truncate">{currentUser.email}</span>
-                  </div>
-                )}
-                {myOpsMember?.phone && (
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-slate-500">Phone</span>
-                    <span className="text-slate-300">{myOpsMember.phone}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Role</span>
-                  <span className="text-slate-300 capitalize">{currentUser.role}</span>
-                </div>
-              </div>
-            </div>
           )}
 
           {activeView === "emp-eod" && (
