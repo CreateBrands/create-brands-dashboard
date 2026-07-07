@@ -13252,10 +13252,36 @@ export const SALES_CATEGORIES = ["Breakfast", "Dinner", "Desserts", "Hot Drinks"
 // Distinct Flipdish categories that actually appear in sales over a period,
 // with their revenue — so the mapping screen only shows real, in-use categories.
 export async function fetchFlipdishCategories({ from, to, brandId = "chocoberry" } = {}) {
-  const { items } = await fetchItemsSold({ from, to, brandId });
+  // Item-level aggregation can hit the server statement timeout over long
+  // windows. Try the requested window; if it times out, shrink and retry so the
+  // mapper still gets a usable category list.
+  const toDate = to instanceof Date ? to : new Date(to || Date.now());
+  const spanDays = (() => {
+    const f = from instanceof Date ? from : new Date(from);
+    const d = Math.round((toDate - f) / 86400000);
+    return isNaN(d) || d < 1 ? 14 : d;
+  })();
+  const attempts = [spanDays, 7, 3, 1].filter((v, i, a) => a.indexOf(v) === i && v >= 1);
+
+  let items = null, lastErr = null;
+  for (const days of attempts) {
+    const f = new Date(toDate); f.setDate(f.getDate() - days);
+    try {
+      const res = await fetchItemsSold({ from: f, to: toDate, brandId });
+      items = res.items || [];
+      break;
+    } catch (e) {
+      lastErr = e;
+      const msg = (e?.message || "").toLowerCase();
+      // Only retry-smaller on timeouts; rethrow anything else.
+      if (!msg.includes("timeout") && !msg.includes("canceling statement")) throw e;
+    }
+  }
+  if (items === null) throw (lastErr || new Error("Could not load sales items."));
+
   const byCat = new Map();
   let uncategorised = 0;
-  for (const it of (items || [])) {
+  for (const it of items) {
     const rawCat = it.category ?? it.Category ?? it.categoryName ?? it.menuSection ?? "";
     const cat = String(rawCat || "").trim();
     if (!cat) { uncategorised++; continue; }
@@ -13267,7 +13293,7 @@ export async function fetchFlipdishCategories({ from, to, brandId = "chocoberry"
   const rows = Array.from(byCat.values())
     .map(c => ({ ...c, revenue: +c.revenue.toFixed(2) }))
     .sort((a, b) => b.revenue - a.revenue);
-  rows._itemCount = (items || []).length;
+  rows._itemCount = items.length;
   rows._uncategorised = uncategorised;
   return rows;
 }

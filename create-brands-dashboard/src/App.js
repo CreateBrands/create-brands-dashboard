@@ -11905,9 +11905,11 @@ function SalesCategoryMapView() {
     (async () => {
       setLoading(true);
       try {
-        // Look back ~90 days so we catch all categories that appear across the menu.
+        // Item-level aggregation is heavy; a short recent window is enough to
+        // discover the categories in use (the menu rarely changes). Wider
+        // windows time out on the server.
         const to = new Date();
-        const from = new Date(); from.setDate(from.getDate() - 90);
+        const from = new Date(); from.setDate(from.getDate() - 14);
         const [list, m] = await Promise.all([
           fetchFlipdishCategories({ from, to }),
           fetchSalesCategoryMap().catch(() => ({})),
@@ -11954,8 +11956,8 @@ function SalesCategoryMapView() {
           {msg
             ? <span className="text-red-400">{msg}</span>
             : cats._itemCount > 0
-              ? <>Found {cats._itemCount} sold items in the last 90 days, but none carry a Flipdish category{cats._uncategorised ? ` (${cats._uncategorised} had no category)` : ""}. The category may be stored under a different field — tell me and I'll map it.</>
-              : "No sold items found in the last 90 days. Check that Flipdish sales have synced."}
+              ? <>Found {cats._itemCount} sold items recently, but none carry a Flipdish category{cats._uncategorised ? ` (${cats._uncategorised} had no category)` : ""}. The category may be stored under a different field — tell me and I'll map it.</>
+              : "No sold items found recently. Check that Flipdish sales have synced."}
         </div>
       )}
 
@@ -11966,7 +11968,7 @@ function SalesCategoryMapView() {
             <div key={c.category} className="flex items-center gap-3 px-4 py-3 flex-wrap">
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-white truncate">{c.category}</div>
-                <div className="text-[11px] text-slate-500">{gbp(c.revenue)} · {c.quantity} sold (90 days)</div>
+                <div className="text-[11px] text-slate-500">{gbp(c.revenue)} · {c.quantity} sold (recent)</div>
               </div>
               <div className="flex items-center gap-1.5 flex-wrap justify-end">
                 {SALES_CATEGORIES.map(bucket => (
