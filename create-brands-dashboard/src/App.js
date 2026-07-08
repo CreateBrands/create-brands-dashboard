@@ -22634,6 +22634,55 @@ function UberEatsPerformanceView({ stores = [], currentUser, selectedStore }) {
             </div>
           )}
 
+          {/* ACCURACY LEADERBOARD — which stores prepare orders most accurately */}
+          {!selectedStore && view.length > 1 && (() => {
+            const withErr = view.map(r => {
+              const iss = (r.orders_cancelled||0)+(r.orders_refunded||0)+(r.orders_chargeback||0);
+              const inaccCount = (r.inaccurate_items||[]).reduce((s,x)=>s+(x.count||0),0);
+              const rate = r.orders>0 ? (inaccCount/r.orders*100) : 0;
+              return { ...r, _iss: iss, _inacc: inaccCount, _rate: rate };
+            }).filter(r=>r.orders>0).sort((a,b)=>a._rate-b._rate);
+            const best = withErr.slice(0,5);
+            const worst = [...withErr].reverse().slice(0,5);
+            const nm = (r) => r.site_name.replace(/^Chocoberry\s*[-–]?\s*[(]?/, "").replace(/[)]$/, "");
+            return (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-800">
+                  <div className="text-sm font-bold text-white">Order accuracy leaderboard</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">Inaccurate items as a share of orders — lower is better</div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-800">
+                  <div className="p-4">
+                    <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-400 mb-2">Most accurate</div>
+                    <div className="space-y-1.5">
+                      {best.map((r,i)=>(
+                        <div key={r.id} className="flex items-center gap-2 text-xs">
+                          <span className="w-4 text-slate-600 font-bold">{i+1}</span>
+                          <span className="flex-1 text-white truncate">{nm(r)}</span>
+                          <span className="text-slate-500">{r._inacc} issues</span>
+                          <span className="text-emerald-300 font-bold w-12 text-right">{r._rate.toFixed(1)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="p-4">
+                    <div className="text-[11px] font-bold uppercase tracking-wide text-red-400 mb-2">Needs attention</div>
+                    <div className="space-y-1.5">
+                      {worst.map((r,i)=>(
+                        <div key={r.id} className="flex items-center gap-2 text-xs">
+                          <span className="w-4 text-slate-600 font-bold">{i+1}</span>
+                          <span className="flex-1 text-white truncate">{nm(r)}</span>
+                          <span className="text-slate-500">{r._inacc} issues</span>
+                          <span className="text-red-300 font-bold w-12 text-right">{r._rate.toFixed(1)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {unmatched > 0 && <div className="text-[11px] text-amber-400/80 bg-amber-950/20 border border-amber-500/20 rounded-lg px-3 py-2">{unmatched} Uber Eats site{unmatched===1?"":"s"} couldn't be matched to an internal store by name.</div>}
         </>
       )}
@@ -22757,25 +22806,82 @@ function UberStoreDetail({ r, gbp, gbp2 }) {
         );
       })()}
 
-      {/* OPERATIONS — Uber-style metric tiles with error % */}
+      {/* OPERATIONS — mirrors Uber Manager: completed / errors / chargebacks */}
       <Card>
-        <div className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: C.inkFaint }}>Operations</div>
+        <div className="flex items-baseline justify-between mb-4">
+          <div className="text-xs font-bold uppercase tracking-wider" style={{ color: C.inkFaint }}>Operations</div>
+          <div className="text-xs" style={{ color: C.inkFaint }}>Orders with inaccuracies, taste and quality issues</div>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="rounded-xl p-4" style={{ background: C.creamAlt }}>
+            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Completed orders</div>
+            <div className="text-3xl font-black mt-1" style={{ color: C.ink }}>{r.orders}</div>
+          </div>
+          <div className="rounded-xl p-4" style={{ background: errPct>3?C.redBg:C.creamAlt }}>
+            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Orders with errors</div>
+            <div className="text-3xl font-black mt-1" style={{ color: errPct>3?C.red:C.ink }}>{issues}</div>
+            <div className="text-[11px] mt-0.5 font-semibold" style={{ color: errPct>3?C.red:C.inkSoft }}>{errPct.toFixed(2)}%</div>
+          </div>
+          <div className="rounded-xl p-4" style={{ background: (r.orders_chargeback||0)>0?C.amberBg:C.creamAlt }}>
+            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Chargebacks</div>
+            <div className="text-3xl font-black mt-1" style={{ color: (r.orders_chargeback||0)>0?C.amber:C.ink }}>{r.orders_chargeback||0}</div>
+            <div className="text-[11px] mt-0.5" style={{ color: C.inkSoft }}>{r.orders>0?((r.orders_chargeback||0)/r.orders*100).toFixed(2):0}%</div>
+          </div>
+          <div className="rounded-xl p-4" style={{ background: C.creamAlt }}>
+            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Refund amount</div>
+            <div className="text-3xl font-black mt-1" style={{ color: C.ink }}>{gbp(r.merchant_refunds)}</div>
+            <div className="text-[11px] mt-0.5" style={{ color: C.inkSoft }}>merchant covered</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4 pt-4" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
           {[
-            { label:"Orders with errors", big:`${issues}`, sub:`${errPct.toFixed(1)}% of orders`, tone: errPct>3?"red":"ok" },
-            { label:"Merchant refunds", big:gbp2(r.merchant_refunds), sub:"paid out", tone: r.merchant_refunds>50?"amber":"ok" },
-            { label:"Prep time", big:`${(r.avg_prep_mins||0).toFixed(1)}m`, sub:"avg", tone: r.avg_prep_mins>12?"amber":"ok" },
-            { label:"Order duration", big:`${(r.avg_delivery_mins||0).toFixed(0)}m`, sub:"total", tone:"ok" },
-          ].map(m=>{
-            const t = m.tone==="red"?{fg:C.red,bg:C.redBg}:m.tone==="amber"?{fg:C.amber,bg:C.amberBg}:{fg:C.ink,bg:C.creamAlt};
-            return (
-              <div key={m.label} className="rounded-xl p-4" style={{ background: t.bg }}>
-                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>{m.label}</div>
-                <div className="text-2xl font-black mt-1" style={{ color: t.fg }}>{m.big}</div>
-                <div className="text-[10px] mt-0.5" style={{ color: C.inkSoft }}>{m.sub}</div>
-              </div>
-            );
-          })}
+            { label:"Prep time", big:`${(r.avg_prep_mins||0).toFixed(1)}m`, warn: r.avg_prep_mins>12 },
+            { label:"Order duration", big:`${(r.avg_delivery_mins||0).toFixed(0)}m`, warn:false },
+            { label:"Cancelled / refunded", big:`${r.orders_cancelled||0} / ${r.orders_refunded||0}`, warn:(r.orders_cancelled||0)+(r.orders_refunded||0)>4 },
+          ].map(m=>(
+            <div key={m.label}>
+              <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>{m.label}</div>
+              <div className="text-xl font-black mt-0.5" style={{ color: m.warn?C.amber:C.ink }}>{m.big}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* CUSTOMERS & CHANNEL — Uber One share + order platform */}
+      <Card>
+        <div className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: C.inkFaint }}>Customers and channel</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <div className="text-[11px]" style={{ color: C.inkFaint }}>Uber One members</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <div className="text-4xl font-black" style={{ color: C.accent }}>{r.uber_one_pct!=null?r.uber_one_pct.toFixed(0)+"%":"—"}</div>
+              <div className="text-xs" style={{ color: C.inkSoft }}>of orders</div>
+            </div>
+            <div className="h-2.5 rounded-full overflow-hidden mt-2" style={{ background: C.creamAlt }}>
+              <div className="h-full rounded-full" style={{ width: `${r.uber_one_pct||0}%`, background: C.accent }}/>
+            </div>
+            <div className="text-[11px] mt-2" style={{ color: C.inkSoft }}>Uber One customers order more often — worth keeping them happy.</div>
+          </div>
+          <div>
+            <div className="text-[11px] mb-2" style={{ color: C.inkFaint }}>Order platform</div>
+            {(() => {
+              const ch = r.channel_mix || {};
+              const total = Object.values(ch).reduce((s,n)=>s+n,0)||1;
+              const colors = { iOS:C.ink, Android:"#3F6B3A", "Uber Eats web":C.blue, Unknown:C.inkFaint };
+              const entries = Object.entries(ch).sort((a,b)=>b[1]-a[1]);
+              return (
+                <div className="space-y-1.5">
+                  {entries.map(([k,n])=>(
+                    <div key={k} className="flex items-center gap-2 text-xs">
+                      <span className="w-16 truncate" style={{ color: C.inkSoft }}>{k}</span>
+                      <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: C.creamAlt }}><div className="h-full rounded-full" style={{ width: `${n/total*100}%`, background: colors[k]||C.inkFaint }}/></div>
+                      <span className="w-10 text-right font-bold" style={{ color: C.ink }}>{(n/total*100).toFixed(0)}%</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       </Card>
 

@@ -13626,19 +13626,30 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
   };
 
   // Financial statement — the core economics.
+  const MEMBER = "Uber membership status of the customer who placed the order";
+  const PLATFORM = "The platform from which the customer ordered, (i.e. iOS, Android, Uber Eats Web)";
+  const FULFIL = "The mode of order fulfilment, whether it was delivery by courier via the Uber network, delivery by merchant, pick-up by customer or eat-in";
   const fin = new Map();
   _toRows(files.statement || "").forEach(r => {
     const site = r[SHOP]; if (!site) return;
     const status = (r[Object.keys(r).find(k => k.startsWith("Either: Completed")) || ""] || "").toLowerCase();
-    const a = fin.get(site) || { sales: 0, fee: 0, refund: 0, payout: 0, orders: 0, cancelled: 0, refunded: 0 };
+    const a = fin.get(site) || { sales: 0, fee: 0, refund: 0, payout: 0, orders: 0, cancelled: 0, refunded: 0, chargeback: 0, uberOne: 0, memberN: 0, ch: {}, ff: {} };
     a.sales += _num(r[SALES]);
     a.fee += _num(r[FEE]);            // negative in the file
     a.refund += _num(r[REFUND]);
     const payoutKey = Object.keys(r).find(k => k.startsWith("Total payout"));
     a.payout += _num(r[payoutKey]);
-    if (status.includes("cancel")) a.cancelled++;
+    if (status.includes("dispute")) { a.chargeback++; }
+    else if (status.includes("cancel")) a.cancelled++;
     else if (status.includes("refund")) a.refunded++;
     else a.orders++;
+    // Membership + channel + fulfilment (skip the stray descriptive header row).
+    const mem = (r[MEMBER] || "").trim();
+    if (mem && mem !== "Customer Uber Membership Status") { a.memberN++; if (/uber one/i.test(mem)) a.uberOne++; }
+    const plat = (r[PLATFORM] || "").trim();
+    if (plat && plat !== "Order channel") a.ch[plat] = (a.ch[plat] || 0) + 1;
+    const ff = (r[FULFIL] || "").trim();
+    if (ff && ff.length > 3) a.ff[ff] = (a.ff[ff] || 0) + 1;
     fin.set(site, a);
   });
   fin.forEach((a, site) => {
@@ -13651,7 +13662,11 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
     s.orders = a.orders;
     s.orders_cancelled = a.cancelled;
     s.orders_refunded = a.refunded;
+    s.orders_chargeback = a.chargeback;
     s.avg_order_value = a.orders > 0 ? +(a.sales / a.orders).toFixed(2) : 0;
+    s.uber_one_pct = a.memberN > 0 ? +(a.uberOne / a.memberN * 100).toFixed(1) : null;
+    // Channel mix (top few) + fulfilment mix as compact objects.
+    s.channel_mix = a.ch; s.fulfil_mix = a.ff;
   });
 
   // Ratings — star breakdown + average.
@@ -13727,6 +13742,8 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
       sales_incl_vat: 0, orders: 0, service_fee: 0, service_fee_pct: 0, payout: 0,
       inaccurate_items: s.inaccurate_items || [], items_sold: [],
       sales_hour_grid: s.sales_hour_grid || null, peak_hour: s.peak_hour ?? null, offpeak_hour: s.offpeak_hour ?? null,
+      orders_chargeback: s.orders_chargeback || 0, uber_one_pct: s.uber_one_pct ?? null,
+      channel_mix: s.channel_mix || {}, fulfil_mix: s.fulfil_mix || {},
       ...s,
     }))
     .filter(s => s.sales_incl_vat > 0 || s.orders > 0);
@@ -13762,6 +13779,8 @@ export async function saveUberEatsPerformance(parsedRows, stores = []) {
       downtime_mins: r.downtime_mins || 0,
       items_sold: r.items_sold || [], inaccurate_items: r.inaccurate_items || [],
       sales_hour_grid: r.sales_hour_grid || null, peak_hour: r.peak_hour ?? null, offpeak_hour: r.offpeak_hour ?? null,
+      orders_chargeback: r.orders_chargeback || 0, uber_one_pct: r.uber_one_pct ?? null,
+      channel_mix: r.channel_mix || {}, fulfil_mix: r.fulfil_mix || {},
       uploaded_at: new Date().toISOString(),
     };
   });
