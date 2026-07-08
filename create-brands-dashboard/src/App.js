@@ -22425,7 +22425,12 @@ function UberEatsPerformanceView({ stores = [], currentUser, selectedStore }) {
   const [expandStore, setExpandStore] = useState(null);
   const isHQ = isHqOrAbove(currentUser?.role);
 
-  const _normName = (s) => String(s || "").toLowerCase().replace(/^chocoberry\s*[-–(]*\s*/, "").replace(/[^a-z0-9]/g, "").trim();
+  const _normName = (s) => String(s || "").toLowerCase()
+    .replace(/^chocoberry\s*[-–(]*\s*/, "")           // strip brand prefix + bracket
+    .replace(/\b(rd)\b/g, "road").replace(/\b(st)\b/g, "street")
+    .replace(/\b(ave|av)\b/g, "avenue").replace(/\b(ln)\b/g, "lane")
+    .replace(/\b(sq)\b/g, "square").replace(/\b(pk)\b/g, "park")
+    .replace(/[^a-z0-9]/g, "").trim();
   const load = useCallback(async (wk) => {
     setLoading(true);
     try {

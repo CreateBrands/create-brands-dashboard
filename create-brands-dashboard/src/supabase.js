@@ -13392,7 +13392,12 @@ const _toRows = (text) => {
   return raw.slice(1).map(r => { const o = {}; head.forEach((h, i) => o[h] = (r[i] ?? "").trim()); return o; });
 };
 const _num = (v) => { const n = parseFloat(String(v ?? "").replace(/[£,%]/g, "")); return isNaN(n) ? 0 : n; };
-const _norm = (s) => String(s || "").toLowerCase().replace(/^chocoberry\s*[-–]\s*/, "").replace(/[^a-z0-9]/g, "").trim();
+const _norm = (s) => String(s || "").toLowerCase()
+  .replace(/^chocoberry\s*[-–(]*\s*/, "")            // brand prefix + optional bracket
+  .replace(/\b(rd)\b/g, "road").replace(/\b(st)\b/g, "street")
+  .replace(/\b(ave|av)\b/g, "avenue").replace(/\b(ln)\b/g, "lane")
+  .replace(/\b(sq)\b/g, "square").replace(/\b(pk)\b/g, "park")
+  .replace(/[^a-z0-9]/g, "").trim();
 
 // files: { performance, orders, items_sold, customers, speed_summary,
 //          availability_open_rate, rejected_orders, rejected_by_reason } (text)
