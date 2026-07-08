@@ -13436,23 +13436,29 @@ export function parseDeliverooReports(files, { weekStart, weekEnd } = {}) {
   const orderAgg = new Map();
   _toRows(files.orders || "").forEach(r => {
     const site = r["Restaurant name"]; if (!site) return;
-    const a = orderAgg.get(site) || { subtotal: 0, commission: 0, commission_vat: 0, cancelled: 0, rejected: 0 };
-    a.subtotal += _num(r["Subtotal"]);
-    a.commission += _num(r["Deliveroo commission"]);
+    const a = orderAgg.get(site) || { subtotal: 0, commissionable: 0, commission: 0, commission_vat: 0, cancelled: 0, rejected: 0 };
+    const lineSub = _num(r["Subtotal"]);
+    const lineComm = _num(r["Deliveroo commission"]);
+    a.subtotal += lineSub;
+    a.commission += lineComm;
     a.commission_vat += _num(r["VAT on Deliveroo commission"]);
     const st = (r["Order status"] || "").toLowerCase();
     if (st.includes("cancel")) a.cancelled++;
     else if (st.includes("reject")) a.rejected++;
+    // Commission is only charged on completed orders — use their subtotal as the
+    // rate denominator so cancelled/rejected (£0-commission) rows don't dilute it.
+    else a.commissionable += lineSub;
     orderAgg.set(site, a);
   });
   orderAgg.forEach((a, site) => {
     const s = ensure(site); if (!s) return;
+    const base = a.commissionable > 0 ? a.commissionable : a.subtotal;   // fallback safety
     s.subtotal = +a.subtotal.toFixed(2);
     s.commission = +a.commission.toFixed(2);
     s.commission_vat = +a.commission_vat.toFixed(2);
     s.commission_total = +(a.commission + a.commission_vat).toFixed(2);   // true cost incl VAT
-    s.commission_pct = a.subtotal > 0 ? +(a.commission / a.subtotal * 100).toFixed(1) : 0;
-    s.commission_total_pct = a.subtotal > 0 ? +((a.commission + a.commission_vat) / a.subtotal * 100).toFixed(1) : 0;
+    s.commission_pct = base > 0 ? +(a.commission / base * 100).toFixed(1) : 0;
+    s.commission_total_pct = base > 0 ? +((a.commission + a.commission_vat) / base * 100).toFixed(1) : 0;
     s.orders_cancelled = a.cancelled;
     s.orders_rejected = a.rejected;
   });

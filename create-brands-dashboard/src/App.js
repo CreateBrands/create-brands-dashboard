@@ -22800,7 +22800,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-bold text-white">Where the money goes</div>
-              <div className="text-[11px] text-slate-500">on {gbp(totals.subtotal)} subtotal</div>
+              <div className="text-[11px] text-slate-500" title="Order subtotal is the menu-price value Deliveroo charges commission on — it differs from Gross sales, which is net of promotions.">on {gbp(totals.subtotal)} order subtotal <span className="text-slate-600">ⓘ</span></div>
             </div>
             {(() => {
               const sub = totals.subtotal || 1;
@@ -22827,7 +22827,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
                       </div>
                     ))}
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-2">You keep <b className="text-emerald-400">{(totals.netAfterComm/sub*100).toFixed(0)}p</b> of every £1 of delivery subtotal. Standard Deliveroo rate is 30% + VAT; the blend is lower where discounted order types apply. VAT on commission is typically reclaimable if VAT-registered.{totals.commVatEstimated && <span className="text-amber-400/80"> VAT estimated at 20% — re-upload this week to show actuals.</span>}</div>
+                  <div className="text-[11px] text-slate-500 mt-2">You keep <b className="text-emerald-400">{(totals.netAfterComm/sub*100).toFixed(0)}p</b> of every £1 of order subtotal. Commission is charged on order subtotal (menu-price value), which is higher than the Gross sales figure above — Gross sales is net of promotions and offers. Standard rate is 30% + VAT; the blend is lower where discounted order types apply. VAT is typically reclaimable if VAT-registered.{totals.commVatEstimated && <span className="text-amber-400/80"> VAT estimated at 20% — re-upload this week to show actuals.</span>}</div>
                 </>
               );
             })()}
