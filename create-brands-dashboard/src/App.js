@@ -22643,126 +22643,191 @@ function UberEatsPerformanceView({ stores = [], currentUser, selectedStore }) {
 
 // Per-store Uber detail: rating breakdown + service + inaccurate items.
 function UberStoreDetail({ r, gbp, gbp2 }) {
+  const C = { cream:"#FBF6EC", creamAlt:"#F3EADA", bg:"#F4E9DD", line:"#E8DCC6", lineSoft:"#EFE6D4",
+    ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68", accent:"#844429",
+    red:"#A23B2E", redBg:"#F6E4DF", green:"#3F6B3A", greenBg:"#E4EEDC", amber:"#8A5A12", amberBg:"#F7EBD4", blue:"#2F5C86" };
   const ratings = [
-    { star: 5, n: r.rating_5||0, color: "#10b981" },
-    { star: 4, n: r.rating_4||0, color: "#84cc16" },
-    { star: 3, n: r.rating_3||0, color: "#f59e0b" },
-    { star: 2, n: r.rating_2||0, color: "#f97316" },
-    { star: 1, n: r.rating_1||0, color: "#ef4444" },
+    { star: 5, n: r.rating_5||0 }, { star: 4, n: r.rating_4||0 }, { star: 3, n: r.rating_3||0 },
+    { star: 2, n: r.rating_2||0 }, { star: 1, n: r.rating_1||0 },
   ];
   const totalRatings = ratings.reduce((s,x)=>s+x.n,0);
+  const fmtHr = (h) => h==null?"—":h===0?"12am":h<12?h+"am":h===12?"12pm":(h-12)+"pm";
+  const issues = (r.orders_cancelled||0) + (r.orders_refunded||0);
+  const errPct = r.orders>0 ? (issues/r.orders*100) : 0;
+
+  const Card = ({ children, pad="p-5", className="" }) => (
+    <div className={`rounded-2xl ${pad} ${className}`} style={{ background: C.cream, border: `1px solid ${C.line}` }}>{children}</div>
+  );
+
   return (
-    <div className="space-y-4">
-      {/* Money flow */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-        <div className="flex items-center justify-between mb-2"><div className="text-sm font-bold text-white">Where the money goes</div><div className="text-[11px] text-slate-500">on {gbp(r.sales_incl_vat)} sales incl VAT</div></div>
+    <div className="space-y-5">
+      {/* SALES OVERVIEW — hero row, Uber Manager style */}
+      <Card>
+        <div className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: C.inkFaint }}>Sales overview</div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div>
+            <div className="text-xs" style={{ color: C.inkFaint }}>Sales incl VAT</div>
+            <div className="text-4xl font-black mt-1" style={{ color: C.ink }}>{gbp(r.sales_incl_vat)}</div>
+            <div className="text-xs mt-1" style={{ color: C.inkSoft }}>Total value of items sold</div>
+          </div>
+          <div className="sm:border-l sm:pl-6" style={{ borderColor: C.line }}>
+            <div className="text-xs" style={{ color: C.inkFaint }}>Booked orders</div>
+            <div className="text-4xl font-black mt-1" style={{ color: C.ink }}>{r.orders}</div>
+            <div className="text-xs mt-1" style={{ color: C.inkSoft }}>Orders that generated sales</div>
+          </div>
+          <div className="sm:border-l sm:pl-6" style={{ borderColor: C.line }}>
+            <div className="text-xs" style={{ color: C.inkFaint }}>Average ticket size</div>
+            <div className="text-4xl font-black mt-1" style={{ color: C.ink }}>{gbp2(r.avg_order_value)}</div>
+            <div className="text-xs mt-1" style={{ color: C.inkSoft }}>Avg value per order</div>
+          </div>
+        </div>
+      </Card>
+
+      {/* MONEY / PAYOUT */}
+      <Card>
+        <div className="flex items-baseline justify-between mb-3">
+          <div className="text-xs font-bold uppercase tracking-wider" style={{ color: C.inkFaint }}>Where the money goes</div>
+          <div className="text-xs" style={{ color: C.inkFaint }}>on {gbp(r.sales_incl_vat)} sales incl VAT</div>
+        </div>
         {(() => {
           const sales = r.sales_incl_vat||1;
-          const seg = [{label:"Payout to you",val:r.payout,color:"#10b981"},{label:"Uber service fee",val:r.service_fee,color:"#ef4444"},{label:"Refunds/other",val:Math.max(0,sales-r.payout-r.service_fee),color:"#f59e0b"}];
+          const seg = [
+            { label:"Payout to you", val:r.payout, color:C.green },
+            { label:"Uber service fee", val:r.service_fee, color:C.red },
+            { label:"Refunds & other", val:Math.max(0,sales-r.payout-r.service_fee), color:C.amber },
+          ];
           return (<>
-            <div className="flex h-8 rounded-lg overflow-hidden">{seg.map(s=>s.val>0&&<div key={s.label} style={{width:`${s.val/sales*100}%`,background:s.color}} className="flex items-center justify-center" title={`${s.label}: ${gbp(s.val)}`}>{s.val/sales>0.08&&<span className="text-[10px] font-bold text-white/90">{(s.val/sales*100).toFixed(0)}%</span>}</div>)}</div>
-            <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2.5">{seg.map(s=><div key={s.label} className="flex items-center gap-1.5 text-[11px]"><span className="w-2.5 h-2.5 rounded-full" style={{background:s.color}}/><span className="text-slate-400">{s.label}</span><span className="text-white font-bold">{gbp(s.val)}</span></div>)}</div>
-            <div className="text-[11px] text-slate-500 mt-2">Uber's service fee here is <b className="text-red-400">{r.service_fee_pct?.toFixed(1)}%</b> of sales incl VAT. Payout is what lands after fees{r.merchant_refunds?` and ${gbp(r.merchant_refunds)} of refunds`:""}.</div>
+            <div className="flex h-9 rounded-xl overflow-hidden" style={{ background: C.creamAlt }}>
+              {seg.map(s=>s.val>0 && <div key={s.label} style={{width:`${s.val/sales*100}%`,background:s.color}} className="flex items-center justify-center" title={`${s.label}: ${gbp(s.val)}`}>{s.val/sales>0.09 && <span className="text-[11px] font-black text-white">{(s.val/sales*100).toFixed(0)}%</span>}</div>)}
+            </div>
+            <div className="grid grid-cols-3 gap-3 mt-4">
+              {seg.map(s=>(
+                <div key={s.label}>
+                  <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{background:s.color}}/><span className="text-[11px]" style={{color:C.inkSoft}}>{s.label}</span></div>
+                  <div className="text-lg font-black mt-0.5" style={{color:C.ink}}>{gbp(s.val)}</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-[11px] mt-3" style={{ color: C.inkFaint }}>Uber's service fee is <b style={{color:C.red}}>{r.service_fee_pct?.toFixed(1)}%</b> of sales incl VAT.</div>
           </>);
         })()}
-      </div>
+      </Card>
 
-      {/* Sales by hour heatmap — mirrors Uber Manager */}
+      {/* SALES BY HOUR — heatmap */}
       {r.sales_hour_grid && (() => {
         const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
         const grid = r.sales_hour_grid;
-        const flat = grid.flat();
-        const max = Math.max(...flat, 1);
+        const max = Math.max(...grid.flat(), 1);
         const heat = (v) => {
-          if (!v) return "#0f172a";
-          const t = v / max;
-          if (t > 0.66) return "#065f46";
-          if (t > 0.33) return "#0f766e";
-          if (t > 0.1) return "#155e63";
-          return "#1e3a3a";
+          if (!v) return C.creamAlt;
+          const t = v/max;
+          if (t>0.66) return C.accent;
+          if (t>0.4) return "#A66A43";
+          if (t>0.2) return "#C9976F";
+          if (t>0.05) return "#E3C9AE";
+          return "#F0E2CF";
         };
-        const hrs = Array.from({length:24},(_,h)=>h);
-        const fmtHr = (h) => h===0?"12a":h<12?h+"a":h===12?"12p":(h-12)+"p";
+        const hrs = Array.from({length:24},(_,h)=>h).filter(h=>h>=8||h<=2);
         return (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-            <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-              <div className="text-sm font-bold text-white">Sales by hour</div>
-              {r.peak_hour!=null && <div className="text-[11px] text-slate-500">Peak <b className="text-emerald-400">{fmtHr(r.peak_hour)}</b></div>}
+          <Card>
+            <div className="flex items-baseline justify-between mb-1">
+              <div className="text-xs font-bold uppercase tracking-wider" style={{ color: C.inkFaint }}>Sales by hour</div>
+              <div className="text-xs" style={{ color: C.inkFaint }}>Peak <b style={{color:C.accent}}>{fmtHr(r.peak_hour)}</b></div>
             </div>
-            <div className="text-[11px] text-slate-500 mb-3">Order value by day &amp; time of day</div>
+            <div className="text-[11px] mb-3" style={{ color: C.inkSoft }}>Order value by day and time</div>
             <div className="overflow-x-auto">
-              <table className="border-separate" style={{borderSpacing:2}}>
-                <thead><tr><th></th>{hrs.filter(h=>h>=8||h<=3).map(h=><th key={h} className="text-[8px] text-slate-600 font-normal px-0.5">{fmtHr(h)}</th>)}</tr></thead>
+              <table className="border-separate" style={{ borderSpacing: 3 }}>
+                <thead><tr><th></th>{hrs.map(h=><th key={h} className="text-[9px] font-normal px-0.5" style={{color:C.inkFaint}}>{h===0?"12":h>12?h-12:h}{h>=12&&h<24?"p":"a"}</th>)}</tr></thead>
                 <tbody>
                   {DAYS.map((day,di)=>(
                     <tr key={day}>
-                      <td className="text-[10px] text-slate-500 font-semibold pr-1.5 text-right">{day}</td>
-                      {hrs.filter(h=>h>=8||h<=3).map(h=>{ const v=grid[di][h]; return (
-                        <td key={h} style={{background:heat(v),width:16,height:16}} className="rounded-sm" title={`${day} ${fmtHr(h)}: ${gbp(v)}`}/>
-                      );})}
+                      <td className="text-[10px] font-bold pr-2 text-right" style={{color:C.inkSoft}}>{day}</td>
+                      {hrs.map(h=>{ const v=grid[di][h]; return <td key={h} style={{background:heat(v),width:22,height:22,borderRadius:5}} title={`${day} ${fmtHr(h)}: ${gbp(v)}`}/>; })}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="text-[10px] text-slate-600 mt-2">Darker = more sales. Showing 8am–3am (trading hours).</div>
-          </div>
+            <div className="flex items-center gap-2 mt-3 text-[10px]" style={{color:C.inkFaint}}>
+              <span>Less</span>
+              {[C.creamAlt,"#F0E2CF","#E3C9AE","#C9976F","#A66A43",C.accent].map((c,i)=><span key={i} style={{background:c,width:14,height:14,borderRadius:3,border:`1px solid ${C.line}`}}/>)}
+              <span>More · trading hours 8am–2am</span>
+            </div>
+          </Card>
         );
       })()}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Rating breakdown — Uber gives us the star split Deliveroo didn't */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-          <div className="flex items-center justify-between mb-3"><div className="text-sm font-bold text-white">Customer ratings</div><div className="text-amber-300 font-bold">{r.avg_rating?r.avg_rating.toFixed(2):"—"} ★ <span className="text-slate-500 text-xs font-normal">({totalRatings})</span></div></div>
-          {totalRatings === 0 ? <div className="text-xs text-slate-600">No ratings this week.</div> : (
-            <div className="space-y-1.5">{ratings.map(rt => (
-              <div key={rt.star} className="flex items-center gap-2 text-xs">
-                <span className="text-slate-400 w-6">{rt.star}★</span>
-                <div className="flex-1 h-3 bg-slate-800 rounded overflow-hidden"><div className="h-full rounded" style={{width:`${totalRatings?rt.n/totalRatings*100:0}%`,background:rt.color}}/></div>
-                <span className="text-slate-500 w-10 text-right">{totalRatings?(rt.n/totalRatings*100).toFixed(0):0}%</span>
-                <span className="text-white font-bold w-6 text-right">{rt.n}</span>
-              </div>
-            ))}</div>
-          )}
-        </div>
-
-        {/* Inaccurate items */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-          <div className="text-sm font-bold text-white mb-3">Order accuracy issues</div>
-          {(r.inaccurate_items||[]).length === 0 ? (
-            <div className="flex items-center justify-center h-24"><div className="text-center"><CheckCircle size={22} className="mx-auto text-emerald-400 mb-1"/><div className="text-xs text-slate-400">No accuracy issues 🎉</div></div></div>
-          ) : (
-            <div className="space-y-1.5">{r.inaccurate_items.slice(0,7).map((it,i)=>(
-              <div key={i} className="flex items-center gap-2 text-xs">
-                <span className="text-white flex-1 truncate">{it.item}</span>
-                <span className="text-[10px] text-slate-500">{(it.issue||"").replace(/_/g," ").toLowerCase()}</span>
-                <span className="text-red-300 font-bold w-6 text-right">{it.count}</span>
-              </div>
-            ))}</div>
-          )}
-        </div>
-      </div>
-
-      {/* Service metrics */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-        <div className="text-sm font-bold text-white mb-3">Service &amp; operations</div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* OPERATIONS — Uber-style metric tiles with error % */}
+      <Card>
+        <div className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: C.inkFaint }}>Operations</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: "Prep time", val: (r.avg_prep_mins||0).toFixed(1)+"m", warn: r.avg_prep_mins>12 },
-            { label: "Order duration", val: (r.avg_delivery_mins||0).toFixed(0)+"m", warn: false },
-            { label: "Cancelled", val: r.orders_cancelled||0, warn: (r.orders_cancelled||0)>3 },
-            { label: "Refunded", val: r.orders_refunded||0, warn: (r.orders_refunded||0)>3 },
-          ].map(m => (
-            <div key={m.label} className={`rounded-xl p-3 border ${m.warn?"border-red-500/30 bg-red-950/15":"border-slate-800 bg-slate-950/40"}`}>
-              <div className="text-[10px] text-slate-500 uppercase tracking-wide">{m.label}</div>
-              <div className={`text-xl font-black mt-0.5 ${m.warn?"text-red-300":"text-white"}`}>{m.val}</div>
-            </div>
-          ))}
+            { label:"Orders with errors", big:`${issues}`, sub:`${errPct.toFixed(1)}% of orders`, tone: errPct>3?"red":"ok" },
+            { label:"Merchant refunds", big:gbp2(r.merchant_refunds), sub:"paid out", tone: r.merchant_refunds>50?"amber":"ok" },
+            { label:"Prep time", big:`${(r.avg_prep_mins||0).toFixed(1)}m`, sub:"avg", tone: r.avg_prep_mins>12?"amber":"ok" },
+            { label:"Order duration", big:`${(r.avg_delivery_mins||0).toFixed(0)}m`, sub:"total", tone:"ok" },
+          ].map(m=>{
+            const t = m.tone==="red"?{fg:C.red,bg:C.redBg}:m.tone==="amber"?{fg:C.amber,bg:C.amberBg}:{fg:C.ink,bg:C.creamAlt};
+            return (
+              <div key={m.label} className="rounded-xl p-4" style={{ background: t.bg }}>
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>{m.label}</div>
+                <div className="text-2xl font-black mt-1" style={{ color: t.fg }}>{m.big}</div>
+                <div className="text-[10px] mt-0.5" style={{ color: C.inkSoft }}>{m.sub}</div>
+              </div>
+            );
+          })}
         </div>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* REVIEWS — star breakdown */}
+        <Card>
+          <div className="flex items-baseline justify-between mb-4">
+            <div className="text-xs font-bold uppercase tracking-wider" style={{ color: C.inkFaint }}>Customer reviews</div>
+            <div className="text-xs" style={{ color: C.inkFaint }}>{totalRatings} ratings</div>
+          </div>
+          {totalRatings === 0 ? <div className="text-sm" style={{color:C.inkFaint}}>No ratings this week.</div> : (
+            <div className="flex items-center gap-6">
+              <div className="text-center">
+                <div className="text-5xl font-black" style={{ color: C.ink }}>{r.avg_rating?r.avg_rating.toFixed(1):"—"}</div>
+                <div className="text-lg" style={{ color: "#E0A100" }}>{"★".repeat(Math.round(r.avg_rating||0))}<span style={{color:C.line}}>{"★".repeat(5-Math.round(r.avg_rating||0))}</span></div>
+              </div>
+              <div className="flex-1 space-y-1.5">
+                {ratings.map(rt=>(
+                  <div key={rt.star} className="flex items-center gap-2 text-xs">
+                    <span className="w-8" style={{color:C.inkSoft}}>{rt.star}★</span>
+                    <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{background:C.creamAlt}}><div className="h-full rounded-full" style={{width:`${totalRatings?rt.n/totalRatings*100:0}%`,background:rt.star>=4?C.green:rt.star===3?C.amber:C.red}}/></div>
+                    <span className="w-8 text-right font-bold" style={{color:C.ink}}>{rt.n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+
+        {/* TOP INACCURATE ITEMS */}
+        <Card>
+          <div className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: C.inkFaint }}>Top inaccurate items</div>
+          {(r.inaccurate_items||[]).length === 0 ? (
+            <div className="flex items-center justify-center h-28"><div className="text-center"><CheckCircle size={24} style={{color:C.green}} className="mx-auto mb-1"/><div className="text-sm" style={{color:C.inkSoft}}>No accuracy issues</div></div></div>
+          ) : (
+            <div className="space-y-2.5">{r.inaccurate_items.slice(0,6).map((it,i)=>(
+              <div key={i} className="flex items-center gap-3">
+                <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-black" style={{background:C.creamAlt,color:C.inkSoft}}>{i+1}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold truncate" style={{color:C.ink}}>{it.item}</div>
+                  <div className="text-[10px]" style={{color:C.inkFaint}}>{(it.issue||"").replace(/_/g," ").toLowerCase()}</div>
+                </div>
+                <div className="text-lg font-black" style={{color:C.red}}>{it.count}</div>
+              </div>
+            ))}</div>
+          )}
+        </Card>
       </div>
     </div>
   );
 }
+
 
 // ── Delivery hub: platform toggle between Deliveroo and Uber Eats ───────────
 function DeliveryHub({ stores, brands, currentUser, selectedStore }) {
