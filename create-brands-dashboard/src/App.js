@@ -22384,7 +22384,7 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
       )}
 
       {tab === "delivery" && (
-        <DeliveryPerformanceView stores={stores} brands={brands} currentUser={currentUser}/>
+        <DeliveryPerformanceView stores={stores} brands={brands} currentUser={currentUser} selectedStore={store}/>
       )}
 
       {store && tab === "forecast" && (
@@ -22405,7 +22405,7 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
 // uploads. Covers economics (commission), speed/ops, store league, and
 // availability/rejections. Upload the weekly report bundle to refresh.
 // ============================================================================
-function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
+function DeliveryPerformanceView({ stores = [], brands = [], currentUser, selectedStore }) {
   const [rows, setRows] = useState([]);
   const [weeks, setWeeks] = useState([]);
   const [week, setWeek] = useState("");
@@ -22416,6 +22416,19 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
   const [sortKey, setSortKey] = useState("gross_sales");
   const [expandStore, setExpandStore] = useState(null);
   const isHQ = isHqOrAbove(currentUser?.role);
+
+  // When a specific store is selected in the Analytics header, scope the whole
+  // view to that store; otherwise show the estate view.
+  const _normName = (s) => String(s || "").toLowerCase().replace(/^chocoberry\s*[-–]\s*/, "").replace(/[^a-z0-9]/g, "").trim();
+  const scopedRows = useMemo(() => {
+    if (!selectedStore) return rows;
+    const sid = selectedStore.id;
+    const sk = _normName(selectedStore.shortName) || _normName(selectedStore.name);
+    const matched = rows.filter(r => r.store_id === sid);
+    if (matched.length) return matched;
+    return rows.filter(r => { const n = _normName(r.site_name); return sk.length >= 3 && (n.includes(sk) || sk.includes(n)); });
+  }, [rows, selectedStore]);
+  const view = selectedStore ? scopedRows : rows;
 
   const load = useCallback(async (wk) => {
     setLoading(true);
@@ -22435,8 +22448,8 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
 
   // Estate totals
   const totals = useMemo(() => {
-    if (!rows.length) return null;
-    const t = rows.reduce((a, r) => ({
+    if (!view.length) return null;
+    const t = view.reduce((a, r) => ({
       gross: a.gross + (r.gross_sales||0), orders: a.orders + (r.orders_delivered||0),
       commission: a.commission + (r.commission||0), subtotal: a.subtotal + (r.subtotal||0),
       cancelled: a.cancelled + (r.orders_cancelled||0), rejected: a.rejected + (r.orders_rejected||0),
@@ -22446,15 +22459,15 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
     t.commPct = t.subtotal > 0 ? (t.commission/t.subtotal*100) : 0;
     t.avgRating = t.ratingN > 0 ? (t.ratingSum/t.ratingN) : 0;
     t.netAfterComm = t.subtotal - t.commission;
-    t.avgPrep = rows.reduce((s,r)=>s+(r.prep_time_mins||0),0)/rows.length;
+    t.avgPrep = view.reduce((s,r)=>s+(r.prep_time_mins||0),0)/view.length;
     return t;
-  }, [rows]);
+  }, [view]);
 
   const sorted = useMemo(() => {
-    const arr = [...rows];
+    const arr = [...view];
     arr.sort((a,b) => (b[sortKey]||0) - (a[sortKey]||0));
     return arr;
-  }, [rows, sortKey]);
+  }, [view, sortKey]);
 
   const storeName = (r) => r.site_name.replace(/^Chocoberry\s*[-–]\s*/, "");
 
@@ -22507,7 +22520,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
     ["gross_sales","Gross"], ["orders_delivered","Orders"], ["commission_pct","Comm %"],
     ["avg_rating","Rating"], ["prep_time_mins","Prep"], ["open_rate_pct","Open %"],
   ];
-  const unmatched = rows.filter(r => !r.store_id).length;
+  const unmatched = selectedStore ? 0 : rows.filter(r => !r.store_id).length;
 
   return (
     <div className="space-y-4">
@@ -22515,7 +22528,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2"><Truck size={18} className="text-indigo-400"/> Delivery performance</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Deliveroo · {week ? `week ending ${week}` : "no data yet"}{rows.length ? ` · ${rows.length} stores` : ""}</p>
+          <p className="text-xs text-slate-500 mt-0.5">Deliveroo · {week ? `week ending ${week}` : "no data yet"}{selectedStore ? ` · ${selectedStore.shortName || selectedStore.name}` : (rows.length ? ` · ${rows.length} stores` : "")}</p>
         </div>
         <div className="flex items-center gap-2">
           {weeks.length > 0 && (
@@ -22557,7 +22570,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {view.length === 0 ? (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-10 text-center">
           <Truck size={28} className="mx-auto text-slate-600 mb-3"/>
           <div className="text-sm text-slate-400">No delivery data yet.</div>
@@ -22598,7 +22611,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
           {/* STORE LEAGUE TABLE */}
           <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
             <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800 flex-wrap">
-              <div className="text-sm font-bold text-white">Store league table</div>
+              <div className="text-sm font-bold text-white">{selectedStore ? "Delivery detail" : "Store league table"}</div>
               <div className="flex items-center gap-1 flex-wrap">
                 {sortBtns.map(([k,l]) => (
                   <button key={k} onClick={()=>setSortKey(k)} className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${sortKey===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
@@ -22668,7 +22681,8 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
             </div>
           </div>
 
-          {/* INSIGHT CARDS: worst performers to action */}
+          {/* INSIGHT CARDS: worst performers to action — estate view only */}
+          {!selectedStore && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
               <div className="text-sm font-bold text-white mb-2 flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-400"/> Needs attention</div>
@@ -22691,7 +22705,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
               <div className="text-sm font-bold text-white mb-2 flex items-center gap-1.5"><TrendingUp size={14} className="text-emerald-400"/> Top performers</div>
               <div className="space-y-1.5 text-xs">
-                {[...rows].sort((a,b)=>(b.gross_sales||0)-(a.gross_sales||0)).slice(0,5).map((r,i)=>(
+                {[...view].sort((a,b)=>(b.gross_sales||0)-(a.gross_sales||0)).slice(0,5).map((r,i)=>(
                   <div key={r.id} className="flex justify-between">
                     <span className="text-slate-300">{i+1}. {storeName(r)}</span>
                     <span className="text-white font-semibold">{gbp(r.gross_sales)} <span className="text-slate-500 font-normal">· {r.avg_rating?r.avg_rating.toFixed(1):"—"}★</span></span>
@@ -22700,6 +22714,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
               </div>
             </div>
           </div>
+          )}
         </>
       )}
     </div>

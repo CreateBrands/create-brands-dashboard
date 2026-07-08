@@ -13499,9 +13499,28 @@ export function parseDeliverooReports(files, { weekStart, weekEnd } = {}) {
 
 // Match to internal stores and upsert.
 export async function saveDeliverooPerformance(parsedRows, stores = []) {
-  const idx = new Map(stores.map(st => [_norm(st.name), st]));
+  // Build a lookup from several normalised keys per store (name + shortName),
+  // so Deliveroo's "Chocoberry - Banbury" matches a store named "Banbury",
+  // "Chocoberry Banbury", etc. Also keep a list for a contains() fallback.
+  const idx = new Map();
+  const storeList = [];
+  for (const st of stores) {
+    const keys = new Set([_norm(st.name), _norm(st.shortName)].filter(Boolean));
+    keys.forEach(k => { if (k && !idx.has(k)) idx.set(k, st); });
+    const short = _norm(st.shortName) || _norm(st.name);
+    if (short) storeList.push({ st, key: short });
+  }
+  const matchStore = (siteName) => {
+    const n = _norm(siteName);
+    if (idx.has(n)) return idx.get(n);
+    let best = null;
+    for (const { st, key } of storeList) {
+      if (key.length >= 3 && (n.includes(key) || key.includes(n))) { best = st; break; }
+    }
+    return best;
+  };
   const rows = parsedRows.map(r => {
-    const match = idx.get(_norm(r.site_name));
+    const match = matchStore(r.site_name);
     return {
       id: `dlv-${r.week_end || "na"}-${_norm(r.site_name)}`,
       week_start: r.week_start, week_end: r.week_end,
