@@ -22641,6 +22641,11 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
       ratingSum: a.ratingSum + (r.avg_rating||0)*(r.avg_rating?1:0), ratingN: a.ratingN + (r.avg_rating?1:0),
       newC: a.newC + (r.orders_new||0), rejValue: a.rejValue + (r.rejection_reasons||[]).reduce((s,x)=>s+(x.value||0),0),
     }), { gross:0,orders:0,commission:0,subtotal:0,commVat:0,cancelled:0,rejected:0,ratingSum:0,ratingN:0,newC:0,rejValue:0 });
+    // VAT on commission is 20%. If the stored VAT is missing (data uploaded
+    // before VAT parsing existed), fall back to estimating it so the money-flow
+    // picture stays accurate rather than showing £0.
+    t.commVatEstimated = t.commVat < t.commission * 0.05 && t.commission > 0;
+    if (t.commVatEstimated) t.commVat = +(t.commission * 0.2).toFixed(2);
     t.commTotal = t.commission + t.commVat;                          // true cost incl VAT
     t.commPct = t.subtotal > 0 ? (t.commission/t.subtotal*100) : 0;   // base rate
     t.commTotalPct = t.subtotal > 0 ? (t.commTotal/t.subtotal*100) : 0; // true take-rate
@@ -22822,7 +22827,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
                       </div>
                     ))}
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-2">You keep <b className="text-emerald-400">{(totals.netAfterComm/sub*100).toFixed(0)}p</b> of every £1 of delivery subtotal. Standard Deliveroo rate is 30% + VAT; the blend is lower where discounted order types apply. VAT on commission is typically reclaimable if VAT-registered.</div>
+                  <div className="text-[11px] text-slate-500 mt-2">You keep <b className="text-emerald-400">{(totals.netAfterComm/sub*100).toFixed(0)}p</b> of every £1 of delivery subtotal. Standard Deliveroo rate is 30% + VAT; the blend is lower where discounted order types apply. VAT on commission is typically reclaimable if VAT-registered.{totals.commVatEstimated && <span className="text-amber-400/80"> VAT estimated at 20% — re-upload this week to show actuals.</span>}</div>
                 </>
               );
             })()}
@@ -22876,7 +22881,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
                           <td className="px-3 py-2 text-right text-white tabular-nums">{gbp(r.gross_sales)}</td>
                           <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{r.orders_delivered}</td>
                           <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{gbp2(r.avg_order_value)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums"><span className={(r.commission_total_pct||r.commission_pct)>31?"text-red-400":"text-slate-300"}>{(r.commission_total_pct||r.commission_pct)?.toFixed(1)}%</span></td>
+                          <td className="px-3 py-2 text-right tabular-nums">{(() => { const tp = r.commission_total_pct || (r.commission_pct ? r.commission_pct * 1.2 : 0); return <span className={tp>31?"text-red-400":"text-slate-300"}>{tp?tp.toFixed(1):"—"}%</span>; })()}</td>
                           <td className="px-3 py-2 text-right tabular-nums"><span className={r.avg_rating&&r.avg_rating<4.4?"text-red-400":"text-amber-300"}>{r.avg_rating?r.avg_rating.toFixed(1):"—"}</span></td>
                           <td className="px-3 py-2 text-right tabular-nums"><span className={r.prep_time_mins>13?"text-red-400":"text-slate-300"}>{r.prep_time_mins?r.prep_time_mins.toFixed(1):"—"}</span></td>
                           <td className="px-3 py-2 text-right tabular-nums"><span className={r.open_rate_pct&&r.open_rate_pct<90?"text-red-400":"text-slate-300"}>{r.open_rate_pct?r.open_rate_pct.toFixed(0)+"%":"—"}</span></td>
