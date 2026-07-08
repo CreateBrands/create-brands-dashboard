@@ -13489,12 +13489,50 @@ export function parseDeliverooReports(files, { weekStart, weekEnd } = {}) {
     s.rejection_reasons.push({ reason, count: _num(r["Total rejected orders"]), value: _num(r["Order value of rejected orders"]) });
   });
 
+  // Day × daypart grids — keep the full matrix per store for heatmaps.
+  const DAYPARTS = ["Breakfast (04:00 - 11:00)", "Lunch (11:00 - 14:00)", "Interpeak (14:00 - 17:00)", "Dinner (17:00 - 00:00)", "Late night (00:00 - 04:00)"];
+  const DP_SHORT = ["Breakfast", "Lunch", "Afternoon", "Dinner", "Late"];
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const parseGrid = (text, siteKey) => {
+    const grids = new Map();
+    _toRows(text || "").forEach(r => {
+      const site = r[siteKey]; if (!site || /^all sites$/i.test(site)) return;
+      const day = r["Day of week"]; if (!day) return;
+      const g = grids.get(site) || {};
+      g[day] = DAYPARTS.map(dp => _num(r[dp]));
+      grids.set(site, g);
+    });
+    // Convert to ordered 7×5 matrix
+    const out = new Map();
+    grids.forEach((g, site) => { out.set(site, DAYS.map(d => g[d] || [0,0,0,0,0])); });
+    return out;
+  };
+  const prepGrid = parseGrid(files.prep_time, "Restaurant name");
+  const riderGrid = parseGrid(files.rider_wait, "Restaurant name");
+  const openGrid = parseGrid(files.availability_open_rate, "Restaurant name");
+  prepGrid.forEach((grid, site) => { const s = ensure(site); if (s) s.prep_grid = grid; });
+  riderGrid.forEach((grid, site) => { const s = ensure(site); if (s) s.rider_grid = grid; });
+  openGrid.forEach((grid, site) => { const s = ensure(site); if (s) s.open_grid = grid; });
+
+  // Rejection heatmap: Site × daypart (the "% of orders rejected" + value rows)
+  _toRows(files.rejected_orders || "").forEach(r => {
+    const site = r["Site"]; if (!site || /^all sites$/i.test(site)) return;
+    const metric = (r["Metric"] || "").toLowerCase();
+    const s = ensure(site); if (!s) return;
+    const vals = DAYPARTS.map(dp => _num(r[dp]));
+    if (metric.includes("value")) s.reject_value_by_daypart = vals;
+    else if (metric.includes("rejected")) s.reject_pct_by_daypart = vals;
+  });
+
   return Array.from(bySite.values())
     .map(s => ({
       week_start: weekStart || null, week_end: weekEnd || null,
       gross_sales: 0, orders_delivered: 0, avg_order_value: 0, avg_rating: null,
       subtotal: 0, commission: 0, commission_pct: 0, orders_cancelled: 0, orders_rejected: 0,
-      items_sold: s.items_sold || [], rejection_reasons: s.rejection_reasons || [], ...s,
+      items_sold: s.items_sold || [], rejection_reasons: s.rejection_reasons || [],
+      prep_grid: s.prep_grid || null, rider_grid: s.rider_grid || null, open_grid: s.open_grid || null,
+      reject_pct_by_daypart: s.reject_pct_by_daypart || null, reject_value_by_daypart: s.reject_value_by_daypart || null,
+      ...s,
     }))
     // Drop sites with no real activity that week (e.g. appear only in a
     // zero-filled availability report).
@@ -13541,6 +13579,8 @@ export async function saveDeliverooPerformance(parsedRows, stores = []) {
       avg_order_duration_mins: r.avg_order_duration_mins ?? null,
       open_rate_pct: r.open_rate_pct ?? null, rejected_pct: r.rejected_pct ?? null,
       items_sold: r.items_sold || [], rejection_reasons: r.rejection_reasons || [],
+      prep_grid: r.prep_grid || null, rider_grid: r.rider_grid || null, open_grid: r.open_grid || null,
+      reject_pct_by_daypart: r.reject_pct_by_daypart || null, reject_value_by_daypart: r.reject_value_by_daypart || null,
       uploaded_at: new Date().toISOString(),
     };
   });

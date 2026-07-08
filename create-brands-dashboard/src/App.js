@@ -22405,6 +22405,190 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
 // uploads. Covers economics (commission), speed/ops, store league, and
 // availability/rejections. Upload the weekly report bundle to refresh.
 // ============================================================================
+// ── Deliveroo-style single-store detail: rich sections mirroring the Hub ──
+function DeliveryStoreDetail({ r, gbp, gbp2 }) {
+  const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const DP = ["Breakfast","Lunch","Afternoon","Dinner","Late"];
+  const [heatMetric, setHeatMetric] = useState("prep"); // prep | rider | open
+
+  // Heat colour for a value given metric semantics
+  const heatCell = (metric, v) => {
+    if (v == null) return { bg: "#1e293b", txt: "#475569" };
+    if (metric === "open") { // higher is better (0-100)
+      if (v >= 99) return { bg: "#065f46", txt: "#d1fae5" };
+      if (v >= 95) return { bg: "#0f766e", txt: "#ccfbf1" };
+      if (v >= 90) return { bg: "#b45309", txt: "#fef3c7" };
+      return { bg: "#991b1b", txt: "#fee2e2" };
+    }
+    if (metric === "prep") { // lower is better (mins); target ~12
+      if (v === 0) return { bg: "#1e293b", txt: "#475569" };
+      if (v <= 10) return { bg: "#065f46", txt: "#d1fae5" };
+      if (v <= 13) return { bg: "#0f766e", txt: "#ccfbf1" };
+      if (v <= 16) return { bg: "#b45309", txt: "#fef3c7" };
+      return { bg: "#991b1b", txt: "#fee2e2" };
+    }
+    // rider wait past target: lower better
+    if (v === 0) return { bg: "#065f46", txt: "#d1fae5" };
+    if (v <= 1) return { bg: "#0f766e", txt: "#ccfbf1" };
+    if (v <= 3) return { bg: "#b45309", txt: "#fef3c7" };
+    return { bg: "#991b1b", txt: "#fee2e2" };
+  };
+  const grid = heatMetric === "prep" ? r.prep_grid : heatMetric === "rider" ? r.rider_grid : r.open_grid;
+  const fmtCell = (metric, v) => v == null ? "" : metric === "open" ? Math.round(v)+"" : v.toFixed(1);
+
+  const openBars = (r.open_grid || []).map(row => { const vals = row.filter(v=>v>0); return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0; });
+
+  return (
+    <div className="space-y-4">
+      {/* Service metrics row — Deliveroo "Maintain high service levels" */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="text-sm font-bold text-white mb-3">Service levels</div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[
+            { label: "Rejected", val: r.orders_rejected||0, sub: "orders", warn: (r.orders_rejected||0)>0 },
+            { label: "Cancelled", val: r.orders_cancelled||0, sub: "orders", warn: (r.orders_cancelled||0)>2 },
+            { label: "Prep time", val: (r.prep_time_mins||0).toFixed(1)+"m", sub: "avg", warn: r.prep_time_mins>13 },
+            { label: "Rider wait", val: (r.rider_wait_mins||0).toFixed(1)+"m", sub: "past target", warn: r.rider_wait_mins>2 },
+            { label: "Order time", val: (r.avg_order_duration_mins||0).toFixed(0)+"m", sub: "total", warn: false },
+          ].map(m => (
+            <div key={m.label} className={`rounded-xl p-3 border ${m.warn?"border-red-500/30 bg-red-950/15":"border-slate-800 bg-slate-950/40"}`}>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide">{m.label}</div>
+              <div className={`text-xl font-black mt-0.5 ${m.warn?"text-red-300":"text-white"}`}>{m.val}</div>
+              <div className="text-[10px] text-slate-600">{m.sub}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Best sellers */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="text-sm font-bold text-white mb-3">Best sellers</div>
+          {(r.items_sold||[]).length === 0 ? <div className="text-xs text-slate-600">No item data.</div> : (
+            <div className="space-y-2">
+              {r.items_sold.slice(0,6).map((it,i)=>(
+                <div key={i} className="flex items-center gap-3">
+                  <div className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">{i+1}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm text-white truncate">{it.name}</div>
+                    <div className="text-[10px] text-slate-500">{it.qty} sold · {it.category}</div>
+                  </div>
+                  <div className="text-sm font-bold text-white">{gbp(it.revenue)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Customer mix */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="text-sm font-bold text-white mb-3">Customer mix</div>
+          {(() => {
+            const parts = [
+              { label: "New", val: r.orders_new||0, color: "#3b82f6" },
+              { label: "Repeat", val: r.orders_repeat||0, color: "#8b5cf6" },
+              { label: "Frequent", val: r.orders_frequent||0, color: "#10b981" },
+            ];
+            const tot = parts.reduce((s,p)=>s+p.val,0)||1;
+            return (
+              <>
+                <div className="flex h-6 rounded-lg overflow-hidden mb-3">
+                  {parts.map(p=>p.val>0 && <div key={p.label} style={{width:`${p.val/tot*100}%`,background:p.color}} title={`${p.label}: ${p.val}`}/>)}
+                </div>
+                <div className="space-y-1.5">
+                  {parts.map(p=>(
+                    <div key={p.label} className="flex items-center gap-2 text-xs">
+                      <span className="w-2.5 h-2.5 rounded-full" style={{background:p.color}}/>
+                      <span className="text-slate-400 flex-1">{p.label} customers</span>
+                      <span className="text-white font-bold">{p.val}</span>
+                      <span className="text-slate-600 w-10 text-right">{(p.val/tot*100).toFixed(0)}%</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 text-xs pt-1.5 border-t border-slate-800">
+                    <span className="text-slate-500 flex-1">Menu conversion</span>
+                    <span className="text-white font-bold">{r.menu_conversion?r.menu_conversion.toFixed(1)+"%":"—"}</span>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </div>
+
+      {/* Day × time heatmap */}
+      {grid && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <div className="text-sm font-bold text-white">Performance by day &amp; time</div>
+            <div className="flex gap-1">
+              {[["prep","Prep time"],["rider","Rider wait"],["open","Open rate"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setHeatMetric(k)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${heatMetric===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="text-[11px] border-separate" style={{borderSpacing:3}}>
+              <thead>
+                <tr><th></th>{DP.map(d=><th key={d} className="text-slate-500 font-semibold px-1 pb-1 text-center">{d}</th>)}</tr>
+              </thead>
+              <tbody>
+                {DAYS.map((day,di)=>(
+                  <tr key={day}>
+                    <td className="text-slate-500 font-semibold pr-2 text-right">{day}</td>
+                    {(grid[di]||[0,0,0,0,0]).map((v,ci)=>{ const c=heatCell(heatMetric,v); return (
+                      <td key={ci} style={{background:c.bg,color:c.txt}} className="text-center font-bold rounded" title={`${day} ${DP[ci]}: ${fmtCell(heatMetric,v)}`}>
+                        <div style={{width:52,padding:"6px 0"}}>{fmtCell(heatMetric,v)}</div>
+                      </td>
+                    );})}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[10px] text-slate-600 mt-2">{heatMetric==="open"?"% of scheduled hours open — higher is better":heatMetric==="prep"?"Avg prep minutes — lower is better (target ~12)":"Rider wait past target (mins) — lower is better"}</div>
+        </div>
+      )}
+
+      {/* Open-rate bars + rejections by daypart */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {openBars.some(v=>v>0) && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <div className="text-sm font-bold text-white mb-1">Open rate by day</div>
+            <div className="text-[11px] text-slate-500 mb-3">Avg {r.open_rate_pct?r.open_rate_pct.toFixed(1):"—"}% of scheduled hours</div>
+            <div className="flex items-end justify-between gap-1.5" style={{height:120}}>
+              {openBars.map((v,i)=>{ const h=Math.max(4,(v-80)/20*100); return (
+                <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                  <div className="w-full rounded-t" style={{height:`${h}%`,background:v>=99?"#10b981":v>=90?"#f59e0b":"#ef4444",minHeight:4}} title={`${DAYS[i]}: ${v.toFixed(1)}%`}/>
+                  <span className="text-[9px] text-slate-600">{DAYS[i]}</span>
+                </div>
+              );})}
+            </div>
+          </div>
+        )}
+        {r.reject_pct_by_daypart && r.reject_pct_by_daypart.some(v=>v>0) ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <div className="text-sm font-bold text-white mb-3">Rejections by time of day</div>
+            <div className="space-y-2">
+              {DP.map((dp,i)=>{ const pct=r.reject_pct_by_daypart[i]; const val=(r.reject_value_by_daypart||[])[i]||0; if(!pct&&!val) return null; return (
+                <div key={dp} className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-400 w-20">{dp}</span>
+                  <div className="flex-1 h-4 bg-slate-800 rounded overflow-hidden"><div className="h-full bg-red-500" style={{width:`${Math.min(100,pct*5)}%`}}/></div>
+                  <span className="text-red-300 font-bold w-12 text-right">{pct?pct.toFixed(1)+"%":"0%"}</span>
+                  <span className="text-slate-500 w-14 text-right">{gbp(val)}</span>
+                </div>
+              );})}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 flex items-center justify-center">
+            <div className="text-center"><CheckCircle size={22} className="mx-auto text-emerald-400 mb-1"/><div className="text-xs text-slate-400">No rejections this week</div></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DeliveryPerformanceView({ stores = [], brands = [], currentUser, selectedStore }) {
   const [rows, setRows] = useState([]);
   const [weeks, setWeeks] = useState([]);
@@ -22481,6 +22665,8 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
     { key: "items_sold", match: /items_sold/i, label: "Items sold" },
     { key: "customers", match: /customers/i, label: "Customers" },
     { key: "speed_summary", match: /speed-summary/i, label: "Speed summary" },
+    { key: "prep_time", match: /prep-time/i, label: "Prep time (by day)" },
+    { key: "rider_wait", match: /rider-wait/i, label: "Rider wait (by day)" },
     { key: "availability_open_rate", match: /open-rate/i, label: "Open rate" },
     { key: "rejected_orders", match: /rejected-orders_/i, label: "Rejected orders" },
     { key: "rejected_by_reason", match: /rejected-orders-by-reason/i, label: "Rejected by reason" },
@@ -22648,7 +22834,13 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
             </div>
           )}
 
-          {/* STORE LEAGUE TABLE */}
+          {/* SINGLE-STORE: rich Deliveroo-style detail */}
+          {selectedStore && view.length === 1 && (
+            <DeliveryStoreDetail r={view[0]} gbp={gbp} gbp2={gbp2}/>
+          )}
+
+          {/* STORE LEAGUE TABLE — estate view (or multi-store scope) */}
+          {(!selectedStore || view.length > 1) && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
             <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800 flex-wrap">
               <div className="text-sm font-bold text-white">{selectedStore ? "Delivery detail" : "Store league table"}</div>
@@ -22720,6 +22912,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
               </table>
             </div>
           </div>
+          )}
 
           {/* INSIGHT CARDS: worst performers to action — estate view only */}
           {!selectedStore && (
