@@ -13674,19 +13674,31 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
     s.channel_mix = a.ch; s.fulfil_mix = a.ff;
   });
 
-  // Ratings — star breakdown + average.
+  // Ratings — star breakdown + average + individual reviews for drill-down.
   const ratings = new Map();
   _toRows(files.ratings || "").forEach(r => {
     const site = r["Restaurant"]; if (!site) return;
     const v = Math.round(_num(r["Rating value"])); if (v < 1 || v > 5) return;
-    const a = ratings.get(site) || { 1:0,2:0,3:0,4:0,5:0, sum:0, n:0 };
+    const a = ratings.get(site) || { 1:0,2:0,3:0,4:0,5:0, sum:0, n:0, reviews: [] };
     a[v]++; a.sum += v; a.n++;
+    const comment = (r["Comment"] || "").trim();
+    const tags = (r["Rating tags"] || "").trim();
+    // Keep reviews that carry a comment or tags (the useful ones to read).
+    if (comment || tags) {
+      a.reviews.push({
+        stars: v, comment: comment.slice(0, 300),
+        tags: tags ? tags.split(",").map(t => t.trim().replace(/^restaurant_/, "").replace(/_/g, " ")).filter(Boolean).slice(0, 4) : [],
+        date: (r["Rating date"] || "").trim(),
+      });
+    }
     ratings.set(site, a);
   });
   ratings.forEach((a, site) => {
     const s = ensure(site); if (!s) return;
     s.rating_5 = a[5]; s.rating_4 = a[4]; s.rating_3 = a[3]; s.rating_2 = a[2]; s.rating_1 = a[1];
     s.avg_rating = a.n > 0 ? +(a.sum / a.n).toFixed(2) : null;
+    // Store reviews worst-first (most actionable), cap to keep the row small.
+    s.reviews = a.reviews.sort((x, y) => x.stars - y.stars).slice(0, 40);
   });
 
   // Order history — prep + delivery times + day×hour sales grid + peak hours.
@@ -13741,11 +13753,34 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
     s.inaccurate_items = Object.values(agg).sort((a, b) => b.count - a.count).slice(0, 15);
   });
 
+  // Inaccurate orders — per-order detail (issue, items, refund) for drill-down.
+  const inaccOrders = new Map();
+  _toRows(files.inaccurate_orders || "").forEach(r => {
+    const site = r["Restaurant"]; if (!site) return;
+    const list = inaccOrders.get(site) || [];
+    const items = (r["Inaccurate items"] || r["Inaccurate Customisations"] || "").trim();
+    list.push({
+      issue: (r["Order issue"] || "").replace(/_/g, " ").toLowerCase(),
+      items: items.slice(0, 80),
+      ticket: _num(r["Ticket size"]),
+      refundMerchant: _num(r["Refund Covered by Merchant"]),
+      refundTotal: _num(r["Customer refunded"]),
+      feedback: (r["Customer feedback"] || "").trim().slice(0, 140),
+      date: (r["Time customer ordered"] || "").split(" ")[0] || "",
+    });
+    inaccOrders.set(site, list);
+  });
+  inaccOrders.forEach((list, site) => {
+    const s = ensure(site); if (!s) return;
+    s.inaccurate_orders = list.sort((a, b) => b.refundMerchant - a.refundMerchant).slice(0, 30);
+  });
+
   return Array.from(bySite.values())
     .map(s => ({
       week_start: weekStart || null, week_end: weekEnd || null,
       sales_incl_vat: 0, orders: 0, service_fee: 0, service_fee_pct: 0, payout: 0,
       inaccurate_items: s.inaccurate_items || [], items_sold: [],
+      reviews: s.reviews || [], inaccurate_orders: s.inaccurate_orders || [],
       sales_hour_grid: s.sales_hour_grid || null, peak_hour: s.peak_hour ?? null, offpeak_hour: s.offpeak_hour ?? null,
       orders_chargeback: s.orders_chargeback || 0, uber_one_pct: s.uber_one_pct ?? null,
       channel_mix: s.channel_mix || {}, fulfil_mix: s.fulfil_mix || {},
@@ -13783,6 +13818,7 @@ export async function saveUberEatsPerformance(parsedRows, stores = []) {
       avg_prep_mins: r.avg_prep_mins ?? null, avg_delivery_mins: r.avg_delivery_mins ?? null,
       downtime_mins: r.downtime_mins || 0,
       items_sold: r.items_sold || [], inaccurate_items: r.inaccurate_items || [],
+      reviews: r.reviews || [], inaccurate_orders: r.inaccurate_orders || [],
       sales_hour_grid: r.sales_hour_grid || null, peak_hour: r.peak_hour ?? null, offpeak_hour: r.offpeak_hour ?? null,
       orders_chargeback: r.orders_chargeback || 0, uber_one_pct: r.uber_one_pct ?? null,
       channel_mix: r.channel_mix || {}, fulfil_mix: r.fulfil_mix || {},

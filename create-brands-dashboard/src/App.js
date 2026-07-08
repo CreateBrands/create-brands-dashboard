@@ -22481,6 +22481,7 @@ function UberEatsPerformanceView({ stores = [], currentUser, selectedStore }) {
     { key: "ratings", match: /restaurant_rating_local/i, label: "Ratings" },
     { key: "order_history", match: /order_history/i, label: "Order history" },
     { key: "top_inaccurate", match: /top_inaccurate/i, label: "Top inaccurate items" },
+    { key: "inaccurate_orders", match: /inaccurate_orders/i, label: "Inaccurate orders (detail)" },
   ];
   const onFiles = async (fileList) => {
     const next = { ...pendingFiles };
@@ -22705,6 +22706,10 @@ function UberStoreDetail({ r, gbp, gbp2 }) {
     { star: 2, n: r.rating_2||0 }, { star: 1, n: r.rating_1||0 },
   ];
   const totalRatings = ratings.reduce((s,x)=>s+x.n,0);
+  const [showReviews, setShowReviews] = useState(false);
+  const [showAccuracy, setShowAccuracy] = useState(false);
+  const reviewsWithText = (r.reviews||[]).filter(v => v.comment || (v.tags||[]).length);
+  const inaccOrders = r.inaccurate_orders || [];
   const fmtHr = (h) => h==null?"—":h===0?"12am":h<12?h+"am":h===12?"12pm":(h-12)+"pm";
   const issues = (r.orders_cancelled||0) + (r.orders_refunded||0);
   const errPct = r.orders>0 ? (issues/r.orders*100) : 0;
@@ -22914,6 +22919,31 @@ function UberStoreDetail({ r, gbp, gbp2 }) {
               </div>
             </div>
           )}
+          {reviewsWithText.length > 0 && (
+            <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+              <button onClick={()=>setShowReviews(v=>!v)} className="text-xs font-bold flex items-center gap-1" style={{ color: C.accent }}>
+                {showReviews ? "Hide" : "Read"} {reviewsWithText.length} written review{reviewsWithText.length===1?"":"s"} <span style={{fontSize:9}}>{showReviews?"▲":"▼"}</span>
+              </button>
+              {showReviews && (
+                <div className="mt-3 space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                  {reviewsWithText.map((rv,i)=>(
+                    <div key={i} className="rounded-xl p-3" style={{ background: rv.stars>=4?C.greenBg:rv.stars===3?C.amberBg:C.redBg }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="text-xs font-black" style={{ color: rv.stars>=4?C.green:rv.stars===3?C.amber:C.red }}>{"★".repeat(rv.stars)}{"☆".repeat(5-rv.stars)}</div>
+                        {rv.date && <div className="text-[10px]" style={{ color: C.inkFaint }}>{rv.date}</div>}
+                      </div>
+                      {rv.comment && <div className="text-xs mb-1.5" style={{ color: C.ink }}>“{rv.comment}”</div>}
+                      {(rv.tags||[]).length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {rv.tags.map((t,j)=><span key={j} className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: C.cream, color: C.inkSoft, border: `1px solid ${C.line}` }}>{t}</span>)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Card>
 
         {/* TOP INACCURATE ITEMS */}
@@ -22932,6 +22962,30 @@ function UberStoreDetail({ r, gbp, gbp2 }) {
                 <div className="text-lg font-black" style={{color:C.red}}>{it.count}</div>
               </div>
             ))}</div>
+          )}
+          {inaccOrders.length > 0 && (
+            <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+              <button onClick={()=>setShowAccuracy(v=>!v)} className="text-xs font-bold flex items-center gap-1" style={{ color: C.accent }}>
+                {showAccuracy ? "Hide" : "See"} {inaccOrders.length} refunded order{inaccOrders.length===1?"":"s"} <span style={{fontSize:9}}>{showAccuracy?"▲":"▼"}</span>
+              </button>
+              {showAccuracy && (
+                <div className="mt-3 space-y-2 max-h-80 overflow-y-auto pr-1">
+                  {inaccOrders.map((o,i)=>(
+                    <div key={i} className="rounded-xl p-3" style={{ background: C.creamAlt }}>
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-semibold" style={{ color: C.ink }}>{o.items || o.issue}</div>
+                        <div className="text-sm font-black" style={{ color: C.red }}>−{gbp2(o.refundMerchant)}</div>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 text-[10px]" style={{ color: C.inkFaint }}>
+                        <span>{o.issue}</span><span>·</span><span>ticket {gbp2(o.ticket)}</span>{o.date && <><span>·</span><span>{o.date}</span></>}
+                      </div>
+                      {o.feedback && <div className="text-[11px] mt-1 italic" style={{ color: C.inkSoft }}>“{o.feedback}”</div>}
+                    </div>
+                  ))}
+                  <div className="text-[10px] pt-1" style={{ color: C.inkFaint }}>Merchant-covered refunds total {gbp2(inaccOrders.reduce((s,o)=>s+o.refundMerchant,0))}.</div>
+                </div>
+              )}
+            </div>
           )}
         </Card>
       </div>
