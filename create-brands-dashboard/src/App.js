@@ -22667,6 +22667,49 @@ function UberStoreDetail({ r, gbp, gbp2 }) {
         })()}
       </div>
 
+      {/* Sales by hour heatmap — mirrors Uber Manager */}
+      {r.sales_hour_grid && (() => {
+        const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+        const grid = r.sales_hour_grid;
+        const flat = grid.flat();
+        const max = Math.max(...flat, 1);
+        const heat = (v) => {
+          if (!v) return "#0f172a";
+          const t = v / max;
+          if (t > 0.66) return "#065f46";
+          if (t > 0.33) return "#0f766e";
+          if (t > 0.1) return "#155e63";
+          return "#1e3a3a";
+        };
+        const hrs = Array.from({length:24},(_,h)=>h);
+        const fmtHr = (h) => h===0?"12a":h<12?h+"a":h===12?"12p":(h-12)+"p";
+        return (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+              <div className="text-sm font-bold text-white">Sales by hour</div>
+              {r.peak_hour!=null && <div className="text-[11px] text-slate-500">Peak <b className="text-emerald-400">{fmtHr(r.peak_hour)}</b></div>}
+            </div>
+            <div className="text-[11px] text-slate-500 mb-3">Order value by day &amp; time of day</div>
+            <div className="overflow-x-auto">
+              <table className="border-separate" style={{borderSpacing:2}}>
+                <thead><tr><th></th>{hrs.filter(h=>h>=8||h<=3).map(h=><th key={h} className="text-[8px] text-slate-600 font-normal px-0.5">{fmtHr(h)}</th>)}</tr></thead>
+                <tbody>
+                  {DAYS.map((day,di)=>(
+                    <tr key={day}>
+                      <td className="text-[10px] text-slate-500 font-semibold pr-1.5 text-right">{day}</td>
+                      {hrs.filter(h=>h>=8||h<=3).map(h=>{ const v=grid[di][h]; return (
+                        <td key={h} style={{background:heat(v),width:16,height:16}} className="rounded-sm" title={`${day} ${fmtHr(h)}: ${gbp(v)}`}/>
+                      );})}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="text-[10px] text-slate-600 mt-2">Darker = more sales. Showing 8am–3am (trading hours).</div>
+          </div>
+        );
+      })()}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Rating breakdown — Uber gives us the star split Deliveroo didn't */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">

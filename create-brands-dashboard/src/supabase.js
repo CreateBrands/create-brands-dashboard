@@ -13669,19 +13669,41 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
     s.avg_rating = a.n > 0 ? +(a.sum / a.n).toFixed(2) : null;
   });
 
-  // Order history — prep + delivery times.
+  // Order history — prep + delivery times + day×hour sales grid + peak hours.
   const oh = new Map();
   _toRows(files.order_history || "").forEach(r => {
     const site = r["Restaurant"]; if (!site) return;
-    const a = oh.get(site) || { prep: 0, prepN: 0, dur: 0, durN: 0 };
+    const a = oh.get(site) || { prep: 0, prepN: 0, dur: 0, durN: 0, grid: null, hourTot: null };
     const prep = _num(r["Original prep time"]); if (prep > 0) { a.prep += prep; a.prepN++; }
     const dur = _num(r["Order duration"]); if (dur > 0) { a.dur += dur; a.durN++; }
+    // Day-of-week × hour sales grid (7 rows Mon–Sun × 24 hours) from the order
+    // timestamp and ticket size, mirroring Uber's "Sales by hour" heatmap.
+    const ts = r["Time customer ordered"] || r["Date ordered"];
+    const ticket = _num(r["Ticket size"]);
+    if (ts) {
+      const d = new Date(ts.replace(" ", "T"));
+      if (!isNaN(d.getTime())) {
+        if (!a.grid) { a.grid = Array.from({length:7},()=>new Array(24).fill(0)); a.hourTot = new Array(24).fill(0); }
+        const dow = (d.getDay() + 6) % 7;    // Mon=0 … Sun=6
+        const hr = d.getHours();
+        a.grid[dow][hr] += ticket;
+        a.hourTot[hr] += ticket;
+      }
+    }
     oh.set(site, a);
   });
   oh.forEach((a, site) => {
     const s = ensure(site); if (!s) return;
     s.avg_prep_mins = a.prepN > 0 ? +(a.prep / a.prepN).toFixed(1) : null;
     s.avg_delivery_mins = a.durN > 0 ? +(a.dur / a.durN).toFixed(1) : null;
+    if (a.grid) {
+      s.sales_hour_grid = a.grid.map(row => row.map(v => +v.toFixed(2)));
+      // Peak / off-peak hour from the hourly totals.
+      const ht = a.hourTot;
+      let peak = 0, off = 0;
+      for (let h = 1; h < 24; h++) { if (ht[h] > ht[peak]) peak = h; if (ht[h] > 0 && (ht[off] === 0 || ht[h] < ht[off])) off = h; }
+      s.peak_hour = peak; s.offpeak_hour = off;
+    }
   });
 
   // Inaccurate items — top missing/wrong items per store.
@@ -13703,7 +13725,9 @@ export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
     .map(s => ({
       week_start: weekStart || null, week_end: weekEnd || null,
       sales_incl_vat: 0, orders: 0, service_fee: 0, service_fee_pct: 0, payout: 0,
-      inaccurate_items: s.inaccurate_items || [], items_sold: [], ...s,
+      inaccurate_items: s.inaccurate_items || [], items_sold: [],
+      sales_hour_grid: s.sales_hour_grid || null, peak_hour: s.peak_hour ?? null, offpeak_hour: s.offpeak_hour ?? null,
+      ...s,
     }))
     .filter(s => s.sales_incl_vat > 0 || s.orders > 0);
 }
@@ -13737,6 +13761,7 @@ export async function saveUberEatsPerformance(parsedRows, stores = []) {
       avg_prep_mins: r.avg_prep_mins ?? null, avg_delivery_mins: r.avg_delivery_mins ?? null,
       downtime_mins: r.downtime_mins || 0,
       items_sold: r.items_sold || [], inaccurate_items: r.inaccurate_items || [],
+      sales_hour_grid: r.sales_hour_grid || null, peak_hour: r.peak_hour ?? null, offpeak_hour: r.offpeak_hour ?? null,
       uploaded_at: new Date().toISOString(),
     };
   });
