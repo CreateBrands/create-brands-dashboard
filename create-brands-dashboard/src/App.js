@@ -41,7 +41,7 @@ import {
   fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, parseDeliverooReports, saveDeliverooPerformance, fetchDeliverooPerformance, fetchDeliverooWeeks, SALES_CATEGORIES, fetchFlipdishCategories, fetchItemsInCategory, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, parseDeliverooReports, saveDeliverooPerformance, fetchDeliverooPerformance, fetchDeliverooWeeks, parseUberEatsReports, saveUberEatsPerformance, fetchUberEatsPerformance, fetchUberEatsWeeks, SALES_CATEGORIES, fetchFlipdishCategories, fetchItemsInCategory, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   fetchPendingPresenceCheck, fetchPresenceChecks, respondPresenceCheck, requestPresenceCheck,
@@ -22384,7 +22384,7 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
       )}
 
       {tab === "delivery" && (
-        <DeliveryPerformanceView stores={stores} brands={brands} currentUser={currentUser} selectedStore={store}/>
+        <DeliveryHub stores={stores} brands={brands} currentUser={currentUser} selectedStore={store}/>
       )}
 
       {store && tab === "forecast" && (
@@ -22405,6 +22405,342 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
 // uploads. Covers economics (commission), speed/ops, store league, and
 // availability/rejections. Upload the weekly report bundle to refresh.
 // ============================================================================
+// ============================================================================
+// UBER EATS PERFORMANCE — mirrors the Deliveroo view. Estate league + per-store
+// detail from the weekly Uber Eats exports (statement, ratings, order history,
+// inaccurate items).
+// ============================================================================
+function UberEatsPerformanceView({ stores = [], currentUser, selectedStore }) {
+  const [rows, setRows] = useState([]);
+  const [weeks, setWeeks] = useState([]);
+  const [week, setWeek] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+  const [pendingFiles, setPendingFiles] = useState({});
+  const [weekStart, setWeekStart] = useState("");
+  const [weekEnd, setWeekEnd] = useState("");
+  const [sortKey, setSortKey] = useState("sales_incl_vat");
+  const [expandStore, setExpandStore] = useState(null);
+  const isHQ = isHqOrAbove(currentUser?.role);
+
+  const _normName = (s) => String(s || "").toLowerCase().replace(/^chocoberry\s*[-–(]*\s*/, "").replace(/[^a-z0-9]/g, "").trim();
+  const load = useCallback(async (wk) => {
+    setLoading(true);
+    try {
+      const ws = await fetchUberEatsWeeks();
+      setWeeks(ws);
+      const useWeek = wk || ws[0] || "";
+      setWeek(useWeek);
+      setRows(useWeek ? await fetchUberEatsPerformance({ weekEnd: useWeek }) : []);
+    } catch (e) { setUploadMsg(e.message); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const gbp = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const gbp2 = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const scopedRows = useMemo(() => {
+    if (!selectedStore) return rows;
+    const sk = _normName(selectedStore.shortName) || _normName(selectedStore.name);
+    const matched = rows.filter(r => r.store_id === selectedStore.id);
+    if (matched.length) return matched;
+    return rows.filter(r => { const n = _normName(r.site_name); return sk.length >= 3 && (n.includes(sk) || sk.includes(n)); });
+  }, [rows, selectedStore]);
+  const view = selectedStore ? scopedRows : rows;
+
+  const totals = useMemo(() => {
+    if (!view.length) return null;
+    const t = view.reduce((a, r) => ({
+      sales: a.sales + (r.sales_incl_vat||0), orders: a.orders + (r.orders||0),
+      fee: a.fee + (r.service_fee||0), payout: a.payout + (r.payout||0),
+      refunds: a.refunds + (r.merchant_refunds||0),
+      cancelled: a.cancelled + (r.orders_cancelled||0), refunded: a.refunded + (r.orders_refunded||0),
+      ratingSum: a.ratingSum + (r.avg_rating||0)*(r.avg_rating?1:0), ratingN: a.ratingN + (r.avg_rating?1:0),
+      r5:a.r5+(r.rating_5||0), r4:a.r4+(r.rating_4||0), r3:a.r3+(r.rating_3||0), r2:a.r2+(r.rating_2||0), r1:a.r1+(r.rating_1||0),
+    }), { sales:0,orders:0,fee:0,payout:0,refunds:0,cancelled:0,refunded:0,ratingSum:0,ratingN:0,r5:0,r4:0,r3:0,r2:0,r1:0 });
+    t.feePct = t.sales > 0 ? (t.fee/t.sales*100) : 0;
+    t.avgRating = t.ratingN > 0 ? (t.ratingSum/t.ratingN) : 0;
+    t.net = t.sales - t.fee;
+    t.avgPrep = view.reduce((s,r)=>s+(r.avg_prep_mins||0),0)/view.length;
+    return t;
+  }, [view]);
+
+  const sorted = useMemo(() => [...view].sort((a,b)=>(b[sortKey]||0)-(a[sortKey]||0)), [view, sortKey]);
+  const storeName = (r) => r.site_name.replace(/^Chocoberry\s*[-–]?\s*[(]?/, "").replace(/[)]$/, "");
+
+  const fileRoles = [
+    { key: "statement", match: /great_britain|_gb|statement/i, label: "Financial statement (GB)" },
+    { key: "ratings", match: /restaurant_rating_local/i, label: "Ratings" },
+    { key: "order_history", match: /order_history/i, label: "Order history" },
+    { key: "top_inaccurate", match: /top_inaccurate/i, label: "Top inaccurate items" },
+  ];
+  const onFiles = async (fileList) => {
+    const next = { ...pendingFiles };
+    for (const f of Array.from(fileList)) {
+      const role = fileRoles.find(r => r.match.test(f.name));
+      if (role) next[role.key] = { name: f.name, text: await f.text() };
+      const m = f.name.match(/(\d{4})-(\d{2})-(\d{2})_(\d{4})-(\d{2})-(\d{2})/);
+      if (m && !weekStart) { setWeekStart(`${m[1]}-${m[2]}-${m[3]}`); setWeekEnd(`${m[4]}-${m[5]}-${m[6]}`); }
+    }
+    setPendingFiles(next);
+  };
+  const doUpload = async () => {
+    setUploadBusy(true); setUploadMsg("");
+    try {
+      const files = {}; Object.entries(pendingFiles).forEach(([k,v]) => files[k] = v.text);
+      if (!files.statement) throw new Error("The financial statement (great_britain.csv) is required.");
+      const parsed = parseUberEatsReports(files, { weekStart: weekStart||null, weekEnd: weekEnd||null });
+      if (!parsed.length) throw new Error("No store rows found — check the files.");
+      const n = await saveUberEatsPerformance(parsed, stores);
+      setUploadMsg(`Saved ${n} stores for week ending ${weekEnd||"(unknown)"}.`);
+      setPendingFiles({}); setUploadOpen(false);
+      await load(weekEnd);
+    } catch (e) { setUploadMsg("Upload failed: " + e.message); }
+    setUploadBusy(false);
+  };
+
+  if (loading) return <div className="text-sm text-slate-500 text-center py-12">Loading Uber Eats performance…</div>;
+
+  const sortBtns = [["sales_incl_vat","Sales"],["orders","Orders"],["service_fee_pct","Fee %"],["avg_rating","Rating"],["avg_prep_mins","Prep"]];
+  const unmatched = selectedStore ? 0 : rows.filter(r => !r.store_id).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-xs text-slate-500">Uber Eats · {week ? `week ending ${week}` : "no data yet"}{selectedStore ? ` · ${selectedStore.shortName||selectedStore.name}` : (rows.length ? ` · ${rows.length} stores` : "")}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {weeks.length > 0 && <select value={week} onChange={e => load(e.target.value)} className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">{weeks.map(w => <option key={w} value={w}>Week ending {w}</option>)}</select>}
+          {isHQ && <button onClick={() => setUploadOpen(o=>!o)} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold flex items-center gap-1.5"><Upload size={14}/> Upload week</button>}
+        </div>
+      </div>
+
+      {uploadOpen && (
+        <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 space-y-3">
+          <div className="text-sm font-semibold text-white">Upload Uber Eats weekly reports</div>
+          <div className="text-xs text-slate-400">Drop the Uber Eats exports — the financial statement (great_britain.csv), ratings, order history, and top inaccurate items.</div>
+          <label className="block border-2 border-dashed border-slate-700 rounded-xl p-6 text-center cursor-pointer hover:border-slate-500">
+            <input type="file" accept=".csv" multiple className="hidden" onChange={e => onFiles(e.target.files)}/>
+            <Upload size={22} className="mx-auto text-slate-500 mb-2"/><div className="text-sm text-slate-300">Click to choose CSV files</div>
+          </label>
+          {Object.keys(pendingFiles).length > 0 && (
+            <div className="space-y-1.5">
+              {fileRoles.map(r => (
+                <div key={r.key} className="flex items-center gap-2 text-xs">
+                  {pendingFiles[r.key] ? <CheckCircle size={13} className="text-emerald-400"/> : <div className="w-3 h-3 rounded-full border border-slate-600"/>}
+                  <span className={pendingFiles[r.key] ? "text-slate-300" : "text-slate-600"}>{r.label}</span>
+                  {r.key === "statement" && !pendingFiles[r.key] && <span className="text-red-400">(required)</span>}
+                </div>
+              ))}
+              <div className="flex items-center gap-2 pt-2">
+                <label className="text-xs text-slate-500">Week ending</label>
+                <input type="date" value={weekEnd} onChange={e=>setWeekEnd(e.target.value)} className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"/>
+                <button onClick={doUpload} disabled={uploadBusy || !pendingFiles.statement} className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold">{uploadBusy ? "Saving…" : "Save week"}</button>
+              </div>
+            </div>
+          )}
+          {uploadMsg && <div className={`text-xs ${uploadMsg.startsWith("Upload failed") ? "text-red-400" : "text-emerald-400"}`}>{uploadMsg}</div>}
+        </div>
+      )}
+
+      {view.length === 0 ? (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-10 text-center">
+          <Truck size={28} className="mx-auto text-slate-600 mb-3"/><div className="text-sm text-slate-400">No Uber Eats data yet.</div>
+          {isHQ && <div className="text-xs text-slate-600 mt-1">Upload your Uber Eats weekly reports to get started.</div>}
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Sales incl VAT</div>
+              <div className="text-2xl font-black text-white mt-1">{gbp(totals.sales)}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{totals.orders.toLocaleString()} orders · {gbp2(totals.sales/Math.max(totals.orders,1))} AOV</div>
+            </div>
+            <div className="rounded-2xl border border-red-500/25 bg-red-950/15 p-4">
+              <div className="text-[11px] text-red-400/80 font-semibold uppercase tracking-wide">Uber service fee</div>
+              <div className="text-2xl font-black text-red-300 mt-1">{gbp(totals.fee)}</div>
+              <div className="text-[11px] text-red-400/70 mt-0.5">{totals.feePct.toFixed(1)}% of sales incl VAT</div>
+            </div>
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+              <div className="text-[11px] text-emerald-400/80 font-semibold uppercase tracking-wide">Payout</div>
+              <div className="text-2xl font-black text-emerald-300 mt-1">{gbp(totals.payout)}</div>
+              <div className="text-[11px] text-emerald-400/60 mt-0.5">after fees{totals.refunds?` · ${gbp(totals.refunds)} refunds`:""}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Avg rating</div>
+              <div className="text-2xl font-black text-amber-300 mt-1">{totals.avgRating?totals.avgRating.toFixed(2):"—"} <span className="text-sm">★</span></div>
+              <div className="text-[11px] text-slate-500 mt-0.5">prep {totals.avgPrep?totals.avgPrep.toFixed(1):"—"}m · {totals.cancelled+totals.refunded} issues</div>
+            </div>
+          </div>
+
+          {/* Single-store rich detail */}
+          {selectedStore && view.length === 1 && <UberStoreDetail r={view[0]} gbp={gbp} gbp2={gbp2}/>}
+
+          {/* Estate league table */}
+          {(!selectedStore || view.length > 1) && (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
+              <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800 flex-wrap">
+                <div className="text-sm font-bold text-white">Store league table</div>
+                <div className="flex items-center gap-1 flex-wrap">{sortBtns.map(([k,l]) => <button key={k} onClick={()=>setSortKey(k)} className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${sortKey===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>)}</div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead><tr className="text-slate-500 border-b border-slate-800">
+                    <th className="text-left px-3 py-2 font-semibold">Store</th>
+                    <th className="text-right px-3 py-2 font-semibold">Sales</th>
+                    <th className="text-right px-3 py-2 font-semibold">Orders</th>
+                    <th className="text-right px-3 py-2 font-semibold">AOV</th>
+                    <th className="text-right px-3 py-2 font-semibold">Fee %</th>
+                    <th className="text-right px-3 py-2 font-semibold">Payout</th>
+                    <th className="text-right px-3 py-2 font-semibold">Rating</th>
+                    <th className="text-right px-3 py-2 font-semibold">Prep</th>
+                  </tr></thead>
+                  <tbody>
+                    {sorted.map(r => {
+                      const open = expandStore === r.id;
+                      return (
+                        <Fragment key={r.id}>
+                          <tr onClick={()=>setExpandStore(open?null:r.id)} className="border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                            <td className="px-3 py-2 text-white font-semibold whitespace-nowrap">{storeName(r)}{!r.store_id && <span className="ml-1 text-[9px] text-amber-500">unmatched</span>}</td>
+                            <td className="px-3 py-2 text-right text-white tabular-nums">{gbp(r.sales_incl_vat)}</td>
+                            <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{r.orders}</td>
+                            <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{gbp2(r.avg_order_value)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums"><span className={r.service_fee_pct>27?"text-red-400":"text-slate-300"}>{r.service_fee_pct?.toFixed(1)}%</span></td>
+                            <td className="px-3 py-2 text-right text-emerald-300 tabular-nums">{gbp(r.payout)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums"><span className={r.avg_rating&&r.avg_rating<4.4?"text-red-400":"text-amber-300"}>{r.avg_rating?r.avg_rating.toFixed(1):"—"}</span></td>
+                            <td className="px-3 py-2 text-right tabular-nums text-slate-300">{r.avg_prep_mins?r.avg_prep_mins.toFixed(1):"—"}</td>
+                          </tr>
+                          {open && (
+                            <tr className="bg-slate-950/50"><td colSpan={8} className="px-4 py-3">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
+                                <div><div className="text-slate-500">Service fee</div><div className="text-white font-bold text-sm">{gbp2(r.service_fee)}</div></div>
+                                <div><div className="text-slate-500">Merchant refunds</div><div className="text-white font-bold text-sm">{gbp2(r.merchant_refunds)}</div></div>
+                                <div><div className="text-slate-500">Cancelled / refunded</div><div className="text-white font-bold text-sm">{r.orders_cancelled} / {r.orders_refunded}</div></div>
+                                <div><div className="text-slate-500">Order duration</div><div className="text-white font-bold text-sm">{r.avg_delivery_mins?r.avg_delivery_mins.toFixed(1):"—"}m</div></div>
+                              </div>
+                              {(r.inaccurate_items||[]).length > 0 && <div className="mt-2 text-[11px] text-red-400/80">Top issues: {r.inaccurate_items.slice(0,4).map(x=>`${x.item} (${x.count})`).join(" · ")}</div>}
+                            </td></tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {unmatched > 0 && <div className="text-[11px] text-amber-400/80 bg-amber-950/20 border border-amber-500/20 rounded-lg px-3 py-2">{unmatched} Uber Eats site{unmatched===1?"":"s"} couldn't be matched to an internal store by name.</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Per-store Uber detail: rating breakdown + service + inaccurate items.
+function UberStoreDetail({ r, gbp, gbp2 }) {
+  const ratings = [
+    { star: 5, n: r.rating_5||0, color: "#10b981" },
+    { star: 4, n: r.rating_4||0, color: "#84cc16" },
+    { star: 3, n: r.rating_3||0, color: "#f59e0b" },
+    { star: 2, n: r.rating_2||0, color: "#f97316" },
+    { star: 1, n: r.rating_1||0, color: "#ef4444" },
+  ];
+  const totalRatings = ratings.reduce((s,x)=>s+x.n,0);
+  return (
+    <div className="space-y-4">
+      {/* Money flow */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="flex items-center justify-between mb-2"><div className="text-sm font-bold text-white">Where the money goes</div><div className="text-[11px] text-slate-500">on {gbp(r.sales_incl_vat)} sales incl VAT</div></div>
+        {(() => {
+          const sales = r.sales_incl_vat||1;
+          const seg = [{label:"Payout to you",val:r.payout,color:"#10b981"},{label:"Uber service fee",val:r.service_fee,color:"#ef4444"},{label:"Refunds/other",val:Math.max(0,sales-r.payout-r.service_fee),color:"#f59e0b"}];
+          return (<>
+            <div className="flex h-8 rounded-lg overflow-hidden">{seg.map(s=>s.val>0&&<div key={s.label} style={{width:`${s.val/sales*100}%`,background:s.color}} className="flex items-center justify-center" title={`${s.label}: ${gbp(s.val)}`}>{s.val/sales>0.08&&<span className="text-[10px] font-bold text-white/90">{(s.val/sales*100).toFixed(0)}%</span>}</div>)}</div>
+            <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2.5">{seg.map(s=><div key={s.label} className="flex items-center gap-1.5 text-[11px]"><span className="w-2.5 h-2.5 rounded-full" style={{background:s.color}}/><span className="text-slate-400">{s.label}</span><span className="text-white font-bold">{gbp(s.val)}</span></div>)}</div>
+            <div className="text-[11px] text-slate-500 mt-2">Uber's service fee here is <b className="text-red-400">{r.service_fee_pct?.toFixed(1)}%</b> of sales incl VAT. Payout is what lands after fees{r.merchant_refunds?` and ${gbp(r.merchant_refunds)} of refunds`:""}.</div>
+          </>);
+        })()}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Rating breakdown — Uber gives us the star split Deliveroo didn't */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="flex items-center justify-between mb-3"><div className="text-sm font-bold text-white">Customer ratings</div><div className="text-amber-300 font-bold">{r.avg_rating?r.avg_rating.toFixed(2):"—"} ★ <span className="text-slate-500 text-xs font-normal">({totalRatings})</span></div></div>
+          {totalRatings === 0 ? <div className="text-xs text-slate-600">No ratings this week.</div> : (
+            <div className="space-y-1.5">{ratings.map(rt => (
+              <div key={rt.star} className="flex items-center gap-2 text-xs">
+                <span className="text-slate-400 w-6">{rt.star}★</span>
+                <div className="flex-1 h-3 bg-slate-800 rounded overflow-hidden"><div className="h-full rounded" style={{width:`${totalRatings?rt.n/totalRatings*100:0}%`,background:rt.color}}/></div>
+                <span className="text-slate-500 w-10 text-right">{totalRatings?(rt.n/totalRatings*100).toFixed(0):0}%</span>
+                <span className="text-white font-bold w-6 text-right">{rt.n}</span>
+              </div>
+            ))}</div>
+          )}
+        </div>
+
+        {/* Inaccurate items */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="text-sm font-bold text-white mb-3">Order accuracy issues</div>
+          {(r.inaccurate_items||[]).length === 0 ? (
+            <div className="flex items-center justify-center h-24"><div className="text-center"><CheckCircle size={22} className="mx-auto text-emerald-400 mb-1"/><div className="text-xs text-slate-400">No accuracy issues 🎉</div></div></div>
+          ) : (
+            <div className="space-y-1.5">{r.inaccurate_items.slice(0,7).map((it,i)=>(
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="text-white flex-1 truncate">{it.item}</span>
+                <span className="text-[10px] text-slate-500">{(it.issue||"").replace(/_/g," ").toLowerCase()}</span>
+                <span className="text-red-300 font-bold w-6 text-right">{it.count}</span>
+              </div>
+            ))}</div>
+          )}
+        </div>
+      </div>
+
+      {/* Service metrics */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="text-sm font-bold text-white mb-3">Service &amp; operations</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: "Prep time", val: (r.avg_prep_mins||0).toFixed(1)+"m", warn: r.avg_prep_mins>12 },
+            { label: "Order duration", val: (r.avg_delivery_mins||0).toFixed(0)+"m", warn: false },
+            { label: "Cancelled", val: r.orders_cancelled||0, warn: (r.orders_cancelled||0)>3 },
+            { label: "Refunded", val: r.orders_refunded||0, warn: (r.orders_refunded||0)>3 },
+          ].map(m => (
+            <div key={m.label} className={`rounded-xl p-3 border ${m.warn?"border-red-500/30 bg-red-950/15":"border-slate-800 bg-slate-950/40"}`}>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide">{m.label}</div>
+              <div className={`text-xl font-black mt-0.5 ${m.warn?"text-red-300":"text-white"}`}>{m.val}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Delivery hub: platform toggle between Deliveroo and Uber Eats ───────────
+function DeliveryHub({ stores, brands, currentUser, selectedStore }) {
+  const [platform, setPlatform] = useState("deliveroo");
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><Truck size={18} className="text-indigo-400"/> Delivery performance</h2>
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1">
+          {[["deliveroo","Deliveroo","#00ccbc"],["ubereats","Uber Eats","#06c167"]].map(([k,l,c]) => (
+            <button key={k} onClick={()=>setPlatform(k)} className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${platform===k?"text-white":"text-slate-500 hover:text-slate-300"}`} style={platform===k?{background:c}:{}}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {platform === "deliveroo"
+        ? <DeliveryPerformanceView stores={stores} brands={brands} currentUser={currentUser} selectedStore={selectedStore}/>
+        : <UberEatsPerformanceView stores={stores} currentUser={currentUser} selectedStore={selectedStore}/>}
+    </div>
+  );
+}
+
 // ── Deliveroo-style single-store detail: rich sections mirroring the Hub ──
 function DeliveryStoreDetail({ r, gbp, gbp2 }) {
   const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
@@ -22721,8 +23057,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2"><Truck size={18} className="text-indigo-400"/> Delivery performance</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Deliveroo · {week ? `week ending ${week}` : "no data yet"}{selectedStore ? ` · ${selectedStore.shortName || selectedStore.name}` : (rows.length ? ` · ${rows.length} stores` : "")}</p>
+          <p className="text-xs text-slate-500">Deliveroo · {week ? `week ending ${week}` : "no data yet"}{selectedStore ? ` · ${selectedStore.shortName || selectedStore.name}` : (rows.length ? ` · ${rows.length} stores` : "")}</p>
         </div>
         <div className="flex items-center gap-2">
           {weeks.length > 0 && (

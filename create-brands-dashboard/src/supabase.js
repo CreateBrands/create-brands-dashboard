@@ -13608,3 +13608,153 @@ export async function fetchDeliverooWeeks() {
   if (error) throw error;
   return Array.from(new Set((data || []).map(r => r.week_end)));
 }
+
+// ── UBER EATS PERFORMANCE (weekly CSV upload) ───────────────────────────────
+// Parses Uber Eats weekly exports (financial statement + ratings + order
+// history + inaccurate items) into one row per store. Reuses the CSV helpers
+// (_csvParse, _toRows, _num, _norm) defined for the Deliveroo parser above.
+export function parseUberEatsReports(files, { weekStart, weekEnd } = {}) {
+  const SHOP = "Shop name as per Uber Eats manager";
+  const SALES = "Total item sales including VAT";
+  const FEE = "Uber service fee after Uber service fee promotion is applied (including VAT)";
+  const REFUND = "Amount merchants are responsible for refunding customers when they report order errors (incl. VAT)";
+  const bySite = new Map();
+  const ensure = (site) => {
+    if (!site || /^(shop name|order date|order status)$/i.test(site)) return null;
+    if (!bySite.has(site)) bySite.set(site, { site_name: site });
+    return bySite.get(site);
+  };
+
+  // Financial statement — the core economics.
+  const fin = new Map();
+  _toRows(files.statement || "").forEach(r => {
+    const site = r[SHOP]; if (!site) return;
+    const status = (r[Object.keys(r).find(k => k.startsWith("Either: Completed")) || ""] || "").toLowerCase();
+    const a = fin.get(site) || { sales: 0, fee: 0, refund: 0, payout: 0, orders: 0, cancelled: 0, refunded: 0 };
+    a.sales += _num(r[SALES]);
+    a.fee += _num(r[FEE]);            // negative in the file
+    a.refund += _num(r[REFUND]);
+    const payoutKey = Object.keys(r).find(k => k.startsWith("Total payout"));
+    a.payout += _num(r[payoutKey]);
+    if (status.includes("cancel")) a.cancelled++;
+    else if (status.includes("refund")) a.refunded++;
+    else a.orders++;
+    fin.set(site, a);
+  });
+  fin.forEach((a, site) => {
+    const s = ensure(site); if (!s) return;
+    s.sales_incl_vat = +a.sales.toFixed(2);
+    s.service_fee = +Math.abs(a.fee).toFixed(2);              // store as positive cost
+    s.service_fee_pct = a.sales > 0 ? +(Math.abs(a.fee) / a.sales * 100).toFixed(1) : 0;
+    s.merchant_refunds = +Math.abs(a.refund).toFixed(2);
+    s.payout = +a.payout.toFixed(2);
+    s.orders = a.orders;
+    s.orders_cancelled = a.cancelled;
+    s.orders_refunded = a.refunded;
+    s.avg_order_value = a.orders > 0 ? +(a.sales / a.orders).toFixed(2) : 0;
+  });
+
+  // Ratings — star breakdown + average.
+  const ratings = new Map();
+  _toRows(files.ratings || "").forEach(r => {
+    const site = r["Restaurant"]; if (!site) return;
+    const v = Math.round(_num(r["Rating value"])); if (v < 1 || v > 5) return;
+    const a = ratings.get(site) || { 1:0,2:0,3:0,4:0,5:0, sum:0, n:0 };
+    a[v]++; a.sum += v; a.n++;
+    ratings.set(site, a);
+  });
+  ratings.forEach((a, site) => {
+    const s = ensure(site); if (!s) return;
+    s.rating_5 = a[5]; s.rating_4 = a[4]; s.rating_3 = a[3]; s.rating_2 = a[2]; s.rating_1 = a[1];
+    s.avg_rating = a.n > 0 ? +(a.sum / a.n).toFixed(2) : null;
+  });
+
+  // Order history — prep + delivery times.
+  const oh = new Map();
+  _toRows(files.order_history || "").forEach(r => {
+    const site = r["Restaurant"]; if (!site) return;
+    const a = oh.get(site) || { prep: 0, prepN: 0, dur: 0, durN: 0 };
+    const prep = _num(r["Original prep time"]); if (prep > 0) { a.prep += prep; a.prepN++; }
+    const dur = _num(r["Order duration"]); if (dur > 0) { a.dur += dur; a.durN++; }
+    oh.set(site, a);
+  });
+  oh.forEach((a, site) => {
+    const s = ensure(site); if (!s) return;
+    s.avg_prep_mins = a.prepN > 0 ? +(a.prep / a.prepN).toFixed(1) : null;
+    s.avg_delivery_mins = a.durN > 0 ? +(a.dur / a.durN).toFixed(1) : null;
+  });
+
+  // Inaccurate items — top missing/wrong items per store.
+  const inacc = new Map();
+  _toRows(files.top_inaccurate || "").forEach(r => {
+    const site = r["Restaurant"]; if (!site) return;
+    const list = inacc.get(site) || [];
+    list.push({ item: r["Inaccurate items"] || r["Inaccurate Customisations"] || "Unknown", issue: r["Item issue"] || r["Order issue"] || "", count: _num(r["Count"]) });
+    inacc.set(site, list);
+  });
+  inacc.forEach((list, site) => {
+    const s = ensure(site); if (!s) return;
+    const agg = {};
+    list.forEach(x => { const k = x.item + "|" + x.issue; agg[k] = agg[k] || { ...x, count: 0 }; agg[k].count += x.count; });
+    s.inaccurate_items = Object.values(agg).sort((a, b) => b.count - a.count).slice(0, 15);
+  });
+
+  return Array.from(bySite.values())
+    .map(s => ({
+      week_start: weekStart || null, week_end: weekEnd || null,
+      sales_incl_vat: 0, orders: 0, service_fee: 0, service_fee_pct: 0, payout: 0,
+      inaccurate_items: s.inaccurate_items || [], items_sold: [], ...s,
+    }))
+    .filter(s => s.sales_incl_vat > 0 || s.orders > 0);
+}
+
+export async function saveUberEatsPerformance(parsedRows, stores = []) {
+  const idx = new Map();
+  const storeList = [];
+  for (const st of stores) {
+    [_norm(st.name), _norm(st.shortName)].filter(Boolean).forEach(k => { if (k && !idx.has(k)) idx.set(k, st); });
+    const short = _norm(st.shortName) || _norm(st.name);
+    if (short) storeList.push({ st, key: short });
+  }
+  const matchStore = (siteName) => {
+    const n = _norm(siteName);
+    if (idx.has(n)) return idx.get(n);
+    for (const { st, key } of storeList) if (key.length >= 3 && (n.includes(key) || key.includes(n))) return st;
+    return null;
+  };
+  const rows = parsedRows.map(r => {
+    const match = matchStore(r.site_name);
+    return {
+      id: `ube-${r.week_end || "na"}-${_norm(r.site_name)}`,
+      week_start: r.week_start, week_end: r.week_end,
+      site_name: r.site_name, store_id: match?.id || null, brand_id: match?.brandId || null,
+      sales_incl_vat: r.sales_incl_vat || 0, orders: r.orders || 0, avg_order_value: r.avg_order_value || 0,
+      service_fee: r.service_fee || 0, service_fee_pct: r.service_fee_pct || 0,
+      merchant_refunds: r.merchant_refunds || 0, payout: r.payout || 0,
+      orders_cancelled: r.orders_cancelled || 0, orders_refunded: r.orders_refunded || 0,
+      avg_rating: r.avg_rating ?? null,
+      rating_5: r.rating_5 || 0, rating_4: r.rating_4 || 0, rating_3: r.rating_3 || 0, rating_2: r.rating_2 || 0, rating_1: r.rating_1 || 0,
+      avg_prep_mins: r.avg_prep_mins ?? null, avg_delivery_mins: r.avg_delivery_mins ?? null,
+      downtime_mins: r.downtime_mins || 0,
+      items_sold: r.items_sold || [], inaccurate_items: r.inaccurate_items || [],
+      uploaded_at: new Date().toISOString(),
+    };
+  });
+  const { error } = await supabase.from("ubereats_performance").upsert(rows, { onConflict: "week_end,site_name" });
+  if (error) throw error;
+  return rows.length;
+}
+
+export async function fetchUberEatsPerformance({ weekEnd, storeId } = {}) {
+  let q = supabase.from("ubereats_performance").select("*");
+  if (weekEnd) q = q.eq("week_end", weekEnd);
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q.order("sales_incl_vat", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function fetchUberEatsWeeks() {
+  const { data, error } = await supabase.from("ubereats_performance").select("week_end").order("week_end", { ascending: false });
+  if (error) throw error;
+  return Array.from(new Set((data || []).map(r => r.week_end)));
+}
