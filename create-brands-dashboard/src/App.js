@@ -22452,13 +22452,16 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
     const t = view.reduce((a, r) => ({
       gross: a.gross + (r.gross_sales||0), orders: a.orders + (r.orders_delivered||0),
       commission: a.commission + (r.commission||0), subtotal: a.subtotal + (r.subtotal||0),
+      commVat: a.commVat + (r.commission_vat||0),
       cancelled: a.cancelled + (r.orders_cancelled||0), rejected: a.rejected + (r.orders_rejected||0),
       ratingSum: a.ratingSum + (r.avg_rating||0)*(r.avg_rating?1:0), ratingN: a.ratingN + (r.avg_rating?1:0),
       newC: a.newC + (r.orders_new||0), rejValue: a.rejValue + (r.rejection_reasons||[]).reduce((s,x)=>s+(x.value||0),0),
-    }), { gross:0,orders:0,commission:0,subtotal:0,cancelled:0,rejected:0,ratingSum:0,ratingN:0,newC:0,rejValue:0 });
-    t.commPct = t.subtotal > 0 ? (t.commission/t.subtotal*100) : 0;
+    }), { gross:0,orders:0,commission:0,subtotal:0,commVat:0,cancelled:0,rejected:0,ratingSum:0,ratingN:0,newC:0,rejValue:0 });
+    t.commTotal = t.commission + t.commVat;                          // true cost incl VAT
+    t.commPct = t.subtotal > 0 ? (t.commission/t.subtotal*100) : 0;   // base rate
+    t.commTotalPct = t.subtotal > 0 ? (t.commTotal/t.subtotal*100) : 0; // true take-rate
     t.avgRating = t.ratingN > 0 ? (t.ratingSum/t.ratingN) : 0;
-    t.netAfterComm = t.subtotal - t.commission;
+    t.netAfterComm = t.subtotal - t.commTotal;                        // net after true cost
     t.avgPrep = view.reduce((s,r)=>s+(r.prep_time_mins||0),0)/view.length;
     return t;
   }, [view]);
@@ -22585,21 +22588,58 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
               <div className="text-2xl font-black text-white mt-1">{gbp(totals.gross)}</div>
               <div className="text-[11px] text-slate-500 mt-0.5">{totals.orders.toLocaleString()} orders · {gbp2(totals.gross/Math.max(totals.orders,1))} AOV</div>
             </div>
-            <div className="rounded-2xl border border-red-500/20 bg-red-950/15 p-4">
-              <div className="text-[11px] text-red-400/80 font-semibold uppercase tracking-wide">Deliveroo commission</div>
-              <div className="text-2xl font-black text-red-300 mt-1">{gbp(totals.commission)}</div>
-              <div className="text-[11px] text-red-400/70 mt-0.5">{totals.commPct.toFixed(1)}% of subtotal · {gbp(totals.netAfterComm)} net</div>
+            <div className="rounded-2xl border border-red-500/25 bg-red-950/15 p-4">
+              <div className="text-[11px] text-red-400/80 font-semibold uppercase tracking-wide">Deliveroo cost</div>
+              <div className="text-2xl font-black text-red-300 mt-1">{gbp(totals.commTotal)}</div>
+              <div className="text-[11px] text-red-400/70 mt-0.5">{totals.commTotalPct.toFixed(1)}% incl VAT · {gbp(totals.commission)} + {gbp(totals.commVat)} VAT</div>
+            </div>
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+              <div className="text-[11px] text-emerald-400/80 font-semibold uppercase tracking-wide">Net to you</div>
+              <div className="text-2xl font-black text-emerald-300 mt-1">{gbp(totals.netAfterComm)}</div>
+              <div className="text-[11px] text-emerald-400/60 mt-0.5">after commission + VAT</div>
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
               <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Avg rating</div>
               <div className="text-2xl font-black text-amber-300 mt-1">{totals.avgRating.toFixed(2)} <span className="text-sm">★</span></div>
-              <div className="text-[11px] text-slate-500 mt-0.5">avg prep {totals.avgPrep.toFixed(1)} min</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">avg prep {totals.avgPrep.toFixed(1)} min · {totals.cancelled+totals.rejected} lost orders</div>
             </div>
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Lost orders</div>
-              <div className="text-2xl font-black text-white mt-1">{totals.cancelled + totals.rejected}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{totals.cancelled} cancelled · {totals.rejected} rejected{totals.rejValue?` · ${gbp(totals.rejValue)} lost`:""}</div>
+          </div>
+
+          {/* WHERE THE MONEY GOES — subtotal split into net vs commission vs VAT */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-bold text-white">Where the money goes</div>
+              <div className="text-[11px] text-slate-500">on {gbp(totals.subtotal)} subtotal</div>
             </div>
+            {(() => {
+              const sub = totals.subtotal || 1;
+              const seg = [
+                { label: "Net to you", val: totals.netAfterComm, color: "#10b981" },
+                { label: "Commission", val: totals.commission, color: "#ef4444" },
+                { label: "VAT on commission", val: totals.commVat, color: "#f59e0b" },
+              ];
+              return (
+                <>
+                  <div className="flex h-8 rounded-lg overflow-hidden">
+                    {seg.map(s => (
+                      <div key={s.label} style={{ width: `${s.val/sub*100}%`, background: s.color }} className="flex items-center justify-center" title={`${s.label}: ${gbp(s.val)}`}>
+                        {s.val/sub > 0.08 && <span className="text-[10px] font-bold text-white/90">{(s.val/sub*100).toFixed(0)}%</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2.5">
+                    {seg.map(s => (
+                      <div key={s.label} className="flex items-center gap-1.5 text-[11px]">
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }}/>
+                        <span className="text-slate-400">{s.label}</span>
+                        <span className="text-white font-bold">{gbp(s.val)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-2">You keep <b className="text-emerald-400">{(totals.netAfterComm/sub*100).toFixed(0)}p</b> of every £1 of delivery subtotal. Standard Deliveroo rate is 30% + VAT; the blend is lower where discounted order types apply. VAT on commission is typically reclaimable if VAT-registered.</div>
+                </>
+              );
+            })()}
           </div>
 
           {unmatched > 0 && (
@@ -22644,7 +22684,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
                           <td className="px-3 py-2 text-right text-white tabular-nums">{gbp(r.gross_sales)}</td>
                           <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{r.orders_delivered}</td>
                           <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{gbp2(r.avg_order_value)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums"><span className={r.commission_pct>26?"text-red-400":"text-slate-300"}>{r.commission_pct?.toFixed(1)}%</span></td>
+                          <td className="px-3 py-2 text-right tabular-nums"><span className={(r.commission_total_pct||r.commission_pct)>31?"text-red-400":"text-slate-300"}>{(r.commission_total_pct||r.commission_pct)?.toFixed(1)}%</span></td>
                           <td className="px-3 py-2 text-right tabular-nums"><span className={r.avg_rating&&r.avg_rating<4.4?"text-red-400":"text-amber-300"}>{r.avg_rating?r.avg_rating.toFixed(1):"—"}</span></td>
                           <td className="px-3 py-2 text-right tabular-nums"><span className={r.prep_time_mins>13?"text-red-400":"text-slate-300"}>{r.prep_time_mins?r.prep_time_mins.toFixed(1):"—"}</span></td>
                           <td className="px-3 py-2 text-right tabular-nums"><span className={r.open_rate_pct&&r.open_rate_pct<90?"text-red-400":"text-slate-300"}>{r.open_rate_pct?r.open_rate_pct.toFixed(0)+"%":"—"}</span></td>
@@ -22653,7 +22693,7 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
                         {open && (
                           <tr className="bg-slate-950/50"><td colSpan={9} className="px-4 py-3">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
-                              <div><div className="text-slate-500">Net after commission</div><div className="text-white font-bold text-sm">{gbp2(r.subtotal - r.commission)}</div></div>
+                              <div><div className="text-slate-500">Net after commission</div><div className="text-white font-bold text-sm">{gbp2(r.subtotal - (r.commission_total || r.commission))}</div></div>
                               <div><div className="text-slate-500">New customers</div><div className="text-white font-bold text-sm">{r.orders_new} <span className="text-slate-500 font-normal">/ {r.orders_delivered}</span></div></div>
                               <div><div className="text-slate-500">Rider wait &gt;target</div><div className="text-white font-bold text-sm">{r.rider_wait_mins?.toFixed(2)} min</div></div>
                               <div><div className="text-slate-500">Order duration</div><div className="text-white font-bold text-sm">{r.avg_order_duration_mins?.toFixed(1)} min</div></div>

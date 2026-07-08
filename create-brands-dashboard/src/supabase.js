@@ -13436,9 +13436,10 @@ export function parseDeliverooReports(files, { weekStart, weekEnd } = {}) {
   const orderAgg = new Map();
   _toRows(files.orders || "").forEach(r => {
     const site = r["Restaurant name"]; if (!site) return;
-    const a = orderAgg.get(site) || { subtotal: 0, commission: 0, cancelled: 0, rejected: 0 };
+    const a = orderAgg.get(site) || { subtotal: 0, commission: 0, commission_vat: 0, cancelled: 0, rejected: 0 };
     a.subtotal += _num(r["Subtotal"]);
     a.commission += _num(r["Deliveroo commission"]);
+    a.commission_vat += _num(r["VAT on Deliveroo commission"]);
     const st = (r["Order status"] || "").toLowerCase();
     if (st.includes("cancel")) a.cancelled++;
     else if (st.includes("reject")) a.rejected++;
@@ -13448,7 +13449,10 @@ export function parseDeliverooReports(files, { weekStart, weekEnd } = {}) {
     const s = ensure(site); if (!s) return;
     s.subtotal = +a.subtotal.toFixed(2);
     s.commission = +a.commission.toFixed(2);
+    s.commission_vat = +a.commission_vat.toFixed(2);
+    s.commission_total = +(a.commission + a.commission_vat).toFixed(2);   // true cost incl VAT
     s.commission_pct = a.subtotal > 0 ? +(a.commission / a.subtotal * 100).toFixed(1) : 0;
+    s.commission_total_pct = a.subtotal > 0 ? +((a.commission + a.commission_vat) / a.subtotal * 100).toFixed(1) : 0;
     s.orders_cancelled = a.cancelled;
     s.orders_rejected = a.rejected;
   });
@@ -13528,6 +13532,7 @@ export async function saveDeliverooPerformance(parsedRows, stores = []) {
       gross_sales: r.gross_sales || 0, orders_delivered: r.orders_delivered || 0,
       avg_order_value: r.avg_order_value || 0, avg_rating: r.avg_rating ?? null,
       subtotal: r.subtotal || 0, commission: r.commission || 0, commission_pct: r.commission_pct || 0,
+      commission_vat: r.commission_vat || 0, commission_total: r.commission_total || 0, commission_total_pct: r.commission_total_pct || 0,
       orders_cancelled: r.orders_cancelled || 0, orders_rejected: r.orders_rejected || 0,
       orders_new: r.orders_new || 0, orders_repeat: r.orders_repeat || 0, orders_frequent: r.orders_frequent || 0,
       orders_offers: r.orders_offers || 0, orders_rewards: r.orders_rewards || 0, menu_conversion: r.menu_conversion ?? null,
