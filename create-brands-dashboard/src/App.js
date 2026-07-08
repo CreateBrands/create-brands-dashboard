@@ -41,7 +41,7 @@ import {
   fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
   fetchSchedules, upsertSchedule, removeSchedule,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
-  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, SALES_CATEGORIES, fetchFlipdishCategories, fetchItemsInCategory, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
+  fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, parseDeliverooReports, saveDeliverooPerformance, fetchDeliverooPerformance, fetchDeliverooWeeks, SALES_CATEGORIES, fetchFlipdishCategories, fetchItemsInCategory, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
   fetchNotifications, markNotificationRead, markAllNotificationsRead, notifyManagers, notifyOpsMember, subscribeToPush, resubscribeToPush, sendTestNotification, notifyOpsMembers, notifyMessageRecipients,
   fetchPendingPresenceCheck, fetchPresenceChecks, respondPresenceCheck, requestPresenceCheck,
@@ -22360,6 +22360,7 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
       <div className="flex items-center gap-1 border-b border-slate-800">
         {[
           { key: "analytics", label: "Analytics", icon: BarChart2 },
+          { key: "delivery",  label: "Delivery", icon: Truck },
           { key: "forecast",  label: "Forecast",  icon: TrendingUp },
           { key: "reviews",   label: "Google Reviews", icon: Star },
         ].map(t => (
@@ -22382,6 +22383,10 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
         />
       )}
 
+      {tab === "delivery" && (
+        <DeliveryPerformanceView stores={stores} brands={brands} currentUser={currentUser}/>
+      )}
+
       {store && tab === "forecast" && (
         <ForecastPanel storeId={store.id} stores={[store]}/>
       )}
@@ -22394,6 +22399,313 @@ function ManagerStoreDashboard({ stores, brands, currentUser }) {
     </div>
   );
 }
+
+// ============================================================================
+// DELIVERY PERFORMANCE — estate-wide Deliveroo analytics from weekly CSV
+// uploads. Covers economics (commission), speed/ops, store league, and
+// availability/rejections. Upload the weekly report bundle to refresh.
+// ============================================================================
+function DeliveryPerformanceView({ stores = [], brands = [], currentUser }) {
+  const [rows, setRows] = useState([]);
+  const [weeks, setWeeks] = useState([]);
+  const [week, setWeek] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+  const [sortKey, setSortKey] = useState("gross_sales");
+  const [expandStore, setExpandStore] = useState(null);
+  const isHQ = isHqOrAbove(currentUser?.role);
+
+  const load = useCallback(async (wk) => {
+    setLoading(true);
+    try {
+      const ws = await fetchDeliverooWeeks();
+      setWeeks(ws);
+      const useWeek = wk || ws[0] || "";
+      setWeek(useWeek);
+      setRows(useWeek ? await fetchDeliverooPerformance({ weekEnd: useWeek }) : []);
+    } catch (e) { setUploadMsg(e.message); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const gbp = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const gbp2 = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Estate totals
+  const totals = useMemo(() => {
+    if (!rows.length) return null;
+    const t = rows.reduce((a, r) => ({
+      gross: a.gross + (r.gross_sales||0), orders: a.orders + (r.orders_delivered||0),
+      commission: a.commission + (r.commission||0), subtotal: a.subtotal + (r.subtotal||0),
+      cancelled: a.cancelled + (r.orders_cancelled||0), rejected: a.rejected + (r.orders_rejected||0),
+      ratingSum: a.ratingSum + (r.avg_rating||0)*(r.avg_rating?1:0), ratingN: a.ratingN + (r.avg_rating?1:0),
+      newC: a.newC + (r.orders_new||0), rejValue: a.rejValue + (r.rejection_reasons||[]).reduce((s,x)=>s+(x.value||0),0),
+    }), { gross:0,orders:0,commission:0,subtotal:0,cancelled:0,rejected:0,ratingSum:0,ratingN:0,newC:0,rejValue:0 });
+    t.commPct = t.subtotal > 0 ? (t.commission/t.subtotal*100) : 0;
+    t.avgRating = t.ratingN > 0 ? (t.ratingSum/t.ratingN) : 0;
+    t.netAfterComm = t.subtotal - t.commission;
+    t.avgPrep = rows.reduce((s,r)=>s+(r.prep_time_mins||0),0)/rows.length;
+    return t;
+  }, [rows]);
+
+  const sorted = useMemo(() => {
+    const arr = [...rows];
+    arr.sort((a,b) => (b[sortKey]||0) - (a[sortKey]||0));
+    return arr;
+  }, [rows, sortKey]);
+
+  const storeName = (r) => r.site_name.replace(/^Chocoberry\s*[-–]\s*/, "");
+
+  // ── CSV upload ──
+  const fileRoles = [
+    { key: "performance", match: /performance/i, label: "Performance" },
+    { key: "orders", match: /orders-report/i, label: "Orders" },
+    { key: "items_sold", match: /items_sold/i, label: "Items sold" },
+    { key: "customers", match: /customers/i, label: "Customers" },
+    { key: "speed_summary", match: /speed-summary/i, label: "Speed summary" },
+    { key: "availability_open_rate", match: /open-rate/i, label: "Open rate" },
+    { key: "rejected_orders", match: /rejected-orders_/i, label: "Rejected orders" },
+    { key: "rejected_by_reason", match: /rejected-orders-by-reason/i, label: "Rejected by reason" },
+  ];
+  const [pendingFiles, setPendingFiles] = useState({});
+  const [weekStart, setWeekStart] = useState("");
+  const [weekEnd, setWeekEnd] = useState("");
+
+  const onFiles = async (fileList) => {
+    const next = { ...pendingFiles };
+    for (const f of Array.from(fileList)) {
+      const role = fileRoles.find(r => r.match.test(f.name));
+      const text = await f.text();
+      if (role) next[role.key] = { name: f.name, text };
+      // Try to sniff the date range from the filename (…_DD-MM-YYYY_DD-MM-YYYY.csv)
+      const m = f.name.match(/(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{4})/);
+      if (m && !weekStart) { setWeekStart(`${m[3]}-${m[2]}-${m[1]}`); setWeekEnd(`${m[6]}-${m[5]}-${m[4]}`); }
+    }
+    setPendingFiles(next);
+  };
+
+  const doUpload = async () => {
+    setUploadBusy(true); setUploadMsg("");
+    try {
+      const files = {}; Object.entries(pendingFiles).forEach(([k,v]) => files[k] = v.text);
+      if (!files.performance) throw new Error("The Performance report is required.");
+      const parsed = parseDeliverooReports(files, { weekStart: weekStart||null, weekEnd: weekEnd||null });
+      if (!parsed.length) throw new Error("No store rows found — check the files.");
+      const n = await saveDeliverooPerformance(parsed, stores);
+      setUploadMsg(`Saved ${n} stores for week ending ${weekEnd||"(unknown)"}.`);
+      setPendingFiles({}); setUploadOpen(false);
+      await load(weekEnd);
+    } catch (e) { setUploadMsg("Upload failed: " + e.message); }
+    setUploadBusy(false);
+  };
+
+  if (loading) return <div className="text-sm text-slate-500 text-center py-12">Loading delivery performance…</div>;
+
+  const sortBtns = [
+    ["gross_sales","Gross"], ["orders_delivered","Orders"], ["commission_pct","Comm %"],
+    ["avg_rating","Rating"], ["prep_time_mins","Prep"], ["open_rate_pct","Open %"],
+  ];
+  const unmatched = rows.filter(r => !r.store_id).length;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-white flex items-center gap-2"><Truck size={18} className="text-indigo-400"/> Delivery performance</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Deliveroo · {week ? `week ending ${week}` : "no data yet"}{rows.length ? ` · ${rows.length} stores` : ""}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {weeks.length > 0 && (
+            <select value={week} onChange={e => load(e.target.value)} className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">
+              {weeks.map(w => <option key={w} value={w}>Week ending {w}</option>)}
+            </select>
+          )}
+          {isHQ && <button onClick={() => setUploadOpen(o=>!o)} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold flex items-center gap-1.5"><Upload size={14}/> Upload week</button>}
+        </div>
+      </div>
+
+      {/* Upload panel */}
+      {uploadOpen && (
+        <div className="rounded-2xl border border-indigo-500/30 bg-indigo-950/20 p-4 space-y-3">
+          <div className="text-sm font-semibold text-white">Upload Deliveroo weekly reports</div>
+          <div className="text-xs text-slate-400">Drop all the <code className="text-indigo-300">rs-*.csv</code> files for the week. They're matched by filename automatically.</div>
+          <label className="block border-2 border-dashed border-slate-700 rounded-xl p-6 text-center cursor-pointer hover:border-indigo-500 transition-colors">
+            <input type="file" accept=".csv" multiple className="hidden" onChange={e => onFiles(e.target.files)}/>
+            <Upload size={22} className="mx-auto text-slate-500 mb-2"/>
+            <div className="text-sm text-slate-300">Click to choose CSV files</div>
+          </label>
+          {Object.keys(pendingFiles).length > 0 && (
+            <div className="space-y-1.5">
+              {fileRoles.map(r => (
+                <div key={r.key} className="flex items-center gap-2 text-xs">
+                  {pendingFiles[r.key] ? <CheckCircle size={13} className="text-emerald-400"/> : <div className="w-3 h-3 rounded-full border border-slate-600"/>}
+                  <span className={pendingFiles[r.key] ? "text-slate-300" : "text-slate-600"}>{r.label}</span>
+                  {r.key === "performance" && !pendingFiles[r.key] && <span className="text-red-400">(required)</span>}
+                </div>
+              ))}
+              <div className="flex items-center gap-2 pt-2">
+                <label className="text-xs text-slate-500">Week ending</label>
+                <input type="date" value={weekEnd} onChange={e=>setWeekEnd(e.target.value)} className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"/>
+                <button onClick={doUpload} disabled={uploadBusy || !pendingFiles.performance} className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold">{uploadBusy ? "Saving…" : "Save week"}</button>
+              </div>
+            </div>
+          )}
+          {uploadMsg && <div className={`text-xs ${uploadMsg.startsWith("Upload failed") ? "text-red-400" : "text-emerald-400"}`}>{uploadMsg}</div>}
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-10 text-center">
+          <Truck size={28} className="mx-auto text-slate-600 mb-3"/>
+          <div className="text-sm text-slate-400">No delivery data yet.</div>
+          {isHQ && <div className="text-xs text-slate-600 mt-1">Upload your Deliveroo weekly reports to get started.</div>}
+        </div>
+      ) : (
+        <>
+          {/* KPI ROW */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Gross sales</div>
+              <div className="text-2xl font-black text-white mt-1">{gbp(totals.gross)}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{totals.orders.toLocaleString()} orders · {gbp2(totals.gross/Math.max(totals.orders,1))} AOV</div>
+            </div>
+            <div className="rounded-2xl border border-red-500/20 bg-red-950/15 p-4">
+              <div className="text-[11px] text-red-400/80 font-semibold uppercase tracking-wide">Deliveroo commission</div>
+              <div className="text-2xl font-black text-red-300 mt-1">{gbp(totals.commission)}</div>
+              <div className="text-[11px] text-red-400/70 mt-0.5">{totals.commPct.toFixed(1)}% of subtotal · {gbp(totals.netAfterComm)} net</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Avg rating</div>
+              <div className="text-2xl font-black text-amber-300 mt-1">{totals.avgRating.toFixed(2)} <span className="text-sm">★</span></div>
+              <div className="text-[11px] text-slate-500 mt-0.5">avg prep {totals.avgPrep.toFixed(1)} min</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Lost orders</div>
+              <div className="text-2xl font-black text-white mt-1">{totals.cancelled + totals.rejected}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{totals.cancelled} cancelled · {totals.rejected} rejected{totals.rejValue?` · ${gbp(totals.rejValue)} lost`:""}</div>
+            </div>
+          </div>
+
+          {unmatched > 0 && (
+            <div className="text-[11px] text-amber-400/80 bg-amber-950/20 border border-amber-500/20 rounded-lg px-3 py-2">
+              {unmatched} Deliveroo site{unmatched===1?"":"s"} couldn't be matched to an internal store by name — they still show here but won't link to store records.
+            </div>
+          )}
+
+          {/* STORE LEAGUE TABLE */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800 flex-wrap">
+              <div className="text-sm font-bold text-white">Store league table</div>
+              <div className="flex items-center gap-1 flex-wrap">
+                {sortBtns.map(([k,l]) => (
+                  <button key={k} onClick={()=>setSortKey(k)} className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${sortKey===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
+                ))}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-500 border-b border-slate-800">
+                    <th className="text-left px-3 py-2 font-semibold">Store</th>
+                    <th className="text-right px-3 py-2 font-semibold">Gross</th>
+                    <th className="text-right px-3 py-2 font-semibold">Orders</th>
+                    <th className="text-right px-3 py-2 font-semibold">AOV</th>
+                    <th className="text-right px-3 py-2 font-semibold">Comm %</th>
+                    <th className="text-right px-3 py-2 font-semibold">Rating</th>
+                    <th className="text-right px-3 py-2 font-semibold">Prep</th>
+                    <th className="text-right px-3 py-2 font-semibold">Open %</th>
+                    <th className="text-right px-3 py-2 font-semibold">Lost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map(r => {
+                    const lost = (r.orders_cancelled||0)+(r.orders_rejected||0);
+                    const open = expandStore === r.id;
+                    return (
+                      <Fragment key={r.id}>
+                        <tr onClick={()=>setExpandStore(open?null:r.id)} className="border-b border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                          <td className="px-3 py-2 text-white font-semibold whitespace-nowrap">{storeName(r)}{!r.store_id && <span className="ml-1 text-[9px] text-amber-500">unmatched</span>}</td>
+                          <td className="px-3 py-2 text-right text-white tabular-nums">{gbp(r.gross_sales)}</td>
+                          <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{r.orders_delivered}</td>
+                          <td className="px-3 py-2 text-right text-slate-300 tabular-nums">{gbp2(r.avg_order_value)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums"><span className={r.commission_pct>26?"text-red-400":"text-slate-300"}>{r.commission_pct?.toFixed(1)}%</span></td>
+                          <td className="px-3 py-2 text-right tabular-nums"><span className={r.avg_rating&&r.avg_rating<4.4?"text-red-400":"text-amber-300"}>{r.avg_rating?r.avg_rating.toFixed(1):"—"}</span></td>
+                          <td className="px-3 py-2 text-right tabular-nums"><span className={r.prep_time_mins>13?"text-red-400":"text-slate-300"}>{r.prep_time_mins?r.prep_time_mins.toFixed(1):"—"}</span></td>
+                          <td className="px-3 py-2 text-right tabular-nums"><span className={r.open_rate_pct&&r.open_rate_pct<90?"text-red-400":"text-slate-300"}>{r.open_rate_pct?r.open_rate_pct.toFixed(0)+"%":"—"}</span></td>
+                          <td className="px-3 py-2 text-right tabular-nums"><span className={lost>3?"text-red-400":"text-slate-500"}>{lost||"—"}</span></td>
+                        </tr>
+                        {open && (
+                          <tr className="bg-slate-950/50"><td colSpan={9} className="px-4 py-3">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
+                              <div><div className="text-slate-500">Net after commission</div><div className="text-white font-bold text-sm">{gbp2(r.subtotal - r.commission)}</div></div>
+                              <div><div className="text-slate-500">New customers</div><div className="text-white font-bold text-sm">{r.orders_new} <span className="text-slate-500 font-normal">/ {r.orders_delivered}</span></div></div>
+                              <div><div className="text-slate-500">Rider wait &gt;target</div><div className="text-white font-bold text-sm">{r.rider_wait_mins?.toFixed(2)} min</div></div>
+                              <div><div className="text-slate-500">Order duration</div><div className="text-white font-bold text-sm">{r.avg_order_duration_mins?.toFixed(1)} min</div></div>
+                            </div>
+                            {(r.items_sold||[]).length > 0 && (
+                              <div className="mt-3">
+                                <div className="text-[10px] text-slate-500 uppercase tracking-wide mb-1">Top items</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {r.items_sold.slice(0,6).map((it,i)=>(
+                                    <span key={i} className="text-[11px] bg-slate-800 rounded-lg px-2 py-0.5 text-slate-300">{it.name} <span className="text-slate-500">{gbp(it.revenue)}</span></span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {(r.rejection_reasons||[]).length > 0 && (
+                              <div className="mt-2 text-[11px] text-red-400/80">Rejections: {r.rejection_reasons.map(x=>`${x.reason} (${x.count}, ${gbp(x.value)})`).join(" · ")}</div>
+                            )}
+                          </td></tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* INSIGHT CARDS: worst performers to action */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-sm font-bold text-white mb-2 flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-400"/> Needs attention</div>
+              <div className="space-y-1.5 text-xs">
+                {sorted.filter(r=>r.avg_rating&&r.avg_rating<4.4).slice(0,3).map(r=>(
+                  <div key={"rat"+r.id} className="flex justify-between"><span className="text-slate-300">{storeName(r)} — low rating</span><span className="text-red-400 font-semibold">{r.avg_rating.toFixed(1)}★</span></div>
+                ))}
+                {sorted.filter(r=>r.prep_time_mins>14).slice(0,3).map(r=>(
+                  <div key={"prep"+r.id} className="flex justify-between"><span className="text-slate-300">{storeName(r)} — slow prep</span><span className="text-red-400 font-semibold">{r.prep_time_mins.toFixed(1)}min</span></div>
+                ))}
+                {sorted.filter(r=>r.open_rate_pct&&r.open_rate_pct<88).slice(0,3).map(r=>(
+                  <div key={"open"+r.id} className="flex justify-between"><span className="text-slate-300">{storeName(r)} — low open rate</span><span className="text-red-400 font-semibold">{r.open_rate_pct.toFixed(0)}%</span></div>
+                ))}
+                {sorted.filter(r=>((r.orders_cancelled||0)+(r.orders_rejected||0))>3).slice(0,3).map(r=>(
+                  <div key={"lost"+r.id} className="flex justify-between"><span className="text-slate-300">{storeName(r)} — lost orders</span><span className="text-red-400 font-semibold">{(r.orders_cancelled||0)+(r.orders_rejected||0)}</span></div>
+                ))}
+                {!sorted.some(r=>(r.avg_rating&&r.avg_rating<4.4)||r.prep_time_mins>14||(r.open_rate_pct&&r.open_rate_pct<88)||((r.orders_cancelled||0)+(r.orders_rejected||0))>3) && <div className="text-slate-600">Nothing flagged — all stores within range 👍</div>}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="text-sm font-bold text-white mb-2 flex items-center gap-1.5"><TrendingUp size={14} className="text-emerald-400"/> Top performers</div>
+              <div className="space-y-1.5 text-xs">
+                {[...rows].sort((a,b)=>(b.gross_sales||0)-(a.gross_sales||0)).slice(0,5).map((r,i)=>(
+                  <div key={r.id} className="flex justify-between">
+                    <span className="text-slate-300">{i+1}. {storeName(r)}</span>
+                    <span className="text-white font-semibold">{gbp(r.gross_sales)} <span className="text-slate-500 font-normal">· {r.avg_rating?r.avg_rating.toFixed(1):"—"}★</span></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 // ─── Store Analytics — comprehensive per-store Flipdish dashboard ─────────────
 // Manager-facing (and reused by the owner/HQ store drill-down). Everything is

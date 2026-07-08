@@ -13362,3 +13362,179 @@ export function rollItemsSoldByCategory(items, categoryMap) {
       .sort((a, b) => b.revenue - a.revenue),
   };
 }
+
+// ── DELIVEROO PERFORMANCE (weekly CSV upload) ───────────────────────────────
+// Parses the set of Deliveroo weekly report CSVs into one row per store and
+// upserts them. Store name is matched to internal stores by fuzzy name.
+const _csvParse = (text) => {
+  // Minimal RFC-4180-ish parser (handles quoted fields + commas).
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i+1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
+    } else {
+      if (c === '"') q = true;
+      else if (c === ",") { row.push(cur); cur = ""; }
+      else if (c === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; }
+      else if (c === "\r") { /* skip */ }
+      else cur += c;
+    }
+  }
+  if (cur.length || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.length && r.some(x => x !== ""));
+};
+const _toRows = (text) => {
+  const raw = _csvParse(text);
+  if (!raw.length) return [];
+  const head = raw[0].map(h => h.trim());
+  return raw.slice(1).map(r => { const o = {}; head.forEach((h, i) => o[h] = (r[i] ?? "").trim()); return o; });
+};
+const _num = (v) => { const n = parseFloat(String(v ?? "").replace(/[£,%]/g, "")); return isNaN(n) ? 0 : n; };
+const _norm = (s) => String(s || "").toLowerCase().replace(/^chocoberry\s*[-–]\s*/, "").replace(/[^a-z0-9]/g, "").trim();
+
+// files: { performance, orders, items_sold, customers, speed_summary,
+//          availability_open_rate, rejected_orders, rejected_by_reason } (text)
+export function parseDeliverooReports(files, { weekStart, weekEnd } = {}) {
+  const bySite = new Map();
+  const ensure = (site) => {
+    if (!site || /^all sites$/i.test(site)) return null;
+    if (!bySite.has(site)) bySite.set(site, { site_name: site });
+    return bySite.get(site);
+  };
+
+  // Performance
+  _toRows(files.performance || "").forEach(r => {
+    const s = ensure(r["Site"]); if (!s) return;
+    s.gross_sales = _num(r["Gross sales"]);
+    s.orders_delivered = _num(r["Orders delivered"]);
+    s.avg_order_value = _num(r["Average order value"]);
+    s.avg_rating = r["Average customer rating"] ? _num(r["Average customer rating"]) : null;
+  });
+  // Customers
+  _toRows(files.customers || "").forEach(r => {
+    const s = ensure(r["Site"]); if (!s) return;
+    s.orders_new = _num(r["Orders from new customers"]);
+    s.orders_repeat = _num(r["Orders from repeat customers (2-4 orders)"]);
+    s.orders_frequent = _num(r["Orders from frequent customers (over 4 orders)"]);
+    s.orders_offers = _num(r["Orders with Marketer offers"]);
+    s.orders_rewards = _num(r["Orders from Rewards"]);
+    s.menu_conversion = _num(r["Menu conversion (% orders / menu views)"]);
+  });
+  // Speed summary
+  _toRows(files.speed_summary || "").forEach(r => {
+    const s = ensure(r["Restaurant name"]); if (!s) return;
+    s.busy_mode_pct = _num(r["Busy mode usage"]);
+    s.prep_time_mins = _num(r["Prep time (mins)"]);
+    s.rider_wait_mins = _num(r["Rider wait time past target (mins)"]);
+    s.rider_wait_gt5_pct = _num(r["% Rider wait time past target >5 mins"]);
+    s.rider_wait_gt10_pct = _num(r["% Rider wait time past target >10 mins"]);
+    s.avg_order_duration_mins = _num(r["Average total order duration (mins)"]);
+  });
+  // Orders — economics + cancellation/rejection counts + item mix by site
+  const orderAgg = new Map();
+  _toRows(files.orders || "").forEach(r => {
+    const site = r["Restaurant name"]; if (!site) return;
+    const a = orderAgg.get(site) || { subtotal: 0, commission: 0, cancelled: 0, rejected: 0 };
+    a.subtotal += _num(r["Subtotal"]);
+    a.commission += _num(r["Deliveroo commission"]);
+    const st = (r["Order status"] || "").toLowerCase();
+    if (st.includes("cancel")) a.cancelled++;
+    else if (st.includes("reject")) a.rejected++;
+    orderAgg.set(site, a);
+  });
+  orderAgg.forEach((a, site) => {
+    const s = ensure(site); if (!s) return;
+    s.subtotal = +a.subtotal.toFixed(2);
+    s.commission = +a.commission.toFixed(2);
+    s.commission_pct = a.subtotal > 0 ? +(a.commission / a.subtotal * 100).toFixed(1) : 0;
+    s.orders_cancelled = a.cancelled;
+    s.orders_rejected = a.rejected;
+  });
+  // Items sold — top items per site (exclude Modifiers with 0 price noise)
+  const itemsBySite = new Map();
+  _toRows(files.items_sold || "").forEach(r => {
+    const site = r["Restaurant name"]; if (!site) return;
+    const list = itemsBySite.get(site) || [];
+    list.push({ category: r["Category"], name: r["Item name"], qty: _num(r["Quantity"]), revenue: _num(r["Subtotal"]) });
+    itemsBySite.set(site, list);
+  });
+  itemsBySite.forEach((list, site) => {
+    const s = ensure(site); if (!s) return;
+    s.items_sold = list.filter(i => i.revenue > 0).sort((a, b) => b.revenue - a.revenue).slice(0, 30);
+  });
+  // Availability — open rate (Total column, "All sites" excluded); daily rows so take store total avg
+  const openBySite = new Map();
+  _toRows(files.availability_open_rate || "").forEach(r => {
+    const site = r["Restaurant name"]; if (!site || /^all sites$/i.test(site)) return;
+    const arr = openBySite.get(site) || []; arr.push(_num(r["Total"])); openBySite.set(site, arr);
+  });
+  openBySite.forEach((arr, site) => { const s = ensure(site); if (!s) return; s.open_rate_pct = arr.length ? +(arr.reduce((x, y) => x + y, 0) / arr.length).toFixed(1) : null; });
+  // Rejected orders % (Metric = "% of orders rejected", Total col)
+  _toRows(files.rejected_orders || "").forEach(r => {
+    const site = r["Site"]; if (!site || /^all sites$/i.test(site)) return;
+    if ((r["Metric"] || "").toLowerCase().includes("rejected")) { const s = ensure(site); if (s) s.rejected_pct = _num(r["Total"]); }
+  });
+  // Rejection reasons per site
+  _toRows(files.rejected_by_reason || "").forEach(r => {
+    const site = r["Site"]; if (!site || /^all sites$/i.test(site)) return;
+    const reason = r["Rejection reason"]; if (!reason || reason === "All") return;
+    const s = ensure(site); if (!s) return;
+    s.rejection_reasons = s.rejection_reasons || [];
+    s.rejection_reasons.push({ reason, count: _num(r["Total rejected orders"]), value: _num(r["Order value of rejected orders"]) });
+  });
+
+  return Array.from(bySite.values())
+    .map(s => ({
+      week_start: weekStart || null, week_end: weekEnd || null,
+      gross_sales: 0, orders_delivered: 0, avg_order_value: 0, avg_rating: null,
+      subtotal: 0, commission: 0, commission_pct: 0, orders_cancelled: 0, orders_rejected: 0,
+      items_sold: s.items_sold || [], rejection_reasons: s.rejection_reasons || [], ...s,
+    }))
+    // Drop sites with no real activity that week (e.g. appear only in a
+    // zero-filled availability report).
+    .filter(s => s.gross_sales > 0 || s.orders_delivered > 0 || s.subtotal > 0);
+}
+
+// Match to internal stores and upsert.
+export async function saveDeliverooPerformance(parsedRows, stores = []) {
+  const idx = new Map(stores.map(st => [_norm(st.name), st]));
+  const rows = parsedRows.map(r => {
+    const match = idx.get(_norm(r.site_name));
+    return {
+      id: `dlv-${r.week_end || "na"}-${_norm(r.site_name)}`,
+      week_start: r.week_start, week_end: r.week_end,
+      site_name: r.site_name, store_id: match?.id || null, brand_id: match?.brandId || null,
+      gross_sales: r.gross_sales || 0, orders_delivered: r.orders_delivered || 0,
+      avg_order_value: r.avg_order_value || 0, avg_rating: r.avg_rating ?? null,
+      subtotal: r.subtotal || 0, commission: r.commission || 0, commission_pct: r.commission_pct || 0,
+      orders_cancelled: r.orders_cancelled || 0, orders_rejected: r.orders_rejected || 0,
+      orders_new: r.orders_new || 0, orders_repeat: r.orders_repeat || 0, orders_frequent: r.orders_frequent || 0,
+      orders_offers: r.orders_offers || 0, orders_rewards: r.orders_rewards || 0, menu_conversion: r.menu_conversion ?? null,
+      busy_mode_pct: r.busy_mode_pct ?? null, prep_time_mins: r.prep_time_mins ?? null, rider_wait_mins: r.rider_wait_mins ?? null,
+      rider_wait_gt5_pct: r.rider_wait_gt5_pct ?? null, rider_wait_gt10_pct: r.rider_wait_gt10_pct ?? null,
+      avg_order_duration_mins: r.avg_order_duration_mins ?? null,
+      open_rate_pct: r.open_rate_pct ?? null, rejected_pct: r.rejected_pct ?? null,
+      items_sold: r.items_sold || [], rejection_reasons: r.rejection_reasons || [],
+      uploaded_at: new Date().toISOString(),
+    };
+  });
+  const { error } = await supabase.from("deliveroo_performance").upsert(rows, { onConflict: "week_end,site_name" });
+  if (error) throw error;
+  return rows.length;
+}
+
+export async function fetchDeliverooPerformance({ weekEnd, storeId } = {}) {
+  let q = supabase.from("deliveroo_performance").select("*");
+  if (weekEnd) q = q.eq("week_end", weekEnd);
+  if (storeId) q = q.eq("store_id", storeId);
+  const { data, error } = await q.order("gross_sales", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function fetchDeliverooWeeks() {
+  const { data, error } = await supabase.from("deliveroo_performance").select("week_end").order("week_end", { ascending: false });
+  if (error) throw error;
+  return Array.from(new Set((data || []).map(r => r.week_end)));
+}
