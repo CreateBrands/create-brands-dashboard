@@ -55731,6 +55731,7 @@ export default function App() {
                     { key: "cogs:actualcogs:counts", label: "Stock Counts", desc: "Weekly stock counts per store.", gate: gCogs },
                     { key: "cogs:actualcogs:purchases", label: "Purchases", desc: "Purchase records feeding actual COGS.", gate: gCogs },
                     { key: "cogs:actualcogs:variance", label: "Variance vs Theoretical", desc: "Actual vs recipe-based COGS gap.", gate: gCogs },
+                    { key: "cogs:actualcogs:itemvar", label: "Item Variance", desc: "Per-item counted vs expected stock (which items are short).", gate: gCogs },
                     { key: "cogs:actualcogs:settings", label: "Store Inventory Settings", desc: "Per-store inventory configuration.", gate: gCogs },
                     { key: "cogs:actualcogs:pricechanges", label: "Price Changes", desc: "Ingredient price change history.", gate: gCogs },
                   ].filter(i => i.gate()),
