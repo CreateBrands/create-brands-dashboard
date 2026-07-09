@@ -13499,10 +13499,23 @@ function DistItemsView({ currentUser }) {
   const [imgUploading, setImgUploading] = useState(false);
   const onPickImage = async (file) => {
     if (!file) return;
-    if (!file.type?.startsWith("image/")) { setErr("Please choose an image file."); return; }
+    // Some iPhone HEIC/HEIF photos report an empty file.type — fall back to the
+    // filename extension rather than rejecting them as "not an image".
+    const nameExt = (file.name || "").split(".").pop()?.toLowerCase() || "";
+    const imageExts = ["jpg","jpeg","png","gif","webp","heic","heif","bmp","tiff"];
+    const looksImage = (file.type && file.type.startsWith("image/")) || imageExts.includes(nameExt);
+    if (!looksImage) { setErr("Please choose an image file."); return; }
     setImgUploading(true); setErr("");
-    try { const { url } = await uploadDistItemImage(file); setEditItem(prev => ({ ...prev, imageUrl: url })); }
-    catch (e) { setErr(e.message || "Image upload failed."); }
+    try {
+      const { url } = await uploadDistItemImage(file);
+      setEditItem(prev => ({ ...prev, imageUrl: url }));
+    }
+    catch (e) {
+      const detail = e?.message || e?.error || (typeof e === "string" ? e : "Image upload failed.");
+      console.error("Image upload failed:", e);
+      setErr("Image upload failed: " + detail);
+      try { window.alert("Image upload failed: " + detail); } catch {}
+    }
     setImgUploading(false);
   };
 
