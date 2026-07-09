@@ -2293,7 +2293,36 @@ export async function runFlipdishSync(body = {}) {
   if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
   const { data, error } = await supabase.functions.invoke("flipdish-rms-sync", { body, headers });
   if (error) throw error;
+  // PHASE 4: after sales land, deplete store stock from those sales (best-effort,
+  // idempotent per sale). Never let a depletion issue break the sync itself.
+  try { await _depleteAllStoresRollingWindow(body); } catch (e) { console.error("post-sync depletion failed:", e.message); }
   return data;
+}
+
+// Deplete store stock for all active stores across the sync's window.
+// Default window = yesterday + today (matches the rolling sync). Idempotent, so
+// re-running these dates only processes sales not already deducted.
+async function _depleteAllStoresRollingWindow(body = {}) {
+  // Resolve the date window: explicit from/to on the body, else yesterday+today.
+  const toDate = (d) => d.toISOString().slice(0, 10);
+  let dates = [];
+  if (body && body.from && body.to) {
+    let d = new Date(body.from + "T00:00:00Z"); const end = new Date(body.to + "T00:00:00Z");
+    while (d <= end) { dates.push(toDate(d)); d.setUTCDate(d.getUTCDate() + 1); }
+  } else {
+    const today = new Date(); const yest = new Date(); yest.setUTCDate(yest.getUTCDate() - 1);
+    dates = [toDate(yest), toDate(today)];
+  }
+  // Active, non-CK stores only (store stock is store-scope; skip the kitchen).
+  const { data: stores } = await supabase.from("stores")
+    .select("id, site_type").is("archived_at", null);
+  const storeIds = (stores || []).filter(s => s.site_type !== "central_kitchen").map(s => s.id);
+  for (const storeId of storeIds) {
+    for (const date of dates) {
+      try { await depleteStoreStockFromSales(storeId, date); }
+      catch (e) { console.error(`deplete ${storeId} ${date} failed:`, e.message); }
+    }
+  }
 }
 
 // Rebuild store_day_aggregates from already-synced flipdish_sales for a date
@@ -14019,5 +14048,147 @@ export async function fetchDeliveryShortfalls({ storeId } = {}) {
   let rows = (data || []).filter(r => r.store_deliveries && r.store_deliveries.status === "confirmed");
   if (storeId) rows = rows.filter(r => r.store_deliveries.store_id === storeId);
   return rows;
+}
+
+// ─── PHASE 4: COGS depletion of store stock (the DOWN side) ──────────────────
+// Near-real-time, idempotent. Walks flipdish_sales → POS map → product recipe
+// (ingredients + preps, STORE-SCOPE ONLY — never CK) → writes negative 'cogs'
+// movements to store_stock_movements and decrements store_stock.
+// Idempotency: each sale deducts exactly once, tracked by movement ref
+// 'sale:{sale_id}'. Safe to re-run — already-deducted sales are skipped.
+
+// Resolve a prep into its STORE-scoped ingredient quantities (recursive, cycle-safe).
+// Returns Map(storeItemId -> qty per 1 unit of the prep's yield).
+function _prepToStoreItems(prep, prepById, prepCompsByPrep, _seen) {
+  const out = new Map();
+  if (!prep) return out;
+  const seen = _seen || new Set();
+  if (seen.has(prep.id)) return out;      // cycle guard
+  seen.add(prep.id);
+  const yield_ = Number(prep.yieldQty) || 1;
+  const comps = prepCompsByPrep.get(prep.id) || [];
+  for (const c of comps) {
+    const portion = Number(c.portionQty) || 0;
+    if (c.subPrepId != null) {
+      // nested prep — resolve and scale by this portion / yield
+      const sub = prepById.get(c.subPrepId);
+      const subMap = _prepToStoreItems(sub, prepById, prepCompsByPrep, seen);
+      subMap.forEach((q, itemId) => out.set(itemId, (out.get(itemId) || 0) + q * portion));
+    } else if (c.itemScope === "store" && c.itemId != null) {
+      // STORE ingredient only — ignore CK-scoped components
+      const per = portion / yield_;
+      out.set(String(c.itemId), (out.get(String(c.itemId)) || 0) + per * yield_);
+    }
+    // CK-scoped or unscoped components are intentionally skipped (not store stock)
+  }
+  // normalise to "per 1 unit of yield"
+  const norm = new Map();
+  out.forEach((q, itemId) => norm.set(itemId, q / yield_));
+  return norm;
+}
+
+// Build a product -> Map(storeItemId -> qtyPerUnit) consumption table.
+function _productStoreConsumption(recipes) {
+  const prepById = new Map((recipes.preps || []).map(p => [p.id, p]));
+  const prepCompsByPrep = new Map();
+  (recipes.prepComponents || []).forEach(c => {
+    if (!prepCompsByPrep.has(c.prepId)) prepCompsByPrep.set(c.prepId, []);
+    prepCompsByPrep.get(c.prepId).push(c);
+  });
+  const compsByProduct = new Map();
+  (recipes.productComponents || []).forEach(c => {
+    if (!compsByProduct.has(c.productId)) compsByProduct.set(c.productId, []);
+    compsByProduct.get(c.productId).push(c);
+  });
+  const table = new Map(); // productId -> Map(storeItemId -> qty per 1 sold)
+  (recipes.products || []).forEach(prod => {
+    const map = new Map();
+    (compsByProduct.get(prod.id) || []).forEach(c => {
+      const portion = Number(c.portionQty) || 0;
+      if (c.prepId != null) {
+        const prep = prepById.get(c.prepId);
+        const pm = _prepToStoreItems(prep, prepById, prepCompsByPrep, null);
+        pm.forEach((qPerYield, itemId) => map.set(itemId, (map.get(itemId) || 0) + qPerYield * portion));
+      } else if (c.itemScope === "store" && c.itemId != null) {
+        map.set(String(c.itemId), (map.get(String(c.itemId)) || 0) + portion);
+      }
+      // CK-scoped components skipped — never deplete store stock for CK items
+    });
+    table.set(prod.id, map);
+  });
+  return table;
+}
+
+// Deplete store stock from a store's sales for a given date (idempotent).
+// Returns { processed, skipped, movements }.
+export async function depleteStoreStockFromSales(storeId, date) {
+  if (!storeId || !date) throw new Error("storeId and date required.");
+
+  const [recipes, mapsRaw, salesRes] = await Promise.all([
+    fetchRecipes(),
+    fetchPosMappings(storeId).catch(() => []),
+    supabase.from("flipdish_sales")
+      .select("sale_id, sale_items, is_cancelled, business_date")
+      .eq("store_id", storeId).eq("business_date", date),
+  ]);
+  const sales = (salesRes.data || []).filter(s => !s.is_cancelled);
+  if (!sales.length) return { processed: 0, skipped: 0, movements: 0 };
+
+  const consumption = _productStoreConsumption(recipes);
+  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+  // POS map: till-name (normalised) -> productId
+  const prodByTill = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) prodByTill.set(norm(m.posName), m.productId); });
+
+  // Which sales already deducted? (idempotency by ref)
+  const saleIds = sales.map(s => `sale:${s.sale_id}`);
+  const doneRefs = new Set();
+  if (saleIds.length) {
+    const { data: existing } = await supabase.from("store_stock_movements")
+      .select("ref").eq("store_id", storeId).eq("type", "cogs").in("ref", saleIds);
+    (existing || []).forEach(r => doneRefs.add(r.ref));
+  }
+
+  let processed = 0, skipped = 0, movements = 0;
+  for (const sale of sales) {
+    const ref = `sale:${sale.sale_id}`;
+    if (doneRefs.has(ref)) { skipped++; continue; }
+
+    // Aggregate store-item consumption for this whole sale.
+    const consume = new Map(); // storeItemId -> qty
+    let items = sale.sale_items;
+    if (typeof items === "string") { try { items = JSON.parse(items); } catch { items = []; } }
+    (items || []).forEach(li => {
+      const tillName = li.name || li.item_name || li.title || "";
+      const qtySold = Number(li.qty ?? li.quantity ?? 1) || 1;
+      const productId = prodByTill.get(norm(tillName));
+      if (!productId) return;                       // unmapped till-name → skip (not costed)
+      const map = consumption.get(productId);
+      if (!map) return;
+      map.forEach((perUnit, itemId) => consume.set(itemId, (consume.get(itemId) || 0) + perUnit * qtySold));
+    });
+
+    if (consume.size === 0) { processed++; continue; } // nothing store-scoped to deduct
+
+    // Write negative movements + decrement live stock.
+    for (const [itemId, qty] of consume.entries()) {
+      if (!(qty > 0)) continue;
+      await supabase.from("store_stock_movements").insert({
+        store_id: storeId, item_id: itemId, qty: -qty, type: "cogs",
+        ref, note: `COGS depletion from sale ${sale.sale_id}`,
+      });
+      movements++;
+      const { data: ss } = await supabase.from("store_stock")
+        .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", itemId).maybeSingle();
+      if (ss) {
+        await supabase.from("store_stock").update({ qty_on_hand: Number(ss.qty_on_hand) - qty, updated_at: new Date().toISOString() }).eq("id", ss.id);
+      } else {
+        // No stock row yet → create one at negative (visible as oversold until a count/delivery).
+        await supabase.from("store_stock").insert({ store_id: storeId, item_id: itemId, qty_on_hand: -qty });
+      }
+    }
+    processed++;
+  }
+  return { processed, skipped, movements };
 }
 
