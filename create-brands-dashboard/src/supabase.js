@@ -11124,7 +11124,14 @@ export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {
     };
   });
   if (!lines.length) throw new Error("This pick has no lines to dispatch.");
-  return postDistDispatch({ soId, pickId: pick.id, customerId: pick.customerId, createdBy }, lines);
+  const dispatchResult = await postDistDispatch({ soId, pickId: pick.id, customerId: pick.customerId, createdBy }, lines);
+  // PHASE 3b: mirror the dispatch into a store_delivery (incoming) so the store
+  // can receive against it. Best-effort — never blocks the dispatch.
+  try {
+    const dispatchId = dispatchResult && (dispatchResult.id || dispatchResult.dispatchId) ? (dispatchResult.id || dispatchResult.dispatchId) : null;
+    await createStoreDeliveryFromDispatch(soId, dispatchId, lines);
+  } catch (e) { console.error("store delivery mirror failed:", e.message); }
+  return dispatchResult;
 }
 
 // Which fresh (non-stocked) lines on a picked order still need an actual cost
@@ -13843,3 +13850,161 @@ export async function fetchUberEatsWeeks() {
   if (error) throw error;
   return Array.from(new Set((data || []).map(r => r.week_end)));
 }
+
+// ─── PHASE 3b: Store goods-receipt backend ──────────────────────────────────
+// When Dist dispatches, snapshot the dispatch into a store_delivery (status
+// 'incoming'). Store staff then receive against it. This NEVER modifies the
+// dispatch. Store-only — no CK involvement.
+
+// Resolve the store_id for a dist sales order (via customer→store link).
+async function _storeIdForSalesOrder(soId) {
+  try {
+    const { data: so } = await supabase.from("dist_sales_orders")
+      .select("customer_id").eq("id", soId).maybeSingle();
+    if (!so || !so.customer_id) return null;
+    const { data: contact } = await supabase.from("dist_contacts")
+      .select("store_id").eq("id", so.customer_id).maybeSingle();
+    return contact ? contact.store_id : null;
+  } catch { return null; }
+}
+
+// Create a store_delivery from a set of dispatched lines. Resolves each dist
+// item to its store item via cogs_store_items.dist_item_id (Phase 1 link).
+// Best-effort: logs and returns null on failure so it never breaks the dispatch.
+export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatchLines) {
+  try {
+    const storeId = await _storeIdForSalesOrder(soId);
+    if (!storeId) { console.warn("store delivery: no store for SO", soId); return null; }
+
+    // Map dist_item_id → store item (id + name) for the lines we're delivering.
+    const distIds = [...new Set((dispatchLines || []).map(l => l.itemId).filter(Boolean))];
+    const distById = new Map();
+    if (distIds.length) {
+      const { data: di } = await supabase.from("dist_items").select("id, name").in("id", distIds);
+      (di || []).forEach(d => distById.set(d.id, d.name));
+    }
+    const { data: storeItems } = await supabase.from("cogs_store_items")
+      .select("id, name, dist_item_id").in("dist_item_id", distIds.length ? distIds : ["__none__"]);
+    const storeByDist = new Map((storeItems || []).map(s => [s.dist_item_id, s]));
+
+    // Header
+    const { data: deliv, error: hErr } = await supabase.from("store_deliveries")
+      .insert({ store_id: storeId, dist_order_id: soId, dispatch_id: dispatchId || null,
+                status: "incoming", dispatched_at: new Date().toISOString() })
+      .select().single();
+    if (hErr) { console.error("store delivery header failed:", hErr.message); return null; }
+
+    // Lines
+    const lineRows = (dispatchLines || []).map(l => {
+      const si = storeByDist.get(l.itemId);
+      return {
+        delivery_id: deliv.id,
+        dist_item_id: l.itemId || null,
+        store_item_id: si ? si.id : null,
+        item_name: (si && si.name) || distById.get(l.itemId) || "Item",
+        qty_dispatched: Number(l.qty) || 0,
+        qty_received: null,
+        unit_cost: l.unitPrice != null ? Number(l.unitPrice) : null,
+      };
+    });
+    if (lineRows.length) {
+      const { error: lErr } = await supabase.from("store_delivery_lines").insert(lineRows);
+      if (lErr) console.error("store delivery lines failed:", lErr.message);
+    }
+    return deliv.id;
+  } catch (e) {
+    console.error("createStoreDeliveryFromDispatch error:", e.message);
+    return null;
+  }
+}
+
+// The store's incoming / in-progress deliveries (what's on the way).
+export async function fetchIncomingDeliveries(storeId) {
+  const { data, error } = await supabase.from("store_deliveries")
+    .select("*").eq("store_id", storeId).in("status", ["incoming", "receiving"])
+    .order("dispatched_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// Full detail of one delivery (header + lines).
+export async function fetchStoreDeliveryDetail(deliveryId) {
+  const [{ data: head }, { data: lines }] = await Promise.all([
+    supabase.from("store_deliveries").select("*").eq("id", deliveryId).maybeSingle(),
+    supabase.from("store_delivery_lines").select("*").eq("delivery_id", deliveryId).order("id"),
+  ]);
+  return { head, lines: lines || [] };
+}
+
+// Save received quantities as staff enter them (before final confirm).
+// lines = [{ id, qtyReceived, unitCost? }]
+export async function saveDeliveryReceipt(deliveryId, lines) {
+  for (const l of (lines || [])) {
+    const patch = { qty_received: l.qtyReceived != null ? Number(l.qtyReceived) : null,
+                    received: l.qtyReceived != null && Number(l.qtyReceived) > 0 };
+    if (l.unitCost != null && l.unitCost !== "") patch.unit_cost = Number(l.unitCost);
+    await supabase.from("store_delivery_lines").update(patch).eq("id", l.id);
+  }
+  await supabase.from("store_deliveries").update({ status: "receiving" }).eq("id", deliveryId);
+  return true;
+}
+
+// CONFIRM: add received qty to store_stock, write receipt movements, update
+// moving cost, flag shortfalls. This is the moment stock actually rises.
+export async function confirmStoreDelivery(deliveryId, receivedBy) {
+  const { head, lines } = await fetchStoreDeliveryDetail(deliveryId);
+  if (!head) throw new Error("Delivery not found.");
+  if (head.status === "confirmed") throw new Error("This delivery is already confirmed.");
+  const storeId = head.store_id;
+  let shortfalls = 0;
+
+  for (const l of lines) {
+    const recv = l.qty_received != null ? Number(l.qty_received) : 0;
+    if (l.store_item_id && recv > 0) {
+      // Movement (ledger)
+      await supabase.from("store_stock_movements").insert({
+        store_id: storeId, item_id: l.store_item_id, qty: recv, type: "receipt",
+        ref: `delivery-${deliveryId}`, unit_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
+        note: `Received on delivery ${deliveryId}`, created_by: receivedBy || null,
+      });
+      // Upsert live level (qty += recv; moving cost := latest delivery cost if given)
+      const { data: existing } = await supabase.from("store_stock")
+        .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", l.store_item_id).maybeSingle();
+      if (existing) {
+        const patch = { qty_on_hand: Number(existing.qty_on_hand) + recv, updated_at: new Date().toISOString() };
+        if (l.unit_cost != null) patch.moving_cost = Number(l.unit_cost);
+        await supabase.from("store_stock").update(patch).eq("id", existing.id);
+      } else {
+        await supabase.from("store_stock").insert({
+          store_id: storeId, item_id: l.store_item_id, qty_on_hand: recv,
+          moving_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
+        });
+      }
+    }
+    // Shortfall flag (dispatched > received)
+    const shortQty = Math.max((Number(l.qty_dispatched) || 0) - recv, 0);
+    if (shortQty > 0) {
+      shortfalls++;
+      await supabase.from("store_delivery_lines").update({ short_reported: true }).eq("id", l.id);
+    }
+  }
+
+  await supabase.from("store_deliveries").update({
+    status: "confirmed", received_at: new Date().toISOString(), received_by: receivedBy || null,
+  }).eq("id", deliveryId);
+
+  return { confirmed: true, shortfalls };
+}
+
+// Shortfall report for Dist: confirmed deliveries with any short line.
+export async function fetchDeliveryShortfalls({ storeId } = {}) {
+  let q = supabase.from("store_delivery_lines")
+    .select("*, store_deliveries!inner(store_id, dist_order_id, status, received_at)")
+    .gt("short_qty", 0);
+  const { data, error } = await q;
+  if (error) throw error;
+  let rows = (data || []).filter(r => r.store_deliveries && r.store_deliveries.status === "confirmed");
+  if (storeId) rows = rows.filter(r => r.store_deliveries.store_id === storeId);
+  return rows;
+}
+
