@@ -148,7 +148,7 @@ import {
   discoverModifierCandidates, createModifierFromCaption,
   computeStoreCogsV2, auditTillOrders,
   fetchModifierMappings, setModifierMapping, deleteModifierMapping, fetchModifierCaptions,
-  fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount,
+  fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount, fetchStoreCountVariance,
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
@@ -15328,7 +15328,7 @@ function ActualCogs({ stores = [], initialSub, hideTabs }) {
           </select></div>
         {!hideTabs && (
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
-          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].map(([k,l])=>(
+          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["itemvar","Item Variance"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].map(([k,l])=>(
             <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
@@ -15338,8 +15338,108 @@ function ActualCogs({ stores = [], initialSub, hideTabs }) {
       {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money}/>}
       {storeId && sub === "purchases" && <Purchases storeId={storeId} money={money}/>}
       {storeId && sub === "variance" && <Variance storeId={storeId} money={money}/>}
+      {storeId && sub === "itemvar" && <ItemVariance storeId={storeId}/>}
       {storeId && sub === "settings" && <StoreInventorySettings storeId={storeId} money={money}/>}
       {sub === "pricechanges" && <PriceChanges stores={stores} money={money}/>}
+    </div>
+  );
+}
+
+function ItemVariance({ storeId }) {
+  const [counts, setCounts] = useState([]);
+  const [countId, setCountId] = useState("");
+  const [rows, setRows] = useState([]);
+  const [head, setHead] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let go = true;
+    (async () => {
+      try { const c = await fetchStockCounts(storeId); if (go) setCounts((c || []).filter(x => x.status === "finalised")); }
+      catch (e) { if (go) setErr(e.message); }
+    })();
+    return () => { go = false; };
+  }, [storeId]);
+
+  const run = async (id) => {
+    if (!id) { setRows([]); setHead(null); return; }
+    setLoading(true); setErr(null);
+    try { const r = await fetchStoreCountVariance(Number(id)); setRows(r.rows || []); setHead(r.head || null); }
+    catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-GB", { maximumFractionDigits: 3 });
+  const shorts = rows.filter(r => r.variance != null && r.variance < 0);
+  const overs  = rows.filter(r => r.variance != null && r.variance > 0);
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">Per-item quantity variance: what was physically counted vs what the running stock expected (deliveries in − sales out since the last count). Negative = short (waste, over-portioning, or loss); positive = surplus. Worst shortages first.</p>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-[11px] text-slate-500 mb-1">Finalised count</label>
+          <select value={countId} onChange={e => { setCountId(e.target.value); run(e.target.value); }}
+            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            <option value="">Select a count…</option>
+            {counts.map(c => <option key={c.id} value={c.id}>{c.countDate}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {loading ? <div className="text-xs text-slate-500 py-6">Calculating…</div>
+       : !head ? <div className="text-xs text-slate-600 py-6">Pick a finalised count to see per-item variance.</div>
+       : rows.length === 0 ? <div className="text-xs text-slate-600 py-6">No store-scoped items on this count.</div>
+       : (
+        <>
+          <div className="flex gap-3 flex-wrap">
+            <div className="rounded-xl bg-slate-900 border border-slate-700 px-4 py-2">
+              <div className="text-[11px] text-slate-500">Items short</div>
+              <div className="text-lg font-bold text-red-400">{shorts.length}</div>
+            </div>
+            <div className="rounded-xl bg-slate-900 border border-slate-700 px-4 py-2">
+              <div className="text-[11px] text-slate-500">Items surplus</div>
+              <div className="text-lg font-bold text-emerald-400">{overs.length}</div>
+            </div>
+            <div className="rounded-xl bg-slate-900 border border-slate-700 px-4 py-2">
+              <div className="text-[11px] text-slate-500">Items counted</div>
+              <div className="text-lg font-bold text-white">{rows.length}</div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-700">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-900 text-slate-400 text-[11px] uppercase tracking-wide">
+                  <th className="text-left px-3 py-2">Item</th>
+                  <th className="text-right px-3 py-2">Counted</th>
+                  <th className="text-right px-3 py-2">Expected</th>
+                  <th className="text-right px-3 py-2">Variance</th>
+                  <th className="text-right px-3 py-2">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const v = r.variance;
+                  const tone = v == null ? "text-slate-400" : v < 0 ? "text-red-400" : v > 0 ? "text-emerald-400" : "text-slate-300";
+                  return (
+                    <tr key={r.itemId} className="border-t border-slate-800">
+                      <td className="px-3 py-2 text-white">{r.name}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.counted)}{r.unit ? ` ${r.unit}` : ""}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{fmt(r.expected)}</td>
+                      <td className={`px-3 py-2 text-right font-semibold ${tone}`}>{v == null ? "—" : (v > 0 ? "+" : "") + fmt(v)}</td>
+                      <td className={`px-3 py-2 text-right ${tone}`}>{r.variancePct == null ? "—" : `${r.variancePct > 0 ? "+" : ""}${r.variancePct.toFixed(1)}%`}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-slate-600">Expected is blank for items with no prior running stock (first count establishes the baseline — variance appears from the next count onward).</p>
+        </>
+      )}
     </div>
   );
 }

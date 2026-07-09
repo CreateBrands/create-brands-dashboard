@@ -6953,10 +6953,48 @@ export async function finaliseStockCount(countId, status = "finalised") {
   const { error } = await supabase.from("cogs_stock_counts").update({ status }).eq("id", countId);
   if (error) throw error;
 
-  // Count = truth: reconcile CK ingredient stock to the counted quantities so the
-  // Planner / production see real stock. Only runs on finalise (not un-finalise),
-  // and only for CK-scoped ingredient lines (item_scope 'ck').
   if (status !== "finalised") return;
+
+  // ─── STORE-SCOPE reconciliation + variance (Phase 5) ──────────────────────
+  // For store-scoped count lines: capture expected (current running store_stock)
+  // vs counted, write a count_adjust movement so the running qty resets to the
+  // counted truth, and store the variance on the count line. STORE ONLY — the CK
+  // block below handles ck lines separately and is untouched.
+  try {
+    const { data: sHead } = await supabase.from("cogs_stock_counts").select("store_id").eq("id", countId).maybeSingle();
+    const storeId = sHead?.store_id || null;
+    const { data: allLines } = await supabase.from("cogs_stock_count_lines")
+      .select("id, item_scope, item_id, qty").eq("count_id", countId);
+    const storeLines = (allLines || []).filter(l => l.item_scope === "store" && l.item_id != null && l.qty != null);
+    if (storeId && storeLines.length) {
+      for (const l of storeLines) {
+        const itemId = String(l.item_id);
+        const counted = Number(l.qty) || 0;
+        // Expected = current running qty (deliveries − sales since last reconcile).
+        const { data: ss } = await supabase.from("store_stock")
+          .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", itemId).maybeSingle();
+        const expected = ss ? Number(ss.qty_on_hand) : 0;
+        const variance = counted - expected;              // + = surplus, − = short
+        // Write a count_adjust movement to bring running qty to the counted truth.
+        if (variance !== 0 || !ss) {
+          await supabase.from("store_stock_movements").insert({
+            store_id: storeId, item_id: itemId, qty: variance, type: "count_adjust",
+            ref: `count:${countId}`, note: `Count ${countId}: counted ${counted}, expected ${expected}`,
+          });
+        }
+        if (ss) {
+          await supabase.from("store_stock").update({ qty_on_hand: counted, updated_at: new Date().toISOString() }).eq("id", ss.id);
+        } else {
+          await supabase.from("store_stock").insert({ store_id: storeId, item_id: itemId, qty_on_hand: counted });
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Store count reconciliation failed:", e.message);
+  }
+
+  // Count = truth: reconcile CK ingredient stock to the counted quantities so the
+  // Planner / production see real stock. Only for CK-scoped ingredient lines.
   try {
     const { data: head } = await supabase.from("cogs_stock_counts").select("store_id, count_date").eq("id", countId).maybeSingle();
     const { data: lines } = await supabase.from("cogs_stock_count_lines").select("item_scope, item_id, qty, cost_per_unit").eq("count_id", countId);
@@ -6998,6 +7036,38 @@ export async function finaliseStockCount(countId, status = "finalised") {
     // Don't fail the finalise if reconciliation hits an issue; surface for debugging.
     console.error("Count→stock reconciliation failed:", e);
   }
+}
+
+
+// Per-item quantity variance for a finalised store count (Phase 5).
+// Returns each store line: counted vs expected (from the count_adjust movement
+// recorded at finalise), plus the variance qty/%. Worst (most negative) first.
+export async function fetchStoreCountVariance(countId) {
+  const { data: head } = await supabase.from("cogs_stock_counts")
+    .select("id, store_id, count_date, status").eq("id", countId).maybeSingle();
+  if (!head) return { head: null, rows: [] };
+  const [{ data: lines }, { data: moves }, { data: items }] = await Promise.all([
+    supabase.from("cogs_stock_count_lines").select("item_scope, item_id, qty").eq("count_id", countId),
+    supabase.from("store_stock_movements").select("item_id, qty, note").eq("ref", `count:${countId}`).eq("type", "count_adjust"),
+    supabase.from("cogs_store_items").select("id, name, base_unit"),
+  ]);
+  const nameById = new Map((items || []).map(i => [String(i.id), i.name]));
+  const unitById = new Map((items || []).map(i => [String(i.id), i.base_unit]));
+  // variance qty came from the count_adjust movement (counted − expected)
+  const adjById = new Map((moves || []).map(m => [String(m.item_id), Number(m.qty)]));
+  const rows = (lines || [])
+    .filter(l => l.item_scope === "store" && l.item_id != null)
+    .map(l => {
+      const id = String(l.item_id);
+      const counted = Number(l.qty) || 0;
+      const variance = adjById.has(id) ? adjById.get(id) : null;   // counted − expected
+      const expected = variance != null ? counted - variance : null;
+      const variancePct = (expected && expected !== 0 && variance != null) ? (variance / expected) * 100 : null;
+      return { itemId: id, name: nameById.get(id) || id, unit: unitById.get(id) || "",
+               counted, expected, variance, variancePct };
+    })
+    .sort((a, b) => (a.variance ?? 0) - (b.variance ?? 0));   // most short first
+  return { head: { id: head.id, storeId: head.store_id, countDate: head.count_date, status: head.status }, rows };
 }
 
 export async function deleteStockCount(countId) {
