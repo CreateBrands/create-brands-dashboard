@@ -183,6 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -18429,7 +18430,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             />
           )}
           {activeView === "ops-deliveries" && (
-            <DeliveriesView
+            <DeliveriesHub
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} deliveries={deliveries} onAdd={onDeliveryAdd}
             />
           )}
@@ -30900,6 +30901,169 @@ function CkOrderView({ stores = [], visibleStoreIds = [], currentUser }) {
 }
 
 // ─── Deliveries View ──────────────────────────────────────────────────────────
+// ─── STORE RECEIVING (Incoming Orders from Distribution) ────────────────────
+// Phase 3c: staff see dispatched orders as "incoming", mark each item's actual
+// received qty (partial allowed), confirm → stock rises, shortfalls flag to Dist.
+function IncomingOrdersView({ stores, visibleStoreIds }) {
+  const { user } = useAuth();
+  const myStores = (stores || []).filter(s => visibleStoreIds?.includes(s.id) && !s.archivedAt);
+  const [storeId, setStoreId] = useState(myStores[0]?.id || null);
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [recv, setRecv] = useState({});           // lineId -> qty received
+  const [costs, setCosts] = useState({});          // lineId -> unit cost
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const C = { cream:"#FBF6EC", line:"#E8DCC6", ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68",
+              accent:"#844429", red:"#A23B2E", redBg:"#F6E4DF", green:"#3F6B3A", greenBg:"#E4EEDC", amber:"#8A5A12", amberBg:"#F7EBD4" };
+
+  const load = useCallback(async () => {
+    if (!storeId) return;
+    setLoading(true);
+    try { setList(await fetchIncomingDeliveries(storeId)); }
+    catch (e) { setMsg({ tone:"err", text: e.message }); }
+    finally { setLoading(false); }
+  }, [storeId]);
+  useEffect(() => { load(); }, [load]);
+
+  const openDelivery = async (id) => {
+    setOpenId(id); setDetail(null);
+    try {
+      const d = await fetchStoreDeliveryDetail(id);
+      setDetail(d);
+      // default received qty = dispatched (staff adjust down for shortfalls)
+      const r = {}, c = {};
+      (d.lines || []).forEach(l => { r[l.id] = l.qty_received != null ? l.qty_received : l.qty_dispatched; if (l.unit_cost != null) c[l.id] = l.unit_cost; });
+      setRecv(r); setCosts(c);
+    } catch (e) { setMsg({ tone:"err", text: e.message }); }
+  };
+
+  const saveProgress = async () => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await saveDeliveryReceipt(openId, (detail.lines || []).map(l => ({ id: l.id, qtyReceived: recv[l.id], unitCost: costs[l.id] })));
+      setMsg({ tone:"ok", text:"Progress saved." });
+    } catch (e) { setMsg({ tone:"err", text: e.message }); }
+    finally { setBusy(false); }
+  };
+
+  const confirm = async () => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      // save latest entries first, then confirm
+      await saveDeliveryReceipt(openId, (detail.lines || []).map(l => ({ id: l.id, qtyReceived: recv[l.id], unitCost: costs[l.id] })));
+      const res = await confirmStoreDelivery(openId, user?.name || user?.id || null);
+      setMsg({ tone:"ok", text: `Delivery confirmed. Stock updated.${res.shortfalls ? ` ${res.shortfalls} short item(s) reported to Distribution.` : ""}` });
+      setOpenId(null); setDetail(null);
+      load();
+    } catch (e) { setMsg({ tone:"err", text: e.message }); }
+    finally { setBusy(false); }
+  };
+
+  if (myStores.length === 0) {
+    return <div className="flex flex-col items-center justify-center py-16" style={{ color: C.inkFaint }}>
+      <Truck size={32} className="mb-3"/><div className="text-sm font-semibold">No stores assigned.</div></div>;
+  }
+
+  // Detail (receiving) screen
+  if (openId && detail) {
+    const lines = detail.lines || [];
+    const anyShort = lines.some(l => (Number(recv[l.id]) || 0) < (Number(l.qty_dispatched) || 0));
+    return (
+      <div className="space-y-4">
+        <button onClick={() => { setOpenId(null); setDetail(null); }} className="text-sm font-semibold" style={{ color: C.accent }}>← Back to incoming</button>
+        <div className="rounded-2xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
+          <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: C.inkFaint }}>Receiving delivery</div>
+          <div className="text-sm" style={{ color: C.inkSoft }}>Enter the actual quantity received for each item. Short items are reported to Distribution.</div>
+        </div>
+        {msg && <div className="rounded-xl px-3 py-2 text-sm font-semibold" style={{ background: msg.tone==="ok"?C.greenBg:C.redBg, color: msg.tone==="ok"?C.green:C.red }}>{msg.text}</div>}
+        <div className="space-y-2">
+          {lines.map(l => {
+            const got = Number(recv[l.id]) || 0; const disp = Number(l.qty_dispatched) || 0;
+            const short = got < disp; const unlinked = !l.store_item_id;
+            return (
+              <div key={l.id} className="rounded-xl p-3" style={{ background: C.cream, border:`1px solid ${short?C.amber:C.line}` }}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold truncate" style={{ color: C.ink }}>{l.item_name}</div>
+                    <div className="text-[11px]" style={{ color: C.inkFaint }}>Dispatched: {disp}{unlinked && <span style={{ color: C.red }}> · not linked to store item</span>}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => setRecv(r => ({ ...r, [l.id]: Math.max(0, got - 1) }))} className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>−</button>
+                    <input type="number" value={recv[l.id] ?? ""} onChange={e => setRecv(r => ({ ...r, [l.id]: e.target.value }))}
+                      className="w-14 text-center rounded-lg py-1 text-sm font-bold" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
+                    <button onClick={() => setRecv(r => ({ ...r, [l.id]: got + 1 }))} className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>+</button>
+                  </div>
+                </div>
+                {short && <div className="text-[11px] mt-1.5 font-semibold" style={{ color: C.amber }}>Short by {disp - got} — will be reported</div>}
+              </div>
+            );
+          })}
+        </div>
+        {anyShort && <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: C.amberBg, color: C.amber }}>Some items are short. Confirming will report the shortfall to Distribution.</div>}
+        <div className="flex gap-2">
+          <button onClick={saveProgress} disabled={busy} className="flex-1 rounded-xl py-2.5 text-sm font-bold" style={{ background:"#F3EADA", color: C.ink }}>Save progress</button>
+          <button onClick={confirm} disabled={busy} className="flex-1 rounded-xl py-2.5 text-sm font-bold text-white" style={{ background: C.green }}>{busy ? "…" : "Confirm & add to stock"}</button>
+        </div>
+      </div>
+    );
+  }
+
+  // List screen
+  return (
+    <div className="space-y-4">
+      {myStores.length > 1 && (
+        <select value={storeId || ""} onChange={e => setStoreId(e.target.value)} className="rounded-xl px-3 py-2 text-sm" style={{ background: C.cream, border:`1px solid ${C.line}`, color: C.ink }}>
+          {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      )}
+      {msg && <div className="rounded-xl px-3 py-2 text-sm font-semibold" style={{ background: msg.tone==="ok"?C.greenBg:C.redBg, color: msg.tone==="ok"?C.green:C.red }}>{msg.text}</div>}
+      {loading ? <div className="py-12 text-center text-sm" style={{ color: C.inkFaint }}>Loading…</div>
+       : list.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16" style={{ color: C.inkFaint }}>
+          <Truck size={32} className="mb-3"/><div className="text-sm font-semibold">No incoming deliveries.</div>
+          <div className="text-xs mt-1">Dispatched orders from Distribution appear here to receive.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {list.map(d => (
+            <button key={d.id} onClick={() => openDelivery(d.id)} className="w-full text-left rounded-xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-bold" style={{ color: C.ink }}>Delivery #{d.id}</div>
+                  <div className="text-[11px]" style={{ color: C.inkFaint }}>Order {d.dist_order_id || "—"} · {d.status === "receiving" ? "in progress" : "incoming"}</div>
+                </div>
+                <div className="px-2 py-1 rounded-full text-[10px] font-bold" style={{ background: d.status==="receiving"?C.amberBg:C.greenBg, color: d.status==="receiving"?C.amber:C.green }}>{d.status === "receiving" ? "Receiving" : "New"}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeliveriesHub({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
+  const [tab, setTab] = useState("incoming");
+  const C = { line:"#E8DCC6", ink:"#3A2E26", inkFaint:"#8A7B68", accent:"#844429", cream:"#FBF6EC" };
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 p-1 rounded-xl" style={{ background:"#F3EADA", width:"fit-content" }}>
+        <button onClick={() => setTab("incoming")} className="px-3 py-1.5 rounded-lg text-sm font-bold" style={{ background: tab==="incoming"?C.cream:"transparent", color: tab==="incoming"?C.accent:C.inkFaint }}>Incoming Orders</button>
+        <button onClick={() => setTab("log")} className="px-3 py-1.5 rounded-lg text-sm font-bold" style={{ background: tab==="log"?C.cream:"transparent", color: tab==="log"?C.accent:C.inkFaint }}>Log a Delivery</button>
+      </div>
+      {tab === "incoming"
+        ? <IncomingOrdersView stores={stores} visibleStoreIds={visibleStoreIds} />
+        : <DeliveriesView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={onAdd} />}
+    </div>
+  );
+}
+
 function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
   const { user } = useAuth();
 
