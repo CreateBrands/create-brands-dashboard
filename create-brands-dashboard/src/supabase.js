@@ -9671,12 +9671,25 @@ export async function fetchDistItems({ includeInactive } = {}) {
 // Mirrors the applicant-photos upload pattern. Bucket must exist + be public.
 export async function uploadDistItemImage(file) {
   if (!file) throw new Error("No file provided.");
-  const ext = (file.name || "").split(".").pop()?.toLowerCase() || "jpg";
+  // Derive a clean extension. Downloaded images often have messy names
+  // (no extension, query strings like "photo.jpg?w=800", or none at all), so
+  // prefer the MIME type and fall back to a sanitised filename extension.
+  const mimeExt = {
+    "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/gif": "gif",
+    "image/webp": "webp", "image/heic": "heic", "image/heif": "heif",
+    "image/bmp": "bmp", "image/tiff": "tiff", "image/avif": "avif", "image/svg+xml": "svg",
+  }[(file.type || "").toLowerCase()];
+  let ext = mimeExt;
+  if (!ext) {
+    const raw = (file.name || "").split("?")[0].split("#")[0]; // strip query/hash
+    const maybe = raw.includes(".") ? raw.split(".").pop().toLowerCase() : "";
+    ext = /^[a-z0-9]{1,5}$/.test(maybe) ? maybe : "jpg";        // only clean exts
+  }
   const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   const path = `items/${token}.${ext}`;
   const { error: upErr } = await supabase.storage
     .from("dist-item-images")
-    .upload(path, file, { contentType: file.type, cacheControl: "3600", upsert: false });
+    .upload(path, file, { contentType: file.type || "image/jpeg", cacheControl: "3600", upsert: false });
   if (upErr) throw upErr;
   const { data: { publicUrl } } = supabase.storage.from("dist-item-images").getPublicUrl(path);
   return { url: publicUrl, path };
