@@ -14038,6 +14038,21 @@ const RC_ICONS = {
   cheese:'<path d="M4 16l14-6 2 6Z"/><circle cx="9" cy="14" r=".7" fill="#3A2E26"/><circle cx="13" cy="13" r=".7" fill="#3A2E26"/>',
   spice:'<rect x="8" y="8" width="8" height="12" rx="1.5"/><path d="M9 8V5h6v3M11 4h2M11 11h.01M13 11h.01M12 13h.01"/>',
   plate:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/>',
+  cup:'<path d="M6 8h10v6a5 5 0 0 1-10 0Z"/><path d="M16 9h2.5a2 2 0 0 1 0 4H16"/><path d="M8 3v2M11 3v2M14 3v2"/>',
+  glass:'<path d="M7 4h10l-1.5 16h-7Z"/><path d="M7.5 9h9"/>',
+  kettle:'<path d="M5 12h11l1 7H5Z"/><path d="M16 12l3-3M18 9h2"/><path d="M9 12v-2a3 3 0 0 1 6 0v2"/>',
+  scale:'<path d="M4 20h16"/><path d="M12 4v16M6 8h12l-2 6H8Z"/>',
+  oven:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M7 6.5h.01M10 6.5h.01"/><rect x="7" y="12" width="10" height="5" rx="1"/>',
+  fire:'<path d="M12 3c1 3 4 4 4 8a4 4 0 0 1-8 0c0-2 1-3 2-4 0 1 .5 2 1 2 .5-2-1-4 1-6Z"/>',
+  timer:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
+  scoop:'<circle cx="9" cy="9" r="4"/><path d="M12 12l7 7"/>',
+  salt:'<rect x="8" y="9" width="8" height="11" rx="2"/><path d="M9 9V6h6v3M11 5h2M11 12h.01M13 12h.01M12 14h.01"/>',
+  herb:'<path d="M12 21c0-6 2-10 6-12-1 6-3 9-6 10M12 21c0-4-2-7-5-8 1 4 2 6 5 6"/>',
+  lemon:'<ellipse cx="12" cy="12" rx="7" ry="5" transform="rotate(-30 12 12)"/><path d="M9 12h6M12 9v6"/>',
+  milk:'<path d="M8 8h8v11a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1Z"/><path d="M9 8l1-4h4l1 4"/>',
+  chocolate:'<rect x="6" y="6" width="12" height="12" rx="1"/><path d="M6 10h12M6 14h12M10 6v12M14 6v12"/>',
+  scissors:'<circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><path d="M8 8l12 8M8 16l12-8"/>',
+  fork:'<path d="M8 3v6a2 2 0 0 0 4 0V3M10 9v12"/><path d="M16 3c-1 0-2 2-2 5s1 4 2 4v9"/>',
 };
 const RC_ICON_KEYS = Object.keys(RC_ICONS);
 function RcIcon({ name, size = 48 }) {
@@ -14201,11 +14216,103 @@ function StoreRecipesView() {
   );
 }
 
+// Shared card renderer — used by builder preview AND the store viewer.
+function RcCardPreview({ d, scale = 0.62 }) {
+  const C = { hot:"#844429", head:"#E4C9AE", panel:"#FBF6EC", row:"#F3EADA", band:"#844429", ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6" };
+  return (
+    <div className="rc-print inline-block origin-top" style={{ transform:`scale(${scale})`, transformOrigin:"top left" }}>
+      {/* PAGE 1 */}
+      <div className="rc-page" style={{ width:1123, minHeight:794, background:"#fff", padding:"46px 54px", position:"relative", marginBottom:24, boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
+        <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
+          <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
+        </div>
+        <div style={{ position:"absolute", top:44, right:54, background:C.band, color:"#fff", fontWeight:800, fontSize:13, letterSpacing:1, padding:"7px 26px 7px 34px", clipPath:"polygon(8% 0,100% 0,100% 100%,0 100%)" }}>{d.name}</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:20, marginTop:44 }}>
+          {(d.steps||[]).map((st,i)=>(
+            <div key={i} style={{ border:`1px solid ${C.line}`, borderRadius:3, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+              <div style={{ background:C.head, display:"flex", alignItems:"center", gap:12, padding:"9px 14px" }}>
+                <span style={{ fontWeight:700, fontSize:15, color:C.ink, width:16 }}>{i+1}</span>
+                <span style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", flex:1, textAlign:"center", paddingRight:16, color:C.ink }}>{st.verb}</span>
+              </div>
+              <div style={{ background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px 0 14px" }}><RcIcon name={st.icon}/></div>
+              <div style={{ background:C.panel, flex:1, padding:"14px 16px", fontSize:12.5, lineHeight:1.5, textAlign:"center", color:C.ink }}>{st.txt}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* PAGE 2 */}
+      <div className="rc-page" style={{ width:1123, minHeight:794, background:"#fff", padding:"46px 54px", position:"relative", boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
+        <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
+          <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
+        </div>
+        <div style={{ position:"absolute", top:40, right:54, textAlign:"center" }}>
+          <div style={{ fontWeight:800, fontSize:10, letterSpacing:1, color:C.ink }}>BUILD</div>
+          <div style={{ width:44, height:44, borderRadius:"50%", background:C.head, margin:"4px auto 3px", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#3A2E26" strokeWidth="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>
+          </div>
+          <div style={{ fontWeight:800, fontSize:10, color:C.ink }}>{d.time}</div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:34, marginTop:30 }}>
+          <div style={{ position:"relative" }}>
+            <div style={{ position:"absolute", top:16, left:-6, background:C.band, color:"#fff", fontWeight:800, fontSize:14, letterSpacing:".5px", padding:"7px 26px", zIndex:2 }}>{d.name}</div>
+            <div style={{ width:"100%", aspectRatio:"1/1", borderRadius:4, background:d.photo?`#F3EADA url(${d.photo}) center/cover no-repeat`:"#F3EADA", display:"flex", alignItems:"center", justifyContent:"center", color:C.inkFaint, fontSize:13 }}>{d.photo?"":"No photo"}</div>
+          </div>
+          <div>
+            <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", display:"grid", gridTemplateColumns:"1.1fr 1fr 2fr", padding:"0 0 8px", borderBottom:`2px solid ${C.head}`, color:C.ink }}>
+              <span>STEPS</span><span>QTY</span><span>INGREDIENTS/TOOLS</span>
+            </div>
+            <table style={{ width:"100%", borderCollapse:"collapse", border:`1px solid ${C.line}` }}>
+              <tbody>
+                {(d.ingredients||[]).map((it,i)=>(
+                  <tr key={i} style={{ background: i%2===0?C.row:"transparent" }}>
+                    <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, width:"26%", color:C.ink }}>{it.role}</td>
+                    <td style={{ padding:"9px 14px", fontSize:12, fontWeight:700, width:"22%", color:C.ink }}>{it.qty}</td>
+                    <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, color:C.ink }}>{it.name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", marginTop:26, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>TOOLS</div>
+        <div style={{ display:"flex", gap:26, marginTop:16, flexWrap:"wrap" }}>
+          {(d.tools||[]).map((tl,i)=>(
+            <div key={i} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:7, width:78, textAlign:"center" }}>
+              <RcIcon name={tl.icon} size={34}/><span style={{ fontSize:11, color:C.ink, lineHeight:1.2 }}>{tl.name}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", marginTop:22, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>CROCKERY</div>
+        <div style={{ border:`1px solid ${C.ink}`, borderRadius:4, padding:"11px 14px", fontSize:14, marginTop:14, color:C.ink }}>{d.crockery}</div>
+        <div style={{ position:"absolute", bottom:20, right:54, fontSize:10, color:C.inkFaint, letterSpacing:2, fontWeight:700, textTransform:"uppercase" }}>{d.brand}</div>
+      </div>
+    </div>
+  );
+}
+
+// Collapsible section wrapper
+function RcSection({ title, count, open, onToggle, children }) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+      <button onClick={onToggle} className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+        <span className="text-slate-200 font-semibold text-xs">{title}{count!=null && <span className="text-slate-500 font-normal"> ({count})</span>}</span>
+        <span className="text-slate-500 text-xs">{open?"▴":"▾"}</span>
+      </button>
+      {open && <div className="px-3 pb-3">{children}</div>}
+    </div>
+  );
+}
+
 function RecipeCardBuilder() {
-  const [d, setD] = useState(() => { try { const s = localStorage.getItem("recipecard_draft"); return s ? JSON.parse(s) : RC_DEFAULT; } catch { return RC_DEFAULT; } });
+  const [d, setD] = useState(RC_DEFAULT);
   const set = (patch) => setD(prev => ({ ...prev, ...patch }));
-  // NB: localStorage is fine in the live app (only blocked in artifacts sandbox)
-  useEffect(() => { try { localStorage.setItem("recipecard_draft", JSON.stringify(d)); } catch {} }, [d]);
+
+  // collapsible section state
+  const [openSec, setOpenSec] = useState({ header:true, steps:true, ingredients:false, tools:false, photo:false, import:false });
+  const toggle = (k) => setOpenSec(s => ({ ...s, [k]:!s[k] }));
+
+  // drag state
+  const dragRef = useRef({ list:null, from:null });
 
   const upStep = (i,k,v) => setD(p => { const s=[...p.steps]; s[i]={...s[i],[k]:v}; return {...p,steps:s}; });
   const addStep = () => setD(p => ({...p, steps:[...p.steps, {verb:"NEW STEP", icon:"pan", txt:"Describe this step."}]}));
@@ -14217,99 +14324,135 @@ function RecipeCardBuilder() {
   const addTool = () => setD(p => ({...p, tools:[...p.tools, {icon:"pot", name:"New Tool"}]}));
   const delTool = (i) => setD(p => ({...p, tools:p.tools.filter((_,x)=>x!==i)}));
 
+  // reorder helper
+  const reorder = (listKey, from, to) => {
+    if (from===to || from==null || to==null) return;
+    setD(p => { const arr=[...p[listKey]]; const [m]=arr.splice(from,1); arr.splice(to,0,m); return {...p,[listKey]:arr}; });
+  };
+  const onDragStart = (listKey,i)=>{ dragRef.current={list:listKey,from:i}; };
+  const onDropAt = (listKey,i)=>{ if(dragRef.current.list===listKey) reorder(listKey,dragRef.current.from,i); dragRef.current={list:null,from:null}; };
+
   const loadPhoto = (e) => { const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=ev=>set({photo:ev.target.result}); r.readAsDataURL(f); };
-  const resetCard = () => { if(window.confirm("Reset to the sample recipe? Your current card will be cleared.")) setD(RC_DEFAULT); };
   const printCard = () => window.print();
 
-  // ---- database: saved cards library (office creates, stores view) ----
+  // ---- database library ----
   const [savedCards, setSavedCards] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
-  const loadList = useCallback(async () => {
-    try { setSavedCards(await fetchRecipeCards({ includeUnpublished: true })); } catch (e) { setMsg({ t:"err", m:e.message }); }
-  }, []);
+  const loadList = useCallback(async () => { try { setSavedCards(await fetchRecipeCards({ includeUnpublished:true })); } catch(e){ setMsg({t:"err",m:e.message}); } }, []);
   useEffect(() => { loadList(); }, [loadList]);
+  const openCard = async (id) => { if(!id) return; try { const c=await fetchRecipeCard(id); if(c){ setD(c.data); setCurrentId(c.id); setMsg({t:"ok",m:`Opened "${c.name}"`}); } } catch(e){ setMsg({t:"err",m:e.message}); } };
+  const saveCard = async () => { setSaving(true); setMsg(null); try { const row=await saveRecipeCard({ id:currentId||undefined, name:d.name||"Untitled", data:d, published:true }); setCurrentId(row.id); await loadList(); setMsg({t:"ok",m:`Saved "${row.name}" — visible to stores.`}); } catch(e){ setMsg({t:"err",m:e.message}); } finally { setSaving(false); } };
+  const newCard = () => { setD(RC_DEFAULT); setCurrentId(null); setMsg({t:"ok",m:"New card. Edit and Save."}); };
+  const removeCard = async () => { if(!currentId) return; if(!window.confirm(`Delete "${d.name}"?`)) return; try { await deleteRecipeCard(currentId); setCurrentId(null); setD(RC_DEFAULT); await loadList(); setMsg({t:"ok",m:"Deleted."}); } catch(e){ setMsg({t:"err",m:e.message}); } };
 
-  const openCard = async (id) => {
-    if (!id) return;
+  // ---- bulk Excel import ----
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const onImportExcel = async (e) => {
+    const f = e.target.files?.[0]; if(!f) return;
+    if (typeof XLSX === "undefined" || !XLSX) { setImportResult({ err:"Excel reader still loading — try again in a moment." }); return; }
+    setImporting(true); setImportResult(null);
     try {
-      const card = await fetchRecipeCard(id);
-      if (card) { setD(card.data); setCurrentId(card.id); setMsg({ t:"ok", m:`Opened "${card.name}"` }); }
-    } catch (e) { setMsg({ t:"err", m:e.message }); }
-  };
-  const saveCard = async () => {
-    setSaving(true); setMsg(null);
-    try {
-      const row = await saveRecipeCard({ id: currentId || undefined, name: d.name || "Untitled", data: d, published: true });
-      setCurrentId(row.id);
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { type:"array" });
+      const sheet = (n) => { const s=wb.Sheets[n]; return s ? XLSX.utils.sheet_to_json(s, { defval:"" }) : []; };
+      const norm = (s)=>String(s||"").trim();
+      const recipesRows = sheet("Recipes");
+      const stepsRows = sheet("Steps");
+      const ingRows = sheet("Ingredients");
+      const toolRows = sheet("Tools");
+      if (!recipesRows.length) { setImportResult({ err:"No 'Recipes' tab found (or it's empty). Use the sample template." }); setImporting(false); return; }
+
+      const byName = {};
+      const key = (r, ...names) => { for(const n of names){ if(r[n]!=null && r[n]!=="") return r[n]; } return ""; };
+      recipesRows.forEach(r => {
+        const name = norm(key(r,"Recipe","Name","recipe","name"));
+        if(!name) return;
+        byName[name] = {
+          name, script: norm(key(r,"Script word","Script","script"))||"Build",
+          time: norm(key(r,"Build time","Time","time"))||"", crockery: norm(key(r,"Crockery","crockery"))||"",
+          brand: norm(key(r,"Brand tag","Brand","brand"))||"choco-tini",
+          category: norm(key(r,"Category","category"))||"", photo:null,
+          steps:[], ingredients:[], tools:[],
+        };
+      });
+      stepsRows.forEach(r => {
+        const name=norm(key(r,"Recipe","recipe")); if(!byName[name]) return;
+        byName[name].steps.push({ _o: Number(key(r,"Order","order"))||999,
+          verb: norm(key(r,"Verb","verb")).toUpperCase()||"STEP",
+          icon: norm(key(r,"Icon","icon"))||"pan",
+          txt: norm(key(r,"Instruction","instruction","Text","text")) });
+      });
+      ingRows.forEach(r => {
+        const name=norm(key(r,"Recipe","recipe")); if(!byName[name]) return;
+        byName[name].ingredients.push({ role: norm(key(r,"Role","role")).toUpperCase(),
+          qty: norm(key(r,"Qty","qty","Quantity")), name: norm(key(r,"Ingredient","ingredient","Name","name")) });
+      });
+      toolRows.forEach(r => {
+        const name=norm(key(r,"Recipe","recipe")); if(!byName[name]) return;
+        byName[name].tools.push({ name: norm(key(r,"Tool name","Tool","tool","Name","name")), icon: norm(key(r,"Icon","icon"))||"pot" });
+      });
+      // sort steps by order, strip helper
+      Object.values(byName).forEach(rc => { rc.steps.sort((a,b)=>a._o-b._o); rc.steps.forEach(s=>delete s._o); });
+
+      const cards = Object.values(byName);
+      // save each to DB
+      let ok=0, fail=0;
+      for (const card of cards) {
+        try { await saveRecipeCard({ name:card.name, data:card, published:true, category:card.category }); ok++; }
+        catch { fail++; }
+      }
       await loadList();
-      setMsg({ t:"ok", m:`Saved "${row.name}" — stores can now see it.` });
-    } catch (e) { setMsg({ t:"err", m:e.message }); }
-    finally { setSaving(false); }
-  };
-  const newCard = () => { setD(RC_DEFAULT); setCurrentId(null); setMsg({ t:"ok", m:"New blank card (from sample). Edit and Save." }); };
-  const removeCard = async () => {
-    if (!currentId) return;
-    if (!window.confirm(`Delete "${d.name}"? Stores will no longer see it.`)) return;
-    try { await deleteRecipeCard(currentId); setCurrentId(null); setD(RC_DEFAULT); await loadList(); setMsg({ t:"ok", m:"Card deleted." }); }
-    catch (e) { setMsg({ t:"err", m:e.message }); }
+      setImportResult({ ok, fail, total:cards.length });
+    } catch (err) {
+      setImportResult({ err:"Could not read file: "+err.message });
+    } finally { setImporting(false); e.target.value=""; }
   };
 
-  // ---- brand palette for the card preview ----
-  const C = { hot:"#844429", head:"#E4C9AE", panel:"#FBF6EC", row:"#F3EADA", band:"#844429", ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6", paper:"#fff" };
-
-  // small control styles (slate app theme)
   const inp = "w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs";
   const lbl = "block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-2 mb-1";
 
   const IconPick = ({ current, onPick }) => (
-    <div className="grid grid-cols-6 gap-1 mt-1">
+    <div className="grid grid-cols-8 gap-1 mt-1">
       {RC_ICON_KEYS.map(k => (
-        <button key={k} onClick={()=>onPick(k)} type="button"
+        <button key={k} type="button" onClick={()=>onPick(k)} title={k}
           className={`aspect-square rounded-md flex items-center justify-center border ${k===current?"border-orange-500 bg-orange-500/10":"border-slate-700 bg-slate-900"}`}>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={k===current?"#fb923c":"#cbd5e1"} strokeWidth="1.5" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke={k===current?"#fb923c":"#cbd5e1"} strokeWidth="1.5" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/>
         </button>
       ))}
     </div>
   );
 
   return (
-    <div className="rc-wrap flex gap-5" style={{ minHeight: "80vh" }}>
-      {/* print CSS — only the card pages print */}
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          .rc-print, .rc-print * { visibility: visible !important; }
-          .rc-print { position: absolute; left: 0; top: 0; }
-          .rc-page { box-shadow: none !important; margin: 0 !important; page-break-after: always; transform: none !important; }
-          .rc-editor { display: none !important; }
-        }
-      `}</style>
+    <div className="rc-wrap flex gap-5" style={{ minHeight:"80vh" }}>
+      <style>{`@media print { body * { visibility:hidden!important; } .rc-print, .rc-print * { visibility:visible!important; } .rc-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rc-editor{display:none!important;} }`}</style>
 
       {/* EDITOR */}
-      <div className="rc-editor w-[330px] flex-shrink-0 space-y-3">
+      <div className="rc-editor w-[340px] flex-shrink-0 space-y-2.5">
         <div>
           <h2 className="text-white font-bold text-base">Recipe Card Builder</h2>
-          <p className="text-slate-500 text-xs">Design a printable kitchen build-card. Saved cards are visible to all stores.</p>
+          <p className="text-slate-500 text-xs">Rich editor · drag to reorder · bulk Excel import. Saved cards are visible to stores.</p>
         </div>
 
+        {/* library */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
           <label className={lbl}>Saved recipe cards</label>
           <select className={inp} value={currentId||""} onChange={e=>openCard(e.target.value?Number(e.target.value):null)}>
-            <option value="">— New / unsaved card —</option>
-            {savedCards.map(c=>(<option key={c.id} value={c.id}>{c.name}{c.published?"":" (draft)"}</option>))}
+            <option value="">— New / unsaved —</option>
+            {savedCards.map(c=>(<option key={c.id} value={c.id}>{c.name}</option>))}
           </select>
           <div className="flex gap-2 mt-2">
-            <button onClick={saveCard} disabled={saving} className="flex-1 py-2 rounded-lg font-bold text-xs text-white" style={{background:"#844429"}}>{saving?"Saving…":(currentId?"Save changes":"Save new card")}</button>
+            <button onClick={saveCard} disabled={saving} className="flex-1 py-2 rounded-lg font-bold text-xs text-white" style={{background:"#844429"}}>{saving?"Saving…":(currentId?"Save changes":"Save new")}</button>
             <button onClick={newCard} className="px-3 py-2 rounded-lg font-bold text-xs bg-slate-800 text-slate-300">New</button>
-            {currentId && <button onClick={removeCard} className="px-3 py-2 rounded-lg font-bold text-xs bg-red-950 text-red-300 border border-red-800">Delete</button>}
+            {currentId && <button onClick={removeCard} className="px-3 py-2 rounded-lg font-bold text-xs bg-red-950 text-red-300 border border-red-800">Del</button>}
           </div>
           {msg && <div className={`mt-2 text-xs font-semibold ${msg.t==="ok"?"text-emerald-400":"text-red-400"}`}>{msg.m}</div>}
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-          <div className="text-slate-300 font-semibold text-xs mb-1">Header</div>
+        {/* HEADER */}
+        <RcSection title="Header" open={openSec.header} onToggle={()=>toggle("header")}>
           <label className={lbl}>Dish name</label>
           <input className={inp} value={d.name} onChange={e=>set({name:e.target.value})}/>
           <label className={lbl}>Script word</label>
@@ -14318,142 +14461,91 @@ function RecipeCardBuilder() {
             <div className="flex-1"><label className={lbl}>Brand tag</label><input className={inp} value={d.brand} onChange={e=>set({brand:e.target.value})}/></div>
             <div className="flex-1"><label className={lbl}>Build time</label><input className={inp} value={d.time} onChange={e=>set({time:e.target.value})}/></div>
           </div>
-        </div>
+        </RcSection>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-          <div className="text-slate-300 font-semibold text-xs mb-2">Steps ({d.steps.length})</div>
+        {/* STEPS */}
+        <RcSection title="Steps" count={d.steps.length} open={openSec.steps} onToggle={()=>toggle("steps")}>
           {d.steps.map((st,i)=>(
-            <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
-              <button onClick={()=>delStep(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
-              <label className={lbl}>Step {i+1} verb</label>
-              <input className={inp} value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/>
-              <label className={lbl}>Instruction</label>
-              <textarea className={inp+" min-h-[46px]"} value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/>
+            <div key={i} draggable onDragStart={()=>onDragStart("steps",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("steps",i)}
+              className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="cursor-grab text-slate-600 text-sm" title="Drag to reorder">⠿</span>
+                <span className="text-[10px] text-slate-500 font-bold">STEP {i+1}</span>
+                <button onClick={()=>delStep(i)} className="ml-auto text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
+              </div>
+              <input className={inp} placeholder="Verb (e.g. COOK IT)" value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/>
+              <textarea className={inp+" min-h-[44px] mt-1.5"} placeholder="Instruction" value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/>
               <label className={lbl}>Icon</label>
               <IconPick current={st.icon} onPick={k=>upStep(i,"icon",k)}/>
             </div>
           ))}
           <button onClick={addStep} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add step</button>
-        </div>
+        </RcSection>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-          <div className="text-slate-300 font-semibold text-xs mb-2">Ingredients ({d.ingredients.length})</div>
+        {/* INGREDIENTS */}
+        <RcSection title="Ingredients" count={d.ingredients.length} open={openSec.ingredients} onToggle={()=>toggle("ingredients")}>
           {d.ingredients.map((it,i)=>(
-            <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
-              <button onClick={()=>delIng(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
-              <div className="flex gap-2">
-                <div className="w-2/5"><label className={lbl}>Role</label><input className={inp} value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/></div>
-                <div className="w-3/5"><label className={lbl}>Qty</label><input className={inp} value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/></div>
+            <div key={i} draggable onDragStart={()=>onDragStart("ingredients",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("ingredients",i)}
+              className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="cursor-grab text-slate-600 text-sm">⠿</span>
+                <button onClick={()=>delIng(i)} className="ml-auto text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
               </div>
-              <label className={lbl}>Ingredient</label>
-              <input className={inp} value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
+              <div className="flex gap-2">
+                <input className={inp+" w-2/5"} placeholder="ROLE" value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/>
+                <input className={inp+" w-3/5"} placeholder="QTY" value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/>
+              </div>
+              <input className={inp+" mt-1.5"} placeholder="Ingredient" value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
             </div>
           ))}
           <button onClick={addIng} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add ingredient</button>
-        </div>
+        </RcSection>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-          <div className="text-slate-300 font-semibold text-xs mb-2">Tools ({d.tools.length})</div>
+        {/* TOOLS */}
+        <RcSection title="Tools" count={d.tools.length} open={openSec.tools} onToggle={()=>toggle("tools")}>
           {d.tools.map((tl,i)=>(
             <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
               <button onClick={()=>delTool(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
-              <label className={lbl}>Name</label>
-              <input className={inp} value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/>
+              <input className={inp} placeholder="Tool name" value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/>
               <label className={lbl}>Icon</label>
               <IconPick current={tl.icon} onPick={k=>upTool(i,"icon",k)}/>
             </div>
           ))}
           <button onClick={addTool} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add tool</button>
-        </div>
+        </RcSection>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-          <div className="text-slate-300 font-semibold text-xs mb-2">Photo & crockery</div>
+        {/* PHOTO & CROCKERY */}
+        <RcSection title="Photo & crockery" open={openSec.photo} onToggle={()=>toggle("photo")}>
           <label className={lbl}>Dish photo</label>
           <input type="file" accept="image/*" onChange={loadPhoto} className="text-xs text-slate-400"/>
           <label className={lbl}>Crockery</label>
           <input className={inp} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/>
-        </div>
+        </RcSection>
 
-        <div className="flex gap-2">
-          <button onClick={printCard} className="flex-1 py-2.5 rounded-lg font-bold text-sm text-white" style={{background:"#844429"}}>Print / Save PDF</button>
-          <button onClick={resetCard} className="px-3 py-2.5 rounded-lg font-bold text-sm bg-slate-800 text-slate-300">Reset</button>
-        </div>
+        {/* BULK IMPORT */}
+        <RcSection title="Bulk import (Excel)" open={openSec.import} onToggle={()=>toggle("import")}>
+          <p className="text-[11px] text-slate-400 mb-2">Upload a filled template to create many recipe cards at once. Each is saved and made visible to stores.</p>
+          <label className="block w-full py-2 border border-dashed border-emerald-600 text-emerald-400 rounded-lg text-xs font-bold text-center cursor-pointer">
+            {importing ? "Importing…" : "Choose Excel file"}
+            <input type="file" accept=".xlsx,.xls" onChange={onImportExcel} className="hidden" disabled={importing}/>
+          </label>
+          {importResult && (importResult.err
+            ? <div className="mt-2 text-xs text-red-400 font-semibold">{importResult.err}</div>
+            : <div className="mt-2 text-xs text-emerald-400 font-semibold">Imported {importResult.ok} of {importResult.total} recipe(s){importResult.fail?`, ${importResult.fail} failed`:""}.</div>)}
+          <p className="text-[10px] text-slate-500 mt-2">Need the format? Download the sample template (shared separately) — tabs: Recipes, Steps, Ingredients, Tools.</p>
+        </RcSection>
+
+        <button onClick={printCard} className="w-full py-2.5 rounded-lg font-bold text-sm text-white" style={{background:"#844429"}}>Print / Save PDF</button>
       </div>
 
       {/* PREVIEW */}
       <div className="flex-1 overflow-auto">
-        <div className="rc-print inline-block origin-top" style={{ transform:"scale(.62)", transformOrigin:"top left" }}>
-          {/* PAGE 1 */}
-          <div className="rc-page" style={{ width:1123, minHeight:794, background:C.paper, padding:"46px 54px", position:"relative", marginBottom:24, boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
-            <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
-              <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
-            </div>
-            <div style={{ position:"absolute", top:44, right:54, background:C.band, color:"#fff", fontWeight:800, fontSize:13, letterSpacing:1, padding:"7px 26px 7px 34px", clipPath:"polygon(8% 0,100% 0,100% 100%,0 100%)" }}>{d.name}</div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:20, marginTop:44 }}>
-              {d.steps.map((st,i)=>(
-                <div key={i} style={{ border:`1px solid ${C.line}`, borderRadius:3, overflow:"hidden", display:"flex", flexDirection:"column" }}>
-                  <div style={{ background:C.head, display:"flex", alignItems:"center", gap:12, padding:"9px 14px" }}>
-                    <span style={{ fontWeight:700, fontSize:15, color:C.ink, width:16 }}>{i+1}</span>
-                    <span style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", flex:1, textAlign:"center", paddingRight:16, color:C.ink }}>{st.verb}</span>
-                  </div>
-                  <div style={{ background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px 0 14px" }}><RcIcon name={st.icon}/></div>
-                  <div style={{ background:C.panel, flex:1, padding:"14px 16px", fontSize:12.5, lineHeight:1.5, textAlign:"center", color:C.ink }}>{st.txt}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* PAGE 2 */}
-          <div className="rc-page" style={{ width:1123, minHeight:794, background:C.paper, padding:"46px 54px", position:"relative", boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
-            <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
-              <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
-            </div>
-            <div style={{ position:"absolute", top:40, right:54, textAlign:"center" }}>
-              <div style={{ fontWeight:800, fontSize:10, letterSpacing:1, color:C.ink }}>BUILD</div>
-              <div style={{ width:44, height:44, borderRadius:"50%", background:C.head, margin:"4px auto 3px", display:"flex", alignItems:"center", justifyContent:"center" }}>
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#3A2E26" strokeWidth="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>
-              </div>
-              <div style={{ fontWeight:800, fontSize:10, color:C.ink }}>{d.time}</div>
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:34, marginTop:30 }}>
-              <div style={{ position:"relative" }}>
-                <div style={{ position:"absolute", top:16, left:-6, background:C.band, color:"#fff", fontWeight:800, fontSize:14, letterSpacing:".5px", padding:"7px 26px", zIndex:2 }}>{d.name}</div>
-                <div style={{ width:"100%", aspectRatio:"1/1", borderRadius:4, background:d.photo?`#F3EADA url(${d.photo}) center/cover no-repeat`:"#F3EADA", display:"flex", alignItems:"center", justifyContent:"center", color:C.inkFaint, fontSize:13 }}>{d.photo?"":"Add a dish photo"}</div>
-              </div>
-              <div>
-                <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", display:"grid", gridTemplateColumns:"1.1fr 1fr 2fr", padding:"0 0 8px", borderBottom:`2px solid ${C.head}`, color:C.ink }}>
-                  <span>STEPS</span><span>QTY</span><span>INGREDIENTS/TOOLS</span>
-                </div>
-                <table style={{ width:"100%", borderCollapse:"collapse", border:`1px solid ${C.line}` }}>
-                  <tbody>
-                    {d.ingredients.map((it,i)=>(
-                      <tr key={i} style={{ background: i%2===0?C.row:"transparent" }}>
-                        <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, width:"26%", color:C.ink }}>{it.role}</td>
-                        <td style={{ padding:"9px 14px", fontSize:12, fontWeight:700, width:"22%", color:C.ink }}>{it.qty}</td>
-                        <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, color:C.ink }}>{it.name}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", marginTop:26, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>TOOLS</div>
-            <div style={{ display:"flex", gap:26, marginTop:16, flexWrap:"wrap" }}>
-              {d.tools.map((tl,i)=>(
-                <div key={i} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:7, width:78, textAlign:"center" }}>
-                  <RcIcon name={tl.icon} size={34}/><span style={{ fontSize:11, color:C.ink, lineHeight:1.2 }}>{tl.name}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", marginTop:22, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>CROCKERY</div>
-            <div style={{ border:`1px solid ${C.ink}`, borderRadius:4, padding:"11px 14px", fontSize:14, marginTop:14, color:C.ink }}>{d.crockery}</div>
-            <div style={{ position:"absolute", bottom:20, right:54, fontSize:10, color:C.inkFaint, letterSpacing:2, fontWeight:700, textTransform:"uppercase" }}>{d.brand}</div>
-          </div>
-        </div>
+        <RcCardPreview d={d} scale={0.62}/>
       </div>
     </div>
   );
 }
+
 
 function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub, hideTabs }) {
   const [tab, setTab] = useState(initialTab || "inventory");
