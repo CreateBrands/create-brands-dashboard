@@ -11585,6 +11585,7 @@ function DistReorderReport() {
 //   • department order                  → cfg.departments order
 // ============================================================================
 function DistOrderBuilderView() {
+  const XLSX = useXLSX();
   const [collections, setCollections] = useState([]);
   const [itemsByColl, setItemsByColl] = useState({}); // collId -> [itemId] (ordered)
   const [items, setItems] = useState([]);
@@ -11630,6 +11631,63 @@ function DistOrderBuilderView() {
 
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const markDirty = () => setDirty(true);
+
+  // Export the order page — layout structure + item details — to Excel.
+  const exportItems = () => {
+    if (!XLSX) { setMsg("Excel still loading — try again in a moment."); return; }
+    const packDesc = (it) => {
+      const cnt = it.packCount || 1, sz = it.packSize, u = it.packUnit || "";
+      return sz != null ? `${cnt}*${sz}${u}` : (u ? `${cnt}*${u}` : `${cnt}`);
+    };
+    const rows = [];
+    // Walk departments → their collections → items (in display order).
+    (cfg.departments || []).forEach(dept => {
+      (dept.collectionIds || []).forEach(cid => {
+        const coll = collById.get(cid);
+        if (!coll) return;
+        const itemIds = itemsByColl[cid] || [];
+        if (!itemIds.length) {
+          rows.push({ Department: dept.name || "", Collection: coll.name || "", Item: "(no items)", SKU:"", Category:"", "Pack":"", "Buy £":"", "Sell £":"", Type:"" });
+          return;
+        }
+        itemIds.forEach(iid => {
+          const it = itemById.get(iid);
+          if (!it) return;
+          rows.push({
+            Department: dept.name || "",
+            Collection: coll.name || "",
+            Item: it.name || "",
+            SKU: it.sku || "",
+            Category: it.category || "",
+            Pack: packDesc(it),
+            "Buy £": it.purchaseRate != null ? it.purchaseRate : "",
+            "Sell £": it.sellRate != null ? it.sellRate : "",
+            Type: it.itemType || "",
+          });
+        });
+      });
+    });
+    // Unassigned collections (not in any department) — include so nothing is missed.
+    const assigned = new Set();
+    (cfg.departments||[]).forEach(d => (d.collectionIds||[]).forEach(id => assigned.add(id)));
+    collections.filter(c => !assigned.has(c.id)).forEach(coll => {
+      (itemsByColl[coll.id] || []).forEach(iid => {
+        const it = itemById.get(iid); if (!it) return;
+        rows.push({ Department: "(unassigned)", Collection: coll.name || "", Item: it.name || "", SKU: it.sku || "",
+          Category: it.category || "", Pack: packDesc(it),
+          "Buy £": it.purchaseRate != null ? it.purchaseRate : "", "Sell £": it.sellRate != null ? it.sellRate : "", Type: it.itemType || "" });
+      });
+    });
+    if (!rows.length) { setMsg("Nothing to export yet."); return; }
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{wch:24},{wch:24},{wch:34},{wch:14},{wch:18},{wch:14},{wch:9},{wch:9},{wch:12}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Order Page");
+    const today = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `order_page_items_${today}.xlsx`);
+    setMsg(`Exported ${rows.length} rows.`);
+  };
+
 
   const deptList = cfg.departments || [];
   const assignedCollIds = useMemo(() => {
@@ -11859,6 +11917,7 @@ function DistOrderBuilderView() {
         <div className="flex items-center gap-2">
           {msg && <span className="text-xs font-semibold" style={{ color: msg.startsWith("Save failed") ? "#A23B2E" : "#3F6B3A" }}>{msg}</span>}
           {dirty && <span className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: "#F7EBD4", color: "#8A5A12" }}>Unsaved changes</span>}
+          <button onClick={exportItems} disabled={loading} className="px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}><FileText size={14}/> Export items</button>
           <button onClick={reload} disabled={saving} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}>Reset</button>
           <button onClick={saveAll} disabled={saving || !dirty} className="px-4 py-2 rounded-xl text-sm font-bold text-white" style={{ background: dirty ? "#3F6B3A" : "#B7C4AE", cursor: dirty ? "pointer" : "default" }}>{saving ? "Saving…" : "Save layout"}</button>
         </div>
