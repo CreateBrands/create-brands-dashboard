@@ -14060,9 +14060,20 @@ function RcIcon({ name, size = 48 }) {
     dangerouslySetInnerHTML={{ __html: RC_ICONS[name] || "" }} />;
 }
 
+const RC_STYLE_DEFAULT = {
+  accent: "#844429", headBar: "#E4C9AE", panel: "#FBF6EC",
+  iconSize: 48, stepCols: 3, showBands: true, showTimeBadge: true,
+};
+const RC_ACCENT_PRESETS = [
+  { name:"Brown", accent:"#844429", headBar:"#E4C9AE", panel:"#FBF6EC" },
+  { name:"Pink",  accent:"#EC5C90", headBar:"#F3C4CF", panel:"#FBEEF2" },
+  { name:"Green", accent:"#3F6B3A", headBar:"#CADFBE", panel:"#EEF4E9" },
+  { name:"Navy",  accent:"#2F5C86", headBar:"#BFD3E5", panel:"#EAF0F6" },
+  { name:"Charcoal", accent:"#3A3A3A", headBar:"#D6D6D6", panel:"#F5F5F5" },
+];
 const RC_DEFAULT = {
   name:"PASTA ALL'ARRABBIATA", script:"Build", brand:"choco-tini", time:"2.5 MIN",
-  crockery:"Pudding Plate", photo:null,
+  crockery:"Pudding Plate", photo:null, style:{ ...RC_STYLE_DEFAULT },
   steps:[
     {verb:"COOK IT", icon:"pasta", txt:"Bring salted water to a boil in a pasta boiler, add 100g of penne pasta, and cook for 8 minutes."},
     {verb:"DRAIN IT", icon:"colander", txt:"Drain the pasta and set aside."},
@@ -14217,24 +14228,28 @@ function StoreRecipesView() {
 }
 
 // Shared card renderer — used by builder preview AND the store viewer.
-function RcCardPreview({ d, scale = 0.62 }) {
-  const C = { hot:"#844429", head:"#E4C9AE", panel:"#FBF6EC", row:"#F3EADA", band:"#844429", ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6" };
+function RcCardPreview({ d, scale = 0.62, responsive = false }) {
+  const sty = { ...RC_STYLE_DEFAULT, ...(d.style || {}) };
+  const C = { hot:sty.accent, head:sty.headBar, panel:sty.panel, row:sty.panel, band:sty.accent, ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6" };
+  const iconSize = sty.iconSize || 48;
+  const stepCols = sty.stepCols || 3;
+  const wrapStyle = responsive ? { transformOrigin:"top left" } : { transform:`scale(${scale})`, transformOrigin:"top left" };
   return (
-    <div className="rc-print inline-block origin-top" style={{ transform:`scale(${scale})`, transformOrigin:"top left" }}>
+    <div className="rc-print inline-block origin-top" style={wrapStyle}>
       {/* PAGE 1 */}
       <div className="rc-page" style={{ width:1123, minHeight:794, background:"#fff", padding:"46px 54px", position:"relative", marginBottom:24, boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
         <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
           <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
         </div>
-        <div style={{ position:"absolute", top:44, right:54, background:C.band, color:"#fff", fontWeight:800, fontSize:13, letterSpacing:1, padding:"7px 26px 7px 34px", clipPath:"polygon(8% 0,100% 0,100% 100%,0 100%)" }}>{d.name}</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:20, marginTop:44 }}>
+        {sty.showBands && <div style={{ position:"absolute", top:44, right:54, background:C.band, color:"#fff", fontWeight:800, fontSize:13, letterSpacing:1, padding:"7px 26px 7px 34px", clipPath:"polygon(8% 0,100% 0,100% 100%,0 100%)" }}>{d.name}</div>}
+        <div style={{ display:"grid", gridTemplateColumns:`repeat(${stepCols},1fr)`, gap:20, marginTop:44 }}>
           {(d.steps||[]).map((st,i)=>(
             <div key={i} style={{ border:`1px solid ${C.line}`, borderRadius:3, overflow:"hidden", display:"flex", flexDirection:"column" }}>
               <div style={{ background:C.head, display:"flex", alignItems:"center", gap:12, padding:"9px 14px" }}>
                 <span style={{ fontWeight:700, fontSize:15, color:C.ink, width:16 }}>{i+1}</span>
                 <span style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", flex:1, textAlign:"center", paddingRight:16, color:C.ink }}>{st.verb}</span>
               </div>
-              <div style={{ background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px 0 14px" }}><RcIcon name={st.icon}/></div>
+              <div style={{ background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px 0 14px" }}><RcIcon name={st.icon} size={iconSize}/></div>
               <div style={{ background:C.panel, flex:1, padding:"14px 16px", fontSize:12.5, lineHeight:1.5, textAlign:"center", color:C.ink }}>{st.txt}</div>
             </div>
           ))}
@@ -14245,16 +14260,16 @@ function RcCardPreview({ d, scale = 0.62 }) {
         <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
           <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
         </div>
-        <div style={{ position:"absolute", top:40, right:54, textAlign:"center" }}>
+        {sty.showTimeBadge && <div style={{ position:"absolute", top:40, right:54, textAlign:"center" }}>
           <div style={{ fontWeight:800, fontSize:10, letterSpacing:1, color:C.ink }}>BUILD</div>
           <div style={{ width:44, height:44, borderRadius:"50%", background:C.head, margin:"4px auto 3px", display:"flex", alignItems:"center", justifyContent:"center" }}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#3A2E26" strokeWidth="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>
           </div>
           <div style={{ fontWeight:800, fontSize:10, color:C.ink }}>{d.time}</div>
-        </div>
+        </div>}
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:34, marginTop:30 }}>
           <div style={{ position:"relative" }}>
-            <div style={{ position:"absolute", top:16, left:-6, background:C.band, color:"#fff", fontWeight:800, fontSize:14, letterSpacing:".5px", padding:"7px 26px", zIndex:2 }}>{d.name}</div>
+            {sty.showBands && <div style={{ position:"absolute", top:16, left:-6, background:C.band, color:"#fff", fontWeight:800, fontSize:14, letterSpacing:".5px", padding:"7px 26px", zIndex:2 }}>{d.name}</div>}
             <div style={{ width:"100%", aspectRatio:"1/1", borderRadius:4, background:d.photo?`#F3EADA url(${d.photo}) center/cover no-repeat`:"#F3EADA", display:"flex", alignItems:"center", justifyContent:"center", color:C.inkFaint, fontSize:13 }}>{d.photo?"":"No photo"}</div>
           </div>
           <div>
@@ -14290,7 +14305,6 @@ function RcCardPreview({ d, scale = 0.62 }) {
   );
 }
 
-// Collapsible section wrapper
 function RcSection({ title, count, open, onToggle, children }) {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
