@@ -14304,11 +14304,12 @@ function RcSection({ title, count, open, onToggle, children }) {
 }
 
 function RecipeCardBuilder() {
+  const XLSX = useXLSX();
   const [d, setD] = useState(RC_DEFAULT);
   const set = (patch) => setD(prev => ({ ...prev, ...patch }));
 
   // collapsible section state
-  const [openSec, setOpenSec] = useState({ header:true, steps:true, ingredients:false, tools:false, photo:false, import:false });
+  const [openSec, setOpenSec] = useState({ header:true, steps:true, ingredients:false, tools:false, photo:false, styling:false, import:false });
   const toggle = (k) => setOpenSec(s => ({ ...s, [k]:!s[k] }));
 
   // drag state
@@ -14352,7 +14353,7 @@ function RecipeCardBuilder() {
   const [importResult, setImportResult] = useState(null);
   const onImportExcel = async (e) => {
     const f = e.target.files?.[0]; if(!f) return;
-    if (typeof XLSX === "undefined" || !XLSX) { setImportResult({ err:"Excel reader still loading — try again in a moment." }); return; }
+    if (!XLSX) { setImportResult({ err:"Excel reader still loading — try again in a moment." }); return; }
     setImporting(true); setImportResult(null);
     try {
       const buf = await f.arrayBuffer();
@@ -14426,11 +14427,14 @@ function RecipeCardBuilder() {
   );
 
   return (
-    <div className="rc-wrap flex gap-5" style={{ minHeight:"80vh" }}>
-      <style>{`@media print { body * { visibility:hidden!important; } .rc-print, .rc-print * { visibility:visible!important; } .rc-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rc-editor{display:none!important;} }`}</style>
+    <div className="rc-wrap flex flex-col lg:flex-row gap-5" style={{ minHeight:"80vh" }}>
+      <style>{`@media print { body * { visibility:hidden!important; } .rc-print, .rc-print * { visibility:visible!important; } .rc-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rc-editor{display:none!important;} }
+        .rc-preview-scale{transform:scale(0.62);transform-origin:top left;}
+        @media (max-width:1100px){ .rc-preview-scale{transform:scale(0.42);} }
+        @media (max-width:640px){ .rc-preview-scale{transform:scale(0.30);} }`}</style>
 
       {/* EDITOR */}
-      <div className="rc-editor w-[340px] flex-shrink-0 space-y-2.5">
+      <div className="rc-editor w-full lg:w-[340px] flex-shrink-0 space-y-2.5">
         <div>
           <h2 className="text-white font-bold text-base">Recipe Card Builder</h2>
           <p className="text-slate-500 text-xs">Rich editor · drag to reorder · bulk Excel import. Saved cards are visible to stores.</p>
@@ -14522,7 +14526,37 @@ function RecipeCardBuilder() {
           <input className={inp} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/>
         </RcSection>
 
-        {/* BULK IMPORT */}
+        {/* STYLING */}
+        <RcSection title="Styling" open={openSec.styling} onToggle={()=>toggle("styling")}>
+          <label className={lbl}>Colour theme</label>
+          <div className="flex gap-1.5 flex-wrap">
+            {RC_ACCENT_PRESETS.map(p=>(
+              <button key={p.name} type="button" onClick={()=>set({ style:{ ...(d.style||RC_STYLE_DEFAULT), accent:p.accent, headBar:p.headBar, panel:p.panel } })}
+                className="px-2 py-1 rounded-lg text-[11px] font-bold border" style={{ borderColor:(d.style?.accent||RC_STYLE_DEFAULT.accent)===p.accent?"#fb923c":"#334155", color:"#e2e8f0" }}>
+                <span style={{ display:"inline-block", width:10, height:10, borderRadius:3, background:p.accent, marginRight:5, verticalAlign:"middle" }}/>{p.name}
+              </button>
+            ))}
+          </div>
+          <label className={lbl}>Custom accent</label>
+          <input type="color" value={d.style?.accent||RC_STYLE_DEFAULT.accent} onChange={e=>set({ style:{ ...(d.style||RC_STYLE_DEFAULT), accent:e.target.value } })} className="w-full h-8 rounded-lg bg-slate-950 border border-slate-700"/>
+          <label className={lbl}>Step columns</label>
+          <div className="flex gap-1.5">
+            {[2,3,4].map(n=>(
+              <button key={n} type="button" onClick={()=>set({ style:{ ...(d.style||RC_STYLE_DEFAULT), stepCols:n } })}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold border ${(d.style?.stepCols||3)===n?"border-orange-500 bg-orange-500/10 text-orange-300":"border-slate-700 text-slate-300"}`}>{n}</button>
+            ))}
+          </div>
+          <label className={lbl}>Icon size: {d.style?.iconSize||48}px</label>
+          <input type="range" min="28" max="72" value={d.style?.iconSize||48} onChange={e=>set({ style:{ ...(d.style||RC_STYLE_DEFAULT), iconSize:Number(e.target.value) } })} className="w-full"/>
+          <div className="flex flex-col gap-1.5 mt-2">
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input type="checkbox" checked={d.style?.showBands!==false} onChange={e=>set({ style:{ ...(d.style||RC_STYLE_DEFAULT), showBands:e.target.checked } })}/> Show name bands
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input type="checkbox" checked={d.style?.showTimeBadge!==false} onChange={e=>set({ style:{ ...(d.style||RC_STYLE_DEFAULT), showTimeBadge:e.target.checked } })}/> Show build-time badge
+            </label>
+          </div>
+        </RcSection>
         <RcSection title="Bulk import (Excel)" open={openSec.import} onToggle={()=>toggle("import")}>
           <p className="text-[11px] text-slate-400 mb-2">Upload a filled template to create many recipe cards at once. Each is saved and made visible to stores.</p>
           <label className="block w-full py-2 border border-dashed border-emerald-600 text-emerald-400 rounded-lg text-xs font-bold text-center cursor-pointer">
@@ -14540,7 +14574,9 @@ function RecipeCardBuilder() {
 
       {/* PREVIEW */}
       <div className="flex-1 overflow-auto">
-        <RcCardPreview d={d} scale={0.62}/>
+        <div className="rc-preview-scale">
+          <RcCardPreview d={d} responsive={true}/>
+        </div>
       </div>
     </div>
   );
