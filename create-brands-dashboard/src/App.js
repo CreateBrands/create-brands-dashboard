@@ -14016,6 +14016,268 @@ function DistItemsView({ currentUser }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RECIPE CARD BUILDER — design printable Chocoberry build-cards for the kitchen.
+// Manual entry, live preview, N steps / N ingredients, print-to-PDF.
+// Card preview uses the Chocoberry brand palette; controls use the app's slate.
+// ═══════════════════════════════════════════════════════════════════════════
+const RC_ICONS = {
+  pasta:'<path d="M4 18 L14 6 M7 19 L17 7 M10 20 L20 8"/>',
+  colander:'<path d="M4 9 a8 8 0 0 0 16 0Z"/><circle cx="9" cy="12" r=".6" fill="#3A2E26"/><circle cx="12" cy="13" r=".6" fill="#3A2E26"/><circle cx="15" cy="12" r=".6" fill="#3A2E26"/><path d="M11 20l-.5 2M13 20l.5 2M12 20v2"/>',
+  bottle:'<rect x="9" y="8" width="6" height="13" rx="1.5"/><path d="M10.5 8V5h3v3M11 3h2"/>',
+  tomato:'<circle cx="12" cy="13" r="7"/><path d="M12 6l-2-2M12 6l2-2M12 6V4M8 13h8M12 9v8"/>',
+  pan:'<ellipse cx="10" cy="14" rx="7" ry="3"/><path d="M17 14h6"/>',
+  bread:'<path d="M4 14 a5 4 0 0 1 16 0 Z"/><path d="M8 14l1-3M12 14l1-3M16 14l-1-3"/>',
+  garnish:'<path d="M6 18c0-5 3-8 6-9M6 18c-2-3-1-6 1-7M6 18c-3-1-4-4-3-6"/><rect x="15" y="9" width="4" height="9" rx="1"/><path d="M15 12h4"/>',
+  tong:'<path d="M5 4l8 9M5 4c-1 2 0 4 2 5M13 13c2 2 5 4 6 6M13 13l-3 3"/>',
+  knife:'<path d="M4 16 L14 6 a3 3 0 0 1 4 0 L8 20Z"/>',
+  bowl:'<path d="M4 11 a8 6 0 0 0 16 0Z"/><path d="M3 11h18"/>',
+  pot:'<rect x="5" y="9" width="14" height="10" rx="2"/><path d="M3 9h18M8 9V6M16 9V6"/>',
+  whisk:'<path d="M12 3v6M9 9c0 4 1 7 3 9 2-2 3-5 3-9M10.5 9c0 4 .5 7 1.5 9M13.5 9c0 4-.5 7-1.5 9"/>',
+  cheese:'<path d="M4 16l14-6 2 6Z"/><circle cx="9" cy="14" r=".7" fill="#3A2E26"/><circle cx="13" cy="13" r=".7" fill="#3A2E26"/>',
+  spice:'<rect x="8" y="8" width="8" height="12" rx="1.5"/><path d="M9 8V5h6v3M11 4h2M11 11h.01M13 11h.01M12 13h.01"/>',
+  plate:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/>',
+};
+const RC_ICON_KEYS = Object.keys(RC_ICONS);
+function RcIcon({ name, size = 48 }) {
+  return <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="#3A2E26" strokeWidth="1.5"
+    dangerouslySetInnerHTML={{ __html: RC_ICONS[name] || "" }} />;
+}
+
+const RC_DEFAULT = {
+  name:"PASTA ALL'ARRABBIATA", script:"Build", brand:"choco-tini", time:"2.5 MIN",
+  crockery:"Pudding Plate", photo:null,
+  steps:[
+    {verb:"COOK IT", icon:"pasta", txt:"Bring salted water to a boil in a pasta boiler, add 100g of penne pasta, and cook for 8 minutes."},
+    {verb:"DRAIN IT", icon:"colander", txt:"Drain the pasta and set aside."},
+    {verb:"HEAT IT", icon:"bottle", txt:"Heat 1 tablespoon of olive oil in a large pan and warm 1/2 cup napoletana sauce and 1 tbsp arrabbiata spice over medium heat."},
+    {verb:"ADD IT", icon:"tomato", txt:"Add the sliced cherry tomatoes to the sauce and cook until they soften slightly."},
+    {verb:"MIX IT", icon:"pan", txt:"Add the cooked penne pasta to the pan and mix to coat evenly with the sauce."},
+    {verb:"TOAST IT", icon:"bread", txt:"Toast 2 pieces of garlic bread for 2 minutes on each side until golden and crispy."},
+    {verb:"GARNISH IT", icon:"garnish", txt:"Transfer to serving plates and garnish with basil leaves, grated cheese, and cracked black pepper."},
+    {verb:"SERVE IT", icon:"bread", txt:"Serve the garlic bread on the side."},
+  ],
+  ingredients:[
+    {role:"BASE", qty:"200 G", name:"Cooked penne pasta"},
+    {role:"SAUCE", qty:"1/2 CUP", name:"Napoletana pasta sauce"},
+    {role:"SPICE", qty:"1 TBSP", name:"Arrabbiata spice"},
+    {role:"VEG", qty:"6 PCS", name:"Cherry tomatoes (quartered)"},
+    {role:"GARNISH", qty:"2 G", name:"Basil leaves"},
+    {role:"GARNISH", qty:"2 G", name:"Grated cheese"},
+    {role:"GARNISH", qty:"2 G", name:"Cracked black pepper"},
+    {role:"BREAD", qty:"2 PCS", name:"Garlic bread"},
+  ],
+  tools:[
+    {icon:"bottle", name:"Sauce Bottle"},{icon:"tong", name:"Yellow Tong"},
+    {icon:"colander", name:"Pasta Drainer"},{icon:"pan", name:"Frying Pan"},
+  ],
+};
+
+function RecipeCardBuilder() {
+  const [d, setD] = useState(() => { try { const s = localStorage.getItem("recipecard_draft"); return s ? JSON.parse(s) : RC_DEFAULT; } catch { return RC_DEFAULT; } });
+  const set = (patch) => setD(prev => ({ ...prev, ...patch }));
+  // NB: localStorage is fine in the live app (only blocked in artifacts sandbox)
+  useEffect(() => { try { localStorage.setItem("recipecard_draft", JSON.stringify(d)); } catch {} }, [d]);
+
+  const upStep = (i,k,v) => setD(p => { const s=[...p.steps]; s[i]={...s[i],[k]:v}; return {...p,steps:s}; });
+  const addStep = () => setD(p => ({...p, steps:[...p.steps, {verb:"NEW STEP", icon:"pan", txt:"Describe this step."}]}));
+  const delStep = (i) => setD(p => ({...p, steps:p.steps.filter((_,x)=>x!==i)}));
+  const upIng = (i,k,v) => setD(p => { const s=[...p.ingredients]; s[i]={...s[i],[k]:v}; return {...p,ingredients:s}; });
+  const addIng = () => setD(p => ({...p, ingredients:[...p.ingredients, {role:"ROLE", qty:"1", name:"New ingredient"}]}));
+  const delIng = (i) => setD(p => ({...p, ingredients:p.ingredients.filter((_,x)=>x!==i)}));
+  const upTool = (i,k,v) => setD(p => { const s=[...p.tools]; s[i]={...s[i],[k]:v}; return {...p,tools:s}; });
+  const addTool = () => setD(p => ({...p, tools:[...p.tools, {icon:"pot", name:"New Tool"}]}));
+  const delTool = (i) => setD(p => ({...p, tools:p.tools.filter((_,x)=>x!==i)}));
+
+  const loadPhoto = (e) => { const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=ev=>set({photo:ev.target.result}); r.readAsDataURL(f); };
+  const resetCard = () => { if(window.confirm("Reset to the sample recipe? Your current card will be cleared.")) setD(RC_DEFAULT); };
+  const printCard = () => window.print();
+
+  // ---- brand palette for the card preview ----
+  const C = { hot:"#844429", head:"#E4C9AE", panel:"#FBF6EC", row:"#F3EADA", band:"#844429", ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6", paper:"#fff" };
+
+  // small control styles (slate app theme)
+  const inp = "w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs";
+  const lbl = "block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-2 mb-1";
+
+  const IconPick = ({ current, onPick }) => (
+    <div className="grid grid-cols-6 gap-1 mt-1">
+      {RC_ICON_KEYS.map(k => (
+        <button key={k} onClick={()=>onPick(k)} type="button"
+          className={`aspect-square rounded-md flex items-center justify-center border ${k===current?"border-orange-500 bg-orange-500/10":"border-slate-700 bg-slate-900"}`}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={k===current?"#fb923c":"#cbd5e1"} strokeWidth="1.5" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/>
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="rc-wrap flex gap-5" style={{ minHeight: "80vh" }}>
+      {/* print CSS — only the card pages print */}
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          .rc-print, .rc-print * { visibility: visible !important; }
+          .rc-print { position: absolute; left: 0; top: 0; }
+          .rc-page { box-shadow: none !important; margin: 0 !important; page-break-after: always; transform: none !important; }
+          .rc-editor { display: none !important; }
+        }
+      `}</style>
+
+      {/* EDITOR */}
+      <div className="rc-editor w-[330px] flex-shrink-0 space-y-3">
+        <div>
+          <h2 className="text-white font-bold text-base">Recipe Card Builder</h2>
+          <p className="text-slate-500 text-xs">Design a printable kitchen build-card. Manual entry · live preview · print to PDF.</p>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-slate-300 font-semibold text-xs mb-1">Header</div>
+          <label className={lbl}>Dish name</label>
+          <input className={inp} value={d.name} onChange={e=>set({name:e.target.value})}/>
+          <label className={lbl}>Script word</label>
+          <input className={inp} value={d.script} onChange={e=>set({script:e.target.value})}/>
+          <div className="flex gap-2">
+            <div className="flex-1"><label className={lbl}>Brand tag</label><input className={inp} value={d.brand} onChange={e=>set({brand:e.target.value})}/></div>
+            <div className="flex-1"><label className={lbl}>Build time</label><input className={inp} value={d.time} onChange={e=>set({time:e.target.value})}/></div>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-slate-300 font-semibold text-xs mb-2">Steps ({d.steps.length})</div>
+          {d.steps.map((st,i)=>(
+            <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
+              <button onClick={()=>delStep(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
+              <label className={lbl}>Step {i+1} verb</label>
+              <input className={inp} value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/>
+              <label className={lbl}>Instruction</label>
+              <textarea className={inp+" min-h-[46px]"} value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/>
+              <label className={lbl}>Icon</label>
+              <IconPick current={st.icon} onPick={k=>upStep(i,"icon",k)}/>
+            </div>
+          ))}
+          <button onClick={addStep} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add step</button>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-slate-300 font-semibold text-xs mb-2">Ingredients ({d.ingredients.length})</div>
+          {d.ingredients.map((it,i)=>(
+            <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
+              <button onClick={()=>delIng(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
+              <div className="flex gap-2">
+                <div className="w-2/5"><label className={lbl}>Role</label><input className={inp} value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/></div>
+                <div className="w-3/5"><label className={lbl}>Qty</label><input className={inp} value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/></div>
+              </div>
+              <label className={lbl}>Ingredient</label>
+              <input className={inp} value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
+            </div>
+          ))}
+          <button onClick={addIng} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add ingredient</button>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-slate-300 font-semibold text-xs mb-2">Tools ({d.tools.length})</div>
+          {d.tools.map((tl,i)=>(
+            <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
+              <button onClick={()=>delTool(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
+              <label className={lbl}>Name</label>
+              <input className={inp} value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/>
+              <label className={lbl}>Icon</label>
+              <IconPick current={tl.icon} onPick={k=>upTool(i,"icon",k)}/>
+            </div>
+          ))}
+          <button onClick={addTool} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add tool</button>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="text-slate-300 font-semibold text-xs mb-2">Photo & crockery</div>
+          <label className={lbl}>Dish photo</label>
+          <input type="file" accept="image/*" onChange={loadPhoto} className="text-xs text-slate-400"/>
+          <label className={lbl}>Crockery</label>
+          <input className={inp} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/>
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={printCard} className="flex-1 py-2.5 rounded-lg font-bold text-sm text-white" style={{background:"#844429"}}>Print / Save PDF</button>
+          <button onClick={resetCard} className="px-3 py-2.5 rounded-lg font-bold text-sm bg-slate-800 text-slate-300">Reset</button>
+        </div>
+      </div>
+
+      {/* PREVIEW */}
+      <div className="flex-1 overflow-auto">
+        <div className="rc-print inline-block origin-top" style={{ transform:"scale(.62)", transformOrigin:"top left" }}>
+          {/* PAGE 1 */}
+          <div className="rc-page" style={{ width:1123, minHeight:794, background:C.paper, padding:"46px 54px", position:"relative", marginBottom:24, boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
+            <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
+              <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
+            </div>
+            <div style={{ position:"absolute", top:44, right:54, background:C.band, color:"#fff", fontWeight:800, fontSize:13, letterSpacing:1, padding:"7px 26px 7px 34px", clipPath:"polygon(8% 0,100% 0,100% 100%,0 100%)" }}>{d.name}</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:20, marginTop:44 }}>
+              {d.steps.map((st,i)=>(
+                <div key={i} style={{ border:`1px solid ${C.line}`, borderRadius:3, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+                  <div style={{ background:C.head, display:"flex", alignItems:"center", gap:12, padding:"9px 14px" }}>
+                    <span style={{ fontWeight:700, fontSize:15, color:C.ink, width:16 }}>{i+1}</span>
+                    <span style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", flex:1, textAlign:"center", paddingRight:16, color:C.ink }}>{st.verb}</span>
+                  </div>
+                  <div style={{ background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px 0 14px" }}><RcIcon name={st.icon}/></div>
+                  <div style={{ background:C.panel, flex:1, padding:"14px 16px", fontSize:12.5, lineHeight:1.5, textAlign:"center", color:C.ink }}>{st.txt}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* PAGE 2 */}
+          <div className="rc-page" style={{ width:1123, minHeight:794, background:C.paper, padding:"46px 54px", position:"relative", boxShadow:"0 3px 18px rgba(0,0,0,.13)" }}>
+            <div style={{ fontWeight:800, fontSize:34, letterSpacing:"-.5px", color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
+              <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
+            </div>
+            <div style={{ position:"absolute", top:40, right:54, textAlign:"center" }}>
+              <div style={{ fontWeight:800, fontSize:10, letterSpacing:1, color:C.ink }}>BUILD</div>
+              <div style={{ width:44, height:44, borderRadius:"50%", background:C.head, margin:"4px auto 3px", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#3A2E26" strokeWidth="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>
+              </div>
+              <div style={{ fontWeight:800, fontSize:10, color:C.ink }}>{d.time}</div>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:34, marginTop:30 }}>
+              <div style={{ position:"relative" }}>
+                <div style={{ position:"absolute", top:16, left:-6, background:C.band, color:"#fff", fontWeight:800, fontSize:14, letterSpacing:".5px", padding:"7px 26px", zIndex:2 }}>{d.name}</div>
+                <div style={{ width:"100%", aspectRatio:"1/1", borderRadius:4, background:d.photo?`#F3EADA url(${d.photo}) center/cover no-repeat`:"#F3EADA", display:"flex", alignItems:"center", justifyContent:"center", color:C.inkFaint, fontSize:13 }}>{d.photo?"":"Add a dish photo"}</div>
+              </div>
+              <div>
+                <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", display:"grid", gridTemplateColumns:"1.1fr 1fr 2fr", padding:"0 0 8px", borderBottom:`2px solid ${C.head}`, color:C.ink }}>
+                  <span>STEPS</span><span>QTY</span><span>INGREDIENTS/TOOLS</span>
+                </div>
+                <table style={{ width:"100%", borderCollapse:"collapse", border:`1px solid ${C.line}` }}>
+                  <tbody>
+                    {d.ingredients.map((it,i)=>(
+                      <tr key={i} style={{ background: i%2===0?C.row:"transparent" }}>
+                        <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, width:"26%", color:C.ink }}>{it.role}</td>
+                        <td style={{ padding:"9px 14px", fontSize:12, fontWeight:700, width:"22%", color:C.ink }}>{it.qty}</td>
+                        <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, color:C.ink }}>{it.name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", marginTop:26, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>TOOLS</div>
+            <div style={{ display:"flex", gap:26, marginTop:16, flexWrap:"wrap" }}>
+              {d.tools.map((tl,i)=>(
+                <div key={i} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:7, width:78, textAlign:"center" }}>
+                  <RcIcon name={tl.icon} size={34}/><span style={{ fontSize:11, color:C.ink, lineHeight:1.2 }}>{tl.name}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontWeight:800, fontSize:15, letterSpacing:".5px", marginTop:22, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>CROCKERY</div>
+            <div style={{ border:`1px solid ${C.ink}`, borderRadius:4, padding:"11px 14px", fontSize:14, marginTop:14, color:C.ink }}>{d.crockery}</div>
+            <div style={{ position:"absolute", bottom:20, right:54, fontSize:10, color:C.inkFaint, letterSpacing:2, fontWeight:700, textTransform:"uppercase" }}>{d.brand}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub, hideTabs }) {
   const [tab, setTab] = useState(initialTab || "inventory");
   const ALL_TABS = [
@@ -14062,6 +14324,7 @@ function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub
       {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
       {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
       {effectiveTab === "actualcogs" && <ActualCogs stores={stores} initialSub={initialSub} hideTabs={hideTabs}/>}
+      {effectiveTab === "recipecards" && <RecipeCardBuilder/>}
     </div>
   );
 }
@@ -55720,6 +55983,7 @@ export default function App() {
                     { key: "cogs:inventory", label: "Inventory", desc: "Raw ingredients and costs.", gate: gCogs },
                     { key: "cogs:preps", label: "Preps", desc: "Prepared components and sub-recipes.", gate: gCogs },
                     { key: "cogs:products", label: "Products", desc: "Menu items and their recipes.", gate: gCogs },
+                    { key: "cogs:recipecards", label: "Recipe Cards", desc: "Design printable build cards for the kitchen.", gate: gCogs },
                     { key: "cogs:modifiers", label: "Modifiers", desc: "Add-ons and option costing.", gate: gCogs },
                     { key: "cogs:mapping", label: "Mapping", desc: "Map POS items to recipes.", gate: gCogs },
                   ].filter(i => i.gate()),
