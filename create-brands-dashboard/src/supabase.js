@@ -14063,6 +14063,36 @@ export async function saveDeliveryReceipt(deliveryId, lines) {
 
 // CONFIRM: add received qty to store_stock, write receipt movements, update
 // moving cost, flag shortfalls. This is the moment stock actually rises.
+// Ensure a store inventory item exists for a given dist item. Returns its id.
+// Used when a store orders a dist item that has no store counterpart yet — we
+// create one from the dist item's details so received stock has somewhere to land.
+// Store-scope only (never CK). Idempotent: reuses an existing linked store item.
+async function ensureStoreItemForDistItem(distItemId, fallbackName, unitCost) {
+  if (!distItemId) return null;
+  // Already linked?
+  const { data: existing } = await supabase.from("cogs_store_items")
+    .select("id").eq("dist_item_id", distItemId).limit(1).maybeSingle();
+  if (existing) return existing.id;
+  // Pull the dist item's details to copy across.
+  const { data: di } = await supabase.from("dist_items")
+    .select("name, sku, category, pack_count, pack_size, pack_unit, purchase_rate")
+    .eq("id", distItemId).maybeSingle();
+  const name = (di?.name || fallbackName || "Unnamed item").trim();
+  const packCount = di?.pack_count != null ? Number(di.pack_count) : 1;
+  const packSize = di?.pack_size != null ? Number(di.pack_size) : null;
+  const packUnit = di?.pack_unit || "";
+  const packDesc = packSize != null ? `${packCount}*${packSize}${packUnit}` : `${packCount}${packUnit?("*"+packUnit):""}`;
+  const packPrice = unitCost != null ? Number(unitCost) : (di?.purchase_rate != null ? Number(di.purchase_rate) : null);
+  const body = {
+    name, category: di?.category || "Other Items", base_unit: packUnit || "ea",
+    pack_desc: packDesc, pack_qty: (packSize != null ? packSize * packCount : packCount),
+    pack_price: packPrice, dist_item_id: distItemId,
+  };
+  const { data: created, error } = await supabase.from("cogs_store_items").insert(body).select("id").single();
+  if (error) { console.error("ensureStoreItemForDistItem failed:", error.message); return null; }
+  return created.id;
+}
+
 export async function confirmStoreDelivery(deliveryId, receivedBy) {
   const { head, lines } = await fetchStoreDeliveryDetail(deliveryId);
   if (!head) throw new Error("Delivery not found.");
@@ -14072,23 +14102,35 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
 
   for (const l of lines) {
     const recv = l.qty_received != null ? Number(l.qty_received) : 0;
-    if (l.store_item_id && recv > 0) {
+    // Resolve the store item. If this dist item has no store counterpart yet,
+    // create one on the fly so the received stock has somewhere to land
+    // (dist catalogue is larger than store inventory; ordering a dist-only item
+    // must not silently vanish on receipt).
+    let storeItemId = l.store_item_id;
+    if (!storeItemId && recv > 0 && l.dist_item_id) {
+      storeItemId = await ensureStoreItemForDistItem(l.dist_item_id, l.item_name, l.unit_cost);
+      if (storeItemId) {
+        // backfill the link on the delivery line for traceability
+        await supabase.from("store_delivery_lines").update({ store_item_id: storeItemId }).eq("id", l.id);
+      }
+    }
+    if (storeItemId && recv > 0) {
       // Movement (ledger)
       await supabase.from("store_stock_movements").insert({
-        store_id: storeId, item_id: l.store_item_id, qty: recv, type: "receipt",
+        store_id: storeId, item_id: storeItemId, qty: recv, type: "receipt",
         ref: `delivery-${deliveryId}`, unit_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
         note: `Received on delivery ${deliveryId}`, created_by: receivedBy || null,
       });
       // Upsert live level (qty += recv; moving cost := latest delivery cost if given)
       const { data: existing } = await supabase.from("store_stock")
-        .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", l.store_item_id).maybeSingle();
+        .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", storeItemId).maybeSingle();
       if (existing) {
         const patch = { qty_on_hand: Number(existing.qty_on_hand) + recv, updated_at: new Date().toISOString() };
         if (l.unit_cost != null) patch.moving_cost = Number(l.unit_cost);
         await supabase.from("store_stock").update(patch).eq("id", existing.id);
       } else {
         await supabase.from("store_stock").insert({
-          store_id: storeId, item_id: l.store_item_id, qty_on_hand: recv,
+          store_id: storeId, item_id: storeItemId, qty_on_hand: recv,
           moving_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
         });
       }
