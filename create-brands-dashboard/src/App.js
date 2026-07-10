@@ -14468,9 +14468,11 @@ function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub
     { key: "tillaudit", label: "Till Audit" },
     { key: "modmapper", label: "Modifier Mapper" },
     { key: "actualcogs", label: "Stock & Actual COGS" },
+    { key: "recipecards", label: "Recipe Cards" },
   ];
   // Each tab is matrix-controlled via feat.cogs.<key>. Only show granted tabs.
-  const TABS = ALL_TABS.filter(t => canFeature(`feat.cogs.${t.key}`));
+  // Recipe Cards is always available (not gated) — it's a design tool, not data.
+  const TABS = ALL_TABS.filter(t => t.key === "recipecards" || canFeature(`feat.cogs.${t.key}`));
   // If the active tab isn't permitted (or none are), fall back to the first allowed.
   const allowedKeys = TABS.map(t => t.key);
   const effectiveTab = allowedKeys.includes(tab) ? tab : (allowedKeys[0] || null);
