@@ -14262,3 +14262,42 @@ export async function depleteStoreStockFromSales(storeId, date) {
   return { processed, skipped, movements };
 }
 
+// ─── RECIPE CARDS — office creates, all stores view ─────────────────────────
+// List cards for the browse view (published only by default).
+export async function fetchRecipeCards({ includeUnpublished = false } = {}) {
+  let q = supabase.from("recipe_cards").select("id, name, category, published, updated_at").order("name");
+  if (!includeUnpublished) q = q.eq("published", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+// Full card (with its data JSON) for the viewer/editor.
+export async function fetchRecipeCard(id) {
+  const { data, error } = await supabase.from("recipe_cards").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Create or update a card. Pass id to update, omit to create.
+export async function saveRecipeCard({ id, name, category, data, published = true, createdBy }) {
+  if (id) {
+    const { data: row, error } = await supabase.from("recipe_cards")
+      .update({ name, category: category || null, data, published, updated_at: new Date().toISOString() })
+      .eq("id", id).select().single();
+    if (error) throw error;
+    return row;
+  }
+  const { data: row, error } = await supabase.from("recipe_cards")
+    .insert({ name, category: category || null, data, published, created_by: createdBy || null })
+    .select().single();
+  if (error) throw error;
+  return row;
+}
+
+export async function deleteRecipeCard(id) {
+  const { error } = await supabase.from("recipe_cards").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+

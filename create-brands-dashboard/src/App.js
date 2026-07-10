@@ -184,6 +184,7 @@ import {
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls,
+  fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -196,7 +197,7 @@ import {
   QrCode,
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, ArrowUpRight,
   Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw, Copy, LayoutGrid, List,
-  DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList,
+  DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList, BookOpen,
   Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera, Sparkles, Scale,
@@ -14073,6 +14074,133 @@ const RC_DEFAULT = {
   ],
 };
 
+// ─── STORE RECIPES VIEWER — read-only browse + full card, printable ─────────
+function StoreRecipesView() {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(null);   // full card data
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState(null);
+
+  useEffect(() => { (async () => {
+    try { setList(await fetchRecipeCards({})); } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  })(); }, []);
+
+  const openCard = async (id) => {
+    try { const c = await fetchRecipeCard(id); if (c) setOpen(c); } catch (e) { setErr(e.message); }
+  };
+
+  const C = { hot:"#844429", head:"#E4C9AE", panel:"#FBF6EC", row:"#F3EADA", band:"#844429", ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6" };
+  const filtered = list.filter(c => c.name.toLowerCase().includes(q.toLowerCase()));
+
+  // ---- full card view (read-only) ----
+  if (open) {
+    const d = open.data || {};
+    return (
+      <div className="space-y-3">
+        <style>{`@media print { body * { visibility:hidden!important; } .rcv-print, .rcv-print * { visibility:visible!important; } .rcv-print{position:absolute;left:0;top:0;} .rcv-page{box-shadow:none!important;page-break-after:always;} .rcv-hide{display:none!important;} }`}</style>
+        <div className="rcv-hide flex items-center justify-between">
+          <button onClick={()=>setOpen(null)} className="text-sm font-semibold" style={{color:"#fb923c"}}>← All recipes</button>
+          <button onClick={()=>window.print()} className="px-3 py-1.5 rounded-lg text-xs font-bold text-white" style={{background:"#844429"}}>Print</button>
+        </div>
+        <div className="rcv-print overflow-auto">
+          <div style={{ transform:"scale(.42)", transformOrigin:"top left", width:1123 }}>
+            {/* PAGE 1 */}
+            <div className="rcv-page" style={{ width:1123, minHeight:794, background:"#fff", padding:"46px 54px", position:"relative", marginBottom:24 }}>
+              <div style={{ fontWeight:800, fontSize:34, color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
+                <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
+              </div>
+              <div style={{ position:"absolute", top:44, right:54, background:C.band, color:"#fff", fontWeight:800, fontSize:13, letterSpacing:1, padding:"7px 26px 7px 34px", clipPath:"polygon(8% 0,100% 0,100% 100%,0 100%)" }}>{d.name}</div>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:20, marginTop:44 }}>
+                {(d.steps||[]).map((st,i)=>(
+                  <div key={i} style={{ border:`1px solid ${C.line}`, borderRadius:3, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+                    <div style={{ background:C.head, display:"flex", alignItems:"center", gap:12, padding:"9px 14px" }}>
+                      <span style={{ fontWeight:700, fontSize:15, color:C.ink, width:16 }}>{i+1}</span>
+                      <span style={{ fontWeight:800, fontSize:15, flex:1, textAlign:"center", paddingRight:16, color:C.ink }}>{st.verb}</span>
+                    </div>
+                    <div style={{ background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px 0 14px" }}><RcIcon name={st.icon}/></div>
+                    <div style={{ background:C.panel, flex:1, padding:"14px 16px", fontSize:12.5, lineHeight:1.5, textAlign:"center", color:C.ink }}>{st.txt}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* PAGE 2 */}
+            <div className="rcv-page" style={{ width:1123, minHeight:794, background:"#fff", padding:"46px 54px", position:"relative" }}>
+              <div style={{ fontWeight:800, fontSize:34, color:C.ink, display:"flex", alignItems:"baseline", gap:12 }}>
+                <span>{d.name}</span><span style={{ fontFamily:"'Segoe Script','Brush Script MT',cursive", color:C.hot, fontWeight:400, fontSize:30 }}>{d.script}</span>
+              </div>
+              <div style={{ position:"absolute", top:40, right:54, textAlign:"center" }}>
+                <div style={{ fontWeight:800, fontSize:10, letterSpacing:1, color:C.ink }}>BUILD</div>
+                <div style={{ width:44, height:44, borderRadius:"50%", background:C.head, margin:"4px auto 3px", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#3A2E26" strokeWidth="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>
+                </div>
+                <div style={{ fontWeight:800, fontSize:10, color:C.ink }}>{d.time}</div>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:34, marginTop:30 }}>
+                <div style={{ position:"relative" }}>
+                  <div style={{ position:"absolute", top:16, left:-6, background:C.band, color:"#fff", fontWeight:800, fontSize:14, padding:"7px 26px", zIndex:2 }}>{d.name}</div>
+                  <div style={{ width:"100%", aspectRatio:"1/1", borderRadius:4, background:d.photo?`#F3EADA url(${d.photo}) center/cover no-repeat`:"#F3EADA", display:"flex", alignItems:"center", justifyContent:"center", color:C.inkFaint, fontSize:13 }}>{d.photo?"":"No photo"}</div>
+                </div>
+                <div>
+                  <div style={{ fontWeight:800, fontSize:15, display:"grid", gridTemplateColumns:"1.1fr 1fr 2fr", padding:"0 0 8px", borderBottom:`2px solid ${C.head}`, color:C.ink }}>
+                    <span>STEPS</span><span>QTY</span><span>INGREDIENTS/TOOLS</span>
+                  </div>
+                  <table style={{ width:"100%", borderCollapse:"collapse", border:`1px solid ${C.line}` }}>
+                    <tbody>
+                      {(d.ingredients||[]).map((it,i)=>(
+                        <tr key={i} style={{ background: i%2===0?C.row:"transparent" }}>
+                          <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, width:"26%", color:C.ink }}>{it.role}</td>
+                          <td style={{ padding:"9px 14px", fontSize:12, fontWeight:700, width:"22%", color:C.ink }}>{it.qty}</td>
+                          <td style={{ padding:"9px 14px", fontSize:12, fontWeight:600, color:C.ink }}>{it.name}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div style={{ fontWeight:800, fontSize:15, marginTop:26, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>TOOLS</div>
+              <div style={{ display:"flex", gap:26, marginTop:16, flexWrap:"wrap" }}>
+                {(d.tools||[]).map((tl,i)=>(
+                  <div key={i} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:7, width:78, textAlign:"center" }}>
+                    <RcIcon name={tl.icon} size={34}/><span style={{ fontSize:11, color:C.ink }}>{tl.name}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontWeight:800, fontSize:15, marginTop:22, paddingBottom:6, borderBottom:`1px solid ${C.head}`, color:C.ink }}>CROCKERY</div>
+              <div style={{ border:`1px solid ${C.ink}`, borderRadius:4, padding:"11px 14px", fontSize:14, marginTop:14, color:C.ink }}>{d.crockery}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- browse list ----
+  return (
+    <div className="space-y-3">
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search recipes…"
+        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm"/>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-8 text-center">Loading recipes…</div>
+       : filtered.length === 0 ? <div className="text-sm text-slate-600 py-10 text-center">No recipes yet. The office adds them in Setup.</div>
+       : (
+        <div className="grid grid-cols-1 gap-2">
+          {filtered.map(c=>(
+            <button key={c.id} onClick={()=>openCard(c.id)}
+              className="text-left p-4 rounded-xl bg-slate-900 border border-slate-800 hover:border-orange-700 flex items-center justify-between">
+              <div>
+                <div className="text-white font-bold text-sm">{c.name}</div>
+                {c.category && <div className="text-slate-500 text-xs">{c.category}</div>}
+              </div>
+              <BookOpen size={18} className="text-orange-400"/>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecipeCardBuilder() {
   const [d, setD] = useState(() => { try { const s = localStorage.getItem("recipecard_draft"); return s ? JSON.parse(s) : RC_DEFAULT; } catch { return RC_DEFAULT; } });
   const set = (patch) => setD(prev => ({ ...prev, ...patch }));
@@ -14092,6 +14220,41 @@ function RecipeCardBuilder() {
   const loadPhoto = (e) => { const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=ev=>set({photo:ev.target.result}); r.readAsDataURL(f); };
   const resetCard = () => { if(window.confirm("Reset to the sample recipe? Your current card will be cleared.")) setD(RC_DEFAULT); };
   const printCard = () => window.print();
+
+  // ---- database: saved cards library (office creates, stores view) ----
+  const [savedCards, setSavedCards] = useState([]);
+  const [currentId, setCurrentId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const loadList = useCallback(async () => {
+    try { setSavedCards(await fetchRecipeCards({ includeUnpublished: true })); } catch (e) { setMsg({ t:"err", m:e.message }); }
+  }, []);
+  useEffect(() => { loadList(); }, [loadList]);
+
+  const openCard = async (id) => {
+    if (!id) return;
+    try {
+      const card = await fetchRecipeCard(id);
+      if (card) { setD(card.data); setCurrentId(card.id); setMsg({ t:"ok", m:`Opened "${card.name}"` }); }
+    } catch (e) { setMsg({ t:"err", m:e.message }); }
+  };
+  const saveCard = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const row = await saveRecipeCard({ id: currentId || undefined, name: d.name || "Untitled", data: d, published: true });
+      setCurrentId(row.id);
+      await loadList();
+      setMsg({ t:"ok", m:`Saved "${row.name}" — stores can now see it.` });
+    } catch (e) { setMsg({ t:"err", m:e.message }); }
+    finally { setSaving(false); }
+  };
+  const newCard = () => { setD(RC_DEFAULT); setCurrentId(null); setMsg({ t:"ok", m:"New blank card (from sample). Edit and Save." }); };
+  const removeCard = async () => {
+    if (!currentId) return;
+    if (!window.confirm(`Delete "${d.name}"? Stores will no longer see it.`)) return;
+    try { await deleteRecipeCard(currentId); setCurrentId(null); setD(RC_DEFAULT); await loadList(); setMsg({ t:"ok", m:"Card deleted." }); }
+    catch (e) { setMsg({ t:"err", m:e.message }); }
+  };
 
   // ---- brand palette for the card preview ----
   const C = { hot:"#844429", head:"#E4C9AE", panel:"#FBF6EC", row:"#F3EADA", band:"#844429", ink:"#3A2E26", inkFaint:"#8A7B68", line:"#E8DCC6", paper:"#fff" };
@@ -14128,7 +14291,21 @@ function RecipeCardBuilder() {
       <div className="rc-editor w-[330px] flex-shrink-0 space-y-3">
         <div>
           <h2 className="text-white font-bold text-base">Recipe Card Builder</h2>
-          <p className="text-slate-500 text-xs">Design a printable kitchen build-card. Manual entry · live preview · print to PDF.</p>
+          <p className="text-slate-500 text-xs">Design a printable kitchen build-card. Saved cards are visible to all stores.</p>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <label className={lbl}>Saved recipe cards</label>
+          <select className={inp} value={currentId||""} onChange={e=>openCard(e.target.value?Number(e.target.value):null)}>
+            <option value="">— New / unsaved card —</option>
+            {savedCards.map(c=>(<option key={c.id} value={c.id}>{c.name}{c.published?"":" (draft)"}</option>))}
+          </select>
+          <div className="flex gap-2 mt-2">
+            <button onClick={saveCard} disabled={saving} className="flex-1 py-2 rounded-lg font-bold text-xs text-white" style={{background:"#844429"}}>{saving?"Saving…":(currentId?"Save changes":"Save new card")}</button>
+            <button onClick={newCard} className="px-3 py-2 rounded-lg font-bold text-xs bg-slate-800 text-slate-300">New</button>
+            {currentId && <button onClick={removeCard} className="px-3 py-2 rounded-lg font-bold text-xs bg-red-950 text-red-300 border border-red-800">Delete</button>}
+          </div>
+          {msg && <div className={`mt-2 text-xs font-semibold ${msg.t==="ok"?"text-emerald-400":"text-red-400"}`}>{msg.m}</div>}
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
@@ -18557,6 +18734,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "issues",         label: "Report an Issue", icon: Wrench },
     { key: "emp-eod",        label: "EOD Report",      icon: ClipboardList },
     { key: "smallware",      label: "Assets",          icon: Package },
+    { key: "recipes",        label: "Recipes",         icon: BookOpen },
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Overtime",        icon: Clock },
@@ -18572,8 +18750,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const titles = {
     "ops-tasks":      "Today's Tasks",
     "ops-temps":      "Temperature Log",
-    "ops-deliveries": "Deliveries",
-    "ops-network":    "Ops Status",
+    "ops-deliveries": "Deliveries",    "ops-network":    "Ops Status",
     "issues":         "Report an Issue",
     "emp-eod":        "EOD Report",
     "comms":          "Communication",
@@ -18582,6 +18759,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-training":   "Training",
     "emp-contracts":  "Contracts",
     "review-qr":      "Review QR",
+    "recipes":        "Recipes",
     "my-review":      "Review Impact",
     "my-expenses":    "Submit Expense",
   };
@@ -18810,6 +18988,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} deliveries={deliveries} onAdd={onDeliveryAdd}
             />
           )}
+          {activeView === "recipes" && <StoreRecipesView />}
           {activeView === "smallware" && (
             <SmallwareView
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
