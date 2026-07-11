@@ -185,6 +185,7 @@ import {
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
+  renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -14442,6 +14443,7 @@ function RecipeCardBuilder() {
   const [treeOpen,setTreeOpen]=useState(true);
   const [openNodes,setOpenNodes]=useState({});
   const [menuFor,setMenuFor]=useState(null);
+  const [nodeMenu,setNodeMenu]=useState(null); // {type:'main'|'cat', main, cat}
   const loadList=useCallback(async()=>{try{setSavedCards(await fetchRecipeCards({includeUnpublished:true}));}catch(e){setMsg({t:"err",m:e.message});}},[]);
   useEffect(()=>{loadList();},[loadList]);
   const openCard=async(id)=>{if(!id)return;setMenuFor(null);try{const c=await fetchRecipeCard(id);if(c){setD(c.data||RC_DEFAULT);setCurrentId(c.id);setMainCat(c.main_category||"");setCat(c.category||"");setMsg(null);}}catch(e){setMsg({t:"err",m:e.message});}};
@@ -14450,6 +14452,17 @@ function RecipeCardBuilder() {
   const removeCard=async(id)=>{const target=id||currentId;if(!target)return;const nm=savedCards.find(c=>c.id===target)?.name||d.name;if(!window.confirm(`Delete "${nm}"?`))return;try{await deleteRecipeCard(target);if(target===currentId)newCard();setMenuFor(null);await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
   const dupCard=async(id)=>{setMenuFor(null);try{const row=await duplicateRecipeCard(id);await loadList();openCard(row.id);}catch(e){setMsg({t:"err",m:e.message});}};
   const renameCard=async(id)=>{const card=savedCards.find(c=>c.id===id);const nn=window.prompt("Rename recipe:",card?.name||"");if(nn==null||!nn.trim())return;setMenuFor(null);try{await renameRecipeCard(id,{name:nn.trim()});if(id===currentId)setD(p=>({...p,name:nn.trim()}));await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  // tree-level ops
+  const realMain=(m)=>m==="Uncategorised"?"":m;
+  const realCat=(c)=>c==="General"?"":c;
+  const renMain=async(m)=>{const nn=window.prompt("Rename category:",m);if(nn==null||!nn.trim()||nn===m)return;setNodeMenu(null);try{await renameRecipeMainCategory(realMain(m),nn.trim());if(mainCat===realMain(m))setMainCat(nn.trim());await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  const renCat=async(m,c)=>{const nn=window.prompt("Rename sub-category:",c);if(nn==null||!nn.trim()||nn===c)return;setNodeMenu(null);try{await renameRecipeCategory(realMain(m),realCat(c),nn.trim());if(cat===realCat(c))setCat(nn.trim());await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  const delMain=async(m)=>{if(!window.confirm(`Delete "${m}" and ALL recipes inside it? This cannot be undone.`))return;setNodeMenu(null);try{await deleteRecipeMainCategory(realMain(m));newCard();await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  const delCat=async(m,c)=>{if(!window.confirm(`Delete "${c}" and all recipes inside it?`))return;setNodeMenu(null);try{await deleteRecipeCategory(realMain(m),realCat(c));newCard();await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  const addUnderMain=async(m)=>{const cn=window.prompt("New sub-category name:","");if(cn==null)return;setNodeMenu(null);try{const row=await createRecipeInCategory(realMain(m),cn.trim()||"General","New recipe");await loadList();openCard(row.id);}catch(e){setMsg({t:"err",m:e.message});}};
+  const addUnderCat=async(m,c)=>{setNodeMenu(null);try{const row=await createRecipeInCategory(realMain(m),realCat(c),"New recipe");await loadList();openCard(row.id);}catch(e){setMsg({t:"err",m:e.message});}};
+  const addMainCat=async()=>{const mn=window.prompt("New main category name:","");if(mn==null||!mn.trim())return;try{const row=await createRecipeInCategory(mn.trim(),"General","New recipe");await loadList();openCard(row.id);}catch(e){setMsg({t:"err",m:e.message});}};
+  const moveCard=async(id)=>{const mm=window.prompt("Move to main category:","");if(mm==null)return;const cc=window.prompt("Move to sub-category:","General");if(cc==null)return;setMenuFor(null);try{await moveRecipeCard(id,{mainCategory:mm.trim(),category:cc.trim()});if(id===currentId){setMainCat(mm.trim());setCat(cc.trim());}await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
 
   const tree=useMemo(()=>{const t={};const q=treeQuery.trim().toLowerCase();savedCards.forEach(c=>{if(q&&!(`${c.name} ${c.main_category||""} ${c.category||""}`.toLowerCase().includes(q)))return;const m=c.main_category||"Uncategorised";const k=c.category||"General";if(!t[m])t[m]={};if(!t[m][k])t[m][k]=[];t[m][k].push(c);});return t;},[savedCards,treeQuery]);
   const existingMains=[...new Set(savedCards.map(c=>c.main_category).filter(Boolean))];
@@ -14491,7 +14504,7 @@ function RecipeCardBuilder() {
   const tabs=[["steps","Steps",d.steps.length],["ingredients","Ingredients",d.ingredients.length],["tools","Tools",d.tools.length],["details","Details"],["style","Style"],["import","Import"]];
 
   return (
-    <div style={{background:T.bg,borderRadius:16,overflow:"hidden",border:`1px solid ${T.line}`}} onClick={()=>menuFor&&setMenuFor(null)}>
+    <div style={{background:T.bg,borderRadius:16,overflow:"hidden",border:`1px solid ${T.line}`}} onClick={()=>{if(menuFor)setMenuFor(null);if(nodeMenu)setNodeMenu(null);}}>
       <style>{`@media print { body * { visibility:hidden!important; } .rcb-print, .rcb-print * { visibility:visible!important; } .rcb-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rcb-chrome{display:none!important;} }`}</style>
 
       {/* top bar */}
@@ -14514,27 +14527,40 @@ function RecipeCardBuilder() {
           </button>
           <input value={treeQuery} onChange={e=>setTreeQuery(e.target.value)} placeholder="Search…" className="px-2.5 py-1.5 rounded-lg text-[13px] outline-none" style={{...fieldStyle,width:220}}/>
           <button onClick={newCard} title="New recipe" className="w-8 h-8 rounded-lg text-white text-lg flex-shrink-0" style={{background:T.accent}}>+</button>
+          <button onClick={addMainCat} className="px-2.5 py-1.5 rounded-lg text-[12px] font-bold flex-shrink-0" style={{background:T.surfaceAlt,color:T.accent,border:`1px solid ${T.line}`}}>+ Category</button>
         </div>
         {treeOpen && (
-          <div className="px-3 pb-3 flex flex-wrap gap-x-6 gap-y-1 max-h-[180px] overflow-auto">
-            {Object.keys(tree).length===0 && <div className="text-[12px] py-2" style={{color:T.inkFaint}}>No recipes yet. Click + to create one.</div>}
+          <div className="px-3 pb-3 flex flex-wrap gap-x-6 gap-y-1 max-h-[220px] overflow-auto">
+            {Object.keys(tree).length===0 && <div className="text-[12px] py-2" style={{color:T.inkFaint}}>No recipes yet. Click + to create one, or + Category.</div>}
             {Object.keys(tree).sort().map(main=>(
-              <div key={main} className="min-w-[180px]">
-                <button onClick={()=>toggleNode(main)} className="flex items-center gap-1.5 py-1 text-left w-full">
-                  <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[main]!==false?"▾":"▸"}</span>{folderIcon(openNodes[main]!==false)}
-                  <span className="text-[12px] font-bold" style={{color:T.ink}}>{main}</span>
-                  <span className="ml-auto text-[10px] px-1.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
-                </button>
+              <div key={main} className="min-w-[200px]">
+                <div className="relative flex items-center group">
+                  <button onClick={()=>toggleNode(main)} className="flex items-center gap-1.5 py-1 text-left flex-1">
+                    <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[main]!==false?"▾":"▸"}</span>{folderIcon(openNodes[main]!==false)}
+                    <span className="text-[12px] font-bold" style={{color:T.ink}}>{main}</span>
+                    <span className="text-[10px] px-1.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
+                  </button>
+                  <button onClick={(e)=>{e.stopPropagation();setNodeMenu(nodeMenu?.type==="main"&&nodeMenu.main===main?null:{type:"main",main});}} className="w-6 h-6 flex-shrink-0" style={{color:T.inkFaint}}>⋯</button>
+                  {nodeMenu?.type==="main"&&nodeMenu.main===main&&(<div className="absolute right-0 top-7 z-40 rounded-lg py-1 shadow-lg" style={{background:T.surface,border:`1px solid ${T.line}`,minWidth:150}} onClick={e=>e.stopPropagation()}>
+                    {[["Rename category",()=>renMain(main)],["Add sub-category",()=>addUnderMain(main)],["Delete category",()=>delMain(main)]].map(([lab,fn])=>(<button key={lab} onClick={fn} className="w-full text-left px-3 py-1.5 text-[12px]" style={{color:lab.startsWith("Delete")?"#A23B2E":T.ink}}>{lab}</button>))}
+                  </div>)}
+                </div>
                 {openNodes[main]!==false && Object.keys(tree[main]).sort().map(c=>{const nk=main+"|||"+c;return(
                   <div key={nk} className="ml-3">
-                    <button onClick={()=>toggleNode(nk)} className="flex items-center gap-1.5 py-0.5 text-left w-full">
-                      <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[nk]!==false?"▾":"▸"}</span><span className="text-[11px] font-semibold" style={{color:T.inkSoft}}>{c}</span><span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{tree[main][c].length}</span>
-                    </button>
+                    <div className="relative flex items-center">
+                      <button onClick={()=>toggleNode(nk)} className="flex items-center gap-1.5 py-0.5 text-left flex-1">
+                        <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[nk]!==false?"▾":"▸"}</span><span className="text-[11px] font-semibold" style={{color:T.inkSoft}}>{c}</span><span className="text-[10px]" style={{color:T.inkFaint}}>{tree[main][c].length}</span>
+                      </button>
+                      <button onClick={(e)=>{e.stopPropagation();setNodeMenu(nodeMenu?.type==="cat"&&nodeMenu.main===main&&nodeMenu.cat===c?null:{type:"cat",main,cat:c});}} className="w-6 h-6 flex-shrink-0" style={{color:T.inkFaint}}>⋯</button>
+                      {nodeMenu?.type==="cat"&&nodeMenu.main===main&&nodeMenu.cat===c&&(<div className="absolute right-0 top-6 z-40 rounded-lg py-1 shadow-lg" style={{background:T.surface,border:`1px solid ${T.line}`,minWidth:150}} onClick={e=>e.stopPropagation()}>
+                        {[["Rename sub-category",()=>renCat(main,c)],["Add recipe here",()=>addUnderCat(main,c)],["Delete sub-category",()=>delCat(main,c)]].map(([lab,fn])=>(<button key={lab} onClick={fn} className="w-full text-left px-3 py-1.5 text-[12px]" style={{color:lab.startsWith("Delete")?"#A23B2E":T.ink}}>{lab}</button>))}
+                      </div>)}
+                    </div>
                     {openNodes[nk]!==false && tree[main][c].slice().sort((a,b)=>a.name.localeCompare(b.name)).map(card=>(
                       <div key={card.id} className="relative ml-4">
                         <button onClick={()=>openCard(card.id)} className="w-full text-left pl-3 pr-8 py-1 rounded-lg text-[12px]" style={{background:currentId===card.id?T.surfaceAlt:"transparent",color:currentId===card.id?T.accent:T.inkSoft,fontWeight:currentId===card.id?700:400}}>{card.name}</button>
                         <button onClick={(e)=>{e.stopPropagation();setMenuFor(menuFor===card.id?null:card.id);}} className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6" style={{color:T.inkFaint}}>⋯</button>
-                        {menuFor===card.id&&(<div className="absolute right-1 top-8 z-30 rounded-lg py-1 shadow-lg" style={{background:T.surface,border:`1px solid ${T.line}`,minWidth:120}} onClick={e=>e.stopPropagation()}>{[["Rename",()=>renameCard(card.id)],["Duplicate",()=>dupCard(card.id)],["Delete",()=>removeCard(card.id)]].map(([lab,fn])=>(<button key={lab} onClick={fn} className="w-full text-left px-3 py-1.5 text-[12px]" style={{color:lab==="Delete"?"#A23B2E":T.ink}}>{lab}</button>))}</div>)}
+                        {menuFor===card.id&&(<div className="absolute right-1 top-8 z-40 rounded-lg py-1 shadow-lg" style={{background:T.surface,border:`1px solid ${T.line}`,minWidth:120}} onClick={e=>e.stopPropagation()}>{[["Rename",()=>renameCard(card.id)],["Move",()=>moveCard(card.id)],["Duplicate",()=>dupCard(card.id)],["Delete",()=>removeCard(card.id)]].map(([lab,fn])=>(<button key={lab} onClick={fn} className="w-full text-left px-3 py-1.5 text-[12px]" style={{color:lab==="Delete"?"#A23B2E":T.ink}}>{lab}</button>))}</div>)}
                       </div>
                     ))}
                   </div>

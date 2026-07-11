@@ -14360,6 +14360,46 @@ export async function duplicateRecipeCard(id) {
 }
 
 // Rename / re-file a card (name, main_category, category) without touching the design.
+// TREE-LEVEL OPS — categories are derived from recipe fields, so these bulk-update.
+export async function renameRecipeMainCategory(oldMain, newMain) {
+  const q = supabase.from("recipe_cards").update({ main_category: newMain || null, updated_at: new Date().toISOString() });
+  const { error } = oldMain ? await q.eq("main_category", oldMain) : await q.is("main_category", null);
+  if (error) throw error; return true;
+}
+export async function renameRecipeCategory(main, oldCat, newCat) {
+  let q = supabase.from("recipe_cards").update({ category: newCat || null, updated_at: new Date().toISOString() });
+  q = main ? q.eq("main_category", main) : q.is("main_category", null);
+  q = oldCat ? q.eq("category", oldCat) : q.is("category", null);
+  const { error } = await q; if (error) throw error; return true;
+}
+export async function moveRecipeCard(id, { mainCategory, category }) {
+  const { error } = await supabase.from("recipe_cards")
+    .update({ main_category: mainCategory || null, category: category || null, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error; return true;
+}
+export async function deleteRecipeMainCategory(main) {
+  const q = supabase.from("recipe_cards").delete();
+  const { error } = main ? await q.eq("main_category", main) : await q.is("main_category", null);
+  if (error) throw error; return true;
+}
+export async function deleteRecipeCategory(main, cat) {
+  let q = supabase.from("recipe_cards").delete();
+  q = main ? q.eq("main_category", main) : q.is("main_category", null);
+  q = cat ? q.eq("category", cat) : q.is("category", null);
+  const { error } = await q; if (error) throw error; return true;
+}
+export async function createRecipeInCategory(mainCategory, category, name) {
+  const nm = name || "New recipe";
+  const data = { name:nm, script:"Build", brand:"choco-tini", time:"", crockery:"", photo:null,
+    style:{ accent:"#844429", headBar:"#E4C9AE", panel:"#FBF6EC", iconSize:48, stepCols:3, showBands:true, showTimeBadge:true },
+    steps:[], ingredients:[], tools:[] };
+  const { data: row, error } = await supabase.from("recipe_cards")
+    .insert({ name:nm, main_category:mainCategory||null, category:category||null, data, published:true })
+    .select().single();
+  if (error) throw error; return row;
+}
+
 export async function renameRecipeCard(id, { name, mainCategory, category }) {
   const patch = { updated_at: new Date().toISOString() };
   if (name !== undefined) patch.name = name;
