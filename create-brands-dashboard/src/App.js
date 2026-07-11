@@ -50321,6 +50321,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           <div className="flex bg-slate-900 border border-slate-700 rounded-xl p-0.5 gap-0.5">
             <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Records</button>
             <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Summary</button>
+            <button onClick={()=>setTab("breaks")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="breaks"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Breaks</button>
             <button onClick={()=>setTab("periods")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="periods"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Pay Periods</button>
             <button onClick={()=>setTab("recordings")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="recordings"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Recordings</button>
           </div>
@@ -50705,6 +50706,150 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       })()}
 
       {/* ── Summary ── */}
+      {tab === "breaks" && (() => {
+        const storeName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
+        // Aggregate break data across the in-scope records for the period.
+        const rows = enriched.map(r => {
+          const bs = breakSplit(r);
+          if (!bs) return null;
+          const m = opsTeam.find(x => x.id === r.employeeId);
+          return {
+            id: r.id, employeeId: r.employeeId,
+            name: r.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown"),
+            storeId: r.storeId, date: r.date,
+            worked: bs.workedHours || 0,
+            deducted: bs.breakMins || 0,          // minutes actually deducted from pay
+            enforced: !!bs.breakEnforced,          // system auto-applied the break
+            required: bs.requiredBreakMins || 0,
+            punched: bs.punchedBreakMins || 0,     // minutes staff actually clocked
+          };
+        }).filter(Boolean);
+
+        const shifts = rows.length;
+        const autoRows = rows.filter(r => r.enforced);
+        const punchedRows = rows.filter(r => r.punched > 0);
+        const totalDeducted = rows.reduce((s,r)=>s+r.deducted,0);
+        const totalPunched = rows.reduce((s,r)=>s+r.punched,0);
+        const totalAuto = autoRows.reduce((s,r)=>s+r.deducted,0);
+        const avgPerShift = shifts ? Math.round(totalDeducted/shifts) : 0;
+        // "Short/missed": worked 6h+ but punched less than the required break.
+        const missed = rows.filter(r => r.worked >= 6 && r.punched < (r.required || 20));
+        const compliancePct = shifts ? Math.round(((shifts - missed.length)/shifts)*100) : 100;
+
+        const fmtM = (m) => { const h=Math.floor(m/60), mm=m%60; return h>0?`${h}h ${mm}m`:`${mm}m`; };
+
+        // By employee
+        const byEmp = {};
+        rows.forEach(r => {
+          if (!byEmp[r.employeeId]) byEmp[r.employeeId] = { name: r.name, shifts:0, deducted:0, punched:0, auto:0, missed:0 };
+          const e = byEmp[r.employeeId];
+          e.shifts++; e.deducted+=r.deducted; e.punched+=r.punched;
+          if (r.enforced) e.auto++;
+          if (r.worked>=6 && r.punched<(r.required||20)) e.missed++;
+        });
+        const empList = Object.values(byEmp).sort((a,b)=>b.auto-a.auto || b.missed-a.missed);
+
+        // By store
+        const byStore = {};
+        rows.forEach(r => {
+          const sid = r.storeId || "—";
+          if (!byStore[sid]) byStore[sid] = { sid, shifts:0, deducted:0, punched:0, auto:0, missed:0 };
+          const e = byStore[sid];
+          e.shifts++; e.deducted+=r.deducted; e.punched+=r.punched;
+          if (r.enforced) e.auto++;
+          if (r.worked>=6 && r.punched<(r.required||20)) e.missed++;
+        });
+        const storeList = Object.values(byStore).sort((a,b)=>storeName(a.sid).localeCompare(storeName(b.sid)));
+
+        const Card = ({ label, value, sub, cls }) => (
+          <div className={`rounded-2xl border px-4 py-3 ${cls||"bg-slate-900 border-slate-800"}`}>
+            <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">{label}</div>
+            <div className="text-xl font-black text-white mt-0.5 tabular-nums">{value}</div>
+            {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+          </div>
+        );
+
+        return (
+          <div className="space-y-4">
+            <div className="text-[11px] text-slate-500">{from === to ? from : `${from} → ${to}`}{periodStoreId ? ` · ${storeName(periodStoreId)}` : " · all stores"} · {shifts} shift{shifts===1?"":"s"}</div>
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <Card label="Breaks taken" value={punchedRows.length} sub={`${fmtM(totalPunched)} punched`}/>
+              <Card label="Auto-applied" value={autoRows.length} sub={`${fmtM(totalAuto)} enforced`} cls={autoRows.length?"bg-amber-950/20 border-amber-800/40":"bg-slate-900 border-slate-800"}/>
+              <Card label="Total deducted" value={fmtM(totalDeducted)} sub="from paid hours"/>
+              <Card label="Avg / shift" value={`${avgPerShift}m`} sub={`across ${shifts} shifts`}/>
+              <Card label="With break" value={`${compliancePct}%`} sub={`${missed.length} without adequate break`} cls={missed.length?"bg-slate-900 border-slate-800":"bg-emerald-950/20 border-emerald-800/40"}/>
+            </div>
+
+            {shifts === 0 && <div className="text-center py-10 text-sm text-slate-500">No punch records with break data in this period.</div>}
+
+            {/* By employee */}
+            {empList.length > 0 && (
+              <AnalysisBlock title="By employee">
+                <div className="overflow-x-auto"><table className="w-full text-xs">
+                  <thead><tr className="border-b border-slate-700 text-slate-500">
+                    {["Employee","Shifts","Punched break","Auto breaks","No break (6h+)","Deducted"].map(h=><th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}
+                  </tr></thead>
+                  <tbody>{empList.map((e,i)=>(
+                    <tr key={i} className="border-b border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-200 font-semibold">{e.name}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{e.shifts}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.punched)}</td>
+                      <td className={`px-3 py-2 tabular-nums ${e.auto?"text-amber-400 font-semibold":"text-slate-500"}`}>{e.auto||"—"}</td>
+                      <td className={`px-3 py-2 tabular-nums ${e.missed?"text-red-400 font-semibold":"text-slate-500"}`}>{e.missed||"—"}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.deducted)}</td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              </AnalysisBlock>
+            )}
+
+            {/* By store */}
+            {storeList.length > 1 && (
+              <AnalysisBlock title="By store">
+                <div className="overflow-x-auto"><table className="w-full text-xs">
+                  <thead><tr className="border-b border-slate-700 text-slate-500">
+                    {["Store","Shifts","Punched","Auto","No break (6h+)","Deducted"].map(h=><th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}
+                  </tr></thead>
+                  <tbody>{storeList.map((e,i)=>(
+                    <tr key={i} className="border-b border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-200 font-semibold">{storeName(e.sid)}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{e.shifts}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.punched)}</td>
+                      <td className={`px-3 py-2 tabular-nums ${e.auto?"text-amber-400 font-semibold":"text-slate-500"}`}>{e.auto||"—"}</td>
+                      <td className={`px-3 py-2 tabular-nums ${e.missed?"text-red-400 font-semibold":"text-slate-500"}`}>{e.missed||"—"}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.deducted)}</td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              </AnalysisBlock>
+            )}
+
+            {/* Missed / short breaks detail */}
+            {missed.length > 0 && (
+              <AnalysisBlock title={`Shifts 6h+ without an adequate break (${missed.length})`}>
+                <div className="overflow-x-auto"><table className="w-full text-xs">
+                  <thead><tr className="border-b border-slate-700 text-slate-500">
+                    {["Date","Employee","Store","Worked","Break punched","Required"].map(h=><th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}
+                  </tr></thead>
+                  <tbody>{missed.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||"")).map((r,i)=>(
+                    <tr key={i} className="border-b border-slate-800/60">
+                      <td className="px-3 py-2 text-slate-400 font-mono">{r.date}</td>
+                      <td className="px-3 py-2 text-slate-200">{r.name}</td>
+                      <td className="px-3 py-2 text-slate-400">{storeName(r.storeId)}</td>
+                      <td className="px-3 py-2 text-slate-400 tabular-nums">{r.worked.toFixed(1)}h</td>
+                      <td className="px-3 py-2 text-red-400 tabular-nums">{r.punched}m</td>
+                      <td className="px-3 py-2 text-slate-500 tabular-nums">{r.required||20}m</td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              </AnalysisBlock>
+            )}
+          </div>
+        );
+      })()}
+
       {tab === "summary" && (
         <div className="space-y-3">
           <div className={`flex items-center justify-between gap-3 flex-wrap rounded-2xl border px-4 py-3 ${periodApproved ? "bg-emerald-950/30 border-emerald-800/50" : "bg-slate-900 border-slate-800"}`}>
