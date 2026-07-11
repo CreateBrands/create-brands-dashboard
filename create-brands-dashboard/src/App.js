@@ -54221,6 +54221,50 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
 
   const fmtMoney = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
 
+  // ── Store → Department → Time labour breakdown (for the selected day) ────────
+  const labourBreakdown = useMemo(() => {
+    const deptOf = (empId) => { const m = memberOf(empId); return (m?.department || "").trim() || "No department"; };
+    const sName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
+    // Only the selected day's punches, within the store filter.
+    const todays = punchRecords.filter(p => p.date === dayStr && inStore(p.storeId) && p.punchIn);
+    const byStore = {};
+    todays.forEach(p => {
+      const sid = p.storeId || "—";
+      if (!byStore[sid]) byStore[sid] = { sid, name: sName(sid), total: 0, depts: {}, hours: Array.from({length:24},()=>0) };
+      const st = byStore[sid];
+      const cost = punchCostOf(p);
+      st.total += cost;
+      const dept = deptOf(p.employeeId);
+      if (!st.depts[dept]) st.depts[dept] = { name: dept, total: 0, people: 0, hours: Array.from({length:24},()=>0) };
+      st.depts[dept].total += cost;
+      st.depts[dept].people += 1;
+      // Spread each punch's cost across the hours it spans (for the time profile).
+      const startMs = new Date(p.punchIn).getTime();
+      const endMs = p.punchOut ? new Date(p.punchOut).getTime() : Date.now();
+      const rate = rateOf(p.employeeId);
+      if (rate > 0 && endMs > startMs) {
+        let cursor = startMs;
+        while (cursor < endMs) {
+          const h = new Date(cursor).getHours();
+          const nextHour = new Date(cursor); nextHour.setMinutes(60,0,0);
+          const segEnd = Math.min(nextHour.getTime(), endMs);
+          const segHrs = (segEnd - cursor) / 3600000;
+          const segCost = Math.round(segHrs * rate * 100) / 100;
+          st.hours[h] += segCost;
+          st.depts[dept].hours[h] += segCost;
+          cursor = segEnd;
+        }
+      }
+    });
+    const stores_ = Object.values(byStore).map(s => ({
+      ...s,
+      depts: Object.values(s.depts).sort((a,b)=>b.total-a.total),
+      peakHour: s.hours.reduce((best,v,h)=> v>best.v?{h,v}:best, {h:-1,v:0}),
+    })).sort((a,b)=>b.total-a.total);
+    return stores_;
+  }, [punchRecords, dayStr, storeSel, opsTeam, stores]);
+
+
   const TILES = [
     { key:"on", label:"On", icon: UserCheck, value: onShift.length, cls:"bg-emerald-600 text-white border-emerald-500/20" },
     { key:"break", label:"Break", icon: Coffee, value: onBreak.length, cls: onBreak.length?"bg-amber-500 text-amber-950 border-amber-500/20":"bg-slate-500/10 text-slate-300 border-slate-500/20" },
@@ -54469,6 +54513,62 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
           </div>
         )}
       </div>
+
+      {/* Store → Department → Time labour breakdown (selected day) */}
+      {labourBreakdown.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white">Labour breakdown · {dayDate.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}</h3>
+            <span className="text-[11px] text-slate-500">by store → department → time</span>
+          </div>
+          <div className="space-y-3">
+            {labourBreakdown.map(store => {
+              const maxDept = Math.max(...store.depts.map(d=>d.total), 1);
+              const maxHour = Math.max(...store.hours, 1);
+              return (
+                <div key={store.sid} className="bg-slate-950/50 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 text-sm font-bold text-white"><MapPin size={13} className="text-[#C9854F]"/> {store.name}</div>
+                    <div className="text-sm font-black text-white tabular-nums">{fmtMoney(store.total)}</div>
+                  </div>
+                  {/* Departments with proportional bars */}
+                  <div className="space-y-1.5 mb-3">
+                    {store.depts.map(d => (
+                      <div key={d.name} className="flex items-center gap-2">
+                        <div className="w-24 text-[11px] text-slate-300 truncate flex-shrink-0">{d.name}</div>
+                        <div className="flex-1 h-4 bg-slate-800/60 rounded overflow-hidden">
+                          <div className="h-full bg-[#844429] rounded" style={{width:`${Math.max(3,(d.total/maxDept)*100)}%`}}/>
+                        </div>
+                        <div className="w-14 text-right text-[11px] font-semibold text-slate-200 tabular-nums flex-shrink-0">{fmtMoney(d.total)}</div>
+                        <div className="w-8 text-right text-[10px] text-slate-500 tabular-nums flex-shrink-0">{d.people}p</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Hour-by-hour time profile */}
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">By time{store.peakHour.h>=0 ? ` · peak ${String(store.peakHour.h).padStart(2,"0")}:00 (${fmtMoney(store.peakHour.v)})` : ""}</div>
+                    <div className="flex items-end gap-0.5" style={{height:44}}>
+                      {store.hours.map((v,h)=>{
+                        // Only show operating hours (first non-zero to last non-zero).
+                        return { v, h };
+                      }).filter((_,h)=>{
+                        const firstNZ = store.hours.findIndex(x=>x>0);
+                        const lastNZ = store.hours.length - 1 - [...store.hours].reverse().findIndex(x=>x>0);
+                        return firstNZ>=0 && h>=Math.max(0,firstNZ-1) && h<=Math.min(23,lastNZ+1);
+                      }).map(({v,h})=>(
+                        <div key={h} className="flex-1 flex flex-col items-center gap-0.5" title={`${String(h).padStart(2,"0")}:00 — ${fmtMoney(v)}`}>
+                          <div className="w-full bg-[#C9854F] rounded-sm" style={{height:`${Math.max(2,(v/maxHour)*36)}px`, opacity: v>0?1:0.2}}/>
+                          <div className="text-[8px] text-slate-600 tabular-nums">{String(h).padStart(2,"0")}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {editPunch && (
         <PunchEditModal
