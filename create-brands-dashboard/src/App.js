@@ -14439,6 +14439,7 @@ function RecipeCardBuilder() {
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(null);
   const [treeQuery,setTreeQuery]=useState("");
+  const [treeOpen,setTreeOpen]=useState(true);
   const [openNodes,setOpenNodes]=useState({});
   const [menuFor,setMenuFor]=useState(null);
   const loadList=useCallback(async()=>{try{setSavedCards(await fetchRecipeCards({includeUnpublished:true}));}catch(e){setMsg({t:"err",m:e.message});}},[]);
@@ -14479,6 +14480,14 @@ function RecipeCardBuilder() {
   const fieldStyle={background:T.surface,border:`1px solid ${T.line}`,color:T.ink};
   const Label=({children})=><label className="block text-[10px] font-semibold uppercase tracking-wide mb-1" style={{color:T.inkFaint}}>{children}</label>;
   const folderIcon=(open)=>(<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke={T.accent} strokeWidth="1.8"><path d={open?"M3 7h5l2 2h9v2H3z M3 11h18l-2 8H5z":"M3 7h5l2 2h11v9H3z"}/></svg>);
+  const TAB_ICONS={
+    steps:'<path d="M4 6h16M4 12h16M4 18h10"/>',
+    ingredients:'<path d="M6 3v6a3 3 0 0 0 6 0V3M9 15v6M15 3c-1 0-2 2-2 5s1 4 2 4v9"/>',
+    tools:'<path d="M14 6a3.5 3.5 0 0 0-5 5l-6 6 2 2 6-6a3.5 3.5 0 0 0 5-5l-2 2-2-2 2-2z"/>',
+    details:'<path d="M4 5h16M4 10h16M4 15h10"/>',
+    style:'<circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 1 0 0 20c1 0 2-1 2-2 0-1-1-2 0-3s3 0 4-1a6 6 0 0 0-6-14z"/>',
+    import:'<path d="M12 3v12M8 11l4 4 4-4M4 19h16"/>',
+  };
   const tabs=[["steps","Steps",d.steps.length],["ingredients","Ingredients",d.ingredients.length],["tools","Tools",d.tools.length],["details","Details"],["style","Style"],["import","Import"]];
 
   return (
@@ -14497,31 +14506,33 @@ function RecipeCardBuilder() {
         </div>
       </div>
 
-      {/* Workspace: tree | editor | preview (side by side) */}
-      <div className="rcb-chrome flex" style={{height:"640px"}}>
-        {/* tree */}
-        <div className="flex-shrink-0 flex flex-col" style={{width:230,background:T.surface,borderRight:`1px solid ${T.line}`}}>
-          <div className="p-2.5 flex items-center gap-2">
-            <input value={treeQuery} onChange={e=>setTreeQuery(e.target.value)} placeholder="Search…" className={fieldCls} style={fieldStyle}/>
-            <button onClick={newCard} title="New" className="flex-shrink-0 w-8 h-8 rounded-lg text-white text-lg" style={{background:T.accent}}>+</button>
-          </div>
-          <div className="flex-1 overflow-auto px-2 pb-2">
-            {Object.keys(tree).length===0 && <div className="text-[12px] text-center py-6" style={{color:T.inkFaint}}>No recipes.</div>}
+      {/* Collapsible recipe tree — top bar */}
+      <div className="rcb-chrome" style={{background:T.surface,borderBottom:`1px solid ${T.line}`}}>
+        <div className="flex items-center gap-2 px-3 py-2">
+          <button onClick={()=>setTreeOpen(o=>!o)} className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[12px] font-bold" style={{color:T.ink}}>
+            <span style={{color:T.inkFaint,fontSize:10}}>{treeOpen?"▾":"▸"}</span> Recipes <span className="text-[10px] px-1.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{savedCards.length}</span>
+          </button>
+          <input value={treeQuery} onChange={e=>setTreeQuery(e.target.value)} placeholder="Search…" className="px-2.5 py-1.5 rounded-lg text-[13px] outline-none" style={{...fieldStyle,width:220}}/>
+          <button onClick={newCard} title="New recipe" className="w-8 h-8 rounded-lg text-white text-lg flex-shrink-0" style={{background:T.accent}}>+</button>
+        </div>
+        {treeOpen && (
+          <div className="px-3 pb-3 flex flex-wrap gap-x-6 gap-y-1 max-h-[180px] overflow-auto">
+            {Object.keys(tree).length===0 && <div className="text-[12px] py-2" style={{color:T.inkFaint}}>No recipes yet. Click + to create one.</div>}
             {Object.keys(tree).sort().map(main=>(
-              <div key={main} className="mb-0.5">
-                <button onClick={()=>toggleNode(main)} className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left" onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              <div key={main} className="min-w-[180px]">
+                <button onClick={()=>toggleNode(main)} className="flex items-center gap-1.5 py-1 text-left w-full">
                   <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[main]!==false?"▾":"▸"}</span>{folderIcon(openNodes[main]!==false)}
                   <span className="text-[12px] font-bold" style={{color:T.ink}}>{main}</span>
                   <span className="ml-auto text-[10px] px-1.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
                 </button>
                 {openNodes[main]!==false && Object.keys(tree[main]).sort().map(c=>{const nk=main+"|||"+c;return(
                   <div key={nk} className="ml-3">
-                    <button onClick={()=>toggleNode(nk)} className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-left" onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <button onClick={()=>toggleNode(nk)} className="flex items-center gap-1.5 py-0.5 text-left w-full">
                       <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[nk]!==false?"▾":"▸"}</span><span className="text-[11px] font-semibold" style={{color:T.inkSoft}}>{c}</span><span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{tree[main][c].length}</span>
                     </button>
                     {openNodes[nk]!==false && tree[main][c].slice().sort((a,b)=>a.name.localeCompare(b.name)).map(card=>(
                       <div key={card.id} className="relative ml-4">
-                        <button onClick={()=>openCard(card.id)} className="w-full text-left pl-4 pr-8 py-1.5 rounded-lg text-[12px]" style={{background:currentId===card.id?T.surfaceAlt:"transparent",color:currentId===card.id?T.accent:T.inkSoft,fontWeight:currentId===card.id?700:400}}>{card.name}</button>
+                        <button onClick={()=>openCard(card.id)} className="w-full text-left pl-3 pr-8 py-1 rounded-lg text-[12px]" style={{background:currentId===card.id?T.surfaceAlt:"transparent",color:currentId===card.id?T.accent:T.inkSoft,fontWeight:currentId===card.id?700:400}}>{card.name}</button>
                         <button onClick={(e)=>{e.stopPropagation();setMenuFor(menuFor===card.id?null:card.id);}} className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6" style={{color:T.inkFaint}}>⋯</button>
                         {menuFor===card.id&&(<div className="absolute right-1 top-8 z-30 rounded-lg py-1 shadow-lg" style={{background:T.surface,border:`1px solid ${T.line}`,minWidth:120}} onClick={e=>e.stopPropagation()}>{[["Rename",()=>renameCard(card.id)],["Duplicate",()=>dupCard(card.id)],["Delete",()=>removeCard(card.id)]].map(([lab,fn])=>(<button key={lab} onClick={fn} className="w-full text-left px-3 py-1.5 text-[12px]" style={{color:lab==="Delete"?"#A23B2E":T.ink}}>{lab}</button>))}</div>)}
                       </div>
@@ -14531,14 +14542,26 @@ function RecipeCardBuilder() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+      {/* Workspace: icon rail | editor | preview */}
+      <div className="rcb-chrome flex" style={{height:"600px"}}>
+        {/* icon rail (tabs) */}
+        <div className="flex-shrink-0 flex flex-col items-center gap-1 py-3" style={{width:56,background:T.surface,borderRight:`1px solid ${T.line}`}}>
+          {tabs.map(([k,l,n])=>(
+            <div key={k} className="relative group">
+              <button onClick={()=>setTab(k)} className="w-10 h-10 rounded-xl flex items-center justify-center relative" style={{background:tab===k?T.accent:"transparent"}}>
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke={tab===k?"#fff":T.inkSoft} strokeWidth="1.7" dangerouslySetInnerHTML={{__html:TAB_ICONS[k]}}/>
+                {n!=null && n>0 && <span className="absolute -top-0.5 -right-0.5 text-[9px] font-bold rounded-full min-w-[15px] h-[15px] flex items-center justify-center px-1" style={{background:tab===k?"#fff":T.accent,color:tab===k?T.accent:"#fff"}}>{n}</span>}
+              </button>
+              <div className="absolute left-12 top-1/2 -translate-y-1/2 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition z-40" style={{background:T.ink,color:"#fff"}}>{l}</div>
+            </div>
+          ))}
         </div>
 
         {/* editor */}
         <div className="flex flex-col min-w-0" style={{width:440,flexShrink:0,background:T.bg}}>
-          {/* tabs */}
-          <div className="flex gap-1 px-2 py-1.5 overflow-x-auto" style={{borderBottom:`1px solid ${T.line}`}}>
-            {tabs.map(([k,l,n])=>(<button key={k} onClick={()=>setTab(k)} className="px-3 py-1.5 rounded-lg text-[12px] font-bold whitespace-nowrap flex items-center gap-1.5" style={{background:tab===k?T.accent:"transparent",color:tab===k?"#fff":T.inkSoft}}>{l}{n!=null&&<span className="text-[10px] px-1.5 rounded-full" style={{background:tab===k?"rgba(255,255,255,.2)":T.surfaceAlt,color:tab===k?"#fff":T.inkFaint}}>{n}</span>}</button>))}
-          </div>
           <div className="flex-1 overflow-auto p-2.5">
             {tab==="steps" && <div className="space-y-1.5">
               {d.steps.map((st,i)=>(
