@@ -49962,6 +49962,281 @@ function OrderRecordingsTab({ stores = [], visibleStoreIds }) {
   );
 }
 
+// ─── Breaks Analysis Tab — rich break analytics for Time & Attendance ─────────
+function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [], from, to, periodStoreId }) {
+  const [sortKey, setSortKey] = useState("auto");
+  const [sortDir, setSortDir] = useState("desc");
+  const storeName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
+  const fmtM = (m) => { m = Math.round(m); const h=Math.floor(m/60), mm=m%60; return h>0?`${h}h ${mm}m`:`${mm}m`; };
+
+  // Build per-shift break rows from the in-scope records.
+  const rows = useMemo(() => enriched.map(r => {
+    const bs = breakSplit ? breakSplit(r) : null;
+    if (!bs) return null;
+    const m = opsTeam.find(x => x.id === r.employeeId);
+    return {
+      id: r.id, employeeId: r.employeeId,
+      name: r.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown"),
+      storeId: r.storeId, date: r.date,
+      worked: bs.workedHours || 0,
+      deducted: bs.breakMins || 0,
+      enforced: !!bs.breakEnforced,
+      required: bs.requiredBreakMins || 0,
+      punched: bs.punchedBreakMins || 0,
+    };
+  }).filter(Boolean), [enriched, breakSplit, opsTeam]);
+
+  const shifts = rows.length;
+  const autoRows = rows.filter(r => r.enforced);
+  const punchedRows = rows.filter(r => r.punched > 0);
+  const totalDeducted = rows.reduce((s,r)=>s+r.deducted,0);
+  const totalPunched = rows.reduce((s,r)=>s+r.punched,0);
+  const totalAuto = autoRows.reduce((s,r)=>s+r.deducted,0);
+  const avgPerShift = shifts ? Math.round(totalDeducted/shifts) : 0;
+  const missed = rows.filter(r => r.worked >= 6 && r.punched < (r.required || 20));
+  const withBreakPct = shifts ? Math.round(((shifts - missed.length)/shifts)*100) : 100;
+  const autoPct = shifts ? Math.round((autoRows.length/shifts)*100) : 0;
+
+  // Trend by date: auto vs punched break minutes per day.
+  const trend = useMemo(() => {
+    const byDate = {};
+    rows.forEach(r => {
+      const d = r.date || "—";
+      if (!byDate[d]) byDate[d] = { date: d, auto: 0, punched: 0, shifts: 0 };
+      byDate[d].shifts++;
+      if (r.enforced) byDate[d].auto += r.deducted;
+      byDate[d].punched += r.punched;
+    });
+    return Object.values(byDate).sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(d => ({ ...d, label: (d.date||"").slice(5) }));
+  }, [rows]);
+
+  // Donut: auto vs punched vs no-break share of shifts.
+  const donut = useMemo(() => ([
+    { name: "Punched break", value: punchedRows.length, fill: "#3F6B3A" },
+    { name: "Auto-applied", value: autoRows.length, fill: "#8A5A12" },
+    { name: "No break", value: Math.max(0, shifts - punchedRows.length - autoRows.length), fill: "#C9BBA3" },
+  ].filter(d => d.value > 0)), [punchedRows.length, autoRows.length, shifts]);
+
+  // Per-employee aggregation + per-day sparkline series.
+  const empList = useMemo(() => {
+    const byEmp = {};
+    const dates = [...new Set(rows.map(r=>r.date))].sort();
+    rows.forEach(r => {
+      if (!byEmp[r.employeeId]) byEmp[r.employeeId] = { id:r.employeeId, name:r.name, shifts:0, deducted:0, punched:0, auto:0, missed:0, byDate:{} };
+      const e = byEmp[r.employeeId];
+      e.shifts++; e.deducted+=r.deducted; e.punched+=r.punched;
+      if (r.enforced) e.auto++;
+      if (r.worked>=6 && r.punched<(r.required||20)) e.missed++;
+      e.byDate[r.date] = (e.byDate[r.date]||0) + r.deducted;
+    });
+    return Object.values(byEmp).map(e => ({
+      ...e,
+      breakRate: e.shifts ? Math.round(((e.shifts - e.missed)/e.shifts)*100) : 100,
+      spark: dates.map(d => e.byDate[d] || 0),
+    }));
+  }, [rows]);
+
+  const sortedEmp = useMemo(() => {
+    const arr = [...empList];
+    arr.sort((a,b)=>{
+      let av=a[sortKey], bv=b[sortKey];
+      if (sortKey==="name") { av=a.name.toLowerCase(); bv=b.name.toLowerCase(); return sortDir==="asc"?av.localeCompare(bv):bv.localeCompare(av); }
+      return sortDir==="asc" ? av-bv : bv-av;
+    });
+    return arr;
+  }, [empList, sortKey, sortDir]);
+
+  const byStore = useMemo(() => {
+    const m = {};
+    rows.forEach(r => {
+      const sid = r.storeId || "—";
+      if (!m[sid]) m[sid] = { sid, shifts:0, deducted:0, punched:0, auto:0, missed:0 };
+      const e = m[sid];
+      e.shifts++; e.deducted+=r.deducted; e.punched+=r.punched;
+      if (r.enforced) e.auto++;
+      if (r.worked>=6 && r.punched<(r.required||20)) e.missed++;
+    });
+    return Object.values(m).map(e=>({ ...e, autoRate: e.shifts?Math.round((e.auto/e.shifts)*100):0 })).sort((a,b)=>b.autoRate-a.autoRate);
+  }, [rows]);
+
+  // Auto-surfaced insights.
+  const insights = useMemo(() => {
+    const out = [];
+    const neverPunch = empList.filter(e => e.shifts >= 2 && e.punched === 0);
+    if (neverPunch.length) out.push({ tone:"amber", text: `${neverPunch.length} staff never punch a break (${neverPunch.slice(0,3).map(e=>e.name).join(", ")}${neverPunch.length>3?"…":""}) — their breaks are auto-applied.` });
+    if (byStore.length > 1) { const worst = byStore[0]; if (worst.autoRate >= 40) out.push({ tone:"amber", text: `${storeName(worst.sid)} has the highest auto-break rate (${worst.autoRate}% of shifts).` }); }
+    if (missed.length) out.push({ tone:"red", text: `${missed.length} shift${missed.length===1?"":"s"} of 6h+ had no adequate break punched.` });
+    const topPunchers = empList.filter(e => e.shifts>=2 && e.missed===0 && e.punched>0);
+    if (topPunchers.length) out.push({ tone:"green", text: `${topPunchers.length} staff consistently punch their breaks.` });
+    if (avgPerShift) out.push({ tone:"neutral", text: `Average break deducted is ${avgPerShift}m per shift across ${shifts} shifts.` });
+    return out;
+  }, [empList, byStore, missed.length, avgPerShift, shifts]);
+
+  const Th = ({ k, children, num }) => (
+    <th onClick={()=>{ if(sortKey===k) setSortDir(d=>d==="asc"?"desc":"asc"); else { setSortKey(k); setSortDir(k==="name"?"asc":"desc"); } }}
+      className={`px-3 py-2 font-semibold cursor-pointer select-none hover:text-[#844429] ${num?"text-right":"text-left"} ${sortKey===k?"text-[#844429]":"text-[#8A7B68]"}`}>
+      {children}{sortKey===k ? (sortDir==="asc"?" ↑":" ↓") : ""}
+    </th>
+  );
+
+  const Card = ({ label, value, sub, tone }) => {
+    const toneCls = tone==="amber" ? "bg-[#F6ECD8] border-[#E4C98F]" : tone==="green" ? "bg-[#E7EFDD] border-[#B9D0A3]" : tone==="red" ? "bg-[#F6E3DF] border-[#DDA69B]" : "bg-[#FBF6EC] border-[#E8DCC6]";
+    return (
+      <div className={`rounded-2xl border px-4 py-3 ${toneCls}`}>
+        <div className="text-[10px] uppercase tracking-wide text-[#8A7B68] font-bold">{label}</div>
+        <div className="text-2xl font-black text-[#3A2E26] mt-0.5 tabular-nums leading-none">{value}</div>
+        {sub && <div className="text-[11px] text-[#8A7B68] mt-1">{sub}</div>}
+      </div>
+    );
+  };
+
+  const tip = { background:"#3A2E26", border:"none", borderRadius:"10px", color:"#FBF6EC", fontSize:"12px" };
+
+  if (shifts === 0) return (
+    <div className="text-center py-16 text-sm text-[#8A7B68]">No punch records with break data for {from === to ? from : `${from} → ${to}`}.</div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-[#8A7B68]">{from === to ? from : `${from} → ${to}`}{periodStoreId ? ` · ${storeName(periodStoreId)}` : " · all stores"} · {shifts} shift{shifts===1?"":"s"} analysed</div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <Card label="Breaks punched" value={punchedRows.length} sub={`${fmtM(totalPunched)} total`} tone="green"/>
+        <Card label="Auto-applied" value={autoRows.length} sub={`${autoPct}% of shifts · ${fmtM(totalAuto)}`} tone={autoRows.length?"amber":"neutral"}/>
+        <Card label="Total deducted" value={fmtM(totalDeducted)} sub="from paid hours"/>
+        <Card label="Avg / shift" value={`${avgPerShift}m`} sub={`over ${shifts} shifts`}/>
+        <Card label="Shifts with break" value={`${withBreakPct}%`} sub={`${missed.length} without`} tone={missed.length?"neutral":"green"}/>
+      </div>
+
+      {/* Insights */}
+      {insights.length > 0 && (
+        <div className="grid md:grid-cols-2 gap-2">
+          {insights.map((ins,i)=>{
+            const dot = ins.tone==="amber"?"#8A5A12":ins.tone==="red"?"#A23B2E":ins.tone==="green"?"#3F6B3A":"#8A7B68";
+            return <div key={i} className="flex items-start gap-2 bg-[#FBF6EC] border border-[#E8DCC6] rounded-xl px-3 py-2.5">
+              <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0" style={{background:dot}}/>
+              <span className="text-xs text-[#4A3B2E] leading-snug">{ins.text}</span>
+            </div>;
+          })}
+        </div>
+      )}
+
+      {/* Trend + Donut */}
+      <div className="grid lg:grid-cols-3 gap-3">
+        <div className="lg:col-span-2">
+          <AnalysisBlock title="Break minutes per day">
+            <div className="px-3 pb-3 pt-1" style={{height:240}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={trend} margin={{ top:10, right:8, left:-18, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#EADFCB"/>
+                  <XAxis dataKey="label" tick={{ fontSize:10, fill:"#8A7B68" }} axisLine={{stroke:"#E8DCC6"}} tickLine={false}/>
+                  <YAxis tick={{ fontSize:10, fill:"#8A7B68" }} axisLine={false} tickLine={false}/>
+                  <Tooltip contentStyle={tip} formatter={(v,n)=>[`${v}m`, n]}/>
+                  <Legend wrapperStyle={{ fontSize:11 }}/>
+                  <Bar dataKey="punched" name="Punched" stackId="a" fill="#3F6B3A" radius={[0,0,0,0]}/>
+                  <Bar dataKey="auto" name="Auto" stackId="a" fill="#8A5A12" radius={[3,3,0,0]}/>
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </AnalysisBlock>
+        </div>
+        <AnalysisBlock title="Break source">
+          <div className="px-3 pb-3 pt-1 flex flex-col items-center" style={{height:240}}>
+            <ResponsiveContainer width="100%" height="80%">
+              <PieChart>
+                <Pie data={donut} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={42} outerRadius={70} paddingAngle={2}>
+                  {donut.map((d,i)=><Cell key={i} fill={d.fill}/>)}
+                </Pie>
+                <Tooltip contentStyle={tip} formatter={(v,n)=>[`${v} shifts`, n]}/>
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-1">
+              {donut.map((d,i)=><span key={i} className="flex items-center gap-1 text-[10px] text-[#6B5D4F]"><span className="w-2 h-2 rounded-full" style={{background:d.fill}}/>{d.name} ({d.value})</span>)}
+            </div>
+          </div>
+        </AnalysisBlock>
+      </div>
+
+      {/* By employee — sortable + sparklines */}
+      <AnalysisBlock title="By employee">
+        <div className="overflow-x-auto"><table className="w-full text-xs">
+          <thead><tr className="border-b border-[#EADFCB]">
+            <Th k="name">Employee</Th>
+            <Th k="shifts" num>Shifts</Th>
+            <Th k="punched" num>Punched</Th>
+            <Th k="auto" num>Auto</Th>
+            <Th k="missed" num>No break 6h+</Th>
+            <Th k="breakRate" num>Break rate</Th>
+            <Th k="deducted" num>Deducted</Th>
+            <th className="px-3 py-2 text-right text-[#8A7B68] font-semibold">Trend</th>
+          </tr></thead>
+          <tbody>{sortedEmp.map((e,i)=>(
+            <tr key={i} className="border-b border-[#EFE6D4] hover:bg-[#F4E9DD]/40">
+              <td className="px-3 py-2 text-[#3A2E26] font-semibold">{e.name}</td>
+              <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{e.shifts}</td>
+              <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{fmtM(e.punched)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${e.auto?"text-[#8A5A12] font-semibold":"text-[#B9A88F]"}`}>{e.auto||"—"}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${e.missed?"text-[#A23B2E] font-semibold":"text-[#B9A88F]"}`}>{e.missed||"—"}</td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                <span className={`inline-block px-1.5 py-0.5 rounded-md text-[10px] font-bold ${e.breakRate>=80?"bg-[#E7EFDD] text-[#3F6B3A]":e.breakRate>=50?"bg-[#F6ECD8] text-[#8A5A12]":"bg-[#F6E3DF] text-[#A23B2E]"}`}>{e.breakRate}%</span>
+              </td>
+              <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{fmtM(e.deducted)}</td>
+              <td className="px-3 py-2"><div className="flex justify-end">{e.spark.length>=2 ? <Sparkline data={e.spark} height={24}/> : <span className="text-[#B9A88F]">—</span>}</div></td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      </AnalysisBlock>
+
+      {/* By store */}
+      {byStore.length > 1 && (
+        <AnalysisBlock title="By store">
+          <div className="overflow-x-auto"><table className="w-full text-xs">
+            <thead><tr className="border-b border-[#EADFCB] text-[#8A7B68]">
+              {["Store","Shifts","Punched","Auto","Auto rate","No break 6h+","Deducted"].map((h,i)=><th key={h} className={`px-3 py-2 font-semibold ${i===0?"text-left":"text-right"}`}>{h}</th>)}
+            </tr></thead>
+            <tbody>{byStore.map((e,i)=>(
+              <tr key={i} className="border-b border-[#EFE6D4] hover:bg-[#F4E9DD]/40">
+                <td className="px-3 py-2 text-[#3A2E26] font-semibold">{storeName(e.sid)}</td>
+                <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{e.shifts}</td>
+                <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{fmtM(e.punched)}</td>
+                <td className={`px-3 py-2 text-right tabular-nums ${e.auto?"text-[#8A5A12] font-semibold":"text-[#B9A88F]"}`}>{e.auto||"—"}</td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  <span className={`inline-block px-1.5 py-0.5 rounded-md text-[10px] font-bold ${e.autoRate<=20?"bg-[#E7EFDD] text-[#3F6B3A]":e.autoRate<=40?"bg-[#F6ECD8] text-[#8A5A12]":"bg-[#F6E3DF] text-[#A23B2E]"}`}>{e.autoRate}%</span>
+                </td>
+                <td className={`px-3 py-2 text-right tabular-nums ${e.missed?"text-[#A23B2E] font-semibold":"text-[#B9A88F]"}`}>{e.missed||"—"}</td>
+                <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{fmtM(e.deducted)}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </AnalysisBlock>
+      )}
+
+      {/* Missed / short-break detail */}
+      {missed.length > 0 && (
+        <AnalysisBlock title={`Shifts 6h+ without an adequate break (${missed.length})`}>
+          <div className="overflow-x-auto"><table className="w-full text-xs">
+            <thead><tr className="border-b border-[#EADFCB] text-[#8A7B68]">
+              {["Date","Employee","Store","Worked","Break punched","Required"].map((h,i)=><th key={h} className={`px-3 py-2 font-semibold ${i<3?"text-left":"text-right"}`}>{h}</th>)}
+            </tr></thead>
+            <tbody>{missed.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||"")).map((r,i)=>(
+              <tr key={i} className="border-b border-[#EFE6D4] hover:bg-[#F4E9DD]/40">
+                <td className="px-3 py-2 text-[#6B5D4F] font-mono">{r.date}</td>
+                <td className="px-3 py-2 text-[#3A2E26]">{r.name}</td>
+                <td className="px-3 py-2 text-[#6B5D4F]">{storeName(r.storeId)}</td>
+                <td className="px-3 py-2 text-right text-[#6B5D4F] tabular-nums">{r.worked.toFixed(1)}h</td>
+                <td className="px-3 py-2 text-right text-[#A23B2E] tabular-nums">{r.punched}m</td>
+                <td className="px-3 py-2 text-right text-[#B9A88F] tabular-nums">{r.required||20}m</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </AnalysisBlock>
+      )}
+    </div>
+  );
+}
+
+
 function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod }) {
   const { user } = useAuth();
 
@@ -50706,149 +50981,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       })()}
 
       {/* ── Summary ── */}
-      {tab === "breaks" && (() => {
-        const storeName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
-        // Aggregate break data across the in-scope records for the period.
-        const rows = enriched.map(r => {
-          const bs = breakSplit(r);
-          if (!bs) return null;
-          const m = opsTeam.find(x => x.id === r.employeeId);
-          return {
-            id: r.id, employeeId: r.employeeId,
-            name: r.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown"),
-            storeId: r.storeId, date: r.date,
-            worked: bs.workedHours || 0,
-            deducted: bs.breakMins || 0,          // minutes actually deducted from pay
-            enforced: !!bs.breakEnforced,          // system auto-applied the break
-            required: bs.requiredBreakMins || 0,
-            punched: bs.punchedBreakMins || 0,     // minutes staff actually clocked
-          };
-        }).filter(Boolean);
-
-        const shifts = rows.length;
-        const autoRows = rows.filter(r => r.enforced);
-        const punchedRows = rows.filter(r => r.punched > 0);
-        const totalDeducted = rows.reduce((s,r)=>s+r.deducted,0);
-        const totalPunched = rows.reduce((s,r)=>s+r.punched,0);
-        const totalAuto = autoRows.reduce((s,r)=>s+r.deducted,0);
-        const avgPerShift = shifts ? Math.round(totalDeducted/shifts) : 0;
-        // "Short/missed": worked 6h+ but punched less than the required break.
-        const missed = rows.filter(r => r.worked >= 6 && r.punched < (r.required || 20));
-        const compliancePct = shifts ? Math.round(((shifts - missed.length)/shifts)*100) : 100;
-
-        const fmtM = (m) => { const h=Math.floor(m/60), mm=m%60; return h>0?`${h}h ${mm}m`:`${mm}m`; };
-
-        // By employee
-        const byEmp = {};
-        rows.forEach(r => {
-          if (!byEmp[r.employeeId]) byEmp[r.employeeId] = { name: r.name, shifts:0, deducted:0, punched:0, auto:0, missed:0 };
-          const e = byEmp[r.employeeId];
-          e.shifts++; e.deducted+=r.deducted; e.punched+=r.punched;
-          if (r.enforced) e.auto++;
-          if (r.worked>=6 && r.punched<(r.required||20)) e.missed++;
-        });
-        const empList = Object.values(byEmp).sort((a,b)=>b.auto-a.auto || b.missed-a.missed);
-
-        // By store
-        const byStore = {};
-        rows.forEach(r => {
-          const sid = r.storeId || "—";
-          if (!byStore[sid]) byStore[sid] = { sid, shifts:0, deducted:0, punched:0, auto:0, missed:0 };
-          const e = byStore[sid];
-          e.shifts++; e.deducted+=r.deducted; e.punched+=r.punched;
-          if (r.enforced) e.auto++;
-          if (r.worked>=6 && r.punched<(r.required||20)) e.missed++;
-        });
-        const storeList = Object.values(byStore).sort((a,b)=>storeName(a.sid).localeCompare(storeName(b.sid)));
-
-        const Card = ({ label, value, sub, cls }) => (
-          <div className={`rounded-2xl border px-4 py-3 ${cls||"bg-slate-900 border-slate-800"}`}>
-            <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">{label}</div>
-            <div className="text-xl font-black text-white mt-0.5 tabular-nums">{value}</div>
-            {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
-          </div>
-        );
-
-        return (
-          <div className="space-y-4">
-            <div className="text-[11px] text-slate-500">{from === to ? from : `${from} → ${to}`}{periodStoreId ? ` · ${storeName(periodStoreId)}` : " · all stores"} · {shifts} shift{shifts===1?"":"s"}</div>
-
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-              <Card label="Breaks taken" value={punchedRows.length} sub={`${fmtM(totalPunched)} punched`}/>
-              <Card label="Auto-applied" value={autoRows.length} sub={`${fmtM(totalAuto)} enforced`} cls={autoRows.length?"bg-amber-950/20 border-amber-800/40":"bg-slate-900 border-slate-800"}/>
-              <Card label="Total deducted" value={fmtM(totalDeducted)} sub="from paid hours"/>
-              <Card label="Avg / shift" value={`${avgPerShift}m`} sub={`across ${shifts} shifts`}/>
-              <Card label="With break" value={`${compliancePct}%`} sub={`${missed.length} without adequate break`} cls={missed.length?"bg-slate-900 border-slate-800":"bg-emerald-950/20 border-emerald-800/40"}/>
-            </div>
-
-            {shifts === 0 && <div className="text-center py-10 text-sm text-slate-500">No punch records with break data in this period.</div>}
-
-            {/* By employee */}
-            {empList.length > 0 && (
-              <AnalysisBlock title="By employee">
-                <div className="overflow-x-auto"><table className="w-full text-xs">
-                  <thead><tr className="border-b border-slate-700 text-slate-500">
-                    {["Employee","Shifts","Punched break","Auto breaks","No break (6h+)","Deducted"].map(h=><th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}
-                  </tr></thead>
-                  <tbody>{empList.map((e,i)=>(
-                    <tr key={i} className="border-b border-slate-800/60">
-                      <td className="px-3 py-2 text-slate-200 font-semibold">{e.name}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{e.shifts}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.punched)}</td>
-                      <td className={`px-3 py-2 tabular-nums ${e.auto?"text-amber-400 font-semibold":"text-slate-500"}`}>{e.auto||"—"}</td>
-                      <td className={`px-3 py-2 tabular-nums ${e.missed?"text-red-400 font-semibold":"text-slate-500"}`}>{e.missed||"—"}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.deducted)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table></div>
-              </AnalysisBlock>
-            )}
-
-            {/* By store */}
-            {storeList.length > 1 && (
-              <AnalysisBlock title="By store">
-                <div className="overflow-x-auto"><table className="w-full text-xs">
-                  <thead><tr className="border-b border-slate-700 text-slate-500">
-                    {["Store","Shifts","Punched","Auto","No break (6h+)","Deducted"].map(h=><th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}
-                  </tr></thead>
-                  <tbody>{storeList.map((e,i)=>(
-                    <tr key={i} className="border-b border-slate-800/60">
-                      <td className="px-3 py-2 text-slate-200 font-semibold">{storeName(e.sid)}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{e.shifts}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.punched)}</td>
-                      <td className={`px-3 py-2 tabular-nums ${e.auto?"text-amber-400 font-semibold":"text-slate-500"}`}>{e.auto||"—"}</td>
-                      <td className={`px-3 py-2 tabular-nums ${e.missed?"text-red-400 font-semibold":"text-slate-500"}`}>{e.missed||"—"}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{fmtM(e.deducted)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table></div>
-              </AnalysisBlock>
-            )}
-
-            {/* Missed / short breaks detail */}
-            {missed.length > 0 && (
-              <AnalysisBlock title={`Shifts 6h+ without an adequate break (${missed.length})`}>
-                <div className="overflow-x-auto"><table className="w-full text-xs">
-                  <thead><tr className="border-b border-slate-700 text-slate-500">
-                    {["Date","Employee","Store","Worked","Break punched","Required"].map(h=><th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}
-                  </tr></thead>
-                  <tbody>{missed.slice().sort((a,b)=>(b.date||"").localeCompare(a.date||"")).map((r,i)=>(
-                    <tr key={i} className="border-b border-slate-800/60">
-                      <td className="px-3 py-2 text-slate-400 font-mono">{r.date}</td>
-                      <td className="px-3 py-2 text-slate-200">{r.name}</td>
-                      <td className="px-3 py-2 text-slate-400">{storeName(r.storeId)}</td>
-                      <td className="px-3 py-2 text-slate-400 tabular-nums">{r.worked.toFixed(1)}h</td>
-                      <td className="px-3 py-2 text-red-400 tabular-nums">{r.punched}m</td>
-                      <td className="px-3 py-2 text-slate-500 tabular-nums">{r.required||20}m</td>
-                    </tr>
-                  ))}</tbody>
-                </table></div>
-              </AnalysisBlock>
-            )}
-          </div>
-        );
-      })()}
+      {tab === "breaks" && <BreaksAnalysisTab enriched={enriched} breakSplit={breakSplit} opsTeam={opsTeam} stores={stores} from={from} to={to} periodStoreId={periodStoreId} />}
 
       {tab === "summary" && (
         <div className="space-y-3">
