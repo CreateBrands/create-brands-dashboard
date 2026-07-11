@@ -48267,11 +48267,13 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
 function AssignSlotModal({ slot, roster = [], memberHasRole, availability = [], onAssign, onDeleteSlot, onClose }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
-  // Sort: people WITH the slot's role first, then alphabetical. Filter by search.
+  // Show ALL non-archived staff — you can assign anyone to any slot regardless
+  // of whether they hold the role (role is a guide, not a gate). Sort so the most
+  // relevant people surface first: holds-the-role → then alphabetical.
   const sorted = useMemo(() => {
     const list = roster.filter(m => !m.archivedAt);
     const ql = q.trim().toLowerCase();
-    const filtered = ql ? list.filter(m => `${m.firstName} ${m.lastName}`.toLowerCase().includes(ql)) : list;
+    const filtered = ql ? list.filter(m => `${m.firstName} ${m.lastName} ${m.role || ""}`.toLowerCase().includes(ql)) : list;
     return filtered.slice().sort((a, b) => {
       const ar = memberHasRole(a, slot.role) ? 0 : 1;
       const br = memberHasRole(b, slot.role) ? 0 : 1;
@@ -48299,6 +48301,7 @@ function AssignSlotModal({ slot, roster = [], memberHasRole, availability = [], 
           </div>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search staff…" autoFocus aria-label="Search staff"
             className="mt-3 w-full bg-white border border-[#E2CFBC] rounded-xl px-3 py-2 text-sm text-[#3A2E26] placeholder:text-[#B9A88F] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]"/>
+          <p className="text-[11px] text-[#9A8770] mt-2">Any staff member can be assigned — those who hold the <span className="font-semibold">{slot.role || "role"}</span> role are marked and shown first.</p>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {sorted.length === 0 && <div className="text-center py-6 text-[#9A8770] text-sm">No staff found.</div>}
