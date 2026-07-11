@@ -14307,7 +14307,7 @@ export async function depleteStoreStockFromSales(storeId, date) {
 // ─── RECIPE CARDS — office creates, all stores view ─────────────────────────
 // List cards for the browse view (published only by default).
 export async function fetchRecipeCards({ includeUnpublished = false } = {}) {
-  let q = supabase.from("recipe_cards").select("id, name, category, published, updated_at").order("name");
+  let q = supabase.from("recipe_cards").select("id, name, main_category, category, published, updated_at").order("name");
   if (!includeUnpublished) q = q.eq("published", true);
   const { data, error } = await q;
   if (error) throw error;
@@ -14322,16 +14322,17 @@ export async function fetchRecipeCard(id) {
 }
 
 // Create or update a card. Pass id to update, omit to create.
-export async function saveRecipeCard({ id, name, category, data, published = true, createdBy }) {
+export async function saveRecipeCard({ id, name, mainCategory, category, data, published = true, createdBy }) {
+  const fields = { name, main_category: mainCategory || null, category: category || null, data, published };
   if (id) {
     const { data: row, error } = await supabase.from("recipe_cards")
-      .update({ name, category: category || null, data, published, updated_at: new Date().toISOString() })
+      .update({ ...fields, updated_at: new Date().toISOString() })
       .eq("id", id).select().single();
     if (error) throw error;
     return row;
   }
   const { data: row, error } = await supabase.from("recipe_cards")
-    .insert({ name, category: category || null, data, published, created_by: createdBy || null })
+    .insert({ ...fields, created_by: createdBy || null })
     .select().single();
   if (error) throw error;
   return row;
