@@ -1165,7 +1165,13 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   let punchedBreakMins = Number(breakMinutes) || 0;
   if (breakStart && !breakEnd) {
     const ref = breakEndRef ? new Date(breakEndRef).getTime() : outMs;
-    punchedBreakMins += Math.max(0, Math.round((ref - new Date(breakStart).getTime()) / 60000));
+    const openMins = Math.max(0, Math.round((ref - new Date(breakStart).getTime()) / 60000));
+    // Cap an OPEN break so a forgotten "end break" tap can't count hours of work
+    // as break. Same rule as the clock-out fold: never let the total exceed the
+    // required statutory break for the shift (or what was already punched).
+    const reqForShift = applyBreakRule ? requiredBreakMins(rawHours) : 0;
+    const cap = Math.max(reqForShift, punchedBreakMins);
+    punchedBreakMins = Math.min(punchedBreakMins + openMins, cap);
   }
 
   // Apply the unpaid-break rule: deduct the greater of punched vs the minimum.
@@ -1263,7 +1269,7 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
   // (Root cause of the "2h 3m live break on a closed shift" bug.)
   const { data: existing } = await supabase
     .from("punch_records")
-    .select("break_start, break_end, break_minutes")
+    .select("break_start, break_end, break_minutes, punch_in")
     .eq("id", id).single();
 
   // SANITY GUARD — a single café shift over 16h is physically implausible
@@ -1282,11 +1288,33 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
   if (existing && existing.break_start && !existing.break_end) {
     const startMs = new Date(existing.break_start).getTime();
     const outMs   = new Date(punchOut).getTime();
-    // Guard against a break_start AFTER the clock-out (clock anomalies): never
-    // add negative minutes. Close the break at the clock-out time regardless.
-    const addMins = (isNaN(startMs) || isNaN(outMs)) ? 0 : Math.max(0, Math.round((outMs - startMs) / 60000));
+    // A break left OPEN at clock-out almost always means the employee forgot to
+    // tap "end break" — not that they were on break for hours. Counting the full
+    // break_start→clock_out span as break massively over-deducts pay (e.g. a
+    // break started at 14:19 with clock-out at 23:07 recorded 8.8h of "break").
+    // So we CAP the auto-closed portion at the required statutory break for the
+    // shift length — they're due that much unpaid, but no more gets deducted for
+    // a forgotten tap. A genuinely long break should be ended manually.
+    const rawElapsed = (isNaN(startMs) || isNaN(outMs)) ? 0 : Math.max(0, Math.round((outMs - startMs) / 60000));
+    const priorBreak = Number(existing.break_minutes) || 0;
+    // Shift length in hours (minute-truncated in-line to mirror computePunchHours).
+    const inMs = existing.punch_in ? new Date(existing.punch_in).getTime() : null;
+    let shiftHrs = 0;
+    if (inMs && !isNaN(outMs)) {
+      let o = outMs; if (o < inMs) o += 86400000;
+      shiftHrs = (o - inMs) / 3600000;
+    }
+    const reqMin = requiredBreakMins(shiftHrs);
+    // Cap the newly-folded portion so total break can't exceed the greater of
+    // the required minimum or what was already legitimately punched earlier.
+    const cap = Math.max(reqMin, priorBreak);
+    const foldedTotal = Math.min(priorBreak + rawElapsed, cap);
     patch.break_end = punchOut;
-    patch.break_minutes = (Number(existing.break_minutes) || 0) + addMins;
+    patch.break_minutes = foldedTotal;
+    // Flag when we had to cap a runaway open break, so managers can review.
+    if (priorBreak + rawElapsed > cap + 5) {
+      patch.notes = `${patch.notes ? patch.notes + " · " : ""}Open break auto-closed & capped at ${cap}m (raw ${priorBreak + rawElapsed}m — likely forgot to end break)`;
+    }
   }
 
   const { data, error } = await supabase
