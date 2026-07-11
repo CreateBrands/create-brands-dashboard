@@ -14422,7 +14422,7 @@ function RecipeCardBuilder() {
   const removeCard = async () => { if(!currentId) return; if(!window.confirm(`Delete "${d.name}"?`)) return; try { await deleteRecipeCard(currentId); newCard(); await loadList(); setMsg({t:"ok",m:"Deleted."}); } catch(e){ setMsg({t:"err",m:e.message}); } };
 
   // build the Main → Category → Item tree
-  const tree = React.useMemo(() => {
+  const tree = useMemo(() => {
     const t = {};
     const q = treeQuery.trim().toLowerCase();
     savedCards.forEach(c => {
