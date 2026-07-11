@@ -14383,295 +14383,297 @@ function RecipeCardBuilder() {
   const [mainCat, setMainCat] = useState("");
   const [cat, setCat] = useState("");
 
-  // per-section + per-step collapse
-  const [openSec, setOpenSec] = useState({ header:true, steps:true, ingredients:false, tools:false, photo:false, styling:false, import:false });
-  const toggle = (k) => setOpenSec(s => ({ ...s, [k]:!s[k] }));
-  const [openSteps, setOpenSteps] = useState({});          // per-step collapse (index -> bool)
-  const stepOpen = (i) => openSteps[i] !== false;          // default open
-  const toggleStep = (i) => setOpenSteps(s => ({ ...s, [i]: s[i]===false ? true : false }));
-
-  const dragRef = useRef({ list:null, from:null });
-  const upStep = (i,k,v) => setD(p => { const s=[...p.steps]; s[i]={...s[i],[k]:v}; return {...p,steps:s}; });
-  const addStep = () => setD(p => ({...p, steps:[...p.steps, {verb:"NEW STEP", icon:"pan", txt:"Describe this step."}]}));
-  const delStep = (i) => setD(p => ({...p, steps:p.steps.filter((_,x)=>x!==i)}));
-  const upIng = (i,k,v) => setD(p => { const s=[...p.ingredients]; s[i]={...s[i],[k]:v}; return {...p,ingredients:s}; });
-  const addIng = () => setD(p => ({...p, ingredients:[...p.ingredients, {role:"ROLE", qty:"1", name:"New ingredient"}]}));
-  const delIng = (i) => setD(p => ({...p, ingredients:p.ingredients.filter((_,x)=>x!==i)}));
-  const upTool = (i,k,v) => setD(p => { const s=[...p.tools]; s[i]={...s[i],[k]:v}; return {...p,tools:s}; });
-  const addTool = () => setD(p => ({...p, tools:[...p.tools, {icon:"pot", name:"New Tool"}]}));
-  const delTool = (i) => setD(p => ({...p, tools:p.tools.filter((_,x)=>x!==i)}));
-  const reorder = (listKey, from, to) => { if(from===to||from==null||to==null) return; setD(p=>{const a=[...p[listKey]];const[m]=a.splice(from,1);a.splice(to,0,m);return{...p,[listKey]:a};}); };
-  const onDragStart = (listKey,i)=>{ dragRef.current={list:listKey,from:i}; };
-  const onDropAt = (listKey,i)=>{ if(dragRef.current.list===listKey) reorder(listKey,dragRef.current.from,i); dragRef.current={list:null,from:null}; };
-  const loadPhoto = (e) => { const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=ev=>set({photo:ev.target.result}); r.readAsDataURL(f); };
-  const printCard = () => window.print();
-
-  // ---- library + tree ----
-  const [savedCards, setSavedCards] = useState([]);
-  const [currentId, setCurrentId] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState(null);
-  const [treeQuery, setTreeQuery] = useState("");
-  const [openNodes, setOpenNodes] = useState({});          // "main" and "main|||cat" keys
-  const loadList = useCallback(async () => { try { setSavedCards(await fetchRecipeCards({ includeUnpublished:true })); } catch(e){ setMsg({t:"err",m:e.message}); } }, []);
-  useEffect(() => { loadList(); }, [loadList]);
-
-  const openCard = async (id) => { if(!id) return; try { const c=await fetchRecipeCard(id); if(c){ setD(c.data||RC_DEFAULT); setCurrentId(c.id); setMainCat(c.main_category||""); setCat(c.category||""); setMsg({t:"ok",m:`Opened "${c.name}"`}); } } catch(e){ setMsg({t:"err",m:e.message}); } };
-  const saveCard = async () => { setSaving(true); setMsg(null); try { const row=await saveRecipeCard({ id:currentId||undefined, name:d.name||"Untitled", mainCategory:mainCat, category:cat, data:d, published:true }); setCurrentId(row.id); await loadList(); setMsg({t:"ok",m:`Saved — visible to stores.`}); } catch(e){ setMsg({t:"err",m:e.message}); } finally { setSaving(false); } };
-  const newCard = () => { setD(RC_DEFAULT); setCurrentId(null); setMainCat(""); setCat(""); setMsg({t:"ok",m:"New card. Fill in and Save."}); };
-  const removeCard = async () => { if(!currentId) return; if(!window.confirm(`Delete "${d.name}"?`)) return; try { await deleteRecipeCard(currentId); newCard(); await loadList(); setMsg({t:"ok",m:"Deleted."}); } catch(e){ setMsg({t:"err",m:e.message}); } };
-
-  // build the Main → Category → Item tree
-  const tree = useMemo(() => {
-    const t = {};
-    const q = treeQuery.trim().toLowerCase();
-    savedCards.forEach(c => {
-      if (q && !(`${c.name} ${c.main_category||""} ${c.category||""}`.toLowerCase().includes(q))) return;
-      const m = c.main_category || "Uncategorised";
-      const k = c.category || "General";
-      if (!t[m]) t[m] = {};
-      if (!t[m][k]) t[m][k] = [];
-      t[m][k].push(c);
-    });
-    return t;
-  }, [savedCards, treeQuery]);
-  const existingMains = [...new Set(savedCards.map(c=>c.main_category).filter(Boolean))];
-  const existingCats  = [...new Set(savedCards.map(c=>c.category).filter(Boolean))];
-  const toggleNode = (k) => setOpenNodes(s => ({ ...s, [k]: !s[k] }));
-
-  // ---- bulk Excel import (unchanged logic, now also reads Main category) ----
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
-  const onImportExcel = async (e) => {
-    const f = e.target.files?.[0]; if(!f) return;
-    if (!XLSX) { setImportResult({ err:"Excel reader still loading — try again." }); return; }
-    setImporting(true); setImportResult(null);
-    try {
-      const buf = await f.arrayBuffer();
-      const wb = XLSX.read(buf, { type:"array" });
-      const sheet = (n) => { const s=wb.Sheets[n]; return s ? XLSX.utils.sheet_to_json(s,{defval:""}) : []; };
-      const norm = (s)=>String(s||"").trim();
-      const key = (r,...ns)=>{ for(const n of ns){ if(r[n]!=null&&r[n]!=="") return r[n]; } return ""; };
-      const recipesRows=sheet("Recipes"), stepsRows=sheet("Steps"), ingRows=sheet("Ingredients"), toolRows=sheet("Tools");
-      if(!recipesRows.length){ setImportResult({err:"No 'Recipes' tab found."}); setImporting(false); return; }
-      const byName={};
-      recipesRows.forEach(r=>{ const name=norm(key(r,"Recipe","Name")); if(!name) return;
-        byName[name]={ _mainCat:norm(key(r,"Main category","Main Category","Main")), _cat:norm(key(r,"Category")),
-          name, script:norm(key(r,"Script word","Script"))||"Build", time:norm(key(r,"Build time","Time"))||"",
-          crockery:norm(key(r,"Crockery"))||"", brand:norm(key(r,"Brand tag","Brand"))||"choco-tini",
-          photo:null, style:{...RC_STYLE_DEFAULT}, steps:[], ingredients:[], tools:[] }; });
-      stepsRows.forEach(r=>{ const n=norm(key(r,"Recipe")); if(!byName[n])return; byName[n].steps.push({_o:Number(key(r,"Order"))||999,verb:norm(key(r,"Verb")).toUpperCase()||"STEP",icon:norm(key(r,"Icon"))||"pan",txt:norm(key(r,"Instruction","Text"))}); });
-      ingRows.forEach(r=>{ const n=norm(key(r,"Recipe")); if(!byName[n])return; byName[n].ingredients.push({role:norm(key(r,"Role")).toUpperCase(),qty:norm(key(r,"Qty","Quantity")),name:norm(key(r,"Ingredient","Name"))}); });
-      toolRows.forEach(r=>{ const n=norm(key(r,"Recipe")); if(!byName[n])return; byName[n].tools.push({name:norm(key(r,"Tool name","Tool","Name")),icon:norm(key(r,"Icon"))||"pot"}); });
-      Object.values(byName).forEach(rc=>{ rc.steps.sort((a,b)=>a._o-b._o); rc.steps.forEach(s=>delete s._o); });
-      const cards=Object.values(byName); let ok=0,fail=0;
-      for(const c of cards){ const mc=c._mainCat, cc=c._cat; delete c._mainCat; delete c._cat;
-        try{ await saveRecipeCard({name:c.name,mainCategory:mc,category:cc,data:c,published:true}); ok++; }catch{ fail++; } }
-      await loadList(); setImportResult({ok,fail,total:cards.length});
-    } catch(err){ setImportResult({err:"Could not read file: "+err.message}); }
-    finally{ setImporting(false); e.target.value=""; }
+  // Chocoberry cream/brown design tokens for the TOOL itself
+  const T = {
+    bg:"#F4E9DD", surface:"#FBF6EC", surfaceAlt:"#F3EADA", line:"#E8DCC6", lineSoft:"#EFE6D4",
+    ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68", accent:"#844429", accentSoft:"#C9854F",
+    canvas:"#EDE2D2",
   };
 
-  const inp = "w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs";
-  const lbl = "block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-2 mb-1";
+  const [openSec, setOpenSec] = useState({ steps:true, ingredients:true, tools:false, photo:false, styling:false });
+  const secToggle = (k)=>setOpenSec(s=>({...s,[k]:!s[k]}));
+  const [openSteps, setOpenSteps] = useState({});
+  const stepOpen = (i)=>openSteps[i]!==false;
+  const toggleStep = (i)=>setOpenSteps(s=>({...s,[i]:s[i]===false?true:false}));
+  const [tab, setTab] = useState("content");  // content | style | import
+
+  const dragRef = useRef({ list:null, from:null });
+  const upStep=(i,k,v)=>setD(p=>{const s=[...p.steps];s[i]={...s[i],[k]:v};return{...p,steps:s};});
+  const addStep=()=>setD(p=>({...p,steps:[...p.steps,{verb:"NEW STEP",icon:"pan",txt:"Describe this step."}]}));
+  const delStep=(i)=>setD(p=>({...p,steps:p.steps.filter((_,x)=>x!==i)}));
+  const upIng=(i,k,v)=>setD(p=>{const s=[...p.ingredients];s[i]={...s[i],[k]:v};return{...p,ingredients:s};});
+  const addIng=()=>setD(p=>({...p,ingredients:[...p.ingredients,{role:"ROLE",qty:"1",name:"New ingredient"}]}));
+  const delIng=(i)=>setD(p=>({...p,ingredients:p.ingredients.filter((_,x)=>x!==i)}));
+  const upTool=(i,k,v)=>setD(p=>{const s=[...p.tools];s[i]={...s[i],[k]:v};return{...p,tools:s};});
+  const addTool=()=>setD(p=>({...p,tools:[...p.tools,{icon:"pot",name:"New Tool"}]}));
+  const delTool=(i)=>setD(p=>({...p,tools:p.tools.filter((_,x)=>x!==i)}));
+  const reorder=(lk,from,to)=>{if(from===to||from==null||to==null)return;setD(p=>{const a=[...p[lk]];const[m]=a.splice(from,1);a.splice(to,0,m);return{...p,[lk]:a};});};
+  const onDragStart=(lk,i)=>{dragRef.current={list:lk,from:i};};
+  const onDropAt=(lk,i)=>{if(dragRef.current.list===lk)reorder(lk,dragRef.current.from,i);dragRef.current={list:null,from:null};};
+  const loadPhoto=(e)=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>set({photo:ev.target.result});r.readAsDataURL(f);};
+  const printCard=()=>window.print();
+
+  const [savedCards,setSavedCards]=useState([]);
+  const [currentId,setCurrentId]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState(null);
+  const [treeQuery,setTreeQuery]=useState("");
+  const [openNodes,setOpenNodes]=useState({});
+  const [zoom,setZoom]=useState(0.75);
+  const loadList=useCallback(async()=>{try{setSavedCards(await fetchRecipeCards({includeUnpublished:true}));}catch(e){setMsg({t:"err",m:e.message});}},[]);
+  useEffect(()=>{loadList();},[loadList]);
+  const openCard=async(id)=>{if(!id)return;try{const c=await fetchRecipeCard(id);if(c){setD(c.data||RC_DEFAULT);setCurrentId(c.id);setMainCat(c.main_category||"");setCat(c.category||"");setMsg(null);}}catch(e){setMsg({t:"err",m:e.message});}};
+  const saveCard=async()=>{setSaving(true);setMsg(null);try{const row=await saveRecipeCard({id:currentId||undefined,name:d.name||"Untitled",mainCategory:mainCat,category:cat,data:d,published:true});setCurrentId(row.id);await loadList();setMsg({t:"ok",m:"Saved — visible to stores."});}catch(e){setMsg({t:"err",m:e.message});}finally{setSaving(false);}};
+  const newCard=()=>{setD(RC_DEFAULT);setCurrentId(null);setMainCat("");setCat("");setMsg(null);};
+  const removeCard=async()=>{if(!currentId)return;if(!window.confirm(`Delete "${d.name}"?`))return;try{await deleteRecipeCard(currentId);newCard();await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+
+  const tree=useMemo(()=>{const t={};const q=treeQuery.trim().toLowerCase();savedCards.forEach(c=>{if(q&&!(`${c.name} ${c.main_category||""} ${c.category||""}`.toLowerCase().includes(q)))return;const m=c.main_category||"Uncategorised";const k=c.category||"General";if(!t[m])t[m]={};if(!t[m][k])t[m][k]=[];t[m][k].push(c);});return t;},[savedCards,treeQuery]);
+  const existingMains=[...new Set(savedCards.map(c=>c.main_category).filter(Boolean))];
+  const existingCats=[...new Set(savedCards.map(c=>c.category).filter(Boolean))];
+  const toggleNode=(k)=>setOpenNodes(s=>({...s,[k]:!s[k]}));
+
+  const [importing,setImporting]=useState(false);
+  const [importResult,setImportResult]=useState(null);
+  const onImportExcel=async(e)=>{const f=e.target.files?.[0];if(!f)return;if(!XLSX){setImportResult({err:"Excel reader still loading — try again."});return;}setImporting(true);setImportResult(null);
+    try{const buf=await f.arrayBuffer();const wb=XLSX.read(buf,{type:"array"});const sheet=(n)=>{const s=wb.Sheets[n];return s?XLSX.utils.sheet_to_json(s,{defval:""}):[];};const norm=(s)=>String(s||"").trim();const key=(r,...ns)=>{for(const n of ns){if(r[n]!=null&&r[n]!=="")return r[n];}return"";};
+      const recipesRows=sheet("Recipes"),stepsRows=sheet("Steps"),ingRows=sheet("Ingredients"),toolRows=sheet("Tools");if(!recipesRows.length){setImportResult({err:"No 'Recipes' tab found."});setImporting(false);return;}
+      const byName={};recipesRows.forEach(r=>{const name=norm(key(r,"Recipe","Name"));if(!name)return;byName[name]={_mainCat:norm(key(r,"Main category","Main Category","Main")),_cat:norm(key(r,"Category")),name,script:norm(key(r,"Script word","Script"))||"Build",time:norm(key(r,"Build time","Time"))||"",crockery:norm(key(r,"Crockery"))||"",brand:norm(key(r,"Brand tag","Brand"))||"choco-tini",photo:null,style:{...RC_STYLE_DEFAULT},steps:[],ingredients:[],tools:[]};});
+      stepsRows.forEach(r=>{const n=norm(key(r,"Recipe"));if(!byName[n])return;byName[n].steps.push({_o:Number(key(r,"Order"))||999,verb:norm(key(r,"Verb")).toUpperCase()||"STEP",icon:norm(key(r,"Icon"))||"pan",txt:norm(key(r,"Instruction","Text"))});});
+      ingRows.forEach(r=>{const n=norm(key(r,"Recipe"));if(!byName[n])return;byName[n].ingredients.push({role:norm(key(r,"Role")).toUpperCase(),qty:norm(key(r,"Qty","Quantity")),name:norm(key(r,"Ingredient","Name"))});});
+      toolRows.forEach(r=>{const n=norm(key(r,"Recipe"));if(!byName[n])return;byName[n].tools.push({name:norm(key(r,"Tool name","Tool","Name")),icon:norm(key(r,"Icon"))||"pot"});});
+      Object.values(byName).forEach(rc=>{rc.steps.sort((a,b)=>a._o-b._o);rc.steps.forEach(s=>delete s._o);});
+      const cards=Object.values(byName);let ok=0,fail=0;for(const c of cards){const mc=c._mainCat,cc=c._cat;delete c._mainCat;delete c._cat;try{await saveRecipeCard({name:c.name,mainCategory:mc,category:cc,data:c,published:true});ok++;}catch{fail++;}}
+      await loadList();setImportResult({ok,fail,total:cards.length});
+    }catch(err){setImportResult({err:"Could not read file: "+err.message});}finally{setImporting(false);e.target.value="";}};
+
+  // shared control styles (cream/brown)
+  const fieldCls = "w-full px-3 py-2 rounded-lg text-sm outline-none transition";
+  const fieldStyle = { background:T.surface, border:`1px solid ${T.line}`, color:T.ink };
+  const Label = ({children}) => <label className="block text-[11px] font-semibold uppercase tracking-wide mb-1.5" style={{color:T.inkFaint}}>{children}</label>;
+
   const IconPick = ({ current, onPick }) => (
-    <div className="grid grid-cols-8 gap-1 mt-1">
-      {RC_ICON_KEYS.map(k=>(<button key={k} type="button" onClick={()=>onPick(k)} title={k}
-        className={`aspect-square rounded-md flex items-center justify-center border ${k===current?"border-orange-500 bg-orange-500/10":"border-slate-700 bg-slate-900"}`}>
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke={k===current?"#fb923c":"#cbd5e1"} strokeWidth="1.5" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/></button>))}
+    <div className="grid grid-cols-8 gap-1.5 mt-1">
+      {RC_ICON_KEYS.map(k=>(
+        <button key={k} type="button" onClick={()=>onPick(k)} title={k}
+          className="aspect-square rounded-lg flex items-center justify-center transition"
+          style={{ background: k===current?T.accent:T.surface, border:`1px solid ${k===current?T.accent:T.line}` }}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={k===current?"#fff":T.inkSoft} strokeWidth="1.6" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/>
+        </button>
+      ))}
+    </div>
+  );
+
+  // collapsible group
+  const Group = ({ id, title, count, children, action }) => (
+    <div className="rounded-xl overflow-hidden" style={{ background:T.surface, border:`1px solid ${T.line}` }}>
+      <button onClick={()=>secToggle(id)} className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left">
+        <span style={{color:T.inkFaint,fontSize:10}}>{openSec[id]?"▼":"▶"}</span>
+        <span className="text-[13px] font-bold" style={{color:T.ink}}>{title}</span>
+        {count!=null && <span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{count}</span>}
+        {action && <span className="ml-auto" onClick={e=>e.stopPropagation()}>{action}</span>}
+      </button>
+      {openSec[id] && <div className="px-3.5 pb-3.5" style={{borderTop:`1px solid ${T.lineSoft}`}}>{children}</div>}
     </div>
   );
 
   return (
-    <div className="rc-wrap" style={{ minHeight:"70vh" }}>
-      <style>{`@media print { body * { visibility:hidden!important; } .rc-print, .rc-print * { visibility:visible!important; } .rc-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rc-editor,.rc-tree{display:none!important;} }
-        .rc-preview-scale{transform:scale(0.62);transform-origin:top left;}
-        @media (max-width:1200px){ .rc-preview-scale{transform:scale(0.48);} }
-        @media (max-width:640px){ .rc-preview-scale{transform:scale(0.30);} }`}</style>
+    <div style={{ background:T.bg, borderRadius:16, overflow:"hidden", border:`1px solid ${T.line}` }}>
+      <style>{`@media print { body * { visibility:hidden!important; } .rcb-print, .rcb-print * { visibility:visible!important; } .rcb-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rcb-chrome{display:none!important;} }`}</style>
 
-      {/* TOP: tree + editor side by side (stack on mobile) */}
-      <div className="flex flex-col lg:flex-row gap-4">
-        {/* LEFT: browsable tree */}
-        <div className="rc-tree w-full lg:w-[260px] flex-shrink-0">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-white font-bold text-sm">Recipes</span>
-              <button onClick={newCard} className="px-2 py-1 rounded-lg text-[11px] font-bold text-white" style={{background:"#844429"}}>+ New</button>
-            </div>
-            <input value={treeQuery} onChange={e=>setTreeQuery(e.target.value)} placeholder="Search…" className={inp}/>
-            <div className="mt-2 max-h-[420px] overflow-auto pr-1">
-              {Object.keys(tree).sort().length===0 && <div className="text-xs text-slate-600 py-4 text-center">No recipes yet.</div>}
-              {Object.keys(tree).sort().map(main=>(
-                <div key={main} className="mb-1">
-                  <button onClick={()=>toggleNode(main)} className="w-full flex items-center gap-1 text-left px-1.5 py-1 rounded hover:bg-slate-800">
-                    <span className="text-slate-500 text-[10px] w-3">{openNodes[main]!==false?"▾":"▸"}</span>
-                    <span className="text-slate-200 font-bold text-xs">{main}</span>
-                    <span className="text-slate-600 text-[10px] ml-auto">{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
-                  </button>
-                  {openNodes[main]!==false && Object.keys(tree[main]).sort().map(c=>{
-                    const nodeKey = main+"|||"+c;
-                    return (
-                      <div key={nodeKey} className="ml-3">
-                        <button onClick={()=>toggleNode(nodeKey)} className="w-full flex items-center gap-1 text-left px-1.5 py-1 rounded hover:bg-slate-800">
-                          <span className="text-slate-500 text-[10px] w-3">{openNodes[nodeKey]!==false?"▾":"▸"}</span>
-                          <span className="text-slate-400 font-semibold text-[11px]">{c}</span>
-                          <span className="text-slate-600 text-[10px] ml-auto">{tree[main][c].length}</span>
-                        </button>
-                        {openNodes[nodeKey]!==false && tree[main][c].sort((a,b)=>a.name.localeCompare(b.name)).map(card=>(
-                          <button key={card.id} onClick={()=>openCard(card.id)}
-                            className={`w-full text-left pl-6 pr-2 py-1 rounded text-[11px] hover:bg-slate-800 ${currentId===card.id?"bg-orange-500/10 text-orange-300 font-semibold":"text-slate-300"}`}>
-                            {card.name}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
+      {/* top bar */}
+      <div className="rcb-chrome flex items-center gap-3 px-4 py-3" style={{ background:T.surface, borderBottom:`1px solid ${T.line}` }}>
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{background:T.accent}}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" strokeWidth="2"><path d="M4 4h16v16H4zM4 9h16M9 9v11"/></svg>
+          </div>
+          <div>
+            <div className="text-[13px] font-bold leading-none" style={{color:T.ink}}>Recipe Card Builder</div>
+            <div className="text-[11px]" style={{color:T.inkFaint}}>{currentId?`Editing · ${d.name}`:"New recipe"}</div>
           </div>
         </div>
-
-        {/* RIGHT: editor */}
-        <div className="rc-editor flex-1 space-y-2.5 min-w-0">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-white font-bold text-base">{currentId?"Edit recipe":"New recipe"}</h2>
-              <p className="text-slate-500 text-xs">Organise by Main → Category → Item. Saved cards are visible to stores.</p>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={saveCard} disabled={saving} className="px-3 py-2 rounded-lg font-bold text-xs text-white" style={{background:"#844429"}}>{saving?"Saving…":(currentId?"Save":"Save new")}</button>
-              {currentId && <button onClick={removeCard} className="px-2 py-2 rounded-lg font-bold text-xs bg-red-950 text-red-300 border border-red-800">Del</button>}
-            </div>
-          </div>
-          {msg && <div className={`text-xs font-semibold ${msg.t==="ok"?"text-emerald-400":"text-red-400"}`}>{msg.m}</div>}
-
-          {/* HEADER + hierarchy */}
-          <RcSection title="Recipe details" open={openSec.header} onToggle={()=>toggle("header")}>
-            <div className="flex gap-2">
-              <div className="flex-1"><label className={lbl}>Main category</label>
-                <input className={inp} list="rc-mains" value={mainCat} onChange={e=>setMainCat(e.target.value)} placeholder="Dessert, Food, Drinks…"/>
-                <datalist id="rc-mains">{existingMains.map(m=><option key={m} value={m}/>)}</datalist>
-              </div>
-              <div className="flex-1"><label className={lbl}>Category</label>
-                <input className={inp} list="rc-cats" value={cat} onChange={e=>setCat(e.target.value)} placeholder="Waffle, Cookie Dough…"/>
-                <datalist id="rc-cats">{existingCats.map(c=><option key={c} value={c}/>)}</datalist>
-              </div>
-            </div>
-            <label className={lbl}>Dish name (item)</label>
-            <input className={inp} value={d.name} onChange={e=>set({name:e.target.value})} placeholder="Strawberry Dream…"/>
-            <div className="flex gap-2">
-              <div className="flex-1"><label className={lbl}>Script word</label><input className={inp} value={d.script} onChange={e=>set({script:e.target.value})}/></div>
-              <div className="flex-1"><label className={lbl}>Build time</label><input className={inp} value={d.time} onChange={e=>set({time:e.target.value})}/></div>
-            </div>
-            <label className={lbl}>Brand tag</label><input className={inp} value={d.brand} onChange={e=>set({brand:e.target.value})}/>
-          </RcSection>
-
-          {/* STEPS — each individually collapsible */}
-          <RcSection title="Steps" count={d.steps.length} open={openSec.steps} onToggle={()=>toggle("steps")}>
-            {d.steps.map((st,i)=>(
-              <div key={i} draggable onDragStart={()=>onDragStart("steps",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("steps",i)}
-                className="border border-slate-800 rounded-lg mb-2 bg-slate-950">
-                <div className="flex items-center gap-1.5 px-2 py-1.5">
-                  <span className="cursor-grab text-slate-600 text-sm" title="Drag to reorder">⠿</span>
-                  <button onClick={()=>toggleStep(i)} className="flex items-center gap-1.5 flex-1 text-left">
-                    <span className="text-slate-500 text-[10px]">{stepOpen(i)?"▾":"▸"}</span>
-                    <span className="text-[11px] text-slate-300 font-bold">STEP {i+1}</span>
-                    <span className="text-[11px] text-slate-500 truncate">{st.verb}</span>
-                  </button>
-                  <button onClick={()=>delStep(i)} className="text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
-                </div>
-                {stepOpen(i) && (
-                  <div className="px-2 pb-2">
-                    <input className={inp} placeholder="Verb (e.g. COOK IT)" value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/>
-                    <textarea className={inp+" min-h-[44px] mt-1.5"} placeholder="Instruction" value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/>
-                    <label className={lbl}>Icon</label>
-                    <IconPick current={st.icon} onPick={k=>upStep(i,"icon",k)}/>
-                  </div>
-                )}
-              </div>
-            ))}
-            <button onClick={addStep} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add step</button>
-          </RcSection>
-
-          {/* INGREDIENTS */}
-          <RcSection title="Ingredients" count={d.ingredients.length} open={openSec.ingredients} onToggle={()=>toggle("ingredients")}>
-            {d.ingredients.map((it,i)=>(
-              <div key={i} draggable onDragStart={()=>onDragStart("ingredients",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("ingredients",i)}
-                className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
-                <div className="flex items-center gap-1.5 mb-1"><span className="cursor-grab text-slate-600 text-sm">⠿</span>
-                  <button onClick={()=>delIng(i)} className="ml-auto text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button></div>
-                <div className="flex gap-2">
-                  <input className={inp+" w-2/5"} placeholder="ROLE" value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/>
-                  <input className={inp+" w-3/5"} placeholder="QTY" value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/>
-                </div>
-                <input className={inp+" mt-1.5"} placeholder="Ingredient" value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
-              </div>
-            ))}
-            <button onClick={addIng} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add ingredient</button>
-          </RcSection>
-
-          {/* TOOLS */}
-          <RcSection title="Tools" count={d.tools.length} open={openSec.tools} onToggle={()=>toggle("tools")}>
-            {d.tools.map((tl,i)=>(
-              <div key={i} className="border border-slate-800 rounded-lg p-2 mb-2 bg-slate-950 relative">
-                <button onClick={()=>delTool(i)} className="absolute top-1.5 right-1.5 text-red-400 text-sm w-5 h-5 rounded bg-slate-900 border border-slate-700">×</button>
-                <input className={inp} placeholder="Tool name" value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/>
-                <label className={lbl}>Icon</label><IconPick current={tl.icon} onPick={k=>upTool(i,"icon",k)}/>
-              </div>
-            ))}
-            <button onClick={addTool} className="w-full py-1.5 border border-dashed border-orange-600 text-orange-400 rounded-lg text-xs font-bold">+ Add tool</button>
-          </RcSection>
-
-          {/* PHOTO */}
-          <RcSection title="Photo & crockery" open={openSec.photo} onToggle={()=>toggle("photo")}>
-            <label className={lbl}>Dish photo</label>
-            <input type="file" accept="image/*" onChange={loadPhoto} className="text-xs text-slate-400"/>
-            <label className={lbl}>Crockery</label><input className={inp} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/>
-          </RcSection>
-
-          {/* STYLING */}
-          <RcSection title="Styling" open={openSec.styling} onToggle={()=>toggle("styling")}>
-            <label className={lbl}>Colour theme</label>
-            <div className="flex gap-1.5 flex-wrap">
-              {RC_ACCENT_PRESETS.map(p=>(<button key={p.name} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:p.accent,headBar:p.headBar,panel:p.panel}})}
-                className="px-2 py-1 rounded-lg text-[11px] font-bold border" style={{borderColor:(d.style?.accent||RC_STYLE_DEFAULT.accent)===p.accent?"#fb923c":"#334155",color:"#e2e8f0"}}>
-                <span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:p.accent,marginRight:5,verticalAlign:"middle"}}/>{p.name}</button>))}
-            </div>
-            <label className={lbl}>Custom accent</label>
-            <input type="color" value={d.style?.accent||RC_STYLE_DEFAULT.accent} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:e.target.value}})} className="w-full h-8 rounded-lg bg-slate-950 border border-slate-700"/>
-            <label className={lbl}>Step columns</label>
-            <div className="flex gap-1.5">{[2,3,4].map(n=>(<button key={n} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),stepCols:n}})}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-bold border ${(d.style?.stepCols||3)===n?"border-orange-500 bg-orange-500/10 text-orange-300":"border-slate-700 text-slate-300"}`}>{n}</button>))}</div>
-            <label className={lbl}>Icon size: {d.style?.iconSize||48}px</label>
-            <input type="range" min="28" max="72" value={d.style?.iconSize||48} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),iconSize:Number(e.target.value)}})} className="w-full"/>
-            <div className="flex flex-col gap-1.5 mt-2">
-              <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={d.style?.showBands!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showBands:e.target.checked}})}/> Show name bands</label>
-              <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={d.style?.showTimeBadge!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showTimeBadge:e.target.checked}})}/> Show build-time badge</label>
-            </div>
-          </RcSection>
-
-          {/* IMPORT */}
-          <RcSection title="Bulk import (Excel)" open={openSec.import} onToggle={()=>toggle("import")}>
-            <p className="text-[11px] text-slate-400 mb-2">Upload a filled template to create many recipes at once (include Main category & Category columns to file them in the tree).</p>
-            <label className="block w-full py-2 border border-dashed border-emerald-600 text-emerald-400 rounded-lg text-xs font-bold text-center cursor-pointer">
-              {importing?"Importing…":"Choose Excel file"}
-              <input type="file" accept=".xlsx,.xls" onChange={onImportExcel} className="hidden" disabled={importing}/>
-            </label>
-            {importResult && (importResult.err ? <div className="mt-2 text-xs text-red-400 font-semibold">{importResult.err}</div>
-              : <div className="mt-2 text-xs text-emerald-400 font-semibold">Imported {importResult.ok} of {importResult.total}{importResult.fail?`, ${importResult.fail} failed`:""}.</div>)}
-          </RcSection>
-
-          <button onClick={printCard} className="w-full py-2.5 rounded-lg font-bold text-sm text-white" style={{background:"#844429"}}>Print / Save PDF</button>
+        <div className="ml-auto flex items-center gap-2">
+          {msg && <span className="text-[12px] font-semibold" style={{color:msg.t==="ok"?"#3F6B3A":"#A23B2E"}}>{msg.m}</span>}
+          <button onClick={newCard} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{background:T.surfaceAlt,color:T.ink,border:`1px solid ${T.line}`}}>New</button>
+          <button onClick={printCard} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{background:T.surfaceAlt,color:T.ink,border:`1px solid ${T.line}`}}>Print</button>
+          <button onClick={saveCard} disabled={saving} className="px-4 py-1.5 rounded-lg text-[12px] font-bold text-white" style={{background:T.accent}}>{saving?"Saving…":"Save"}</button>
         </div>
       </div>
 
-      {/* BOTTOM: full-width live preview */}
-      <div className="mt-6 border-t border-slate-800 pt-4">
-        <div className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-3">Live preview</div>
-        <div className="overflow-auto">
-          <div className="rc-preview-scale">
-            <RcCardPreview d={d} responsive={true}/>
+      {/* three-zone workspace */}
+      <div className="flex" style={{ minHeight:"72vh" }}>
+        {/* LEFT: tree */}
+        <div className="rcb-chrome flex-shrink-0 flex flex-col" style={{ width:230, background:T.surface, borderRight:`1px solid ${T.line}` }}>
+          <div className="p-3">
+            <input value={treeQuery} onChange={e=>setTreeQuery(e.target.value)} placeholder="Search recipes…" className={fieldCls} style={fieldStyle}/>
+          </div>
+          <div className="flex-1 overflow-auto px-2 pb-3">
+            {Object.keys(tree).sort().length===0 && <div className="text-[12px] text-center py-6" style={{color:T.inkFaint}}>No recipes yet.<br/>Create one →</div>}
+            {Object.keys(tree).sort().map(main=>(
+              <div key={main} className="mb-0.5">
+                <button onClick={()=>toggleNode(main)} className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left hover:opacity-80" style={{background:"transparent"}}>
+                  <span style={{color:T.inkFaint,fontSize:9,width:10}}>{openNodes[main]!==false?"▼":"▶"}</span>
+                  <span className="text-[12px] font-bold" style={{color:T.ink}}>{main}</span>
+                  <span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
+                </button>
+                {openNodes[main]!==false && Object.keys(tree[main]).sort().map(c=>{
+                  const nk=main+"|||"+c;
+                  return (
+                    <div key={nk} className="ml-2.5">
+                      <button onClick={()=>toggleNode(nk)} className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-left hover:opacity-80">
+                        <span style={{color:T.inkFaint,fontSize:9,width:10}}>{openNodes[nk]!==false?"▼":"▶"}</span>
+                        <span className="text-[11px] font-semibold" style={{color:T.inkSoft}}>{c}</span>
+                        <span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{tree[main][c].length}</span>
+                      </button>
+                      {openNodes[nk]!==false && tree[main][c].slice().sort((a,b)=>a.name.localeCompare(b.name)).map(card=>(
+                        <button key={card.id} onClick={()=>openCard(card.id)} className="w-full text-left pl-7 pr-2 py-1.5 rounded-lg text-[12px] transition"
+                          style={{ background: currentId===card.id?T.surfaceAlt:"transparent", color: currentId===card.id?T.accent:T.inkSoft, fontWeight: currentId===card.id?700:400 }}>
+                          {card.name}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* CENTRE: canvas */}
+        <div className="flex-1 flex flex-col min-w-0" style={{ background:T.canvas }}>
+          <div className="rcb-chrome flex items-center gap-2 px-4 py-2" style={{ borderBottom:`1px solid ${T.line}` }}>
+            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{color:T.inkFaint}}>Preview</span>
+            <div className="ml-auto flex items-center gap-1.5">
+              <button onClick={()=>setZoom(z=>Math.max(0.35,+(z-0.1).toFixed(2)))} className="w-7 h-7 rounded-lg text-sm font-bold" style={{background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>−</button>
+              <span className="text-[12px] font-semibold w-10 text-center" style={{color:T.inkSoft}}>{Math.round(zoom*100)}%</span>
+              <button onClick={()=>setZoom(z=>Math.min(1,+(z+0.1).toFixed(2)))} className="w-7 h-7 rounded-lg text-sm font-bold" style={{background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>+</button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-8">
+            <div className="rcb-print inline-block" style={{ transform:`scale(${zoom})`, transformOrigin:"top left" }}>
+              <RcCardPreview d={d} responsive={true}/>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: inspector */}
+        <div className="rcb-chrome flex-shrink-0 overflow-auto" style={{ width:340, background:T.bg, borderLeft:`1px solid ${T.line}` }}>
+          {/* inspector tabs */}
+          <div className="flex gap-1 p-2" style={{borderBottom:`1px solid ${T.line}`}}>
+            {[["content","Content"],["style","Style"],["import","Import"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setTab(k)} className="flex-1 py-1.5 rounded-lg text-[12px] font-bold transition"
+                style={{ background: tab===k?T.accent:"transparent", color: tab===k?"#fff":T.inkSoft }}>{l}</button>
+            ))}
+          </div>
+
+          <div className="p-3 space-y-2.5">
+            {tab==="content" && <>
+              {/* details */}
+              <div className="rounded-xl p-3.5" style={{background:T.surface,border:`1px solid ${T.line}`}}>
+                <div className="flex gap-2">
+                  <div className="flex-1"><Label>Main category</Label>
+                    <input className={fieldCls} style={fieldStyle} list="rc-mains" value={mainCat} onChange={e=>setMainCat(e.target.value)} placeholder="Dessert…"/>
+                    <datalist id="rc-mains">{existingMains.map(m=><option key={m} value={m}/>)}</datalist></div>
+                  <div className="flex-1"><Label>Category</Label>
+                    <input className={fieldCls} style={fieldStyle} list="rc-cats" value={cat} onChange={e=>setCat(e.target.value)} placeholder="Waffle…"/>
+                    <datalist id="rc-cats">{existingCats.map(c=><option key={c} value={c}/>)}</datalist></div>
+                </div>
+                <div className="mt-2.5"><Label>Dish name</Label><input className={fieldCls} style={fieldStyle} value={d.name} onChange={e=>set({name:e.target.value})} placeholder="Strawberry Dream…"/></div>
+                <div className="flex gap-2 mt-2.5">
+                  <div className="flex-1"><Label>Script</Label><input className={fieldCls} style={fieldStyle} value={d.script} onChange={e=>set({script:e.target.value})}/></div>
+                  <div className="flex-1"><Label>Build time</Label><input className={fieldCls} style={fieldStyle} value={d.time} onChange={e=>set({time:e.target.value})}/></div>
+                </div>
+              </div>
+
+              <Group id="steps" title="Steps" count={d.steps.length}>
+                <div className="mt-3 space-y-2">
+                  {d.steps.map((st,i)=>(
+                    <div key={i} draggable onDragStart={()=>onDragStart("steps",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("steps",i)}
+                      className="rounded-lg" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
+                      <div className="flex items-center gap-1.5 px-2 py-1.5">
+                        <span className="cursor-grab" style={{color:T.inkFaint}}>⠿</span>
+                        <button onClick={()=>toggleStep(i)} className="flex items-center gap-1.5 flex-1 text-left">
+                          <span style={{color:T.inkFaint,fontSize:9}}>{stepOpen(i)?"▼":"▶"}</span>
+                          <span className="text-[11px] font-bold" style={{color:T.ink}}>{i+1}.</span>
+                          <span className="text-[11px] truncate" style={{color:T.inkSoft}}>{st.verb}</span>
+                        </button>
+                        <button onClick={()=>delStep(i)} className="w-5 h-5 rounded text-sm" style={{color:"#A23B2E"}}>×</button>
+                      </div>
+                      {stepOpen(i) && <div className="px-2 pb-2 space-y-2">
+                        <input className={fieldCls} style={fieldStyle} placeholder="COOK IT" value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/>
+                        <textarea className={fieldCls+" min-h-[50px]"} style={fieldStyle} placeholder="Instruction" value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/>
+                        <IconPick current={st.icon} onPick={k=>upStep(i,"icon",k)}/>
+                      </div>}
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addStep} className="w-full mt-2 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>+ Add step</button>
+              </Group>
+
+              <Group id="ingredients" title="Ingredients" count={d.ingredients.length}>
+                <div className="mt-3 space-y-2">
+                  {d.ingredients.map((it,i)=>(
+                    <div key={i} draggable onDragStart={()=>onDragStart("ingredients",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("ingredients",i)}
+                      className="rounded-lg p-2" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
+                      <div className="flex items-center gap-1.5 mb-1.5"><span className="cursor-grab" style={{color:T.inkFaint}}>⠿</span>
+                        <button onClick={()=>delIng(i)} className="ml-auto text-sm" style={{color:"#A23B2E"}}>×</button></div>
+                      <div className="flex gap-2"><input className={fieldCls+" w-2/5"} style={fieldStyle} placeholder="ROLE" value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/>
+                        <input className={fieldCls+" w-3/5"} style={fieldStyle} placeholder="QTY" value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/></div>
+                      <input className={fieldCls+" mt-2"} style={fieldStyle} placeholder="Ingredient" value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addIng} className="w-full mt-2 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>+ Add ingredient</button>
+              </Group>
+
+              <Group id="tools" title="Tools" count={d.tools.length}>
+                <div className="mt-3 space-y-2">
+                  {d.tools.map((tl,i)=>(
+                    <div key={i} className="rounded-lg p-2 relative" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
+                      <button onClick={()=>delTool(i)} className="absolute top-1.5 right-1.5 text-sm" style={{color:"#A23B2E"}}>×</button>
+                      <input className={fieldCls} style={fieldStyle} placeholder="Tool name" value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/>
+                      <div className="mt-2"><IconPick current={tl.icon} onPick={k=>upTool(i,"icon",k)}/></div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addTool} className="w-full mt-2 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>+ Add tool</button>
+              </Group>
+
+              <Group id="photo" title="Photo & crockery">
+                <div className="mt-3"><Label>Dish photo</Label>
+                  <input type="file" accept="image/*" onChange={loadPhoto} className="text-[12px]" style={{color:T.inkSoft}}/></div>
+                <div className="mt-2.5"><Label>Crockery</Label><input className={fieldCls} style={fieldStyle} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/></div>
+              </Group>
+            </>}
+
+            {tab==="style" && <div className="rounded-xl p-3.5 space-y-3" style={{background:T.surface,border:`1px solid ${T.line}`}}>
+              <div><Label>Colour theme</Label>
+                <div className="flex gap-1.5 flex-wrap">
+                  {RC_ACCENT_PRESETS.map(p=>(<button key={p.name} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:p.accent,headBar:p.headBar,panel:p.panel}})}
+                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{border:`1px solid ${(d.style?.accent||RC_STYLE_DEFAULT.accent)===p.accent?T.accent:T.line}`,color:T.ink,background:T.surface}}>
+                    <span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:p.accent,marginRight:5,verticalAlign:"middle"}}/>{p.name}</button>))}
+                </div>
+              </div>
+              <div><Label>Custom accent</Label><input type="color" value={d.style?.accent||RC_STYLE_DEFAULT.accent} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:e.target.value}})} className="w-full h-9 rounded-lg" style={{border:`1px solid ${T.line}`}}/></div>
+              <div><Label>Step columns</Label>
+                <div className="flex gap-1.5">{[2,3,4].map(n=>(<button key={n} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),stepCols:n}})}
+                  className="flex-1 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px solid ${(d.style?.stepCols||3)===n?T.accent:T.line}`,color:(d.style?.stepCols||3)===n?T.accent:T.inkSoft,background:T.surface}}>{n}</button>))}</div></div>
+              <div><Label>Icon size · {d.style?.iconSize||48}px</Label><input type="range" min="24" max="64" value={d.style?.iconSize||48} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),iconSize:Number(e.target.value)}})} className="w-full"/></div>
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center gap-2 text-[12px]" style={{color:T.ink}}><input type="checkbox" checked={d.style?.showBands!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showBands:e.target.checked}})}/> Show name bands</label>
+                <label className="flex items-center gap-2 text-[12px]" style={{color:T.ink}}><input type="checkbox" checked={d.style?.showTimeBadge!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showTimeBadge:e.target.checked}})}/> Show build-time badge</label>
+              </div>
+            </div>}
+
+            {tab==="import" && <div className="rounded-xl p-3.5" style={{background:T.surface,border:`1px solid ${T.line}`}}>
+              <p className="text-[12px] mb-3" style={{color:T.inkSoft}}>Upload a filled template to create many recipes at once. Include Main category & Category columns to file them in the tree.</p>
+              <label className="block w-full py-3 rounded-lg text-[12px] font-bold text-center cursor-pointer" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>
+                {importing?"Importing…":"Choose Excel file"}<input type="file" accept=".xlsx,.xls" onChange={onImportExcel} className="hidden" disabled={importing}/>
+              </label>
+              {importResult && (importResult.err ? <div className="mt-2 text-[12px] font-semibold" style={{color:"#A23B2E"}}>{importResult.err}</div>
+                : <div className="mt-2 text-[12px] font-semibold" style={{color:"#3F6B3A"}}>Imported {importResult.ok} of {importResult.total}{importResult.fail?`, ${importResult.fail} failed`:""}.</div>)}
+            </div>}
+
+            {currentId && <button onClick={removeCard} className="w-full py-2 rounded-lg text-[12px] font-bold" style={{background:"#F6E4DF",color:"#A23B2E",border:"1px solid #E5C4BB"}}>Delete recipe</button>}
           </div>
         </div>
       </div>
