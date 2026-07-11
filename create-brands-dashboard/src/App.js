@@ -47958,7 +47958,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
       )}
       {assignSlot && (
         <AssignSlotModal
-          slot={assignSlot} roster={roster} memberHasRole={memberHasRole}
+          slot={assignSlot} roster={roster} memberHasRole={memberHasRole} storeId={storeId}
           availability={availability}
           onAssign={async (member) => {
             await onAdd({ ...assignSlot, employeeId: member.id,
@@ -48264,23 +48264,26 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
   );
 }
 
-function AssignSlotModal({ slot, roster = [], memberHasRole, availability = [], onAssign, onDeleteSlot, onClose }) {
+function AssignSlotModal({ slot, roster = [], memberHasRole, storeId, availability = [], onAssign, onDeleteSlot, onClose }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
-  // Show ALL non-archived staff — you can assign anyone to any slot regardless
-  // of whether they hold the role (role is a guide, not a gate). Sort so the most
-  // relevant people surface first: holds-the-role → then alphabetical.
+  const atStore = (m) => (m.storeIds || []).includes(storeId);
+  // Show ALL non-archived staff — anyone can be assigned. Sort so the most
+  // relevant surface first: (1) this store's own staff, (2) holds the role,
+  // (3) alphabetical. Role is a guide, not a gate.
   const sorted = useMemo(() => {
     const list = roster.filter(m => !m.archivedAt);
     const ql = q.trim().toLowerCase();
     const filtered = ql ? list.filter(m => `${m.firstName} ${m.lastName} ${m.role || ""}`.toLowerCase().includes(ql)) : list;
     return filtered.slice().sort((a, b) => {
+      const as = atStore(a) ? 0 : 1, bs = atStore(b) ? 0 : 1;
+      if (as !== bs) return as - bs;
       const ar = memberHasRole(a, slot.role) ? 0 : 1;
       const br = memberHasRole(b, slot.role) ? 0 : 1;
       if (ar !== br) return ar - br;
       return `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
     });
-  }, [roster, q, slot.role, memberHasRole]);
+  }, [roster, q, slot.role, memberHasRole, storeId]);
 
   // Is this person already scheduled or unavailable that day? (light hint only)
   const dayUnavail = (m) => (availability || []).some(a =>
@@ -48305,19 +48308,27 @@ function AssignSlotModal({ slot, roster = [], memberHasRole, availability = [], 
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {sorted.length === 0 && <div className="text-center py-6 text-[#9A8770] text-sm">No staff found.</div>}
-          {sorted.map(m => {
+          {sorted.map((m, idx) => {
             const has = memberHasRole(m, slot.role);
             const unavail = dayUnavail(m);
+            const here = atStore(m);
+            const prev = idx > 0 ? sorted[idx-1] : null;
+            const showStoreHdr = idx === 0 && here;
+            const showOtherHdr = prev && atStore(prev) && !here;
             return (
-              <button key={m.id} onClick={() => assign(m)} disabled={busy}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[#F4E9DD] text-left disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">
-                <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName}`} color={m.color || "#844429"} size={36} rounded="full"/>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-[#3A2E26] truncate">{m.firstName} {m.lastName}</div>
-                  <div className="text-[11px] text-[#9A8770]">{unavail ? <span className="text-red-500">Unavailable this day</span> : (m.role || "—")}</div>
-                </div>
-                {has && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E4EFD9] text-[#5C9442] flex-shrink-0">Has role</span>}
-              </button>
+              <Fragment key={m.id}>
+                {showStoreHdr && <div className="text-[10px] font-bold uppercase tracking-wide text-[#9A8770] px-2 pt-1 pb-0.5">This store</div>}
+                {showOtherHdr && <div className="text-[10px] font-bold uppercase tracking-wide text-[#9A8770] px-2 pt-3 pb-0.5">Other stores</div>}
+                <button onClick={() => assign(m)} disabled={busy}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[#F4E9DD] text-left disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40">
+                  <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName}`} color={m.color || "#844429"} size={36} rounded="full"/>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-[#3A2E26] truncate">{m.firstName} {m.lastName}</div>
+                    <div className="text-[11px] text-[#9A8770]">{unavail ? <span className="text-red-500">Unavailable this day</span> : (m.role || "—")}</div>
+                  </div>
+                  {has && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E4EFD9] text-[#5C9442] flex-shrink-0">Has role</span>}
+                </button>
+              </Fragment>
             );
           })}
         </div>
