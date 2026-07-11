@@ -38413,10 +38413,14 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], storeRoles = []
     freq: item?.freq || "Daily - Opening",
     assignRole: item?.assignRole || "", notes: item?.notes || "",
     assignType: item?.assignType || "", assignValue: item?.assignValue || "",
+    items: item?.items || [],
     storeId: item?.storeId || allowedStores[0]?.id || "",
     brandId: item?.brandId || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
+  const addTaskItem = () => setFormState(f => ({ ...f, items: [...(f.items||[]), { id: `cti-${Date.now()}`, text: "", guide: "" }] }));
+  const upTaskItem = (id, k, v) => setFormState(f => ({ ...f, items: (f.items||[]).map(x => x.id === id ? { ...x, [k]: v } : x) }));
+  const delTaskItem = (id) => setFormState(f => ({ ...f, items: (f.items||[]).filter(x => x.id !== id) }));
   const showBrandPrefix = new Set(allowedStores.map(s => s.brandId)).size > 1;
 
   const handleSave = () => {
@@ -38431,6 +38435,7 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], storeRoles = []
     onSave({
       id: item?.id || `ct-${Date.now()}`,
       ...form,
+      items: (form.items || []).filter(i => (i.text || "").trim()),
       assignRole: label,
       brandId: store?.brandId || form.brandId,
     });
@@ -38459,6 +38464,24 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], storeRoles = []
           <div><label className={labelCls}>Frequency</label><input value={form.freq} onChange={e => set("freq", e.target.value)} placeholder="Daily - Opening…" className={inputCls}/></div>
         </div>
         <div><AssignmentPicker type={form.assignType} value={form.assignValue} onChange={({type,value})=>setFormState(f=>({...f,assignType:type,assignValue:value}))} storeId={form.storeId} storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam} labelCls={labelCls} inputCls={inputCls}/></div>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className={labelCls}>Items</label>
+            <button onClick={addTaskItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button>
+          </div>
+          <div className="space-y-2">
+            {(form.items||[]).map(it => (
+              <div key={it.id} className="flex items-start gap-2 bg-slate-950 rounded-xl p-3">
+                <div className="flex-1 space-y-1.5">
+                  <input value={it.text} onChange={e => upTaskItem(it.id, "text", e.target.value)} placeholder="Task item…" className={inputCls}/>
+                  <input value={it.guide} onChange={e => upTaskItem(it.id, "guide", e.target.value)} placeholder="Guidance note…" className={`${inputCls} text-xs py-1.5`}/>
+                </div>
+                <button onClick={() => delTaskItem(it.id)} className="text-slate-600 hover:text-red-400 mt-2"><X size={14}/></button>
+              </div>
+            ))}
+            {(form.items||[]).length === 0 && <div className="text-xs text-slate-500 text-center py-4">No items yet — click Add item above</div>}
+          </div>
+        </div>
         <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Instructions…"/></div>
       </div>
     </Modal>

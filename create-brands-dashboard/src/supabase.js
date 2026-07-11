@@ -487,6 +487,7 @@ function appCleanTaskToDb(t) {
     id: t.id, name: t.name, area: t.area, freq: t.freq,
     assign_role: t.assignRole || "", notes: t.notes || "",
     assign_type: t.assignType || null, assign_value: t.assignValue || null,
+    items: t.items || [],
     // Stage 7: cleaning tasks are now per-store. brand_id is derived from
     // the store on save so legacy code reading brand_id still works.
     store_id: t.storeId || null,
@@ -499,6 +500,7 @@ function dbCleanTaskToApp(t) {
     id: t.id, name: t.name, area: t.area, freq: t.freq,
     assignRole: t.assign_role, notes: t.notes,
     assignType: t.assign_type || "", assignValue: t.assign_value || "",
+    items: Array.isArray(t.items) ? t.items : [],
     storeId: t.store_id || null,
     brandId: t.brand_id || null,
   };
