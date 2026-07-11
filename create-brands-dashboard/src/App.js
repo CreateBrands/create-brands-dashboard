@@ -38285,7 +38285,52 @@ function AuditTrailView({ brands, stores, visibleStoreIds, auditTrail, onClear }
 // ─── Ops Settings View ────────────────────────────────────────────────────────
 // ─── Ops Settings modals (proper top-level components — no hooks-in-callbacks) ──
 
-function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
+// Reusable "assign to" picker: pick a TYPE (Department / Role / Person), then a
+// VALUE from a store-scoped dropdown. Stores { type, value } and also writes a
+// human-readable label back into the legacy free-text field for compatibility.
+function AssignmentPicker({ type, value, onChange, storeId, storeRoles = [], storeDepartments = [], opsTeam = [], labelCls, inputCls }) {
+  const depts = (storeDepartments || []).filter(d => !d.archivedAt && (!storeId || d.storeId === storeId));
+  const roles = (storeRoles || []).filter(r => !r.archivedAt && (!storeId || r.storeId === storeId));
+  const people = (opsTeam || []).filter(m => !m.archivedAt && (!storeId || (m.storeIds || []).includes(storeId)));
+  const setType = (t) => onChange({ type: t, value: "" });
+  const setValue = (v) => onChange({ type, value: v });
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <div>
+        <label className={labelCls}>Assign to</label>
+        <select value={type || ""} onChange={e => setType(e.target.value)} className={inputCls}>
+          <option value="">— None —</option>
+          <option value="dept">Department</option>
+          <option value="role">Role</option>
+          <option value="person">Person</option>
+        </select>
+      </div>
+      <div>
+        <label className={labelCls}>{type === "dept" ? "Department" : type === "person" ? "Person" : type === "role" ? "Role" : "Value"}</label>
+        {type === "dept" ? (
+          <select value={value || ""} onChange={e => setValue(e.target.value)} className={inputCls}>
+            <option value="">— Pick department —</option>
+            {[...new Set(depts.map(d => d.name).filter(Boolean))].sort().map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        ) : type === "role" ? (
+          <select value={value || ""} onChange={e => setValue(e.target.value)} className={inputCls}>
+            <option value="">— Pick role —</option>
+            {[...new Set(roles.map(r => r.name).filter(Boolean))].sort().map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        ) : type === "person" ? (
+          <select value={value || ""} onChange={e => setValue(e.target.value)} className={inputCls}>
+            <option value="">— Pick person —</option>
+            {people.slice().sort((a,b)=>`${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)).map(m => <option key={m.id} value={m.id}>{`${m.firstName||""} ${m.lastName||""}`.trim() || m.nickname || "Unnamed"}</option>)}
+          </select>
+        ) : (
+          <select disabled className={inputCls}><option>— Pick a type first —</option></select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TempUnitFormModal({ item, brands, stores = [], storeRoles = [], storeDepartments = [], opsTeam = [], onSave, onClose }) {
   // Same logic as OpsTeamMemberFormModal: temp units are physical equipment
   // installed at company-owned stores. Franchise/JV stores manage their own.
   const allowedStores = useMemo(
@@ -38299,6 +38344,7 @@ function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
     brandId: item?.brandId || "",   // legacy fallback; we derive from store on save
     min: item?.min ?? "", max: item?.max ?? "",
     assignRole: item?.assignRole || "",
+    assignType: item?.assignType || "", assignValue: item?.assignValue || "",
   });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
 
@@ -38308,9 +38354,15 @@ function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
     if (!form.name.trim()) return;
     if (!form.storeId)     { alert("Please pick a store."); return; }
     const store = allowedStores.find(s => s.id === form.storeId);
+    let label = "";
+    if (form.assignType === "person") {
+      const p = (opsTeam || []).find(m => m.id === form.assignValue);
+      label = p ? (`${p.firstName||""} ${p.lastName||""}`.trim() || p.nickname || "") : "";
+    } else { label = form.assignValue || ""; }
     onSave({
       id: item?.id || `tu-${Date.now()}`,
       ...form,
+      assignRole: label,
       brandId: store?.brandId || form.brandId,  // derived from the selected store
       min: form.min !== "" ? parseFloat(form.min) : null,
       max: form.max !== "" ? parseFloat(form.max) : null,
@@ -38343,13 +38395,13 @@ function TempUnitFormModal({ item, brands, stores = [], onSave, onClose }) {
           <div><label className={labelCls}>Min temp (°C)</label><input type="number" step="0.5" value={form.min} onChange={e => set("min", e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div>
           <div><label className={labelCls}>Max temp (°C)</label><input type="number" step="0.5" value={form.max} onChange={e => set("max", e.target.value)} placeholder="Leave blank if none" className={inputCls}/></div>
         </div>
-        <div><label className={labelCls}>Responsible Role</label><input value={form.assignRole} onChange={e => set("assignRole", e.target.value)} placeholder="e.g. Head Chef" className={inputCls}/></div>
+        <div><AssignmentPicker type={form.assignType} value={form.assignValue} onChange={({type,value})=>setFormState(f=>({...f,assignType:type,assignValue:value}))} storeId={form.storeId} storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam} labelCls={labelCls} inputCls={inputCls}/></div>
       </div>
     </Modal>
   );
 }
 
-function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose }) {
+function CleaningTaskFormModal({ item, brands = [], stores = [], storeRoles = [], storeDepartments = [], opsTeam = [], onSave, onClose }) {
   // Per-store cleaning tasks. brand_id is derived from the chosen store
   // so legacy code that filters by brand still works.
   const allowedStores = useMemo(
@@ -38360,6 +38412,7 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose
     name: item?.name || "", area: item?.area || "Kitchen",
     freq: item?.freq || "Daily - Opening",
     assignRole: item?.assignRole || "", notes: item?.notes || "",
+    assignType: item?.assignType || "", assignValue: item?.assignValue || "",
     storeId: item?.storeId || allowedStores[0]?.id || "",
     brandId: item?.brandId || "",
   });
@@ -38370,9 +38423,15 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose
     if (!form.name.trim()) return;
     if (!form.storeId)     { alert("Please pick a store."); return; }
     const store = allowedStores.find(s => s.id === form.storeId);
+    let label = "";
+    if (form.assignType === "person") {
+      const p = (opsTeam || []).find(m => m.id === form.assignValue);
+      label = p ? (`${p.firstName||""} ${p.lastName||""}`.trim() || p.nickname || "") : "";
+    } else { label = form.assignValue || ""; }
     onSave({
       id: item?.id || `ct-${Date.now()}`,
       ...form,
+      assignRole: label,
       brandId: store?.brandId || form.brandId,
     });
   };
@@ -38399,7 +38458,7 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], onSave, onClose
           <div><label className={labelCls}>Area</label><input value={form.area} onChange={e => set("area", e.target.value)} placeholder="Kitchen, FOH…" className={inputCls}/></div>
           <div><label className={labelCls}>Frequency</label><input value={form.freq} onChange={e => set("freq", e.target.value)} placeholder="Daily - Opening…" className={inputCls}/></div>
         </div>
-        <div><label className={labelCls}>Assigned Role</label><input value={form.assignRole} onChange={e => set("assignRole", e.target.value)} placeholder="e.g. Kitchen Porter" className={inputCls}/></div>
+        <div><AssignmentPicker type={form.assignType} value={form.assignValue} onChange={({type,value})=>setFormState(f=>({...f,assignType:type,assignValue:value}))} storeId={form.storeId} storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam} labelCls={labelCls} inputCls={inputCls}/></div>
         <div><label className={labelCls}>Notes</label><textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Instructions…"/></div>
       </div>
     </Modal>
@@ -38905,7 +38964,7 @@ function OpsTeamMemberFormModal({
   );
 }
 
-function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, onClose }) {
+function ChecklistSettingsFormModal({ item, brands = [], stores = [], storeRoles = [], storeDepartments = [], opsTeam = [], onSave, onClose }) {
   const allowedStores = useMemo(
     () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
     [stores]
@@ -38913,6 +38972,8 @@ function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, on
   const [name, setName] = useState(item?.name || "");
   const [shift, setShift] = useState(item?.shift || "Opening");
   const [defaultRole, setDefaultRole] = useState(item?.defaultRole || "");
+  const [assignType, setAssignType] = useState(item?.assignType || "");
+  const [assignValue, setAssignValue] = useState(item?.assignValue || "");
   const [storeId, setStoreId] = useState(item?.storeId || allowedStores[0]?.id || "");
   const [items, setItems] = useState(item?.items || []);
   const addItem = () => setItems(its => [...its, { id: `ci-${Date.now()}`, text: "", guide: "" }]);
@@ -38922,10 +38983,20 @@ function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, on
     if (!name.trim()) return;
     if (!storeId)    { alert("Please pick a store."); return; }
     const store = allowedStores.find(s => s.id === storeId);
+    // Derive a readable label for the assignment (also fills legacy defaultRole).
+    let label = "";
+    if (assignType === "person") {
+      const p = (opsTeam || []).find(m => m.id === assignValue);
+      label = p ? (`${p.firstName||""} ${p.lastName||""}`.trim() || p.nickname || "") : "";
+    } else {
+      label = assignValue || "";
+    }
     onSave({
       id: item?.id || `cl-${Date.now()}`,
       name: name.trim(),
-      shift, defaultRole,
+      shift,
+      defaultRole: label,
+      assignType, assignValue,
       storeId, brandId: store?.brandId || null,
       items: items.filter(i => i.text.trim()),
     });
@@ -38952,7 +39023,7 @@ function ChecklistSettingsFormModal({ item, brands = [], stores = [], onSave, on
           <div><label className={labelCls}>Name *</label><input value={name} onChange={e => setName(e.target.value)} className={inputCls}/></div>
           <div><label className={labelCls}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} className={inputCls}><option>Opening</option><option>Mid-shift</option><option>Closing</option><option>Any</option></select></div>
         </div>
-        <div><label className={labelCls}>Default Role</label><input value={defaultRole} onChange={e => setDefaultRole(e.target.value)} placeholder="e.g. Shift Leader" className={inputCls}/></div>
+        <div><AssignmentPicker type={assignType} value={assignValue} onChange={({type,value})=>{setAssignType(type);setAssignValue(value);}} storeId={storeId} storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam} labelCls={labelCls} inputCls={inputCls}/></div>
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className={labelCls}>Items</label>
@@ -43217,6 +43288,7 @@ function OpsSettingsView({
           item={clModal === "new" ? null : clModal}
           brands={brands}
           stores={stores}
+          storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam}
           onSave={item => { clModal === "new" ? onAddChecklist(item) : onUpdateChecklist(item); setClModal(null); }}
           onClose={() => setClModal(null)}
         />
@@ -43226,6 +43298,7 @@ function OpsSettingsView({
           item={tuModal === "new" ? null : tuModal}
           brands={brands}
           stores={stores}
+          storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam}
           onSave={item => { tuModal === "new" ? onAddTempUnit(item) : onUpdateTempUnit(item); setTuModal(null); }}
           onClose={() => setTuModal(null)}
         />
@@ -43235,6 +43308,7 @@ function OpsSettingsView({
           item={ctModal === "new" ? null : ctModal}
           brands={brands}
           stores={stores}
+          storeRoles={storeRoles} storeDepartments={storeDepartments} opsTeam={opsTeam}
           onSave={item => { ctModal === "new" ? onAddCleanTask(item) : onUpdateCleanTask(item); setCtModal(null); }}
           onClose={() => setCtModal(null)}
         />

@@ -221,6 +221,7 @@ export async function fetchChecklists() {
   if (e2) throw e2;
   return cls.map(cl => ({
     id: cl.id, name: cl.name, shift: cl.shift, defaultRole: cl.default_role,
+    assignType: cl.assign_type || "", assignValue: cl.assign_value || "",
     color: cl.color, sortOrder: cl.sort_order,
     storeId: cl.store_id || null,
     brandId: cl.brand_id || null,
@@ -230,6 +231,7 @@ export async function fetchChecklists() {
 export async function upsertChecklist(cl) {
   const { data, error } = await supabase.from("checklists").upsert({
     id: cl.id, name: cl.name, shift: cl.shift, default_role: cl.defaultRole || "",
+    assign_type: cl.assignType || null, assign_value: cl.assignValue || null,
     color: cl.color || "indigo", sort_order: cl.sortOrder || 0,
     // Stage 7: per-store checklists. store_id is NOT NULL on the DB so
     // callers MUST set it. brand_id is derived from the store for legacy
@@ -250,6 +252,7 @@ export async function upsertChecklist(cl) {
   return {
     id: data.id, name: data.name, shift: data.shift,
     defaultRole: data.default_role, color: data.color,
+    assignType: data.assign_type || "", assignValue: data.assign_value || "",
     sortOrder: data.sort_order,
     storeId: data.store_id || null,
     brandId: data.brand_id || null,
@@ -476,13 +479,14 @@ function dbIssueToApp(i) { return { id: i.id, brandId: i.brand_id, brandName: i.
 function appTicketToDb(t) { return { id: t.id, brand_id: t.brandId, text: t.text, priority: t.priority, done: t.done ?? false }; }
 function dbTicketToApp(t) { return { id: t.id, brandId: t.brand_id, text: t.text, priority: t.priority, done: t.done, createdAt: t.created_at }; }
 
-function appTempUnitToDb(u) { return { id: u.id, brand_id: u.brandId, store_id: u.storeId || null, name: u.name, type: u.type, min_temp: u.min ?? null, max_temp: u.max ?? null, assign_role: u.assignRole || "", updated_at: new Date().toISOString() }; }
-function dbTempUnitToApp(u) { return { id: u.id, brandId: u.brand_id, storeId: u.store_id || null, name: u.name, type: u.type, min: u.min_temp, max: u.max_temp, assignRole: u.assign_role }; }
+function appTempUnitToDb(u) { return { id: u.id, brand_id: u.brandId, store_id: u.storeId || null, name: u.name, type: u.type, min_temp: u.min ?? null, max_temp: u.max ?? null, assign_role: u.assignRole || "", assign_type: u.assignType || null, assign_value: u.assignValue || null, updated_at: new Date().toISOString() }; }
+function dbTempUnitToApp(u) { return { id: u.id, brandId: u.brand_id, storeId: u.store_id || null, name: u.name, type: u.type, min: u.min_temp, max: u.max_temp, assignRole: u.assign_role, assignType: u.assign_type || "", assignValue: u.assign_value || "" }; }
 
 function appCleanTaskToDb(t) {
   return {
     id: t.id, name: t.name, area: t.area, freq: t.freq,
     assign_role: t.assignRole || "", notes: t.notes || "",
+    assign_type: t.assignType || null, assign_value: t.assignValue || null,
     // Stage 7: cleaning tasks are now per-store. brand_id is derived from
     // the store on save so legacy code reading brand_id still works.
     store_id: t.storeId || null,
@@ -494,6 +498,7 @@ function dbCleanTaskToApp(t) {
   return {
     id: t.id, name: t.name, area: t.area, freq: t.freq,
     assignRole: t.assign_role, notes: t.notes,
+    assignType: t.assign_type || "", assignValue: t.assign_value || "",
     storeId: t.store_id || null,
     brandId: t.brand_id || null,
   };
