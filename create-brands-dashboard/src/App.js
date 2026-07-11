@@ -38288,6 +38288,67 @@ function AuditTrailView({ brands, stores, visibleStoreIds, auditTrail, onClear }
 // Reusable "assign to" picker: pick a TYPE (Department / Role / Person), then a
 // VALUE from a store-scoped dropdown. Stores { type, value } and also writes a
 // human-readable label back into the legacy free-text field for compatibility.
+// Parse pasted text into { text, guide } items. Auto-detects:
+//  • tab-separated (from a spreadsheet): col 1 = text, col 2 = guide
+//  • comma-separated with 2+ parts: first = text, rest joined = guide
+//  • otherwise: whole line = text
+// Blank lines are skipped. A leading "- ", "• " or "1. " bullet/number is stripped.
+function parsePastedItems(raw) {
+  if (!raw) return [];
+  const lines = String(raw).replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let seq = 0;
+  for (let line of lines) {
+    if (!line.trim()) continue;
+    line = line.replace(/^\s*(?:[-•*]\s+|\d+[.)]\s+)/, ""); // strip bullet/number
+    let text = "", guide = "";
+    if (line.includes("\t")) {
+      const parts = line.split("\t").map(s => s.trim());
+      text = parts[0] || "";
+      guide = parts.slice(1).filter(Boolean).join(" — ");
+    } else if (/,/.test(line) && line.split(",").length >= 2) {
+      const parts = line.split(",").map(s => s.trim());
+      text = parts[0] || "";
+      guide = parts.slice(1).filter(Boolean).join(", ");
+    } else {
+      text = line.trim();
+    }
+    if (text) out.push({ id: `pi-${Date.now()}-${seq++}`, text, guide });
+  }
+  return out;
+}
+
+// Small reusable "paste items" control. Calls onAdd(parsedItems) to append.
+function PasteItemsBox({ onAdd, labelCls, inputCls }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const parsed = parsePastedItems(text);
+  return (
+    <div className="mt-1">
+      {!open ? (
+        <button type="button" onClick={() => setOpen(true)} className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300">
+          <Plus size={12}/> Paste items
+        </button>
+      ) : (
+        <div className="bg-slate-950 border border-slate-700 rounded-xl p-2.5 space-y-2">
+          <div className="text-[11px] text-slate-400">Paste one item per line. Optionally add a guidance note with a tab or comma (e.g. <span className="text-slate-300">Wipe counters, use sanitiser</span>). Auto-detected.</div>
+          <textarea value={text} onChange={e => setText(e.target.value)} rows={5} autoFocus
+            placeholder={"Wipe down all counters\nClean the coffee machine\tdescale weekly\nEmpty the bins"}
+            className={`${inputCls} font-mono text-xs`}/>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-slate-500">{parsed.length} item{parsed.length === 1 ? "" : "s"} detected</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => { setText(""); setOpen(false); }} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300">Cancel</button>
+              <button type="button" disabled={parsed.length === 0} onClick={() => { onAdd(parsed); setText(""); setOpen(false); }}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white disabled:opacity-40">Add {parsed.length || ""}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AssignmentPicker({ type, value, onChange, storeId, storeRoles = [], storeDepartments = [], opsTeam = [], labelCls, inputCls }) {
   const depts = (storeDepartments || []).filter(d => !d.archivedAt && (!storeId || d.storeId === storeId));
   const roles = (storeRoles || []).filter(r => !r.archivedAt && (!storeId || r.storeId === storeId));
@@ -38469,6 +38530,8 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], storeRoles = []
             <label className={labelCls}>Items</label>
             <button onClick={addTaskItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button>
           </div>
+          <PasteItemsBox onAdd={(newItems)=>setFormState(f=>({...f, items:[...(f.items||[]), ...newItems]}))} labelCls={labelCls} inputCls={inputCls}/>
+          <div className="mt-2"></div>
           <div className="space-y-2">
             {(form.items||[]).map(it => (
               <div key={it.id} className="flex items-start gap-2 bg-slate-950 rounded-xl p-3">
@@ -39052,6 +39115,8 @@ function ChecklistSettingsFormModal({ item, brands = [], stores = [], storeRoles
             <label className={labelCls}>Items</label>
             <button onClick={addItem} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"><Plus size={12}/> Add item</button>
           </div>
+          <PasteItemsBox onAdd={(newItems)=>setItems(its=>[...its, ...newItems])} labelCls={labelCls} inputCls={inputCls}/>
+          <div className="mt-2"></div>
           <div className="space-y-2">
             {items.map(it => (
               <div key={it.id} className="flex items-start gap-2 bg-slate-950 rounded-xl p-3">
