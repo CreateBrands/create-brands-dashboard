@@ -14344,3 +14344,34 @@ export async function deleteRecipeCard(id) {
   return id;
 }
 
+// Duplicate a card (copies all fields, appends "(copy)" to the name).
+export async function duplicateRecipeCard(id) {
+  const { data: src, error: e1 } = await supabase.from("recipe_cards").select("*").eq("id", id).maybeSingle();
+  if (e1) throw e1;
+  if (!src) throw new Error("Recipe not found.");
+  const data = src.data || {};
+  const newName = `${src.name || "Untitled"} (copy)`;
+  const { data: row, error } = await supabase.from("recipe_cards")
+    .insert({ name: newName, main_category: src.main_category, category: src.category,
+      data: { ...data, name: newName }, published: src.published })
+    .select().single();
+  if (error) throw error;
+  return row;
+}
+
+// Rename / re-file a card (name, main_category, category) without touching the design.
+export async function renameRecipeCard(id, { name, mainCategory, category }) {
+  const patch = { updated_at: new Date().toISOString() };
+  if (name !== undefined) patch.name = name;
+  if (mainCategory !== undefined) patch.main_category = mainCategory || null;
+  if (category !== undefined) patch.category = category || null;
+  // keep data.name in sync if the display name changed
+  if (name !== undefined) {
+    const { data: src } = await supabase.from("recipe_cards").select("data").eq("id", id).maybeSingle();
+    if (src?.data) patch.data = { ...src.data, name };
+  }
+  const { data: row, error } = await supabase.from("recipe_cards").update(patch).eq("id", id).select().single();
+  if (error) throw error;
+  return row;
+}
+

@@ -184,7 +184,7 @@ import {
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls,
-  fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard,
+  fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -14383,19 +14383,17 @@ function RecipeCardBuilder() {
   const [mainCat, setMainCat] = useState("");
   const [cat, setCat] = useState("");
 
-  // Chocoberry cream/brown design tokens for the TOOL itself
   const T = {
     bg:"#F4E9DD", surface:"#FBF6EC", surfaceAlt:"#F3EADA", line:"#E8DCC6", lineSoft:"#EFE6D4",
-    ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68", accent:"#844429", accentSoft:"#C9854F",
-    canvas:"#EDE2D2",
+    ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68", accent:"#844429", accentSoft:"#C9854F", canvas:"#EDE2D2",
   };
 
-  const [openSec, setOpenSec] = useState({ steps:true, ingredients:true, tools:false, photo:false, styling:false });
+  const [openSec, setOpenSec] = useState({ steps:true, ingredients:true, tools:false, photo:false });
   const secToggle = (k)=>setOpenSec(s=>({...s,[k]:!s[k]}));
   const [openSteps, setOpenSteps] = useState({});
   const stepOpen = (i)=>openSteps[i]!==false;
   const toggleStep = (i)=>setOpenSteps(s=>({...s,[i]:s[i]===false?true:false}));
-  const [tab, setTab] = useState("content");  // content | style | import
+  const [tab, setTab] = useState("content");
 
   const dragRef = useRef({ list:null, from:null });
   const upStep=(i,k,v)=>setD(p=>{const s=[...p.steps];s[i]={...s[i],[k]:v};return{...p,steps:s};});
@@ -14419,13 +14417,15 @@ function RecipeCardBuilder() {
   const [msg,setMsg]=useState(null);
   const [treeQuery,setTreeQuery]=useState("");
   const [openNodes,setOpenNodes]=useState({});
-  const [zoom,setZoom]=useState(0.75);
+  const [menuFor,setMenuFor]=useState(null);   // recipe id whose quick-menu is open
   const loadList=useCallback(async()=>{try{setSavedCards(await fetchRecipeCards({includeUnpublished:true}));}catch(e){setMsg({t:"err",m:e.message});}},[]);
   useEffect(()=>{loadList();},[loadList]);
-  const openCard=async(id)=>{if(!id)return;try{const c=await fetchRecipeCard(id);if(c){setD(c.data||RC_DEFAULT);setCurrentId(c.id);setMainCat(c.main_category||"");setCat(c.category||"");setMsg(null);}}catch(e){setMsg({t:"err",m:e.message});}};
+  const openCard=async(id)=>{if(!id)return;setMenuFor(null);try{const c=await fetchRecipeCard(id);if(c){setD(c.data||RC_DEFAULT);setCurrentId(c.id);setMainCat(c.main_category||"");setCat(c.category||"");setMsg(null);}}catch(e){setMsg({t:"err",m:e.message});}};
   const saveCard=async()=>{setSaving(true);setMsg(null);try{const row=await saveRecipeCard({id:currentId||undefined,name:d.name||"Untitled",mainCategory:mainCat,category:cat,data:d,published:true});setCurrentId(row.id);await loadList();setMsg({t:"ok",m:"Saved — visible to stores."});}catch(e){setMsg({t:"err",m:e.message});}finally{setSaving(false);}};
   const newCard=()=>{setD(RC_DEFAULT);setCurrentId(null);setMainCat("");setCat("");setMsg(null);};
-  const removeCard=async()=>{if(!currentId)return;if(!window.confirm(`Delete "${d.name}"?`))return;try{await deleteRecipeCard(currentId);newCard();await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  const removeCard=async(id)=>{const target=id||currentId;if(!target)return;const nm=savedCards.find(c=>c.id===target)?.name||d.name;if(!window.confirm(`Delete "${nm}"?`))return;try{await deleteRecipeCard(target);if(target===currentId)newCard();setMenuFor(null);await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
+  const dupCard=async(id)=>{setMenuFor(null);try{const row=await duplicateRecipeCard(id);await loadList();openCard(row.id);setMsg({t:"ok",m:"Duplicated."});}catch(e){setMsg({t:"err",m:e.message});}};
+  const renameCard=async(id)=>{const card=savedCards.find(c=>c.id===id);const nn=window.prompt("Rename recipe:",card?.name||"");if(nn==null||!nn.trim())return;setMenuFor(null);try{await renameRecipeCard(id,{name:nn.trim()});if(id===currentId)setD(p=>({...p,name:nn.trim()}));await loadList();}catch(e){setMsg({t:"err",m:e.message});}};
 
   const tree=useMemo(()=>{const t={};const q=treeQuery.trim().toLowerCase();savedCards.forEach(c=>{if(q&&!(`${c.name} ${c.main_category||""} ${c.category||""}`.toLowerCase().includes(q)))return;const m=c.main_category||"Uncategorised";const k=c.category||"General";if(!t[m])t[m]={};if(!t[m][k])t[m][k]=[];t[m][k].push(c);});return t;},[savedCards,treeQuery]);
   const existingMains=[...new Set(savedCards.map(c=>c.main_category).filter(Boolean))];
@@ -14434,6 +14434,31 @@ function RecipeCardBuilder() {
 
   const [importing,setImporting]=useState(false);
   const [importResult,setImportResult]=useState(null);
+  const downloadTemplate=()=>{
+    if(!XLSX){setImportResult({err:"Excel writer still loading — try again."});return;}
+    const wb=XLSX.utils.book_new();
+    const mk=(name,rows)=>{const ws=XLSX.utils.aoa_to_sheet(rows);XLSX.utils.book_append_sheet(wb,ws,name);};
+    mk("Recipes",[["Recipe","Main category","Category","Script word","Build time","Crockery","Brand tag"],
+      ["Pasta all'Arrabbiata","Food","Pasta","Build","2.5 MIN","Pudding Plate","choco-tini"],
+      ["Iced Caramel Latte","Drinks","Coffee","Build","1.5 MIN","Tall Glass","choco-tini"]]);
+    mk("Steps",[["Recipe","Order","Verb","Icon","Instruction"],
+      ["Pasta all'Arrabbiata",1,"COOK IT","pasta","Boil salted water, add 100g penne, cook 8 minutes."],
+      ["Pasta all'Arrabbiata",2,"DRAIN IT","colander","Drain the pasta and set aside."],
+      ["Pasta all'Arrabbiata",3,"HEAT IT","bottle","Heat oil, warm napoletana sauce and arrabbiata spice."],
+      ["Iced Caramel Latte",1,"POUR IT","bottle","Pour 30ml caramel syrup into a tall glass."],
+      ["Iced Caramel Latte",2,"ADD IT","whisk","Add a double espresso and stir."]]);
+    mk("Ingredients",[["Recipe","Role","Qty","Ingredient"],
+      ["Pasta all'Arrabbiata","BASE","200 G","Cooked penne pasta"],
+      ["Pasta all'Arrabbiata","SAUCE","1/2 CUP","Napoletana pasta sauce"],
+      ["Pasta all'Arrabbiata","SPICE","1 TBSP","Arrabbiata spice"],
+      ["Iced Caramel Latte","SYRUP","30 ML","Caramel syrup"],
+      ["Iced Caramel Latte","MILK","200 ML","Cold milk"]]);
+    mk("Tools",[["Recipe","Tool name","Icon"],
+      ["Pasta all'Arrabbiata","Frying Pan","pan"],
+      ["Pasta all'Arrabbiata","Pasta Drainer","colander"],
+      ["Iced Caramel Latte","Tall Glass","glass"]]);
+    XLSX.writeFile(wb,"recipe_cards_template.xlsx");
+  };
   const onImportExcel=async(e)=>{const f=e.target.files?.[0];if(!f)return;if(!XLSX){setImportResult({err:"Excel reader still loading — try again."});return;}setImporting(true);setImportResult(null);
     try{const buf=await f.arrayBuffer();const wb=XLSX.read(buf,{type:"array"});const sheet=(n)=>{const s=wb.Sheets[n];return s?XLSX.utils.sheet_to_json(s,{defval:""}):[];};const norm=(s)=>String(s||"").trim();const key=(r,...ns)=>{for(const n of ns){if(r[n]!=null&&r[n]!=="")return r[n];}return"";};
       const recipesRows=sheet("Recipes"),stepsRows=sheet("Steps"),ingRows=sheet("Ingredients"),toolRows=sheet("Tools");if(!recipesRows.length){setImportResult({err:"No 'Recipes' tab found."});setImporting(false);return;}
@@ -14446,234 +14471,142 @@ function RecipeCardBuilder() {
       await loadList();setImportResult({ok,fail,total:cards.length});
     }catch(err){setImportResult({err:"Could not read file: "+err.message});}finally{setImporting(false);e.target.value="";}};
 
-  // shared control styles (cream/brown)
-  const fieldCls = "w-full px-3 py-2 rounded-lg text-sm outline-none transition";
-  const fieldStyle = { background:T.surface, border:`1px solid ${T.line}`, color:T.ink };
-  const Label = ({children}) => <label className="block text-[11px] font-semibold uppercase tracking-wide mb-1.5" style={{color:T.inkFaint}}>{children}</label>;
+  const fieldCls="w-full px-3 py-2 rounded-lg text-sm outline-none";
+  const fieldStyle={background:T.surface,border:`1px solid ${T.line}`,color:T.ink};
+  const Label=({children})=><label className="block text-[11px] font-semibold uppercase tracking-wide mb-1.5" style={{color:T.inkFaint}}>{children}</label>;
+  const IconPick=({current,onPick})=>(<div className="grid grid-cols-8 gap-1.5 mt-1">{RC_ICON_KEYS.map(k=>(<button key={k} type="button" onClick={()=>onPick(k)} title={k} className="aspect-square rounded-lg flex items-center justify-center" style={{background:k===current?T.accent:T.surface,border:`1px solid ${k===current?T.accent:T.line}`}}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={k===current?"#fff":T.inkSoft} strokeWidth="1.6" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/></button>))}</div>);
+  const Group=({id,title,count,children})=>(<div className="rounded-xl overflow-hidden" style={{background:T.surface,border:`1px solid ${T.line}`}}><button onClick={()=>secToggle(id)} className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left"><span style={{color:T.inkFaint,fontSize:10}}>{openSec[id]?"▼":"▶"}</span><span className="text-[13px] font-bold" style={{color:T.ink}}>{title}</span>{count!=null&&<span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{count}</span>}</button>{openSec[id]&&<div className="px-3.5 pb-3.5" style={{borderTop:`1px solid ${T.lineSoft}`}}>{children}</div>}</div>);
 
-  const IconPick = ({ current, onPick }) => (
-    <div className="grid grid-cols-8 gap-1.5 mt-1">
-      {RC_ICON_KEYS.map(k=>(
-        <button key={k} type="button" onClick={()=>onPick(k)} title={k}
-          className="aspect-square rounded-lg flex items-center justify-center transition"
-          style={{ background: k===current?T.accent:T.surface, border:`1px solid ${k===current?T.accent:T.line}` }}>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={k===current?"#fff":T.inkSoft} strokeWidth="1.6" dangerouslySetInnerHTML={{__html:RC_ICONS[k]}}/>
-        </button>
-      ))}
-    </div>
-  );
-
-  // collapsible group
-  const Group = ({ id, title, count, children, action }) => (
-    <div className="rounded-xl overflow-hidden" style={{ background:T.surface, border:`1px solid ${T.line}` }}>
-      <button onClick={()=>secToggle(id)} className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left">
-        <span style={{color:T.inkFaint,fontSize:10}}>{openSec[id]?"▼":"▶"}</span>
-        <span className="text-[13px] font-bold" style={{color:T.ink}}>{title}</span>
-        {count!=null && <span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{count}</span>}
-        {action && <span className="ml-auto" onClick={e=>e.stopPropagation()}>{action}</span>}
-      </button>
-      {openSec[id] && <div className="px-3.5 pb-3.5" style={{borderTop:`1px solid ${T.lineSoft}`}}>{children}</div>}
-    </div>
-  );
+  const folderIcon = (open)=>(<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke={T.accent} strokeWidth="1.8"><path d={open?"M3 7h5l2 2h9v2H3z M3 11h18l-2 8H5z":"M3 7h5l2 2h11v9H3z"}/></svg>);
 
   return (
-    <div style={{ background:T.bg, borderRadius:16, overflow:"hidden", border:`1px solid ${T.line}` }}>
+    <div style={{background:T.bg,borderRadius:16,overflow:"hidden",border:`1px solid ${T.line}`}} onClick={()=>menuFor&&setMenuFor(null)}>
       <style>{`@media print { body * { visibility:hidden!important; } .rcb-print, .rcb-print * { visibility:visible!important; } .rcb-print{position:absolute;left:0;top:0;} .rc-page{box-shadow:none!important;margin:0!important;page-break-after:always;transform:none!important;} .rcb-chrome{display:none!important;} }`}</style>
 
       {/* top bar */}
-      <div className="rcb-chrome flex items-center gap-3 px-4 py-3" style={{ background:T.surface, borderBottom:`1px solid ${T.line}` }}>
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{background:T.accent}}>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" strokeWidth="2"><path d="M4 4h16v16H4zM4 9h16M9 9v11"/></svg>
-          </div>
-          <div>
-            <div className="text-[13px] font-bold leading-none" style={{color:T.ink}}>Recipe Card Builder</div>
-            <div className="text-[11px]" style={{color:T.inkFaint}}>{currentId?`Editing · ${d.name}`:"New recipe"}</div>
-          </div>
-        </div>
+      <div className="rcb-chrome flex items-center gap-3 px-4 py-3" style={{background:T.surface,borderBottom:`1px solid ${T.line}`}}>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{background:T.accent}}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" strokeWidth="2"><path d="M4 4h16v16H4zM4 9h16M9 9v11"/></svg></div>
+        <div><div className="text-[13px] font-bold leading-none" style={{color:T.ink}}>Recipe Card Builder</div><div className="text-[11px]" style={{color:T.inkFaint}}>{currentId?`Editing · ${d.name}`:"New recipe"}</div></div>
         <div className="ml-auto flex items-center gap-2">
-          {msg && <span className="text-[12px] font-semibold" style={{color:msg.t==="ok"?"#3F6B3A":"#A23B2E"}}>{msg.m}</span>}
+          {msg&&<span className="text-[12px] font-semibold" style={{color:msg.t==="ok"?"#3F6B3A":"#A23B2E"}}>{msg.m}</span>}
           <button onClick={newCard} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{background:T.surfaceAlt,color:T.ink,border:`1px solid ${T.line}`}}>New</button>
           <button onClick={printCard} className="px-3 py-1.5 rounded-lg text-[12px] font-bold" style={{background:T.surfaceAlt,color:T.ink,border:`1px solid ${T.line}`}}>Print</button>
           <button onClick={saveCard} disabled={saving} className="px-4 py-1.5 rounded-lg text-[12px] font-bold text-white" style={{background:T.accent}}>{saving?"Saving…":"Save"}</button>
         </div>
       </div>
 
-      {/* three-zone workspace */}
-      <div className="flex" style={{ minHeight:"72vh" }}>
-        {/* LEFT: tree */}
-        <div className="rcb-chrome flex-shrink-0 flex flex-col" style={{ width:230, background:T.surface, borderRight:`1px solid ${T.line}` }}>
-          <div className="p-3">
+      {/* TOP ROW: tree + editor (fixed height, no page scroll) */}
+      <div className="rcb-chrome flex" style={{height:"52vh"}}>
+        {/* tree */}
+        <div className="flex-shrink-0 flex flex-col" style={{width:250,background:T.surface,borderRight:`1px solid ${T.line}`}}>
+          <div className="p-3 flex items-center gap-2">
             <input value={treeQuery} onChange={e=>setTreeQuery(e.target.value)} placeholder="Search recipes…" className={fieldCls} style={fieldStyle}/>
+            <button onClick={newCard} title="New recipe" className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-white text-lg" style={{background:T.accent}}>+</button>
           </div>
           <div className="flex-1 overflow-auto px-2 pb-3">
-            {Object.keys(tree).sort().length===0 && <div className="text-[12px] text-center py-6" style={{color:T.inkFaint}}>No recipes yet.<br/>Create one →</div>}
+            {Object.keys(tree).length===0 && <div className="text-[12px] text-center py-8" style={{color:T.inkFaint}}>No recipes match.<br/>Click <span style={{color:T.accent,fontWeight:700}}>+</span> to create one.</div>}
             {Object.keys(tree).sort().map(main=>(
               <div key={main} className="mb-0.5">
-                <button onClick={()=>toggleNode(main)} className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left hover:opacity-80" style={{background:"transparent"}}>
-                  <span style={{color:T.inkFaint,fontSize:9,width:10}}>{openNodes[main]!==false?"▼":"▶"}</span>
+                <button onClick={()=>toggleNode(main)} className="w-full flex items-center gap-1.5 px-2 py-2 rounded-lg text-left" style={{transition:"background .15s"}} onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                  <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[main]!==false?"▾":"▸"}</span>
+                  {folderIcon(openNodes[main]!==false)}
                   <span className="text-[12px] font-bold" style={{color:T.ink}}>{main}</span>
-                  <span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
+                  <span className="ml-auto text-[10px] px-1.5 rounded-full" style={{background:T.surfaceAlt,color:T.inkFaint}}>{Object.values(tree[main]).reduce((n,a)=>n+a.length,0)}</span>
                 </button>
-                {openNodes[main]!==false && Object.keys(tree[main]).sort().map(c=>{
-                  const nk=main+"|||"+c;
-                  return (
-                    <div key={nk} className="ml-2.5">
-                      <button onClick={()=>toggleNode(nk)} className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-left hover:opacity-80">
-                        <span style={{color:T.inkFaint,fontSize:9,width:10}}>{openNodes[nk]!==false?"▼":"▶"}</span>
-                        <span className="text-[11px] font-semibold" style={{color:T.inkSoft}}>{c}</span>
-                        <span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{tree[main][c].length}</span>
-                      </button>
-                      {openNodes[nk]!==false && tree[main][c].slice().sort((a,b)=>a.name.localeCompare(b.name)).map(card=>(
-                        <button key={card.id} onClick={()=>openCard(card.id)} className="w-full text-left pl-7 pr-2 py-1.5 rounded-lg text-[12px] transition"
-                          style={{ background: currentId===card.id?T.surfaceAlt:"transparent", color: currentId===card.id?T.accent:T.inkSoft, fontWeight: currentId===card.id?700:400 }}>
+                {openNodes[main]!==false && Object.keys(tree[main]).sort().map(c=>{const nk=main+"|||"+c;return(
+                  <div key={nk} className="ml-3">
+                    <button onClick={()=>toggleNode(nk)} className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left" onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <span style={{color:T.inkFaint,fontSize:9,width:8}}>{openNodes[nk]!==false?"▾":"▸"}</span>
+                      <span className="text-[11px] font-semibold" style={{color:T.inkSoft}}>{c}</span>
+                      <span className="ml-auto text-[10px]" style={{color:T.inkFaint}}>{tree[main][c].length}</span>
+                    </button>
+                    {openNodes[nk]!==false && tree[main][c].slice().sort((a,b)=>a.name.localeCompare(b.name)).map(card=>(
+                      <div key={card.id} className="relative group ml-4">
+                        <button onClick={()=>openCard(card.id)} className="w-full text-left pl-4 pr-8 py-1.5 rounded-lg text-[12px]" style={{background:currentId===card.id?T.surfaceAlt:"transparent",color:currentId===card.id?T.accent:T.inkSoft,fontWeight:currentId===card.id?700:400}} onMouseEnter={e=>{if(currentId!==card.id)e.currentTarget.style.background=T.lineSoft;}} onMouseLeave={e=>{if(currentId!==card.id)e.currentTarget.style.background="transparent";}}>
                           {card.name}
                         </button>
-                      ))}
-                    </div>
-                  );
-                })}
+                        <button onClick={(e)=>{e.stopPropagation();setMenuFor(menuFor===card.id?null:card.id);}} className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center" style={{color:T.inkFaint}}>⋯</button>
+                        {menuFor===card.id && (
+                          <div className="absolute right-1 top-8 z-20 rounded-lg py-1 shadow-lg" style={{background:T.surface,border:`1px solid ${T.line}`,minWidth:130}} onClick={e=>e.stopPropagation()}>
+                            {[["Open",()=>openCard(card.id)],["Rename",()=>renameCard(card.id)],["Duplicate",()=>dupCard(card.id)],["Delete",()=>removeCard(card.id)]].map(([lab,fn])=>(
+                              <button key={lab} onClick={fn} className="w-full text-left px-3 py-1.5 text-[12px]" style={{color:lab==="Delete"?"#A23B2E":T.ink}} onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>{lab}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );})}
               </div>
             ))}
           </div>
         </div>
 
-        {/* CENTRE: canvas */}
-        <div className="flex-1 flex flex-col min-w-0" style={{ background:T.canvas }}>
-          <div className="rcb-chrome flex items-center gap-2 px-4 py-2" style={{ borderBottom:`1px solid ${T.line}` }}>
-            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{color:T.inkFaint}}>Preview</span>
-            <div className="ml-auto flex items-center gap-1.5">
-              <button onClick={()=>setZoom(z=>Math.max(0.35,+(z-0.1).toFixed(2)))} className="w-7 h-7 rounded-lg text-sm font-bold" style={{background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>−</button>
-              <span className="text-[12px] font-semibold w-10 text-center" style={{color:T.inkSoft}}>{Math.round(zoom*100)}%</span>
-              <button onClick={()=>setZoom(z=>Math.min(1,+(z+0.1).toFixed(2)))} className="w-7 h-7 rounded-lg text-sm font-bold" style={{background:T.surface,color:T.ink,border:`1px solid ${T.line}`}}>+</button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-auto p-8">
-            <div className="rcb-print inline-block" style={{ transform:`scale(${zoom})`, transformOrigin:"top left" }}>
-              <RcCardPreview d={d} responsive={true}/>
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT: inspector */}
-        <div className="rcb-chrome flex-shrink-0 overflow-auto" style={{ width:340, background:T.bg, borderLeft:`1px solid ${T.line}` }}>
-          {/* inspector tabs */}
-          <div className="flex gap-1 p-2" style={{borderBottom:`1px solid ${T.line}`}}>
+        {/* editor (scrolls internally) */}
+        <div className="flex-1 overflow-auto min-w-0" style={{background:T.bg}}>
+          <div className="flex gap-1 p-2 sticky top-0 z-10" style={{background:T.bg,borderBottom:`1px solid ${T.line}`}}>
             {[["content","Content"],["style","Style"],["import","Import"]].map(([k,l])=>(
-              <button key={k} onClick={()=>setTab(k)} className="flex-1 py-1.5 rounded-lg text-[12px] font-bold transition"
-                style={{ background: tab===k?T.accent:"transparent", color: tab===k?"#fff":T.inkSoft }}>{l}</button>
+              <button key={k} onClick={()=>setTab(k)} className="px-4 py-1.5 rounded-lg text-[12px] font-bold" style={{background:tab===k?T.accent:"transparent",color:tab===k?"#fff":T.inkSoft}}>{l}</button>
             ))}
           </div>
-
           <div className="p-3 space-y-2.5">
             {tab==="content" && <>
-              {/* details */}
               <div className="rounded-xl p-3.5" style={{background:T.surface,border:`1px solid ${T.line}`}}>
                 <div className="flex gap-2">
-                  <div className="flex-1"><Label>Main category</Label>
-                    <input className={fieldCls} style={fieldStyle} list="rc-mains" value={mainCat} onChange={e=>setMainCat(e.target.value)} placeholder="Dessert…"/>
-                    <datalist id="rc-mains">{existingMains.map(m=><option key={m} value={m}/>)}</datalist></div>
-                  <div className="flex-1"><Label>Category</Label>
-                    <input className={fieldCls} style={fieldStyle} list="rc-cats" value={cat} onChange={e=>setCat(e.target.value)} placeholder="Waffle…"/>
-                    <datalist id="rc-cats">{existingCats.map(c=><option key={c} value={c}/>)}</datalist></div>
+                  <div className="flex-1"><Label>Main category</Label><input className={fieldCls} style={fieldStyle} list="rc-mains" value={mainCat} onChange={e=>setMainCat(e.target.value)} placeholder="Dessert…"/><datalist id="rc-mains">{existingMains.map(m=><option key={m} value={m}/>)}</datalist></div>
+                  <div className="flex-1"><Label>Category</Label><input className={fieldCls} style={fieldStyle} list="rc-cats" value={cat} onChange={e=>setCat(e.target.value)} placeholder="Waffle…"/><datalist id="rc-cats">{existingCats.map(c=><option key={c} value={c}/>)}</datalist></div>
                 </div>
                 <div className="mt-2.5"><Label>Dish name</Label><input className={fieldCls} style={fieldStyle} value={d.name} onChange={e=>set({name:e.target.value})} placeholder="Strawberry Dream…"/></div>
-                <div className="flex gap-2 mt-2.5">
-                  <div className="flex-1"><Label>Script</Label><input className={fieldCls} style={fieldStyle} value={d.script} onChange={e=>set({script:e.target.value})}/></div>
-                  <div className="flex-1"><Label>Build time</Label><input className={fieldCls} style={fieldStyle} value={d.time} onChange={e=>set({time:e.target.value})}/></div>
-                </div>
+                <div className="flex gap-2 mt-2.5"><div className="flex-1"><Label>Script</Label><input className={fieldCls} style={fieldStyle} value={d.script} onChange={e=>set({script:e.target.value})}/></div><div className="flex-1"><Label>Build time</Label><input className={fieldCls} style={fieldStyle} value={d.time} onChange={e=>set({time:e.target.value})}/></div></div>
               </div>
-
               <Group id="steps" title="Steps" count={d.steps.length}>
-                <div className="mt-3 space-y-2">
-                  {d.steps.map((st,i)=>(
-                    <div key={i} draggable onDragStart={()=>onDragStart("steps",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("steps",i)}
-                      className="rounded-lg" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
-                      <div className="flex items-center gap-1.5 px-2 py-1.5">
-                        <span className="cursor-grab" style={{color:T.inkFaint}}>⠿</span>
-                        <button onClick={()=>toggleStep(i)} className="flex items-center gap-1.5 flex-1 text-left">
-                          <span style={{color:T.inkFaint,fontSize:9}}>{stepOpen(i)?"▼":"▶"}</span>
-                          <span className="text-[11px] font-bold" style={{color:T.ink}}>{i+1}.</span>
-                          <span className="text-[11px] truncate" style={{color:T.inkSoft}}>{st.verb}</span>
-                        </button>
-                        <button onClick={()=>delStep(i)} className="w-5 h-5 rounded text-sm" style={{color:"#A23B2E"}}>×</button>
-                      </div>
-                      {stepOpen(i) && <div className="px-2 pb-2 space-y-2">
-                        <input className={fieldCls} style={fieldStyle} placeholder="COOK IT" value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/>
-                        <textarea className={fieldCls+" min-h-[50px]"} style={fieldStyle} placeholder="Instruction" value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/>
-                        <IconPick current={st.icon} onPick={k=>upStep(i,"icon",k)}/>
-                      </div>}
-                    </div>
-                  ))}
-                </div>
+                <div className="mt-3 space-y-2">{d.steps.map((st,i)=>(
+                  <div key={i} draggable onDragStart={()=>onDragStart("steps",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("steps",i)} className="rounded-lg" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
+                    <div className="flex items-center gap-1.5 px-2 py-1.5"><span className="cursor-grab" style={{color:T.inkFaint}}>⠿</span><button onClick={()=>toggleStep(i)} className="flex items-center gap-1.5 flex-1 text-left"><span style={{color:T.inkFaint,fontSize:9}}>{stepOpen(i)?"▼":"▶"}</span><span className="text-[11px] font-bold" style={{color:T.ink}}>{i+1}.</span><span className="text-[11px] truncate" style={{color:T.inkSoft}}>{st.verb}</span></button><button onClick={()=>delStep(i)} className="w-5 h-5 text-sm" style={{color:"#A23B2E"}}>×</button></div>
+                    {stepOpen(i)&&<div className="px-2 pb-2 space-y-2"><input className={fieldCls} style={fieldStyle} placeholder="COOK IT" value={st.verb} onChange={e=>upStep(i,"verb",e.target.value)}/><textarea className={fieldCls+" min-h-[50px]"} style={fieldStyle} placeholder="Instruction" value={st.txt} onChange={e=>upStep(i,"txt",e.target.value)}/><IconPick current={st.icon} onPick={k=>upStep(i,"icon",k)}/></div>}
+                  </div>))}</div>
                 <button onClick={addStep} className="w-full mt-2 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>+ Add step</button>
               </Group>
-
               <Group id="ingredients" title="Ingredients" count={d.ingredients.length}>
-                <div className="mt-3 space-y-2">
-                  {d.ingredients.map((it,i)=>(
-                    <div key={i} draggable onDragStart={()=>onDragStart("ingredients",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("ingredients",i)}
-                      className="rounded-lg p-2" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
-                      <div className="flex items-center gap-1.5 mb-1.5"><span className="cursor-grab" style={{color:T.inkFaint}}>⠿</span>
-                        <button onClick={()=>delIng(i)} className="ml-auto text-sm" style={{color:"#A23B2E"}}>×</button></div>
-                      <div className="flex gap-2"><input className={fieldCls+" w-2/5"} style={fieldStyle} placeholder="ROLE" value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/>
-                        <input className={fieldCls+" w-3/5"} style={fieldStyle} placeholder="QTY" value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/></div>
-                      <input className={fieldCls+" mt-2"} style={fieldStyle} placeholder="Ingredient" value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
-                    </div>
-                  ))}
-                </div>
+                <div className="mt-3 space-y-2">{d.ingredients.map((it,i)=>(
+                  <div key={i} draggable onDragStart={()=>onDragStart("ingredients",i)} onDragOver={e=>e.preventDefault()} onDrop={()=>onDropAt("ingredients",i)} className="rounded-lg p-2" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
+                    <div className="flex items-center gap-1.5 mb-1.5"><span className="cursor-grab" style={{color:T.inkFaint}}>⠿</span><button onClick={()=>delIng(i)} className="ml-auto text-sm" style={{color:"#A23B2E"}}>×</button></div>
+                    <div className="flex gap-2"><input className={fieldCls+" w-2/5"} style={fieldStyle} placeholder="ROLE" value={it.role} onChange={e=>upIng(i,"role",e.target.value)}/><input className={fieldCls+" w-3/5"} style={fieldStyle} placeholder="QTY" value={it.qty} onChange={e=>upIng(i,"qty",e.target.value)}/></div>
+                    <input className={fieldCls+" mt-2"} style={fieldStyle} placeholder="Ingredient" value={it.name} onChange={e=>upIng(i,"name",e.target.value)}/>
+                  </div>))}</div>
                 <button onClick={addIng} className="w-full mt-2 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>+ Add ingredient</button>
               </Group>
-
               <Group id="tools" title="Tools" count={d.tools.length}>
-                <div className="mt-3 space-y-2">
-                  {d.tools.map((tl,i)=>(
-                    <div key={i} className="rounded-lg p-2 relative" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}>
-                      <button onClick={()=>delTool(i)} className="absolute top-1.5 right-1.5 text-sm" style={{color:"#A23B2E"}}>×</button>
-                      <input className={fieldCls} style={fieldStyle} placeholder="Tool name" value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/>
-                      <div className="mt-2"><IconPick current={tl.icon} onPick={k=>upTool(i,"icon",k)}/></div>
-                    </div>
-                  ))}
-                </div>
+                <div className="mt-3 space-y-2">{d.tools.map((tl,i)=>(<div key={i} className="rounded-lg p-2 relative" style={{background:T.surfaceAlt,border:`1px solid ${T.line}`}}><button onClick={()=>delTool(i)} className="absolute top-1.5 right-1.5 text-sm" style={{color:"#A23B2E"}}>×</button><input className={fieldCls} style={fieldStyle} placeholder="Tool name" value={tl.name} onChange={e=>upTool(i,"name",e.target.value)}/><div className="mt-2"><IconPick current={tl.icon} onPick={k=>upTool(i,"icon",k)}/></div></div>))}</div>
                 <button onClick={addTool} className="w-full mt-2 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>+ Add tool</button>
               </Group>
-
-              <Group id="photo" title="Photo & crockery">
-                <div className="mt-3"><Label>Dish photo</Label>
-                  <input type="file" accept="image/*" onChange={loadPhoto} className="text-[12px]" style={{color:T.inkSoft}}/></div>
-                <div className="mt-2.5"><Label>Crockery</Label><input className={fieldCls} style={fieldStyle} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/></div>
-              </Group>
+              <Group id="photo" title="Photo & crockery"><div className="mt-3"><Label>Dish photo</Label><input type="file" accept="image/*" onChange={loadPhoto} className="text-[12px]" style={{color:T.inkSoft}}/></div><div className="mt-2.5"><Label>Crockery</Label><input className={fieldCls} style={fieldStyle} value={d.crockery} onChange={e=>set({crockery:e.target.value})}/></div></Group>
             </>}
 
             {tab==="style" && <div className="rounded-xl p-3.5 space-y-3" style={{background:T.surface,border:`1px solid ${T.line}`}}>
-              <div><Label>Colour theme</Label>
-                <div className="flex gap-1.5 flex-wrap">
-                  {RC_ACCENT_PRESETS.map(p=>(<button key={p.name} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:p.accent,headBar:p.headBar,panel:p.panel}})}
-                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{border:`1px solid ${(d.style?.accent||RC_STYLE_DEFAULT.accent)===p.accent?T.accent:T.line}`,color:T.ink,background:T.surface}}>
-                    <span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:p.accent,marginRight:5,verticalAlign:"middle"}}/>{p.name}</button>))}
-                </div>
-              </div>
+              <div><Label>Colour theme</Label><div className="flex gap-1.5 flex-wrap">{RC_ACCENT_PRESETS.map(p=>(<button key={p.name} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:p.accent,headBar:p.headBar,panel:p.panel}})} className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{border:`1px solid ${(d.style?.accent||RC_STYLE_DEFAULT.accent)===p.accent?T.accent:T.line}`,color:T.ink,background:T.surface}}><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:p.accent,marginRight:5,verticalAlign:"middle"}}/>{p.name}</button>))}</div></div>
               <div><Label>Custom accent</Label><input type="color" value={d.style?.accent||RC_STYLE_DEFAULT.accent} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),accent:e.target.value}})} className="w-full h-9 rounded-lg" style={{border:`1px solid ${T.line}`}}/></div>
-              <div><Label>Step columns</Label>
-                <div className="flex gap-1.5">{[2,3,4].map(n=>(<button key={n} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),stepCols:n}})}
-                  className="flex-1 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px solid ${(d.style?.stepCols||3)===n?T.accent:T.line}`,color:(d.style?.stepCols||3)===n?T.accent:T.inkSoft,background:T.surface}}>{n}</button>))}</div></div>
+              <div><Label>Step columns</Label><div className="flex gap-1.5">{[2,3,4].map(n=>(<button key={n} type="button" onClick={()=>set({style:{...(d.style||RC_STYLE_DEFAULT),stepCols:n}})} className="flex-1 py-2 rounded-lg text-[12px] font-bold" style={{border:`1px solid ${(d.style?.stepCols||3)===n?T.accent:T.line}`,color:(d.style?.stepCols||3)===n?T.accent:T.inkSoft,background:T.surface}}>{n}</button>))}</div></div>
               <div><Label>Icon size · {d.style?.iconSize||48}px</Label><input type="range" min="24" max="64" value={d.style?.iconSize||48} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),iconSize:Number(e.target.value)}})} className="w-full"/></div>
-              <div className="space-y-2 pt-1">
-                <label className="flex items-center gap-2 text-[12px]" style={{color:T.ink}}><input type="checkbox" checked={d.style?.showBands!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showBands:e.target.checked}})}/> Show name bands</label>
-                <label className="flex items-center gap-2 text-[12px]" style={{color:T.ink}}><input type="checkbox" checked={d.style?.showTimeBadge!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showTimeBadge:e.target.checked}})}/> Show build-time badge</label>
-              </div>
+              <div className="space-y-2 pt-1"><label className="flex items-center gap-2 text-[12px]" style={{color:T.ink}}><input type="checkbox" checked={d.style?.showBands!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showBands:e.target.checked}})}/> Show name bands</label><label className="flex items-center gap-2 text-[12px]" style={{color:T.ink}}><input type="checkbox" checked={d.style?.showTimeBadge!==false} onChange={e=>set({style:{...(d.style||RC_STYLE_DEFAULT),showTimeBadge:e.target.checked}})}/> Show build-time badge</label></div>
             </div>}
 
             {tab==="import" && <div className="rounded-xl p-3.5" style={{background:T.surface,border:`1px solid ${T.line}`}}>
-              <p className="text-[12px] mb-3" style={{color:T.inkSoft}}>Upload a filled template to create many recipes at once. Include Main category & Category columns to file them in the tree.</p>
-              <label className="block w-full py-3 rounded-lg text-[12px] font-bold text-center cursor-pointer" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>
-                {importing?"Importing…":"Choose Excel file"}<input type="file" accept=".xlsx,.xls" onChange={onImportExcel} className="hidden" disabled={importing}/>
-              </label>
-              {importResult && (importResult.err ? <div className="mt-2 text-[12px] font-semibold" style={{color:"#A23B2E"}}>{importResult.err}</div>
-                : <div className="mt-2 text-[12px] font-semibold" style={{color:"#3F6B3A"}}>Imported {importResult.ok} of {importResult.total}{importResult.fail?`, ${importResult.fail} failed`:""}.</div>)}
+              <p className="text-[12px] mb-3" style={{color:T.inkSoft}}>Create many recipes at once. Download the sample, fill it in (include Main category & Category to file them in the tree), then upload.</p>
+              <button onClick={downloadTemplate} className="w-full py-2.5 rounded-lg text-[12px] font-bold mb-2" style={{background:T.surfaceAlt,color:T.accent,border:`1px solid ${T.line}`}}>↓ Download sample template</button>
+              <label className="block w-full py-3 rounded-lg text-[12px] font-bold text-center cursor-pointer" style={{border:`1px dashed ${T.accentSoft}`,color:T.accent}}>{importing?"Importing…":"Upload filled Excel"}<input type="file" accept=".xlsx,.xls" onChange={onImportExcel} className="hidden" disabled={importing}/></label>
+              {importResult&&(importResult.err?<div className="mt-2 text-[12px] font-semibold" style={{color:"#A23B2E"}}>{importResult.err}</div>:<div className="mt-2 text-[12px] font-semibold" style={{color:"#3F6B3A"}}>Imported {importResult.ok} of {importResult.total}{importResult.fail?`, ${importResult.fail} failed`:""}.</div>)}
             </div>}
+          </div>
+        </div>
+      </div>
 
-            {currentId && <button onClick={removeCard} className="w-full py-2 rounded-lg text-[12px] font-bold" style={{background:"#F6E4DF",color:"#A23B2E",border:"1px solid #E5C4BB"}}>Delete recipe</button>}
+      {/* BOTTOM: full-width preview, zoom-to-fit */}
+      <div style={{background:T.canvas,borderTop:`1px solid ${T.line}`}}>
+        <div className="rcb-chrome px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide" style={{color:T.inkFaint}}>Live preview</div>
+        <div className="overflow-x-auto px-4 pb-4">
+          <div className="rcb-print inline-block" style={{transform:"scale(0.5)",transformOrigin:"top left",height:794*0.5+24}}>
+            <RcCardPreview d={d} responsive={true}/>
           </div>
         </div>
       </div>
