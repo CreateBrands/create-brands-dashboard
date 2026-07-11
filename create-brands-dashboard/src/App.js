@@ -14497,8 +14497,8 @@ function RecipeCardBuilder() {
         </div>
       </div>
 
-      {/* COMPACT top: tree + editor, limited height */}
-      <div className="rcb-chrome flex" style={{height:"320px"}}>
+      {/* Workspace: tree | editor | preview (side by side) */}
+      <div className="rcb-chrome flex" style={{height:"640px"}}>
         {/* tree */}
         <div className="flex-shrink-0 flex flex-col" style={{width:230,background:T.surface,borderRight:`1px solid ${T.line}`}}>
           <div className="p-2.5 flex items-center gap-2">
@@ -14534,7 +14534,7 @@ function RecipeCardBuilder() {
         </div>
 
         {/* editor */}
-        <div className="flex-1 flex flex-col min-w-0" style={{background:T.bg}}>
+        <div className="flex flex-col min-w-0" style={{width:440,flexShrink:0,background:T.bg}}>
           {/* tabs */}
           <div className="flex gap-1 px-2 py-1.5 overflow-x-auto" style={{borderBottom:`1px solid ${T.line}`}}>
             {tabs.map(([k,l,n])=>(<button key={k} onClick={()=>setTab(k)} className="px-3 py-1.5 rounded-lg text-[12px] font-bold whitespace-nowrap flex items-center gap-1.5" style={{background:tab===k?T.accent:"transparent",color:tab===k?"#fff":T.inkSoft}}>{l}{n!=null&&<span className="text-[10px] px-1.5 rounded-full" style={{background:tab===k?"rgba(255,255,255,.2)":T.surfaceAlt,color:tab===k?"#fff":T.inkFaint}}>{n}</span>}</button>))}
@@ -14604,14 +14604,14 @@ function RecipeCardBuilder() {
             </div>}
           </div>
         </div>
-      </div>
 
-      {/* BIG preview at bottom */}
-      <div style={{background:T.canvas,borderTop:`1px solid ${T.line}`}}>
-        <div className="rcb-chrome px-4 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{color:T.inkFaint}}>Live preview</div>
-        <div className="overflow-auto px-6 pb-6" style={{maxHeight:"620px"}}>
-          <div className="rcb-print inline-block" style={{transform:"scale(0.62)",transformOrigin:"top left",height:794*0.62*2+40}}>
-            <RcCardPreview d={d} responsive={true}/>
+        {/* PREVIEW — right column */}
+        <div className="flex-1 flex flex-col min-w-0" style={{background:T.canvas,borderLeft:`1px solid ${T.line}`}}>
+          <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wide flex-shrink-0" style={{color:T.inkFaint,borderBottom:`1px solid ${T.line}`}}>Live preview</div>
+          <div className="flex-1 overflow-auto px-5 py-5">
+            <div className="rcb-print inline-block" style={{transform:"scale(0.55)",transformOrigin:"top left",height:794*0.55*2+30}}>
+              <RcCardPreview d={d} responsive={true}/>
+            </div>
           </div>
         </div>
       </div>
